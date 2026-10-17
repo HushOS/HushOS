@@ -134,6 +134,8 @@ jobs:
                     - key_seal_context
                     - pins
                     - accept
+                    - record_integrity
+                    - origin_open
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2

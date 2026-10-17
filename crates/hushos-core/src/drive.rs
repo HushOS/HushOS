@@ -7,7 +7,7 @@
 use crate::bytes::{
     decode, encode, expect_len, random, Redacted, SecretBytes, KEY_BYTES, NONCE_BYTES, TAG_BYTES,
 };
-use crate::envelope::{context, open, open_key, open_with_nonce, seal, seal_with_nonce};
+use crate::envelope::{context, open, open_key, open_with_nonce, opening_key, rekey, seal, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use blake2::digest::consts::U32;
 use blake2::digest::{Mac, Update, VariableOutput};
@@ -19,10 +19,12 @@ use sha2::Sha256;
 use std::fmt;
 use zeroize::Zeroizing;
 
-const KEY_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES; // 72
+pub(crate) const KEY_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES; // 72
 const VERSION_RECORD_BYTES: usize = KEY_BYTES + 8 + 4;
-const VERSION_ENVELOPE_BYTES: usize = NONCE_BYTES + VERSION_RECORD_BYTES + TAG_BYTES; // 84
+pub(crate) const VERSION_ENVELOPE_BYTES: usize = NONCE_BYTES + VERSION_RECORD_BYTES + TAG_BYTES; // 84
 const METADATA_MAX_BYTES: usize = 4096;
+/* The longest metadata envelope: the padded maximum, its nonce and its tag. */
+pub(crate) const METADATA_ENVELOPE_MAX_BYTES: usize = NONCE_BYTES + METADATA_MAX_BYTES + TAG_BYTES;
 const METADATA_PAD_STEP: usize = 256;
 const NAME_MAX_CODE_POINTS: usize = 255;
 const MIME_MAX_CHARS: usize = 255;
@@ -31,9 +33,9 @@ const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 const THUMBNAIL_MAX_BYTES: u32 = 65_536;
 const CONTENT_NONCE_BYTES: usize = 16;
 const ENVELOPE_SUITE: u32 = 1;
-const LEGACY_CONTENT_SUITE: u32 = 1;
-const UNPADDED_CONTENT_SUITE: u32 = 2;
-const CONTENT_SUITE: u32 = 3;
+pub(crate) const LEGACY_CONTENT_SUITE: u32 = 1;
+pub(crate) const UNPADDED_CONTENT_SUITE: u32 = 2;
+pub(crate) const CONTENT_SUITE: u32 = 3;
 const CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 const THUMBNAIL_KDF_CONTEXT: &str = "hushthmb";
 const THUMBNAIL_KDF_SUBKEY: u64 = 1;
@@ -173,7 +175,7 @@ fn node_key_context(ctx: &NodeKeyContext) -> Vec<u8> {
 /// use hushos_core::{node_open, node_wrap, random_bytes, NodeKeyContext};
 /// let parent_key = random_bytes(32)?;
 /// let node_key = random_bytes(32)?;
-/// let ctx = NodeKeyContext { workspace_id: "ws".into(), node_id: "n1".into(), parent_id: "root".into(), parent_key_epoch: 1, key_epoch: 1 };
+/// let ctx = NodeKeyContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), parent_id: "77777777-7777-4777-8777-777777777777".into(), parent_key_epoch: 1, key_epoch: 1 };
 /// let envelope = node_wrap(ctx.clone(), parent_key.clone(), node_key.clone())?;
 /// assert_eq!(envelope.len(), 72);
 /// assert_eq!(node_open(ctx, parent_key, envelope)?, node_key);
@@ -230,14 +232,27 @@ pub struct MetadataContext {
     pub metadata_version: u64,
 }
 
-fn metadata_context(ctx: &MetadataContext) -> Vec<u8> {
-    context(&[
+/* An id as the web's envelope contexts take it: a lowercase UUID, or refused, as `drive.ts` refuses it. */
+fn context_id<'a>(value: &'a str, what: &str) -> CoreResult<&'a str> {
+    crate::canonical::uuid(value, what).map_err(|_| input(format!("Invalid {what}.")))
+}
+
+/* An epoch or version as the web's envelope contexts take it: 1 to 2^53 - 1. */
+fn context_epoch(value: u64, what: &str) -> CoreResult<u64> {
+    if !(1..=MAX_SAFE_INTEGER).contains(&value) {
+        return Err(input(format!("Invalid {what}.")));
+    }
+    Ok(value)
+}
+
+pub(crate) fn metadata_context(ctx: &MetadataContext) -> CoreResult<Vec<u8>> {
+    Ok(context(&[
         json!("hushos/drive/node-meta"),
         json!(ENVELOPE_SUITE),
-        json!(ctx.workspace_id),
-        json!(ctx.node_id),
-        json!(ctx.metadata_version),
-    ])
+        json!(context_id(&ctx.workspace_id, "workspace id")?),
+        json!(context_id(&ctx.node_id, "node id")?),
+        json!(context_epoch(ctx.metadata_version, "metadata version")?),
+    ]))
 }
 
 /// Names are enforced by the client because the server cannot read them:
@@ -273,7 +288,7 @@ pub fn check_name(name: String) -> CoreResult<String> {
 /// ```
 /// use hushos_core::{metadata_open, metadata_seal, random_bytes, MetadataContext, NodeMetadata};
 /// let key = random_bytes(32)?;
-/// let ctx = MetadataContext { workspace_id: "ws".into(), node_id: "n1".into(), metadata_version: 1 };
+/// let ctx = MetadataContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), metadata_version: 1 };
 /// let metadata = NodeMetadata { name: "notes.md".into(), mime: Some("text/markdown".into()), size: Some(12), modified: None };
 /// let envelope = metadata_seal(ctx.clone(), key.clone(), metadata.clone())?;
 /// assert_eq!(envelope.len(), 24 + 256 + 16, "one padding step");
@@ -295,7 +310,7 @@ pub fn metadata_seal(ctx: MetadataContext, node_key: Vec<u8>, metadata: NodeMeta
     }
     let target = plaintext.len().div_ceil(METADATA_PAD_STEP) * METADATA_PAD_STEP;
     plaintext.resize(target.min(METADATA_MAX_BYTES), b' ');
-    seal(&node_key, &plaintext, &metadata_context(&ctx))
+    seal(&node_key, &plaintext, &metadata_context(&ctx)?)
 }
 
 /// The inverse of [`metadata_seal`]; the version in the context must be the one the envelope was sealed for.
@@ -305,7 +320,7 @@ pub fn metadata_open(ctx: MetadataContext, node_key: Vec<u8>, envelope: Vec<u8>)
     if envelope.len() > NONCE_BYTES + METADATA_MAX_BYTES + TAG_BYTES {
         return Err(CoreError::Sealed("This encrypted envelope is damaged.".into()));
     }
-    let plaintext = open(&node_key, &envelope, &metadata_context(&ctx))?;
+    let plaintext = open(&node_key, &envelope, &metadata_context(&ctx)?)?;
     let text =
         String::from_utf8(plaintext).map_err(|_| CoreError::Sealed("Metadata is not UTF-8.".into()))?;
     serde_json::from_str(text.trim_end()).map_err(|_| CoreError::Sealed("Metadata is not JSON.".into()))
@@ -362,7 +377,7 @@ fn document_pad_step(length: usize) -> usize {
 /// ```
 /// use hushos_core::{document_open, document_seal, random_bytes, DocumentContext};
 /// let key = random_bytes(32)?;
-/// let ctx = DocumentContext { workspace_id: "ws".into(), kind: "tags".into(), version: 1 };
+/// let ctx = DocumentContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), kind: "tags".into(), version: 1 };
 /// let envelope = document_seal(ctx.clone(), key.clone(), r#"{"version":2,"tags":[],"items":{}}"#.into())?;
 /// assert_eq!(envelope.len(), 24 + 1024 + 16);
 /// assert_eq!(document_open(ctx, key, envelope)?, r#"{"version":2,"tags":[],"items":{}}"#);
@@ -407,15 +422,15 @@ pub struct VersionContext {
     pub object_id: String,
 }
 
-fn version_context(ctx: &VersionContext, suite: u32) -> Vec<u8> {
-    context(&[
+pub(crate) fn version_context(ctx: &VersionContext, suite: u32) -> CoreResult<Vec<u8>> {
+    Ok(context(&[
         json!("hushos/drive/content-key"),
-        json!(suite),
-        json!(ctx.workspace_id),
-        json!(ctx.node_id),
-        json!(ctx.version_id),
-        json!(ctx.object_id),
-    ])
+        json!(check_suite(suite)?),
+        json!(context_id(&ctx.workspace_id, "workspace id")?),
+        json!(context_id(&ctx.node_id, "node id")?),
+        json!(context_id(&ctx.version_id, "version id")?),
+        json!(context_id(&ctx.object_id, "object id")?),
+    ]))
 }
 
 /// What opens a version's object: its key, its true size and its thumbnail trailer.
@@ -449,7 +464,7 @@ pub fn version_open(
     row_size: Option<u64>,
 ) -> CoreResult<ContentKey> {
     expect_len("nodeKey", &node_key, KEY_BYTES)?;
-    let aad = version_context(&ctx, suite);
+    let aad = version_context(&ctx, suite)?;
     match suite {
         LEGACY_CONTENT_SUITE => {
             expect_len("envelope", &envelope, KEY_ENVELOPE_BYTES)?;
@@ -500,7 +515,7 @@ pub fn content_suite() -> u32 {
 /// ```
 /// use hushos_core::{random_bytes, version_open, version_seal, VersionContext};
 /// let node_key = random_bytes(32)?;
-/// let ctx = VersionContext { workspace_id: "ws".into(), node_id: "n1".into(), version_id: "v1".into(), object_id: "obj".into() };
+/// let ctx = VersionContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), version_id: "44444444-4444-4444-8444-444444444444".into(), object_id: "66666666-6666-4666-8666-666666666666".into() };
 /// let sealed = version_seal(ctx.clone(), node_key.clone(), random_bytes(32)?, 1000, 0)?;
 /// assert_eq!(sealed.envelope.len(), 84);
 /// assert_eq!(sealed.layout.ciphertext_size, 1024 + 16, "1000 bytes pad to the 1024 bucket");
@@ -541,7 +556,7 @@ fn seal_record(
     record.extend_from_slice(content_key);
     record.extend_from_slice(&plaintext_size.to_be_bytes());
     record.extend_from_slice(&thumbnail_bytes.to_be_bytes());
-    seal(node_key, &record, &version_context(ctx, suite))
+    seal(node_key, &record, &version_context(ctx, suite)?)
 }
 
 /// The opened content of one version sealed again under another node key, in
@@ -552,10 +567,10 @@ fn seal_record(
 /// use hushos_core::{random_bytes, version_open, version_reseal, version_seal, ContentKey, VersionContext};
 /// let source_key = random_bytes(32)?;
 /// let target_key = random_bytes(32)?;
-/// let ctx = VersionContext { workspace_id: "ws".into(), node_id: "n1".into(), version_id: "v1".into(), object_id: "obj".into() };
+/// let ctx = VersionContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), version_id: "44444444-4444-4444-8444-444444444444".into(), object_id: "66666666-6666-4666-8666-666666666666".into() };
 /// let sealed = version_seal(ctx.clone(), source_key.clone(), random_bytes(32)?, 10, 0)?;
 /// let opened = version_open(ctx.clone(), 3, source_key, sealed.envelope, None)?;
-/// let copy = VersionContext { node_id: "n2".into(), version_id: "v2".into(), ..ctx };
+/// let copy = VersionContext { node_id: "33333333-3333-4333-8333-333333333333".into(), version_id: "55555555-5555-4555-8555-555555555555".into(), ..ctx };
 /// let envelope = version_reseal(copy.clone(), 3, target_key.clone(), opened.clone())?;
 /// assert_eq!(version_open(copy, 3, target_key, envelope, None)?.key, opened.key);
 /// # Ok::<(), hushos_core::CoreError>(())
@@ -570,7 +585,7 @@ pub fn version_reseal(
     expect_len("nodeKey", &node_key, KEY_BYTES)?;
     expect_len("contentKey", &content.key, KEY_BYTES)?;
     match suite {
-        LEGACY_CONTENT_SUITE => seal(&node_key, &content.key, &version_context(&ctx, LEGACY_CONTENT_SUITE)),
+        LEGACY_CONTENT_SUITE => seal(&node_key, &content.key, &version_context(&ctx, LEGACY_CONTENT_SUITE)?),
         UNPADDED_CONTENT_SUITE | CONTENT_SUITE => {
             if content.thumbnail_bytes > THUMBNAIL_MAX_BYTES || content.plaintext_size > MAX_SAFE_INTEGER {
                 return Err(input("Invalid version record."));
@@ -849,7 +864,7 @@ fn layout_of(content: &Content) -> CoreResult<ContentLayout> {
 /// ```
 /// use hushos_core::{chunk_decrypt, chunk_encrypt, content_layout, random_bytes, Content};
 /// let content = Content {
-///     workspace_id: "ws".into(), object_id: "obj".into(), suite: 3,
+///     workspace_id: "11111111-1111-4111-8111-111111111111".into(), object_id: "66666666-6666-4666-8666-666666666666".into(), suite: 3,
 ///     key: random_bytes(32)?.into(), nonce: random_bytes(16)?, plaintext_size: 5, thumbnail_bytes: 0,
 /// };
 /// let sealed = chunk_encrypt(content.clone(), 0, b"hello".to_vec())?;
@@ -951,6 +966,161 @@ pub fn thumbnail_decrypt(content: Content, fetched: Vec<u8>) -> CoreResult<Vec<u
 }
 
 // ---------------------------------------------------------------------------
+// Re-keyed records (docs/integrity-design.md, "Re-keyed records")
+// ---------------------------------------------------------------------------
+
+/// Which record a re-keyed origin is: a node's metadata at a metadata version,
+/// or one version of a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum OriginRecord {
+    Metadata { metadata_version: u64 },
+    Version { version_id: String },
+}
+
+/// What binds a wrapped origin key: the node, the record, the node key's
+/// epoch it is wrapped under, and the origin envelope it opens.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OriginKeyContext {
+    pub workspace_id: String,
+    pub node_id: String,
+    pub key_epoch: u64,
+    pub record: OriginRecord,
+    pub origin_envelope: Vec<u8>,
+}
+
+/*
+ * ["hushos/drive/origin-key", 1, ws, nodeId, "metadata", metadataVersion, keyEpoch, sha256(originEnvelope)]
+ * ["hushos/drive/origin-key", 1, ws, nodeId, "version", versionId, keyEpoch, sha256(originEnvelope)]
+ * Its own label: the wrapped origin key is 72 bytes, as a node key or a
+ * legacy content key envelope is, and must never open as either.
+ */
+pub(crate) fn origin_key_context(ctx: &OriginKeyContext) -> CoreResult<Vec<u8>> {
+    let (record, position) = match &ctx.record {
+        OriginRecord::Metadata { metadata_version } => {
+            ("metadata", json!(context_epoch(*metadata_version, "metadata version")?))
+        }
+        OriginRecord::Version { version_id } => ("version", json!(context_id(version_id, "version id")?)),
+    };
+    Ok(context(&[
+        json!("hushos/drive/origin-key"),
+        json!(ENVELOPE_SUITE),
+        json!(context_id(&ctx.workspace_id, "workspace id")?),
+        json!(context_id(&ctx.node_id, "node id")?),
+        json!(record),
+        position,
+        json!(context_epoch(ctx.key_epoch, "key epoch")?),
+        json!(crate::signatures::digest(&ctx.origin_envelope)),
+    ]))
+}
+
+/// A metadata envelope sealed again under a new node key, exactly as it was:
+/// the padded plaintext is never parsed, so the writer's bytes survive and a
+/// reader can compare them with the origin. What a rotation writes.
+///
+/// ```
+/// use hushos_core::*;
+/// let (old, new) = (random_bytes(32)?, random_bytes(32)?);
+/// let ctx = MetadataContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), metadata_version: 1 };
+/// let metadata = NodeMetadata { name: "notes.md".into(), mime: None, size: None, modified: None };
+/// let origin = metadata_seal(ctx.clone(), old.clone(), metadata.clone())?;
+/// let rekeyed = metadata_rekey(ctx.clone(), old.clone(), new.clone(), origin.clone())?;
+/// assert_eq!(rekeyed.len(), origin.len());
+/// assert_eq!(metadata_open(ctx.clone(), new, rekeyed)?, metadata);
+/// assert!(metadata_rekey(ctx, random_bytes(32)?, old, origin).is_err(), "only the old key opens it");
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_rekey(
+    ctx: MetadataContext,
+    old_key: Vec<u8>,
+    new_key: Vec<u8>,
+    envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    expect_len("oldKey", &old_key, KEY_BYTES)?;
+    expect_len("newKey", &new_key, KEY_BYTES)?;
+    if envelope.len() > METADATA_ENVELOPE_MAX_BYTES {
+        return Err(CoreError::Sealed("This encrypted envelope is damaged.".into()));
+    }
+    rekey(&old_key, &new_key, &envelope, &metadata_context(&ctx)?)
+}
+
+/// A version envelope sealed again under a new node key, byte for byte, in
+/// the object's own suite (72 bytes for suite 1, 84 for 2 and 3). What a
+/// rotation writes.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_rekey(
+    ctx: VersionContext,
+    suite: u32,
+    old_key: Vec<u8>,
+    new_key: Vec<u8>,
+    envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    expect_len("oldKey", &old_key, KEY_BYTES)?;
+    expect_len("newKey", &new_key, KEY_BYTES)?;
+    expect_len("envelope", &envelope, version_envelope_len(suite)?)?;
+    rekey(&old_key, &new_key, &envelope, &version_context(&ctx, suite)?)
+}
+
+/* A version envelope's length in its suite. */
+pub(crate) fn version_envelope_len(suite: u32) -> CoreResult<usize> {
+    match suite {
+        LEGACY_CONTENT_SUITE => Ok(KEY_ENVELOPE_BYTES),
+        UNPADDED_CONTENT_SUITE | CONTENT_SUITE => Ok(VERSION_ENVELOPE_BYTES),
+        other => Err(input(format!("Unsupported content suite {other}."))),
+    }
+}
+
+/// The key that opens one origin envelope and nothing else the node key
+/// sealed: XChaCha20-Poly1305's own subkey for that envelope's nonce
+/// (HChaCha20 of `node_key` and the nonce's first 16 bytes). A rotation wraps
+/// it under the fresh node key with [`origin_key_wrap`] instead of handing
+/// out the old node key, which still opens what was moved out before.
+///
+/// ```
+/// use hushos_core::*;
+/// let (old, fresh) = (random_bytes(32)?, random_bytes(32)?);
+/// let origin = node_wrap(NodeKeyContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), parent_id: "77777777-7777-4777-8777-777777777777".into(), parent_key_epoch: 1, key_epoch: 1 }, old.clone(), random_bytes(32)?)?;
+/// let key = origin_opening_key(origin.clone(), old.clone())?;
+/// assert_eq!(key.len(), 32);
+/// assert_ne!(key, old);
+/// let ctx = OriginKeyContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), key_epoch: 2, record: OriginRecord::Metadata { metadata_version: 1 }, origin_envelope: origin };
+/// let wrapped = origin_key_wrap(ctx.clone(), fresh.clone(), key.clone())?;
+/// assert_eq!(wrapped.len(), 72);
+/// assert_eq!(origin_key_open(ctx.clone(), fresh.clone(), wrapped.clone())?, key);
+/// assert!(origin_key_open(OriginKeyContext { key_epoch: 3, ..ctx }, fresh, wrapped).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn origin_opening_key(origin_envelope: Vec<u8>, node_key: Vec<u8>) -> CoreResult<Vec<u8>> {
+    expect_len("nodeKey", &node_key, KEY_BYTES)?;
+    Ok(opening_key(&node_key, &origin_envelope)?.to_vec())
+}
+
+/// An origin's opening key wrapped under the node key at the epoch it now
+/// has: the 72-byte `originKeyEnvelope` a re-keyed record carries.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn origin_key_wrap(ctx: OriginKeyContext, node_key: Vec<u8>, origin_key: Vec<u8>) -> CoreResult<Vec<u8>> {
+    expect_len("nodeKey", &node_key, KEY_BYTES)?;
+    expect_len("originKey", &origin_key, KEY_BYTES)?;
+    seal(&node_key, &origin_key, &origin_key_context(&ctx)?)
+}
+
+/// The inverse of [`origin_key_wrap`]: what a reader, or the next rotation,
+/// opens the origin with.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn origin_key_open(
+    ctx: OriginKeyContext,
+    node_key: Vec<u8>,
+    key_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    expect_len("nodeKey", &node_key, KEY_BYTES)?;
+    expect_len("originKeyEnvelope", &key_envelope, KEY_ENVELOPE_BYTES)?;
+    open_key(&node_key, &key_envelope, &origin_key_context(&ctx)?, "origin key")
+}
+
+// ---------------------------------------------------------------------------
 // Hashing
 // ---------------------------------------------------------------------------
 
@@ -1001,9 +1171,9 @@ mod tests {
 
     fn node_ctx() -> NodeKeyContext {
         NodeKeyContext {
-            workspace_id: "ws".into(),
-            node_id: "n1".into(),
-            parent_id: "root".into(),
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            parent_id: "77777777-7777-4777-8777-777777777777".into(),
             parent_key_epoch: 1,
             key_epoch: 2,
         }
@@ -1011,10 +1181,10 @@ mod tests {
 
     fn version_ctx() -> VersionContext {
         VersionContext {
-            workspace_id: "ws".into(),
-            node_id: "n1".into(),
-            version_id: "v1".into(),
-            object_id: "obj".into(),
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            version_id: "44444444-4444-4444-8444-444444444444".into(),
+            object_id: "66666666-6666-4666-8666-666666666666".into(),
         }
     }
 
@@ -1029,7 +1199,7 @@ mod tests {
         assert!(!shows(&format!("{key:?}"), &key.key));
         let grant = WorkspaceGrant {
             version: 1,
-            workspace_id: "ws".into(),
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
             key_version: 1,
             workspace_key_version: 1,
             wrapping_salt: encode(&random(32)),
@@ -1044,8 +1214,8 @@ mod tests {
 
     fn content(plaintext_size: u64, thumbnail_bytes: u32) -> Content {
         Content {
-            workspace_id: "ws".into(),
-            object_id: "obj".into(),
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            object_id: "66666666-6666-4666-8666-666666666666".into(),
             suite: CONTENT_SUITE,
             key: random(32).into(),
             nonce: random(16),
@@ -1095,7 +1265,7 @@ mod tests {
         let envelope = node_wrap(node_ctx(), parent.clone(), node.clone()).unwrap();
         assert_eq!(node_open(node_ctx(), parent.clone(), envelope.clone()).unwrap(), node);
         let mut moved = node_ctx();
-        moved.parent_id = "other".into();
+        moved.parent_id = "88888888-8888-4888-8888-888888888888".into();
         assert!(matches!(node_open(moved, parent.clone(), envelope.clone()), Err(CoreError::Sealed(_))));
         let mut rotated = node_ctx();
         rotated.key_epoch = 3;
@@ -1106,7 +1276,11 @@ mod tests {
     #[test]
     fn metadata_is_padded_in_256_byte_steps_and_capped_at_4096() {
         let key = random(32);
-        let ctx = MetadataContext { workspace_id: "ws".into(), node_id: "n1".into(), metadata_version: 1 };
+        let ctx = MetadataContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            metadata_version: 1,
+        };
         let short = NodeMetadata { name: "a".into(), mime: None, size: None, modified: None };
         assert_eq!(
             metadata_seal(ctx.clone(), key.clone(), short).unwrap().len(),
@@ -1127,7 +1301,11 @@ mod tests {
     #[test]
     fn metadata_seal_drops_out_of_range_fields_and_binds_the_version() {
         let key = random(32);
-        let ctx = MetadataContext { workspace_id: "ws".into(), node_id: "n1".into(), metadata_version: 4 };
+        let ctx = MetadataContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            metadata_version: 4,
+        };
         let dirty = NodeMetadata {
             name: "f".into(),
             mime: Some("x".repeat(256)),
@@ -1147,7 +1325,11 @@ mod tests {
     #[test]
     fn documents_pad_in_growing_steps_and_bind_kind_and_version() {
         let key = random(32);
-        let ctx = DocumentContext { workspace_id: "ws".into(), kind: "tags".into(), version: 3 };
+        let ctx = DocumentContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            kind: "tags".into(),
+            version: 3,
+        };
         let small = document_seal(ctx.clone(), key.clone(), "{}".into()).unwrap();
         assert_eq!(small.len(), NONCE_BYTES + 1024 + TAG_BYTES);
         let medium = document_seal(ctx.clone(), key.clone(), "x".repeat(70 * 1024)).unwrap();
@@ -1164,7 +1346,11 @@ mod tests {
         assert!(matches!(document_seal(bad_kind, key.clone(), "{}".into()), Err(CoreError::Input(_))));
         assert!(matches!(
             document_seal(
-                DocumentContext { workspace_id: "ws".into(), kind: "tags".into(), version: 1 },
+                DocumentContext {
+                    workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+                    kind: "tags".into(),
+                    version: 1
+                },
                 key,
                 "x".repeat(DOCUMENT_MAX_BYTES + 1)
             ),
@@ -1198,7 +1384,7 @@ mod tests {
         assert_eq!(opened.thumbnail_bytes, 3000);
         // Another version id is another context.
         let mut other = version_ctx();
-        other.version_id = "v2".into();
+        other.version_id = "55555555-5555-4555-8555-555555555555".into();
         assert!(matches!(
             version_open(other, CONTENT_SUITE, node_key.clone(), sealed.envelope.clone(), None),
             Err(CoreError::Sealed(_))
@@ -1242,7 +1428,8 @@ mod tests {
         let node_key = random(32);
         let content_key = random(32);
         let envelope =
-            seal(&node_key, &content_key, &version_context(&version_ctx(), LEGACY_CONTENT_SUITE)).unwrap();
+            seal(&node_key, &content_key, &version_context(&version_ctx(), LEGACY_CONTENT_SUITE).unwrap())
+                .unwrap();
         let opened =
             version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), envelope.clone(), Some(77))
                 .unwrap();
@@ -1474,5 +1661,191 @@ mod tests {
             hash_blake2b(vec![], 64).unwrap()[..32],
             "BLAKE2b mixes the length into the digest"
         );
+    }
+
+    fn origin_ctx(origin: &[u8], key_epoch: u64) -> OriginKeyContext {
+        OriginKeyContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            key_epoch,
+            record: OriginRecord::Metadata { metadata_version: 4 },
+            origin_envelope: origin.to_vec(),
+        }
+    }
+
+    #[test]
+    fn the_origin_key_context_is_the_web_s_array_under_its_own_label() {
+        let origin = b"origin".to_vec();
+        let digest = crate::signatures::digest(&origin);
+        assert_eq!(
+            String::from_utf8(origin_key_context(&origin_ctx(&origin, 3)).unwrap()).unwrap(),
+            format!(
+                r#"["hushos/drive/origin-key",1,"11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222","metadata",4,3,"{digest}"]"#
+            )
+        );
+        let version = OriginKeyContext {
+            record: OriginRecord::Version { version_id: "44444444-4444-4444-8444-444444444444".into() },
+            ..origin_ctx(&origin, 3)
+        };
+        assert_eq!(
+            String::from_utf8(origin_key_context(&version).unwrap()).unwrap(),
+            format!(
+                r#"["hushos/drive/origin-key",1,"11111111-1111-4111-8111-111111111111","22222222-2222-4222-8222-222222222222","version","44444444-4444-4444-8444-444444444444",3,"{digest}"]"#
+            )
+        );
+    }
+
+    #[test]
+    fn a_wrapped_origin_key_never_opens_as_a_node_or_content_key_and_neither_opens_as_it() {
+        let node_key = random(32);
+        let origin = random(296);
+        let origin_key = random(32);
+        let wrapped = origin_key_wrap(origin_ctx(&origin, 3), node_key.clone(), origin_key.clone()).unwrap();
+        assert_eq!(wrapped.len(), KEY_ENVELOPE_BYTES);
+        assert_eq!(
+            origin_key_open(origin_ctx(&origin, 3), node_key.clone(), wrapped.clone()).unwrap(),
+            origin_key
+        );
+        let as_node = NodeKeyContext {
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            key_epoch: 3,
+            parent_key_epoch: 3,
+            ..node_ctx()
+        };
+        assert!(matches!(
+            node_open(as_node.clone(), node_key.clone(), wrapped.clone()),
+            Err(CoreError::Sealed(_))
+        ));
+        assert!(matches!(
+            version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), wrapped.clone(), Some(1)),
+            Err(CoreError::Sealed(_))
+        ));
+        let content = ContentKey { key: origin_key.clone().into(), plaintext_size: 0, thumbnail_bytes: 0 };
+        for other in [
+            node_wrap(as_node, node_key.clone(), origin_key.clone()).unwrap(),
+            version_reseal(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), content).unwrap(),
+        ] {
+            assert!(matches!(
+                origin_key_open(origin_ctx(&origin, 3), node_key.clone(), other),
+                Err(CoreError::Sealed(_))
+            ));
+        }
+        // Bound to the epoch, the record and the origin's bytes.
+        assert!(origin_key_open(origin_ctx(&origin, 4), node_key.clone(), wrapped.clone()).is_err());
+        let as_version = OriginKeyContext {
+            record: OriginRecord::Version { version_id: "99999999-9999-4999-8999-999999999999".into() },
+            ..origin_ctx(&origin, 3)
+        };
+        assert!(origin_key_open(as_version, node_key.clone(), wrapped.clone()).is_err());
+        let mut flipped = origin.clone();
+        flipped[40] ^= 1;
+        assert!(origin_key_open(origin_ctx(&flipped, 3), node_key, wrapped).is_err());
+    }
+
+    #[test]
+    fn a_second_rotation_carries_the_origin_byte_for_byte_and_rewraps_only_its_key() {
+        let (first, second, third) = (random(32), random(32), random(32));
+        let ctx = MetadataContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            metadata_version: 4,
+        };
+        let metadata = NodeMetadata { name: "Sam's notes".into(), mime: None, size: Some(3), modified: None };
+        let origin = metadata_seal(ctx.clone(), first.clone(), metadata.clone()).unwrap();
+        let at_two = origin_key_wrap(
+            origin_ctx(&origin, 2),
+            second.clone(),
+            origin_opening_key(origin.clone(), first.clone()).unwrap(),
+        )
+        .unwrap();
+        let current_two = metadata_rekey(ctx.clone(), first, second.clone(), origin.clone()).unwrap();
+        // The next rotation takes the key out of its wrap, never from a node key.
+        let carried = origin_key_open(origin_ctx(&origin, 2), second.clone(), at_two.clone()).unwrap();
+        let at_three = origin_key_wrap(origin_ctx(&origin, 3), third.clone(), carried).unwrap();
+        let current_three = metadata_rekey(ctx.clone(), second, third.clone(), current_two).unwrap();
+        let opened = origin_key_open(origin_ctx(&origin, 3), third.clone(), at_three).unwrap();
+        let aad = metadata_context(&ctx).unwrap();
+        assert_eq!(
+            crate::envelope::open_with_opening_key(&opened, &origin, &aad).unwrap(),
+            open(&third, &current_three, &aad).unwrap()
+        );
+        assert_eq!(metadata_open(ctx, third.clone(), current_three).unwrap(), metadata);
+        assert!(
+            origin_key_open(origin_ctx(&origin, 3), third, at_two).is_err(),
+            "the old wrap is not the new epoch's"
+        );
+    }
+
+    #[test]
+    fn a_rekey_refuses_envelopes_of_the_wrong_length_for_their_record() {
+        let (old, new) = (random(32), random(32));
+        let sealed = version_seal(version_ctx(), old.clone(), random(32), 10, 0).unwrap().envelope;
+        let rekeyed =
+            version_rekey(version_ctx(), CONTENT_SUITE, old.clone(), new.clone(), sealed.clone()).unwrap();
+        assert_eq!(
+            version_open(version_ctx(), CONTENT_SUITE, new.clone(), rekeyed, None).unwrap().plaintext_size,
+            10
+        );
+        assert!(matches!(
+            version_rekey(version_ctx(), LEGACY_CONTENT_SUITE, old.clone(), new.clone(), sealed.clone()),
+            Err(CoreError::Input(_))
+        ));
+        assert!(matches!(
+            version_rekey(version_ctx(), 4, old.clone(), new.clone(), sealed),
+            Err(CoreError::Input(_))
+        ));
+        let ctx = MetadataContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            metadata_version: 1,
+        };
+        assert!(metadata_rekey(ctx, old, new, vec![0; METADATA_ENVELOPE_MAX_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn contexts_take_what_the_web_takes_lowercase_uuids_and_epochs_from_1_to_2_53_minus_1() {
+        let key = random(32);
+        let origin = random(296);
+        let ws = "11111111-1111-4111-8111-111111111111";
+        let n1 = "22222222-2222-4222-8222-222222222222";
+        // The origin key's context: epoch 0, an epoch past the web's integers, ids that are no lowercase UUID.
+        for ctx in [
+            origin_ctx(&origin, 0),
+            origin_ctx(&origin, MAX_SAFE_INTEGER + 1),
+            OriginKeyContext {
+                workspace_id: "0B6F0E1C-6A52-4F37-9D0E-5F1F2A3B4C5D".into(),
+                ..origin_ctx(&origin, 3)
+            },
+            OriginKeyContext { node_id: "n1".into(), ..origin_ctx(&origin, 3) },
+            OriginKeyContext {
+                record: OriginRecord::Metadata { metadata_version: 0 },
+                ..origin_ctx(&origin, 3)
+            },
+            OriginKeyContext {
+                record: OriginRecord::Version { version_id: "v1".into() },
+                ..origin_ctx(&origin, 3)
+            },
+        ] {
+            assert!(
+                matches!(origin_key_wrap(ctx.clone(), key.clone(), random(32)), Err(CoreError::Input(_))),
+                "{ctx:?}"
+            );
+        }
+        assert!(origin_key_wrap(origin_ctx(&origin, MAX_SAFE_INTEGER), key.clone(), random(32)).is_ok());
+        // Metadata and version envelopes alike.
+        let metadata = NodeMetadata { name: "a".into(), mime: None, size: None, modified: None };
+        for ctx in [
+            MetadataContext { workspace_id: "ws".into(), node_id: n1.into(), metadata_version: 1 },
+            MetadataContext {
+                workspace_id: ws.into(),
+                node_id: "0B6F0E1C-6A52-4F37-9D0E-5F1F2A3B4C5D".into(),
+                metadata_version: 1,
+            },
+            MetadataContext { workspace_id: ws.into(), node_id: n1.into(), metadata_version: 0 },
+        ] {
+            assert!(matches!(metadata_seal(ctx, key.clone(), metadata.clone()), Err(CoreError::Input(_))));
+        }
+        let bad = VersionContext { object_id: "obj".into(), ..version_ctx() };
+        assert!(matches!(version_seal(bad, key.clone(), random(32), 1, 0), Err(CoreError::Input(_))));
     }
 }

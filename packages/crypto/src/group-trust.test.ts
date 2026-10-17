@@ -8,6 +8,7 @@ import {
     firstRoster,
     foldInEntry,
     groupIntegrityOf,
+    groupRekeyedIntegrityOf,
     groupWriterTrust,
     newRosterEntry,
     nextRoster,
@@ -81,11 +82,20 @@ import {
     digest,
     keysStatement,
     successionStatement,
+    metadataRekeyedStatement,
+    metadataResealedStatement,
     metadataStatement,
     metadataStatements,
     signHybrid,
     signStatement,
 } from './signatures';
+import {
+    metadataContext,
+    originOpeningKey,
+    rekeyEnvelope,
+    sealMetadata,
+    wrapOriginKey,
+} from './drive';
 
 /*
  * Every device verifies the roster chain the server serves from version 1,
@@ -1938,6 +1948,91 @@ describe('scoped verdicts', () => {
             integrity: 'former-member',
             via: null,
         });
+    });
+
+    test('a removal rotation keeps a former member’s file theirs, never the re-keyer’s', async () => {
+        const { holder, organizer, chain } = await setting();
+        const trustOf = (who: Person) =>
+            groupWriterTrust({
+                groupId: GROUP,
+                areas: { [AREA]: 1 },
+                reading: { status: 'accepted', chain },
+                workspaceId: AREA,
+                writerUserId: who.userId,
+                pinned: null,
+                served: who.served,
+                links: [],
+            });
+        // The holder wrote a file before leaving; the organizer rotates the area after the removal.
+        const statement = {
+            workspaceId: AREA,
+            nodeId: NODE,
+            kind: 'file' as const,
+            metadataVersion: 1,
+        };
+        const ctx = { workspaceId: AREA, nodeId: NODE, metadataVersion: 1 };
+        const [old, fresh] = [pattern(32, 70), pattern(32, 71)];
+        const origin = await sealMetadata(
+            { name: 'budget.ods', mime: null, size: 9, modified: null },
+            old,
+            ctx,
+        );
+        const written = await signStatement(
+            await metadataStatement(statement, origin),
+            holder.signer.signingKey,
+        );
+        const envelope = await rekeyEnvelope(origin, old, fresh, metadataContext(ctx));
+        const keyEnvelope = await wrapOriginKey(originOpeningKey(origin, old), fresh, {
+            workspaceId: AREA,
+            nodeId: NODE,
+            keyEpoch: 2,
+            record: { kind: 'metadata', metadataVersion: 1 },
+            originEnvelope: origin,
+        });
+        const named = {
+            envelope: origin,
+            signerId: holder.userId,
+            signature: written,
+            keyEnvelope,
+        };
+        const record = {
+            record: 'metadata' as const,
+            statement,
+            keyEpoch: 2,
+            envelope,
+            origin: named,
+            rekeySignature: await signStatement(
+                await metadataRekeyedStatement({ ...statement, keyEpoch: 2 }, envelope, named),
+                organizer.signer.signingKey,
+            ),
+        };
+        const trust = {
+            origin: await trustOf(holder),
+            originPersonal: null,
+            rekeyer: await trustOf(organizer),
+            rekeyerPersonal: null,
+        };
+        expect(await groupRekeyedIntegrityOf(record, fresh, trust)).toEqual({
+            origin: { integrity: 'former-member', via: null },
+            rekeyer: { integrity: 'verified', via: GROUP },
+            bound: true,
+        });
+        // The legacy form names only the organizer, who vouches for nothing: what readers saw before.
+        expect(
+            await groupIntegrityOf(
+                () => metadataStatements(statement, envelope),
+                await signStatement(
+                    await metadataResealedStatement(statement, envelope),
+                    organizer.signer.signingKey,
+                ),
+                trust.rekeyer,
+                null,
+            ),
+        ).toEqual({ integrity: 'resealed', via: null });
+        // Without the area's current key the reader cannot check it at all.
+        expect((await groupRekeyedIntegrityOf(record, null, trust)).origin.integrity).toBe(
+            'unchecked',
+        );
     });
 
     test('P1, F3: an earlier key reads retired only along the member’s own chain; a key a holder planted never', async () => {

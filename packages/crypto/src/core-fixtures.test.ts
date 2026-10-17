@@ -4,6 +4,12 @@ import { deviceSessionStatement, emailDigest } from './device-identity';
 import {
     chunkCount,
     ciphertextSize,
+    contentKeyContext,
+    metadataContext,
+    openEnvelopeBytes,
+    openOriginKey,
+    originOpeningKey,
+    rekeyEnvelope,
     contentLength,
     decryptChunk,
     fileBytesOf,
@@ -39,7 +45,11 @@ import {
     metadataSavedStatement,
     metadataStatement,
     metadataStatements,
+    metadataRekeyedStatement,
     verifyStatement,
+    versionRekeyedStatement,
+    type MetadataStatement,
+    type VersionStatement,
     versionSavedStatement,
     versionStatement,
     versionStatements,
@@ -49,9 +59,10 @@ import { openWorkspaceKey } from './workspace';
 import { openShareKey } from './shares';
 import { openSettings, openSettingsKey } from './contacts';
 import web from '../../../crates/hushos-core/fixtures/web.json';
-import { decode, wrappingKey } from './keys';
+import { decode, encode, wrappingKey } from './keys';
 import { accountKeyContext } from './protocol';
 import core from './__fixtures__/core.json';
+import { carriedRekeyed, judgeRekeyed, readRekeyed } from './rekeyed-testkit';
 
 /* The file's bytes as the fixture writes them; an empty file is the empty string, which decode refuses. */
 const fileOf = (value: string) => (value === '' ? new Uint8Array(0) : decode(value));
@@ -691,5 +702,102 @@ describe('records sealed by the Rust core', () => {
         });
         expect(await verifyStatement(other, signature, publicKey)).toBe(false);
         expect(await emailDigest(session.email)).toBe(session.emailHash);
+    });
+
+    it('reads every rekeyed case the core declared exactly as the core reads it', async () => {
+        const cases = core.rekeyed.cases as {
+            name: string;
+            input: unknown;
+            expected: unknown;
+            carried: boolean | null;
+        }[];
+        expect(cases.length).toBeGreaterThanOrEqual(40);
+        for (const { name, input, expected, carried } of cases) {
+            const read = readRekeyed(input);
+            expect(read, name).toBeDefined();
+            expect(await judgeRekeyed(read!), name).toEqual(expected);
+            // The next rotation carries the origin exactly when the core said it would.
+            expect(await carriedRekeyed(read!), name).toBe(carried);
+        }
+    });
+
+    it('builds the core’s rekeyed statements, origin keys and raw re-seals byte for byte', async () => {
+        const fixture = core.rekeyed;
+        const old = decode(fixture.oldNodeKey, 32);
+        const fresh = decode(fixture.nodeKey, 32);
+        const rekeyer = decode(fixture.rekeyer.signingPublicKey, 32);
+        for (const which of ['metadata', 'version'] as const) {
+            const record = fixture[which];
+            const origin = record.origin;
+            const envelope = decode(record.envelope);
+            const originEnvelope = decode(origin.envelope);
+            const named = {
+                envelope: originEnvelope,
+                signerId: origin.signerId,
+                signature: decode(origin.signature),
+                keyEnvelope: decode(origin.keyEnvelope),
+            };
+            const statement =
+                which === 'metadata'
+                    ? await metadataRekeyedStatement(
+                          { ...(record.statement as MetadataStatement), keyEpoch: record.keyEpoch },
+                          envelope,
+                          named,
+                      )
+                    : await versionRekeyedStatement(
+                          {
+                              ...(record.statement as unknown as VersionStatement),
+                              keyEpoch: record.keyEpoch,
+                          },
+                          envelope,
+                          named,
+                      );
+            expect(encode(statement), which).toBe(
+                which === 'metadata' ? fixture.metadataStatement : fixture.versionStatement,
+            );
+            expect(await verifyStatement(statement, decode(record.rekeySignature), rekeyer)).toBe(
+                true,
+            );
+            const originKey =
+                which === 'metadata' ? fixture.metadataOriginKey : fixture.versionOriginKey;
+            expect(encode(originOpeningKey(originEnvelope, old))).toBe(originKey);
+            const s = record.statement as Record<string, unknown>;
+            const keyCtx = {
+                workspaceId: s.workspaceId as string,
+                nodeId: s.nodeId as string,
+                keyEpoch: record.keyEpoch,
+                record:
+                    which === 'metadata'
+                        ? {
+                              kind: 'metadata' as const,
+                              metadataVersion: s.metadataVersion as number,
+                          }
+                        : { kind: 'version' as const, versionId: s.versionId as string },
+                originEnvelope,
+            };
+            expect(encode(await openOriginKey(decode(origin.keyEnvelope), fresh, keyCtx))).toBe(
+                originKey,
+            );
+            // This twin's raw re-seal of the core's origin holds the very bytes the core's does.
+            const aad =
+                which === 'metadata'
+                    ? metadataContext({
+                          workspaceId: s.workspaceId as string,
+                          nodeId: s.nodeId as string,
+                          metadataVersion: s.metadataVersion as number,
+                      })
+                    : contentKeyContext({
+                          workspaceId: s.workspaceId as string,
+                          nodeId: s.nodeId as string,
+                          versionId: s.versionId as string,
+                          objectId: s.objectId as string,
+                          suite: s.contentSuite as number,
+                      });
+            const mine = await rekeyEnvelope(originEnvelope, old, fresh, aad);
+            expect(mine.subarray(0, 24)).not.toEqual(envelope.subarray(0, 24));
+            expect(await openEnvelopeBytes(mine, fresh, aad)).toEqual(
+                await openEnvelopeBytes(envelope, fresh, aad),
+            );
+        }
     });
 });

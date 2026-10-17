@@ -1781,6 +1781,10 @@ describe('group verdicts', () => {
         await expect(verify(writer({}, f.bob.served))).resolves.toMatchObject({
             metadata: 'unchecked',
         });
+        // But a stripped signature is unsigned whatever did not load: never hidden as unchecked.
+        await expect(
+            verify(writer({}, f.bob.served), { ...folderOf.signed, metadataSignature: '' }),
+        ).resolves.toMatchObject({ metadata: 'unsigned' });
     });
 
     test('a removal’s finish walk re-seals the departing member’s records, though the committed chain still lists them', async () => {

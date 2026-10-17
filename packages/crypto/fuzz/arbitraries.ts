@@ -230,6 +230,7 @@ export function inputs(target: Target): fc.Arbitrary<{ target: Target; data: Uin
         case 'share_open':
         case 'key_seal_open':
         case 'area_grant_open':
+        case 'origin_open':
             return flipped(target, seeds);
         case 'accept':
             // Histories only as the entry point builds them: an edit could break the shape the

@@ -52,8 +52,10 @@ import type { ContactPin } from './contacts';
 import {
     digest,
     integrityOf,
+    rekeyedChecks,
     verifyHybrid,
     type Integrity,
+    type RekeyedRecord,
     type StatementForms,
     type TrustedSigner,
 } from './signatures';
@@ -2095,34 +2097,120 @@ export async function groupIntegrityOf(
     trust: GroupWriterTrust,
     personal: TrustedSigner | null,
 ): Promise<{ integrity: GroupIntegrity; via: string | null }> {
+    return groupVerdictOf(trust, personal, !!signature, (signer) =>
+        integrityOf(statements, signature, signer),
+    );
+}
+
+/* groupIntegrityOf over any check of one signature under the keys it is given (Rust's group_integrity). */
+async function groupVerdictOf(
+    trust: GroupWriterTrust,
+    personal: TrustedSigner | null,
+    signed: boolean,
+    check: (signer: TrustedSigner | null) => Promise<Integrity>,
+): Promise<{ integrity: GroupIntegrity; via: string | null }> {
+    // No signature is unsigned whatever the roster says: an unloaded roster must not hide a stripped one.
+    if (!signed) return { integrity: 'unsigned', via: null };
     // Without the writer's served identity and links, a key their chain retired may be missing.
     const unknown = (integrity: Integrity, linksLoaded: boolean): Integrity =>
         integrity === 'bad-signature' && !linksLoaded ? 'unchecked' : integrity;
     switch (trust.trust) {
         case 'outside':
-            return { integrity: await integrityOf(statements, signature, personal), via: null };
+            return { integrity: await check(personal), via: null };
         case 'unchecked':
             return { integrity: 'unchecked', via: null };
         case 'key-conflict':
-            return { integrity: signature ? 'key-conflict' : 'unsigned', via: null };
+            return { integrity: 'key-conflict', via: null };
         case 'former-member': {
-            const integrity = unknown(
-                await integrityOf(statements, signature, trust.signer),
-                trust.linksLoaded,
-            );
-            const signed = ['verified', 'saved-from-link', 'resealed', 'retired-key'];
+            const integrity = unknown(await check(trust.signer), trust.linksLoaded);
+            const valid = ['verified', 'saved-from-link', 'resealed', 'retired-key'];
             return {
-                integrity: signed.includes(integrity) ? 'former-member' : integrity,
+                integrity: valid.includes(integrity) ? 'former-member' : integrity,
                 via: null,
             };
         }
         case 'roster': {
-            const integrity = unknown(
-                await integrityOf(statements, signature, trust.signer),
-                trust.linksLoaded,
-            );
+            const integrity = unknown(await check(trust.signer), trust.linksLoaded);
             const vouched = integrity === 'verified' || integrity === 'saved-from-link';
             return { integrity, via: vouched ? trust.via : null };
         }
+    }
+}
+
+/*
+ * Whose keys a re-keyed record's two signatures are checked under in a
+ * group's area: groupWriterTrust for the origin's signer and for the
+ * re-keyer, and the personal keys the reader trusts for each (outside the
+ * roster's reach).
+ */
+export type GroupRekeyedTrust = {
+    origin: GroupWriterTrust;
+    originPersonal: TrustedSigner | null;
+    rekeyer: GroupWriterTrust;
+    rekeyerPersonal: TrustedSigner | null;
+};
+export type GroupVerdictWithVia = { integrity: GroupIntegrity; via: string | null };
+/*
+ * A re-keyed record in a group's area, as RekeyedVerdict says: the origin's
+ * verdict in light of the origin signer's trust (so a removed member's file
+ * reads `former-member`, named after them, never as the re-keyer's) when
+ * `bound` is true, `bad-signature` when it is false, `unchecked` when null;
+ * and the re-keyer's in light of theirs. A missing or bad re-key signature,
+ * or a re-keyer in key conflict, is an Unverified mark, never a mismatch on
+ * its own.
+ */
+export type GroupRekeyedVerdict = {
+    origin: GroupVerdictWithVia;
+    rekeyer: GroupVerdictWithVia;
+    bound: boolean | null;
+};
+
+/*
+ * rekeyedIntegrityOf in a group's area. `nodeKey` is the node's key at the
+ * record's epoch, null when the reader does not hold it (`unchecked`); a roster
+ * that did not load is `{ trust: 'unchecked' }` in `trust`.
+ */
+export async function groupRekeyedIntegrityOf(
+    record: RekeyedRecord,
+    nodeKey: Uint8Array | null,
+    trust: GroupRekeyedTrust,
+): Promise<GroupRekeyedVerdict> {
+    const unchecked = (): GroupRekeyedVerdict => ({
+        origin: { integrity: 'unchecked', via: null },
+        rekeyer: { integrity: 'unchecked', via: null },
+        bound: null,
+    });
+    if (!nodeKey) return unchecked();
+    try {
+        const checks = await rekeyedChecks(record, nodeKey);
+        // Attested: the re-key signature verified under the current key the group's trust names for them.
+        let attested = false;
+        const rekeyer = await groupVerdictOf(
+            trust.rekeyer,
+            trust.rekeyerPersonal,
+            checks.rekeySigned,
+            async (signer) => {
+                const integrity = await checks.rekeyer(signer);
+                attested = integrity === 'verified';
+                return integrity;
+            },
+        );
+        const bound = checks.bound(attested);
+        if (bound === false)
+            return { origin: { integrity: 'bad-signature', via: null }, rekeyer, bound };
+        if (bound === null)
+            return { origin: { integrity: 'unchecked', via: null }, rekeyer, bound };
+        // With no origin signer named, no roster or pin speaks for anyone: judged under no keys at all.
+        const origin = checks.originSignerGone
+            ? await groupVerdictOf({ trust: 'outside' }, null, checks.originSigned, checks.origin)
+            : await groupVerdictOf(
+                  trust.origin,
+                  trust.originPersonal,
+                  checks.originSigned,
+                  checks.origin,
+              );
+        return { origin, rekeyer, bound };
+    } catch {
+        return unchecked();
     }
 }

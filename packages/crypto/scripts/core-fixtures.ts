@@ -61,6 +61,8 @@ import {
 import { deriveId, type IdKind } from '../src/ids';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
+import { carriedRekeyed, judgeRekeyed, readRekeyed, rekeyedCases } from '../src/rekeyed-testkit';
+import { isDeepStrictEqual } from 'node:util';
 
 /*
  * Records sealed by the web's code for the Rust core to open, so the two
@@ -571,6 +573,91 @@ const signatures = {
     },
 };
 
+// Re-keyed records (docs/integrity-design.md): the node's metadata and suite 3 version as the account
+// wrote and signed them above, re-keyed to the next epoch by the granter keeping them as origins, and
+// the cases both twins judge alike (src/rekeyed-testkit.ts, tests/common/rekeyed.rs).
+const rekeyerKeys = { userId: granterUserId, secretKey: granterKeys.signingKey };
+const otherVersionSigned = {
+    workspaceId,
+    nodeId,
+    versionId: node.bareVersion.ctx.versionId,
+    objectId: node.bareVersion.ctx.objectId,
+    contentSuite: CONTENT_SUITE,
+};
+const otherNodeSigned = { ...metadataSigned, nodeId: uuid() };
+const otherNodeEnvelope = await sealMetadata(metadata, nodeKey, {
+    workspaceId,
+    nodeId: otherNodeSigned.nodeId,
+    metadataVersion: 3,
+});
+const freshNodeKey = random(32);
+const rekeyedMade = await rekeyedCases({
+    oldNodeKey: nodeKey,
+    nodeKey: freshNodeKey,
+    keyEpoch: nodeCtx.keyEpoch + 1,
+    parentId: nodeCtx.parentId,
+    writer: {
+        userId,
+        secretKey: signingKey,
+        publicKey: decode(identity.signingPublicKey, 32),
+    },
+    rekeyer: {
+        ...rekeyerKeys,
+        publicKey: decode(granterIdentity.signingPublicKey, 32),
+    },
+    stranger: sodium.crypto_sign_keypair().publicKey,
+    group: uuid(),
+    metadata: {
+        statement: metadataSigned,
+        plaintext: metadata,
+        envelope: decode(node.metadataEnvelope),
+        signature: decode(signatures.metadata.signature),
+    },
+    version: {
+        statement: versionSigned,
+        record: { contentKey, plaintextSize: 1000, thumbnailBytes: 300 },
+        envelope: decode(node.version.envelope),
+        signature: decode(signatures.version.signature),
+    },
+    otherVersion: {
+        statement: otherVersionSigned,
+        record: { contentKey, plaintextSize: 5, thumbnailBytes: 0 },
+        envelope: decode(node.bareVersion.envelope),
+        signature: await signStatement(
+            await versionStatement(otherVersionSigned, decode(node.bareVersion.envelope)),
+            signingKey,
+        ),
+    },
+    otherNode: {
+        statement: otherNodeSigned,
+        envelope: otherNodeEnvelope,
+        signature: await signStatement(
+            await metadataStatement(otherNodeSigned, otherNodeEnvelope),
+            signingKey,
+        ),
+    },
+});
+// The declared verdicts must be this twin's own before the other twin is held to them.
+for (const { name, input, expected, carried } of rekeyedMade.cases) {
+    const read = readRekeyed(input);
+    if (!read) throw new Error(`rekeyed case ${name} does not read`);
+    const got = await judgeRekeyed(read);
+    if (!isDeepStrictEqual(got, expected))
+        throw new Error(
+            `rekeyed case ${name}: ${JSON.stringify(got)} != ${JSON.stringify(expected)}`,
+        );
+    if ((await carriedRekeyed(read)) !== carried)
+        throw new Error(`rekeyed case ${name}: carried is not ${carried}`);
+}
+const rekeyed = {
+    oldNodeKey: encode(nodeKey),
+    nodeKey: encode(freshNodeKey),
+    keyEpoch: nodeCtx.keyEpoch + 1,
+    writer: { userId, signingPublicKey: identity.signingPublicKey },
+    rekeyer: { userId: granterUserId, signingPublicKey: granterIdentity.signingPublicKey },
+    ...rekeyedMade,
+};
+
 // Scoped ids: fixed seeds and scopes, so the ids are known answers both sides must derive.
 const idScopes = [
     '0b6f0e1c-6a52-4f37-9d0e-5f1f2a3b4c5d',
@@ -741,6 +828,7 @@ await writeFile(
             recovery,
             settings,
             signatures,
+            rekeyed,
             succession,
             keys,
             upgrade,

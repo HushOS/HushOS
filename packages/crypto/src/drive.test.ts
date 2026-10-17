@@ -39,7 +39,16 @@ import {
     metadataContext,
     openDocument,
     sealDocument,
+    contentKeyContext,
+    openEnvelopeBytes,
+    openOriginKey,
+    openWithOriginKey,
+    originOpeningKey,
+    rekeyEnvelope,
+    wrapOriginKey,
+    type OriginKeyContext,
 } from './drive';
+import { encryptKey } from './aead';
 import sodium from 'libsodium-wrappers';
 
 const WS = '11111111-1111-4111-8111-111111111111';
@@ -665,5 +674,175 @@ describe('padding', () => {
         legacy.set(nonce);
         legacy.set(body, 24);
         await expect(openMetadata(legacy, key, ctx)).resolves.toEqual(meta('old'));
+    });
+});
+
+describe('re-keyed records', () => {
+    const metaCtx = { workspaceId: WS, nodeId: FOLDER, metadataVersion: 4 };
+    const keyCtx = (originEnvelope: Uint8Array, keyEpoch = 3): OriginKeyContext => ({
+        workspaceId: WS,
+        nodeId: FOLDER,
+        keyEpoch,
+        record: { kind: 'metadata', metadataVersion: 4 },
+        originEnvelope,
+    });
+    const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+
+    test('the origin key is HChaCha20, the draft’s known answer', () => {
+        // draft-irtf-cfrg-xchacha-03, 2.2.1: the envelope's first 16 nonce bytes are HChaCha20's input.
+        const key = Uint8Array.from({ length: 32 }, (_, i) => i);
+        const envelope = new Uint8Array(24 + 16 + 1);
+        envelope.set(Buffer.from('000000090000004a0000000031415927', 'hex'));
+        expect(hex(originOpeningKey(envelope, key))).toBe(
+            '82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc',
+        );
+    });
+
+    test('the origin key opens libsodium’s own envelope, and no other envelope the key sealed', async () => {
+        const nodeKey = generateKey();
+        const origin = await sealMetadata(
+            { name: 'a.txt', mime: null, size: 1, modified: null },
+            nodeKey,
+            metaCtx,
+        );
+        const originKey = originOpeningKey(origin, nodeKey);
+        expect(originKey).not.toEqual(nodeKey);
+        const aad = metadataContext(metaCtx);
+        expect(await openWithOriginKey(origin, originKey, aad)).toEqual(
+            await openEnvelopeBytes(origin, nodeKey, aad),
+        );
+        // Another envelope under the same node key and context: another nonce, so the origin key fails.
+        const other = await sealMetadata(
+            { name: 'b.txt', mime: null, size: 1, modified: null },
+            nodeKey,
+            metaCtx,
+        );
+        await expect(openWithOriginKey(other, originKey, aad)).rejects.toThrow(CryptoError);
+        // The nonce's last eight bytes are bound too, and so is the context.
+        const moved = origin.slice();
+        moved[20]! ^= 1;
+        await expect(openWithOriginKey(moved, originKey, aad)).rejects.toThrow(CryptoError);
+        await expect(
+            openWithOriginKey(
+                origin,
+                originKey,
+                metadataContext({ ...metaCtx, metadataVersion: 5 }),
+            ),
+        ).rejects.toThrow(CryptoError);
+        // As an XChaCha key it opens nothing.
+        await expect(openEnvelopeBytes(origin, originKey, aad)).rejects.toThrow(CryptoError);
+    });
+
+    test('a raw re-seal keeps padding and odd JSON byte for byte, under a fresh nonce', async () => {
+        const [old, fresh] = [generateKey(), generateKey()];
+        const aad = metadataContext(metaCtx);
+        // Key order, an unknown field and odd padding: sealMetadata would write none of them.
+        const odd = new TextEncoder().encode(
+            '{"modified":null,"name":"a\u0301.txt","x":[1],"size":2}\t  ',
+        );
+        const nonce = crypto.getRandomValues(new Uint8Array(24));
+        const origin = new Uint8Array([...nonce, ...(await encryptKey(odd, old, nonce, aad))]);
+        const rekeyed = await rekeyEnvelope(origin, old, fresh, aad);
+        expect(rekeyed.length).toBe(origin.length);
+        expect(rekeyed.subarray(0, 24)).not.toEqual(origin.subarray(0, 24));
+        expect(await openEnvelopeBytes(rekeyed, fresh, aad)).toEqual(odd);
+        await expect(openEnvelopeBytes(rekeyed, old, aad)).rejects.toThrow(CryptoError);
+        await expect(rekeyEnvelope(origin, fresh, old, aad)).rejects.toThrow(CryptoError);
+        await expect(rekeyEnvelope(origin, old, new Uint8Array(16), aad)).rejects.toThrow(
+            CryptoError,
+        );
+        // A version envelope too: its record unchanged.
+        const vctx = {
+            workspaceId: WS,
+            nodeId: FOLDER,
+            versionId: VERSION,
+            objectId: OBJECT,
+            suite: CONTENT_SUITE,
+        };
+        const version = await sealVersion(
+            { contentKey: generateKey(), plaintextSize: 7, thumbnailBytes: 3 },
+            old,
+            vctx,
+        );
+        const vaad = contentKeyContext(vctx);
+        expect(
+            await openEnvelopeBytes(await rekeyEnvelope(version, old, fresh, vaad), fresh, vaad),
+        ).toEqual(await openEnvelopeBytes(version, old, vaad));
+    });
+
+    test('the wrapped origin key never opens as a node or content key, and neither opens as it', async () => {
+        const nodeKey = generateKey();
+        const origin = await sealMetadata(
+            { name: 'a', mime: null, size: null, modified: null },
+            generateKey(),
+            metaCtx,
+        );
+        const originKey = generateKey();
+        const wrapped = await wrapOriginKey(originKey, nodeKey, keyCtx(origin));
+        expect(wrapped.length).toBe(72);
+        expect(await openOriginKey(wrapped, nodeKey, keyCtx(origin))).toEqual(originKey);
+        const nodeCtx = {
+            workspaceId: WS,
+            nodeId: FOLDER,
+            parentId: ROOT,
+            parentKeyEpoch: 3,
+            keyEpoch: 3,
+        };
+        const contentCtx = {
+            workspaceId: WS,
+            nodeId: FOLDER,
+            versionId: VERSION,
+            objectId: OBJECT,
+        };
+        await expect(openNodeKey(wrapped, nodeKey, nodeCtx)).rejects.toThrow(CryptoError);
+        await expect(openContentKey(wrapped, nodeKey, contentCtx)).rejects.toThrow(CryptoError);
+        // The same key under the node key with the other labels: refused as an origin key.
+        for (const other of [
+            await wrapNodeKey(originKey, nodeKey, nodeCtx),
+            await wrapContentKey(originKey, nodeKey, contentCtx),
+        ])
+            await expect(openOriginKey(other, nodeKey, keyCtx(origin))).rejects.toThrow(
+                CryptoError,
+            );
+        // Bound to the epoch, the record and the origin's digest.
+        await expect(openOriginKey(wrapped, nodeKey, keyCtx(origin, 4))).rejects.toThrow(
+            CryptoError,
+        );
+        await expect(
+            openOriginKey(wrapped, nodeKey, {
+                ...keyCtx(origin),
+                record: { kind: 'version', versionId: VERSION },
+            }),
+        ).rejects.toThrow(CryptoError);
+        const flipped = origin.slice();
+        flipped[30]! ^= 1;
+        await expect(openOriginKey(wrapped, nodeKey, keyCtx(flipped))).rejects.toThrow(CryptoError);
+    });
+
+    test('a second rotation carries the origin byte for byte and rewraps only its key', async () => {
+        const [first, second, third] = [generateKey(), generateKey(), generateKey()];
+        const aad = metadataContext(metaCtx);
+        const origin = await sealMetadata(
+            { name: 'Sam’s notes', mime: null, size: 3, modified: null },
+            first,
+            metaCtx,
+        );
+        // Rotation one: epoch 2 under `second`.
+        const atTwo = await wrapOriginKey(
+            originOpeningKey(origin, first),
+            second,
+            keyCtx(origin, 2),
+        );
+        const currentTwo = await rekeyEnvelope(origin, first, second, aad);
+        // Rotation two: the origin key comes out of its wrap, never from a node key, and goes under `third`.
+        const carried = await openOriginKey(atTwo, second, keyCtx(origin, 2));
+        const atThree = await wrapOriginKey(carried, third, keyCtx(origin, 3));
+        const currentThree = await rekeyEnvelope(currentTwo, second, third, aad);
+        const opened = await openOriginKey(atThree, third, keyCtx(origin, 3));
+        expect(await openWithOriginKey(origin, opened, aad)).toEqual(
+            await openEnvelopeBytes(currentThree, third, aad),
+        );
+        // The previous wrap does not pass for the new epoch.
+        await expect(openOriginKey(atTwo, third, keyCtx(origin, 3))).rejects.toThrow(CryptoError);
     });
 });
