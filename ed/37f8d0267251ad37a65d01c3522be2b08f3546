@@ -1,0 +1,88 @@
+docs/groups-mobile-plan.md
+  s_c56e31c87cddde::t_e0bff170fcfaba 1-149
+crates/hushos-core/src/area_ledger.rs
+  s_c56e31c87cddde::t_5e3a8718fed10e 1-1025
+  s_c56e31c87cddde::t_dab529195d0f29 1026-1544
+packages/crypto/src/area-ledger.ts
+  s_c56e31c87cddde::t_008baedf1a6d1e 1-815
+  s_c56e31c87cddde::t_87de142ab0a90b 816-834
+crates/hushos-core/tests/common/area_ledger.rs
+  s_c56e31c87cddde::t_407b199c1006cb 1-587,589
+  s_c56e31c87cddde::t_ff54df24fb7d0b 588,590-691
+packages/crypto/src/area-ledger-testkit.ts
+  s_c56e31c87cddde::t_466c628758c2fb 1-641
+  s_c56e31c87cddde::t_d57688b3695c31 642-745
+packages/crypto/src/area-ledger.test.ts
+  s_c56e31c87cddde::t_39df84dc0febcc 1-35
+  s_c56e31c87cddde::t_e9bb729c0ba849 36-38
+.github/workflows/fuzz.yml
+  s_c56e31c87cddde::t_17edce9e0a5e4a 139
+crates/hushos-core/AGENTS.md
+  s_c56e31c87cddde::t_038af45bc09a91 100-105,108
+crates/hushos-core/examples/area_ledger_fixtures.rs
+  s_c56e31c87cddde::t_4fc55b6ea5a704 1-37
+crates/hushos-core/fixtures/area-ledger-scenarios.json
+  s_c56e31c87cddde::t_cae2f9d941894b 1-1780
+crates/hushos-core/fixtures/web-area-ledger.json
+  s_c56e31c87cddde::t_8b93a5e3e0106d 1-1714
+crates/hushos-core/fuzz/Cargo.toml
+  s_c56e31c87cddde::t_ccc454868465f5 136-142
+crates/hushos-core/fuzz/fuzz_targets/area_ledger.rs
+  s_c56e31c87cddde::t_ecffccc46b564b 1-3
+crates/hushos-core/fuzz/src/lib.rs
+  s_c56e31c87cddde::t_22e08089bbee29 21-25
+crates/hushos-core/fuzz/src/targets.rs
+  s_c56e31c87cddde::t_420e2904f22473 38,59,860-877
+crates/hushos-core/src/drive.rs
+  s_c56e31c87cddde::t_82ddcdafe975b9 199-285,1938-1970
+crates/hushos-core/src/lib.rs
+  s_c56e31c87cddde::t_0948dc7464dde4 15,37
+crates/hushos-core/tests/area_ledger_fixtures.rs
+  s_c56e31c87cddde::t_8b4e57252b5a4e 1-64
+crates/hushos-core/tests/common/mod.rs
+  s_c56e31c87cddde::t_1c41a9ad6a140e 3
+docs/groups-invariants.md
+  s_c56e31c87cddde::t_a37c270bc8ba9a 196,199-200,204
+package.json
+  s_c56e31c87cddde::t_33ffec2128c0aa 27
+packages/crypto/fuzz/arbitraries.ts
+  s_c56e31c87cddde::t_54233a69c3c0e9 217-305,330-331
+packages/crypto/fuzz/fixtures.ts
+  s_c56e31c87cddde::t_dd16b49d0ec995 50-51
+packages/crypto/fuzz/jazzer.ts
+  s_c56e31c87cddde::t_872fd539d34160 32
+packages/crypto/fuzz/run.ts
+  s_c56e31c87cddde::t_132bf7f8c95ce6 64
+packages/crypto/fuzz/seeds.ts
+  s_c56e31c87cddde::t_8c331631ec7a17 6,284-289
+packages/crypto/fuzz/verdicts.ts
+  s_c56e31c87cddde::t_a8d3f425739bcc 70,103,1237-1238,1241-1259
+packages/crypto/package.json
+  s_c56e31c87cddde::t_5d8b493c4d197f 32
+packages/crypto/scripts/area-ledger-fixtures.ts
+  s_c56e31c87cddde::t_28689297d46067 1-37
+packages/crypto/src/__fixtures__/core-area-ledger.json
+  s_c56e31c87cddde::t_c3428788447b55 1-1714
+packages/crypto/src/area-ledger-fixtures.test.ts
+  s_c56e31c87cddde::t_336fb2f48a847f 1-56
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_eed137b3b8bdc7 2,738-739,1253-1255,1257,1278-1279,1285-1287,1289,1318-1319,1340,1368,1378,2331,2340-2342,3238-3239
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_bbb4a6b48a429e 71,938-941,943-962,1271,1289-1292,1299,1552,1700,1703-1713,1717,1730,1785-1786,1793,2520,2550,2552,2575,2591-2592,2603-2606,2630,2642-2644,2707,2990,3007
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed37f8d0267251ad37a65d01c3522be2b08f3546",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
