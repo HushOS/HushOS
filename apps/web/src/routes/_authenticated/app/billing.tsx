@@ -37,6 +37,7 @@ import {
     CHECKOUT_SYNC_INTERVAL_MS,
     checkoutNotice,
     checkoutReturn,
+    isRateLimited,
     SUPPORT_LABEL,
 } from '@/lib/checkout-return';
 import { cue } from '@/lib/sounds';
@@ -198,7 +199,10 @@ function BillingPage() {
     // was received before then.
     const [syncTries, setSyncTries] = useState(0);
     const [synced, setSynced] = useState<BillingSubscription | null>(null);
-    const returning = checkoutId ? checkoutReturn({ synced, tries: syncTries }) : null;
+    const [syncLimited, setSyncLimited] = useState(false);
+    const returning = checkoutId
+        ? checkoutReturn({ synced, tries: syncTries, limited: syncLimited })
+        : null;
     const syncing = returning?.kind === 'finishing';
     useEffect(() => {
         if (!checkoutId || !syncing) return;
@@ -210,7 +214,9 @@ function BillingPage() {
                         settle(next);
                         setSynced(next.subscription);
                     })
-                    .catch(() => undefined)
+                    .catch((error: unknown) => {
+                        if (isRateLimited(error)) setSyncLimited(true);
+                    })
                     .finally(() => setSyncTries((n) => n + 1));
             },
             syncTries === 0 ? 0 : CHECKOUT_SYNC_INTERVAL_MS,
