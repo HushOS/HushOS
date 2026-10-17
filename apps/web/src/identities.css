@@ -319,10 +319,11 @@
     }
 }
 /*
- * iOS and iPadOS WebKit, which every browser there uses (-webkit-touch-callout exists
- * nowhere else), scroll the page off the main thread but move scroll-driven animations
- * on it, so the line trails the finger. There it is left out rather than shown lagging;
- * Chrome on Android and desktop browsers keep it in step. Drop this once WebKit runs
+ * iOS and iPadOS WebKit, which every browser there uses, scroll the page off the main
+ * thread but move scroll-driven animations on it, so the line trails the finger. There
+ * it is left out rather than shown lagging. -webkit-touch-callout is supported only
+ * there as far as we know (Safari on the Mac and Chromium do not); Chrome on Android
+ * should keep the line in step, as desktop browsers do. Drop this once WebKit runs
  * scroll timelines off the main thread.
  */
 @supports (-webkit-touch-callout: none) {
