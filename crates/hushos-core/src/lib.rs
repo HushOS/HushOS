@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod account;
+mod area_ledger;
 mod bytes;
 mod canonical;
 mod contacts;
@@ -33,6 +34,7 @@ mod signatures;
 mod succession_path;
 
 pub use account::*;
+pub use area_ledger::*;
 pub use bytes::*;
 pub use contacts::*;
 pub use devices::*;

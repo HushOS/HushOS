@@ -18,6 +18,11 @@ pub mod rekeyed;
 #[path = "../../tests/common/groups.rs"]
 pub mod groups;
 
+/// The family write rules as steps, run as the fixture tests run them.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/area_ledger.rs"]
+pub mod area_ledger;
+
 /// Runs `target` on `data` with every invariant asserted: what a fuzz target calls.
 pub fn check(target: &str, data: &[u8]) {
     targets::verdict(target, data).expect("a known target");

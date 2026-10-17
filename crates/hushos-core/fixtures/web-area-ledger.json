@@ -1,0 +1,1714 @@
+{
+    "generatedBy": "packages/crypto/scripts/area-ledger-fixtures.ts",
+    "scenarios": [
+        {
+            "name": "a family folder takes writes once its top level is the one the member list committed to",
+            "outcomes": [
+                {
+                    "ok": true,
+                    "isArea": false,
+                    "read": null,
+                    "write": null
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "error": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": 1
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1"
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1",
+                    "epoch": 1
+                },
+                {
+                    "ok": true,
+                    "key": "made:B@1"
+                },
+                {
+                    "error": "area-root"
+                },
+                {
+                    "ok": true,
+                    "key": "k:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:2",
+                    "epoch": 1
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "error": "item-changed"
+                },
+                {
+                    "ok": true,
+                    "none": true
+                }
+            ],
+            "made": [
+                {
+                    "step": 8,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "tA7mV7edVdHI3-W9OJjG80v6oAKP6pMP-aGfXGCTAEk",
+                    "keyEnvelope": "e_vioGHO5RivPVMcKUJideKJZau5sAa2f5a7ylytN0kincEqBIqo30Tpn_ezC9ACR1uxvMBmaHozVNFsZY0ctlvvpPVVDmUN"
+                },
+                {
+                    "step": 10,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "tA7mV7edVdHI3-W9OJjG80v6oAKP6pMP-aGfXGCTAEk",
+                    "key": "smIOwigsM-ec9TyydZbnhrbtIrG_BGDvRaMl4W4TCXg",
+                    "keyEnvelope": "TFcwi1LjDgdIprSQRf0ts1NXC6HjWovi67Ahr_oxs8y6c-vorQbH_G9UsDlBj8oVnKjqq5wcNjyIYG-ajPEnDsWhmjk9lJPj"
+                },
+                {
+                    "step": 14,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "smIOwigsM-ec9TyydZbnhrbtIrG_BGDvRaMl4W4TCXg",
+                    "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
+                    "keyEnvelope": "zTbzkEdRr-UrLuHc8XwHEQK5bqIUU8ltcNu_iCrPqdMB_usboSk1X3KMgjHgNRcFKHPwfpLfFlWbvJSrReWi_3B2AXnQbQW_"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "XwX0G_sxHV7ilGcF9IaXHVuMAfwHz0NumGQ1_TY91jOr_V7IQb9o1eSy5B-QKInL_2Hv1hwKx7frG_prx3Ra2AXAaF1TW-vZ"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "tA7mV7edVdHI3-W9OJjG80v6oAKP6pMP-aGfXGCTAEk",
+                    "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
+                    "keyEnvelope": "2oeTcojg-MFjMhUwAJEtN8gMDPbRIyM5H4YkdxP50FlifpwvfnQwvn_otfORPNlEbEJ9BUy91fuJ03tXdW3tcjuopFF_MPZO"
+                }
+            ]
+        },
+        {
+            "name": "a top level under the right folder key but not the committed one opens nothing and makes nothing writable",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "error": "not-committed-root"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": "keys-changed"
+                },
+                {
+                    "error": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": null
+                },
+                {
+                    "error": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": 1
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": 1
+                }
+            ],
+            "made": [],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
+                    "keyEnvelope": "czdopq7v5CNGwL4z9CIAUjxZjZP_fF3d7kPTU6A-VoREg7Sx6Q3vVPz8L_OGqVFeYw8T3vgviMRTLIf2Sif72gWWl_MTfM-y"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "qTZUiTkaM9VUHDmU07xSvCiD9knZiSQfmmHv0Q_H7TWFr2SN1AoOw-73kmHAy9LRKLjQfudgvrCrMkBcma-75NbxMe17EpgN"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
+                    "keyEnvelope": "3aZjOtz_bFvjE7pEmnH-QdgnCnIpK_WhTeXSwcyCcSrJWFuchJvyktBcgxD6UV-T2fI9bi161MM2_O6fPVa5iqODq6CLQsj7"
+                }
+            ]
+        },
+        {
+            "name": "a grant below the latest version, or a server behind or ahead of the chain, blocks writes",
+            "outcomes": [
+                {
+                    "error": "no-chain"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "no-grant-at-latest"
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "server-behind"
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "server-ahead"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": true,
+                    "reason": null
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": 2
+                },
+                {
+                    "error": "not-checked"
+                },
+                {
+                    "error": "not-checked"
+                },
+                {
+                    "error": "not-the-familys"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": 2
+                }
+            ],
+            "made": [],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "Kkievs0l8cva-tL2wJ0m_benXzp3KdrAOvOiHa2fggzeBCKTp6Hl8cnSOe-sASKRkrBpH4jvCQd79UNqYRMwBzOQCpEA3zhw"
+                }
+            ]
+        },
+        {
+            "name": "a folder reached only through the previous top-level key reads but takes no write",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "ok": true,
+                    "key": "made:C@2"
+                },
+                {
+                    "error": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": "made:C@2",
+                    "epoch": 2
+                }
+            ],
+            "made": [
+                {
+                    "step": 9,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "key": "kH5YjcJ_AdK6kFypQiji5L1nCm2oA-P63pf9gqceaSQ",
+                    "keyEnvelope": "O1rZFNIuhYs0xGB5KJ-rOJxR-2ce1ihqzaS5UTDviScV5hhPc6BRYeHXJdB6Ue3BfNvRYkjwrB16yDt0TNpOs-ESZxu7tD1y"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "BAZ8VAX-yfn0BoYQgwNwO0gnFJ8SXfiUxzZCO3pkJfBw1P9Qh0DgbfwTCtW4c2Uvm5dwKAKZPadR4SdUb6Vn6jZncASyo0F1"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "5izlzX2qzCx0I54tpIfDsk5Z--TzQ9rxIsfO5b9lgkgZOBCu7k1JokSexVhhdZitn2As6FXyrVrVXJINFJkUhlMtF2eFwLSd"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "31yJf7vFqxkaJHIJzzx-SdeRM-EYQkEGFCX7c4dSCzwPf-z8iMc6S-4w30fi8-WmIN9w4pBiiDHwE4RpUgZ-pilxGPN2VS_q"
+                }
+            ]
+        },
+        {
+            "name": "the walk re-keys it under the committed top level, and once the server takes the batch it takes writes again",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "ok": true,
+                    "rewrap": false,
+                    "old": "k:1",
+                    "fresh": "made:A@2"
+                },
+                {
+                    "ok": true,
+                    "key": "made:B@2"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "ok": true,
+                    "count": 1
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@2",
+                    "epoch": 2
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@2"
+                },
+                {
+                    "ok": true,
+                    "count": 0
+                }
+            ],
+            "made": [
+                {
+                    "step": 4,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "key": "aJstlNgH2Uw5gBefKKVrerOypTlzycOrCvlP3JS12g8",
+                    "keyEnvelope": "rK-RhB9Xfztuvi3Ue6Gq1HlteNaRMPkwbXScfDQ0sUh2njjUoi5YylP9IHerxrtmYt2D2NC9zuDAJFeQiLiF6TWRXDLmRSwY"
+                },
+                {
+                    "step": 5,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "aJstlNgH2Uw5gBefKKVrerOypTlzycOrCvlP3JS12g8",
+                    "key": "nyx9Ra-68Y9nvPAdbCmSuAKKXzHN2GIJtcwAWBwfoz4",
+                    "keyEnvelope": "9J599TxHC8QkfcMAT6jltYD5sXPx23HtpGLjsO539qMlz1RQ_UZUjs6YgMhad73sIezDSfGKbf3yrTF94SBcgNM5X_EkpIyd"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "0KElAnnB9iB42rUEnPHN4fQXsxaZy3rpRvoKcU4MKxdGIcvf0xZ8NhjIVgzQFLEdOMoEtExLpflIYOkjCsGkU63CfXQcD1Ug"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "wZ9O_u5kXQcSe-dGHMoJAjVIVRVNUkN1WQcV3IhuuYfLW4qqzs3ObG7pynAlqktwq5BkFW2_WebCR_SwDmxY24JOKvNYJQUj"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "hdymAKahd0ZTJLbMrsijhAZGQc9tDWOnt06XJN5DXmotIXgz5l2JJ0-MeJdbaFgh2-Zoi8A-mdumgQgms_yMqeCKut6JvA3D"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "vEvV9OicBXtBzyxdqToBPKbE7EzL5aU3gg-teCGIcwyj-WCT17ObJJ67SWXkK-MJy28-kOhYQglO8iEyQqH9288z2V-7SUfl"
+                }
+            ]
+        },
+        {
+            "name": "a refused batch drops the walk's fresh keys and leaves the old ones as they were",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "ok": true,
+                    "rewrap": false,
+                    "old": "k:1",
+                    "fresh": "made:A@2"
+                },
+                {
+                    "ok": true,
+                    "count": 1
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "ok": true,
+                    "key": null
+                },
+                {
+                    "error": "key-change-pending"
+                }
+            ],
+            "made": [
+                {
+                    "step": 4,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "key": "9ICJ8FB7MjkWE2lDb-c9Ois2iteO8_78PR6_ipUwg6M",
+                    "keyEnvelope": "K0w-cBIzrayQWl5RcQHzsTUPtRLFgSr3FyBl-jgmPecqrJ4fWUyqKfVCc3FVuJBVjIEmlg0YVQqD4kgG3pHrQJdhit8halIv"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "-G0V-AX96jJqyvLhGXtxdOFwosGdS7_tpFbt49TsFiZp8DxqRSbs3fvSbZMIlr5urlb5sCFF6PJaaeO4SmsrTgg7GBfEpzlB"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "2kBs7IJO18FGMbMAOhGisCdJJCcBG0BI5WVojm_lhU5Uf4m9z-D0OiJioAwEYLSIO6wAo1XNP0mfOxnYvAbkoFM8cDTtwhAz"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "_GkmCl3t37cZQby51XNGkc7InLCRAl-gfij8Xivc0ekcfSetxUqGlAvUhMom5fRZy6LZp_fxgHvs0PRrVz3hawubQHtGOF9L"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "IHjanaRgsyCUfsRi2_g9dd3LAiS4oh402n8iANPLUox4MbnUomA6T8wuDCKgXnbPjOIzD6ok7Y6ykL8vleayKo4r9CkpAhZ5"
+                }
+            ]
+        },
+        {
+            "name": "a key a walk made before the folder's next member list landed takes no write",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "ok": true,
+                    "rewrap": false,
+                    "old": "k:1",
+                    "fresh": "made:A@2"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-behind"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "ok": true,
+                    "count": 1
+                },
+                {
+                    "error": "key-change-pending"
+                }
+            ],
+            "made": [
+                {
+                    "step": 4,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 2,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "O041mwuM-ODXjV_Fm6-0SEXilb920Y-Infap2s1SKvA",
+                    "keyEnvelope": "HbmPrat06rsbNbvF6dWRZEALz9un1Cgjdl-YCHUgRPcX_YfUyjv5dlMJft3gA0SanQmWamF1xdUqPOjMWOmKNxtsPz-16j5T"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "0T_xbxNcm1o4gByjdMDUaWcMwg92qYglqpOhM1GG4HyE8HARcTQ1UhmkzurZFCOlEjddJP_QHB5kBbCrGNpiYuH7GU_bnv-0"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "EdjFey-eDgIo--R_zFU3Zpw-nMZbITAMdNBJ68rOg7Kpz0d0M4fnKsW19TogHnaAL7QZL293B7a6AQQRbpPK7U1E-hBSAvov"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "tgM5WcmdM3BWOc6FXWZiMECq8_9QGbRCpFvQmqCVN0fnKJVxrHUCpv-7Bw-CaD8NuZVolEoeUuWg80aZINld580OXyS9Xrdu"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "bAJHhoDv73sDmJWSucMvaOC7yMltCSF_TFhcjcVekaKdyCm_GycFDZIse8wzO6K1TpN4nDUe3tv1gUf9FyciKpV5XbANGQFM"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "tRSn4Q4ERliLPFJMb9iKrWEjbcYYoqCh7wBVEpxqlkUwyXKD83YPxyN56lKKozTRp--NvkohHvYYRSlODjEBBh_yRLCEcdmk"
+                }
+            ]
+        },
+        {
+            "name": "a node planted at the walk's target under a folder's old key is not carried, and one under the re-keyed folder is",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "error": "not-carried"
+                },
+                {
+                    "ok": true,
+                    "key": null
+                },
+                {
+                    "ok": true,
+                    "rewrap": false,
+                    "old": "k:1",
+                    "fresh": "made:A@3"
+                },
+                {
+                    "ok": true,
+                    "rewrap": true,
+                    "key": "k:7"
+                },
+                {
+                    "error": "not-carried"
+                },
+                {
+                    "error": "area-root"
+                }
+            ],
+            "made": [
+                {
+                    "step": 6,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 3,
+                    "parentKey": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "key": "HyxNvcuzdYaH6sNNKs588EfCtD3Zyx0e3-u6GgkkXmk",
+                    "keyEnvelope": "5Yf62KTrXTDHNJDotu9FzVc5IOq311I4xh8aRblQEg-D6fEWAKTa8S6rg3pN4fhcxGaI01x9J9yELwtP-JKOm3Pmm4mIFEg1"
+                },
+                {
+                    "step": 7,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 3,
+                    "keyEpoch": 3,
+                    "parentKey": "HyxNvcuzdYaH6sNNKs588EfCtD3Zyx0e3-u6GgkkXmk",
+                    "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
+                    "keyEnvelope": "lOob50U31LYNrF9LErclmB54QqM42UXwBUKXq2dnWCpqUwxf5lGGABAqIu6Hj9ZMwsk0DYDoE6ZkPg_Gpd2Wwa2Jl6_RHhn5"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "XSFcSHa2KYUpfTc0l_PeF9fKbll0Hfx4VBnqvYq4G_rbV6YqprjG7JOcDDzFx-Y-l79ctmGx93EqnxoMeL1KlWJb4pYvgAQA"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "kSe7B7Vicp4NM_r0WNyNIo1LangqIGqhHjmKV2QWU1p24FhBy4SbV2lPNC6wJXFLPPnr7Ygq5ni4qaJry8LUkRhmezjLQaMx"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "N6BuOPuxwr8JkBZ0ka15nLsUJc1rwBxaNWKc__KT2PACwswekgqVT6HJv0HQbJUqyy5p1zRuTjE4oOOhIQlwHi-DnZMifS-X"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 3,
+                    "parentKey": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
+                    "keyEnvelope": "3nbY1w2u2cRoyWaWmMk9C5aZ5sku7NjKuCcIUH8P9FkbwFoRORfKD6h2Ue48vFXWB1G3zICfxpO-PvgUEOiFMuVFw67cTEiu"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "Ydm2h5Y2Nb0N3C45LGKJLRaCdgmD7yn0XTem7RIwBud4UfKUSrQK6AgeL_Svel9GsRTH1PmJHOgtj3fuRDuxFrTo_Nl65Zwg"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 3,
+                    "keyEpoch": 3,
+                    "parentKey": "HyxNvcuzdYaH6sNNKs588EfCtD3Zyx0e3-u6GgkkXmk",
+                    "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
+                    "keyEnvelope": "RKxQY_TRXtjl7p589nrjwktb5IwMI_UBOud7-bmAbzkWrEoRlOraFvzMXvFl7PeCw564b4wa-JqiuCQKRXQL9Q6mrSlaqO7g"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 3,
+                    "parentKey": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "key": "sOkiW5TNBj94seojXJXOB0B5suskXZbPCEF6s-wlXpc",
+                    "keyEnvelope": "dp9X3anE23qDwwqNxVIMJDk6gFRMoQilTmiz_TciVyK39pH_ravR_FAhc1CTueiy94OpGI5qWwhDsQUMLgNomR8dV82RMlsj"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "nyAezTrNQ7cFp3zXlQ0XmN8Jm3EqqgpzpVZcsdrPlsKbsQOSAMnl9UYPiTwhnjz7knL3-WREP3DqWffK0dFy5zQHCRgkweLp"
+                }
+            ]
+        },
+        {
+            "name": "a version a format 1 roster listed keeps the envelope rule, and a format 2 version after the switch does not",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "k:9"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": 1
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-behind"
+                },
+                {
+                    "error": "not-committed-root"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": 2
+                }
+            ],
+            "made": [
+                {
+                    "step": 4,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "t_ApYpvUDUaAufIrZJ3WD0mCu_QtZp_YEkuEvfYvaKE",
+                    "key": "6YpqRYSP7Qvq_z_jcmk9pbUYeVNpzCTrz1CCYlP03-I",
+                    "keyEnvelope": "ggZnbnJ8pimBLvBTi9lp7Q4JchmyVSgkbNCCBmqkiPrN9x-RTr2CAF0zGn6VyqD5mnxJym2nJcrglON3Bt65q4AH7okC9Rdm"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "t_ApYpvUDUaAufIrZJ3WD0mCu_QtZp_YEkuEvfYvaKE",
+                    "keyEnvelope": "OyglRr_GhzFIp7PaErYEXx5ztGCfGuZFiwuIml7zdKTAKT4gKH_XHgMPgCdSKVJUckgVylxDxHHr3jW80yrD3mgDxIRhd8Aq"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "t_ApYpvUDUaAufIrZJ3WD0mCu_QtZp_YEkuEvfYvaKE",
+                    "keyEnvelope": "9Wu6GO89ixxDsJnXaUuG_wgRoAb_bqnP4wIe0yZAf7sL90d0UC49M0XJ1Tuttf65qo-wsQhOwiQOa3SAcVhqWnRWgkQOOsjN"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "oZBYK613ptECxaywUYJ3eW1fDReUTOxtXXlDz-npJcT-9WpcH1TeBxMlebs-Cwd-NalPvNCnPuaEYoC2NY-jFqOt30sqghy0"
+                }
+            ]
+        },
+        {
+            "name": "a deleted family folder is read but never written again",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": "not-checked",
+                    "write": "not-checked"
+                },
+                {
+                    "error": "not-checked"
+                },
+                {
+                    "error": "not-checked"
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1"
+                },
+                {
+                    "error": "not-listed"
+                }
+            ],
+            "made": [
+                {
+                    "step": 3,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "nMmqOfx6M1zflC1CH9ASZGRiBa7Tzilv8sMLK-HNLJQ",
+                    "keyEnvelope": "-G8CcOd-kiEJflgFMfyuEJUmG3vwUY4kodIFTxMn9PioEAMEexUsIBXDbqqT9M1OKfsYISJ-oLc8iXSN_rLRN6On1oVqnBPR"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "0AJDbRPMXE09kfk4PnjGVGSVJ7B0iQkWIoDNlBo9v5-9J34iY6nT5Vm-mB6ix-6pziDZfWDUcvxI_jmiY_M4ChH_nL62ZLy6"
+                }
+            ]
+        },
+        {
+            "name": "a refused chain stops writes until one is committed again, and forgetting the family wipes its keys",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": "not-checked",
+                    "write": "not-checked"
+                },
+                {
+                    "error": "not-checked"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 1,
+                    "write": 1
+                },
+                {
+                    "ok": true,
+                    "key": "made:B@1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "isArea": false,
+                    "read": null,
+                    "write": null
+                },
+                {
+                    "ok": true,
+                    "key": null
+                },
+                {
+                    "ok": true,
+                    "none": true
+                }
+            ],
+            "made": [
+                {
+                    "step": 3,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "_E7k_Mv_52oruj8HxC5NY0R1Dh6DZjONwtcnYEidndM",
+                    "keyEnvelope": "wAwoXa74tjY65n5Pont4DjIlAa96LhfRBdA9HW2iiCWxniltRI6ZS9xwmyteMfq1Mycb9n4SHnW_Ki6lbfxPdGYZFhKUE2cl"
+                },
+                {
+                    "step": 9,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "_E7k_Mv_52oruj8HxC5NY0R1Dh6DZjONwtcnYEidndM",
+                    "key": "Y-I4uVaPPl3cSW-qKK0rr_rTc1xGI0cWwHMKjAqPHLk",
+                    "keyEnvelope": "FVkWMm8I6xcXWpuACnZ39S2LFUs9N-N30KMz2VCPvEwv8LQd8swx651l7ETqgvbqgvPkOJFEHMgvct_VJtaEupPM1kgjesEM"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "nnCijZnRsN9LSdYsbjlwteWelkuH_crFko7VUMRgleSVo0N-KguwNT69JsfM8yUnRqhCyjAvhTCmj-vKXIXQLV4DPE8c2afI"
+                }
+            ]
+        },
+        {
+            "name": "the next member list makes every key rooted at the earlier version read-only until the walk",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "key": "made:A@1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-behind"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": 2
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                }
+            ],
+            "made": [
+                {
+                    "step": 3,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "w6kcJHhSzLNkWbjTaXR-6yrH_7nv4DcG7Z_UDN9Y0AQ",
+                    "keyEnvelope": "uS1OoAPueaN2Kmg115fxFZDn3ML-DjujxN18oPt7PYduuL9btU4a9jxLzQWeJlJZyJMjLFp-FjWnlNBhtA1uRBjB3uQB2MVD"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "K4AowATg_-yfbrNPtGj0uNWElDHRJ3ipYGjb4bPnPK3rGz4ZKhdJdT5kuzG9Sm84RsSulJQ-njzW4n3whUh-vu2Uz0sZuTGX"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "RcA1wvZwS4n4QiMrk8VTitO_DNlcuWCNJaTWmWwDXqfgal3nUqFqKWe7SDRPXlNM04oQKUHaA7ttl105D0WVuZLqRp9-aRc_"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "bXLn2Gd2D4cNhhOceMRdK02YdJN31CJbPwtPgr4KTaqlH0Bh0sqf8oSrYecaB4pf_dYNuTSISsqVWy59WKBhkZykx_Rlv5GW"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "O0GHKKTWjXUlo7nQE7LgkJ6orO2MhFpBuPXxflHgAQtGU8V0bsqhApIK9yZyNscI2Ef0tCVVA3cjyUvlhmLAgQUx9UZvve4L"
+                }
+            ]
+        },
+        {
+            "name": "the top level's previous key this device opened itself outranks a previous envelope the server serves",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-behind"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true,
+                    "key": "k:1"
+                },
+                {
+                    "error": "refused"
+                }
+            ],
+            "made": [],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "8zxbNR1YgDH3uFJlHeFoi3CDq26SdzM75gTmY65-HsLwtl3q7mGynN8MphnLki1Wa6wbmGC-OaC-GT3R0qDVL5NxNKdasB_G"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "YgsirpR7Xc9gTJGCh9GBAJvYJqM40fA7RukJ3KFx7DZSyJJmo5tUZkeQXmR-2v5bIP_Qk85XIRo-ddzi_vSajCuPSdUGJ_DZ"
+                },
+                {
+                    "label": "previous-root",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "lMwFPXau5x9YkMkBOnKr4xxUjcX-Nm-n4BhRicL6M2s",
+                    "keyEnvelope": "34W61yhC9tawzUC1G-tdVRE0aqp_DZDz_sVn0Wqbmec0ZJsKMy5qrB1___THP1K9YODcEa6LsXUiN5h_iZ7IakdMh680B-x0"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "u4RdNKbzB3rXHF7PduS_Vmzi5OLwcCLbem9elSvaD4i_FEdDuOaowsm2iQTRxTG6FscXP7zpR_onMP3K0y4bPac-JgscFtA2"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "lMwFPXau5x9YkMkBOnKr4xxUjcX-Nm-n4BhRicL6M2s",
+                    "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
+                    "keyEnvelope": "yyy6hT6-5jz6lken_L2K-tm1J0X7C8V73yYKZ2FZvOKeKs41erb52XOjv2yG-FnIgItu1vxCKeiLBEcK3RCpIvQpdLKmK12w"
+                }
+            ]
+        },
+        {
+            "name": "a cached top level is taken again only under the area version it was opened under",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:1"
+                },
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-behind"
+                },
+                {
+                    "error": "not-committed-root"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": "keys-changed"
+                },
+                {
+                    "ok": true,
+                    "key": null
+                }
+            ],
+            "made": [],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "5MVfn8Paw0x1ZtYQewEefLGM3jqquyFZFi_Evb_I0Z_UVHa9278HmH6snjIi-q0ES34HSq-0PNp4UTcb034-qNcN7puXj-fP"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "WSLtgMbWrl-51p8GDxA3WXnWPKCN_zOh1EEeCjkbuvDc9eOw3n8UB7kux0zQcUJMWOJlS0MhT-00sTu_kZE9iAKNuo6tuoFb"
+                }
+            ]
+        },
+        {
+            "name": "a folder's top level is never a walk's, even one this device cannot open",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "error": "area-root"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "error": "area-root"
+                }
+            ],
+            "made": [],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
+                    "keyEnvelope": "Nu3UuP3oiaoVzyRI-lfRzxF9fMfHmec7baR_QVXCrKKBJKrDpeDUUtyUtqRVyQjFfLa0zycHEpgKg8vyYVv7Tg5M0rTS9XO4"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "UPN8S584a_oUDZG10_VLOiSbJcyXvGTNot_pQt3N-G02HmN7ARCb7je--y0zDX28zzrF7hPi7JGdYlk0ipC-KLiLpCAZcDrw"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "hmgFbygPd6V7YSTKC0KD4jBPeQ07FiUp4FcBJskMSDNVsKCOxRwu_D8CaYQ5go5XfNQDnA0sBlHS5lRf6nhxgVgArK5gjtcC"
+                }
+            ]
+        },
+        {
+            "name": "a top level listed under another area version is opened from its envelope, not taken from the cache",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 1,
+                    "writable": false,
+                    "reason": "no-grant-at-latest"
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "k:5"
+                },
+                {
+                    "ok": true,
+                    "key": "k:6"
+                },
+                {
+                    "ok": true,
+                    "isArea": true,
+                    "read": 2,
+                    "write": 2
+                },
+                {
+                    "ok": true,
+                    "key": "k:6",
+                    "epoch": 1
+                },
+                {
+                    "ok": true,
+                    "key": "k:6"
+                }
+            ],
+            "made": [],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "parentKey": "G0NslL3mDjdgiLHZAitTfKXN9h5HcJjB6hI7Y4y13QY",
+                    "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
+                    "keyEnvelope": "-IrBMDrFNZfBT7Nre57EFHtW4--vB41mw0TldGrPANKbgtiK0Qbmum9-0SVsseBSxBB3BSJUoV5yXQRUq8dygh2oxeK9AL1m"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "otoTTIW99i9ooNkSS4O89S5mn9gRSYK79CxlntcPSIE",
+                    "keyEnvelope": "YyJDK9ZPKNuJ339hU37OGyJMNUybZ9kcW83qKVg3uWrkTAijtLgyDaB1hwwg_HamXugLc4_2q8k6vH9sad0mzPD_QsFBDp_d"
+                }
+            ]
+        },
+        {
+            "name": "a key reached through a folder's previous key is rooted nowhere, even at the area's own version number",
+            "outcomes": [
+                {
+                    "ok": true
+                },
+                {
+                    "ok": true,
+                    "version": 2,
+                    "writable": false,
+                    "reason": "root-unknown"
+                },
+                {
+                    "ok": true,
+                    "key": "root:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:2"
+                },
+                {
+                    "ok": true,
+                    "key": "k:2",
+                    "epoch": 3
+                },
+                {
+                    "ok": true,
+                    "key": "k:3"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "error": "key-change-pending"
+                },
+                {
+                    "ok": true,
+                    "key": "made:D@3"
+                },
+                {
+                    "error": "keys-changed"
+                }
+            ],
+            "made": [
+                {
+                    "step": 8,
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 3,
+                    "keyEpoch": 3,
+                    "parentKey": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
+                    "key": "Pc4Mpaq7d6z-WEMqHmCmmB-od4yY5CZWMveSLKMtbBA",
+                    "keyEnvelope": "BACiFMRybU5hTuBQM22IgQP8zLpPt871h4n_NYkqZynHoEOfTys36xHOLywhRpkcdkTnx3znLnArF7XE64dV5GBfaQdAC09t"
+                }
+            ],
+            "served": [
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "IkpznMXtFj9okLniCzNcha7W_yhReaLL9BxFbpe_6BE",
+                    "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "keyEnvelope": "RZTrlkPAG3iRTqUXAc-Qi-o6tDlXJuakIPfiTt-oW3DjF3whNc4ybIIG6OVYBim5Y76Vyb5N4tn4az5EPjbx6Gn8IBuXWk3b"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 3,
+                    "parentKey": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
+                    "keyEnvelope": "uDrDyWqSZmWNRTKLzKmVHQ5KHAQmspNl1fY8umEjJBdc0IL-4yqBMQ8yeJ-prp6j0dfYVb1Uziz_j49GB06TT5aFxSP--7k7"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
+                    "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "keyEnvelope": "ifq6oIPkvpnxnkNtmQGaGNLRg9KjZkOVmLOLi50EehgEpyhj8nsWG3GZym4wdbjs5jjrnw3rlO8OB-AS5I3UNPP0QU-ZXoRP"
+                },
+                {
+                    "label": "node",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "parentKey": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
+                    "key": "jcX9Nm6m3xdQiMD5MWmi2hNLg7z0LGWd1g5Gf7fvKGA",
+                    "keyEnvelope": "zRIw6yVO2JW2uopHUw0OobHT3gIObyfaSwz-g75GcnMGltObOKmNQWEIxEfjvgsLD25cnknIa-lOQT484c0FfKIZPVoJqYUo"
+                }
+            ]
+        }
+    ]
+}
