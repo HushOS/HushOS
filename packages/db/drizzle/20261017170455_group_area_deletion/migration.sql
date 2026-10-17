@@ -11,10 +11,11 @@
 -- release (groups were off by default until #46) has their commitments unrecorded, so reuse of
 -- those across groups is not refused. Each statement waits at most five seconds for its lock and
 -- fails, to be retried, rather than queue requests behind it.
--- It replaces 20261017114227_group_area_deletion, which was never released and was regenerated
--- here after 20261017121401_group_billing. A development database that applied the old one
--- must first drop "group_area_commitments", "workspaces"."deleted_at" (its index and check go
--- with it) and the old name's row in drizzle.__drizzle_migrations; nothing else needs it.
+-- It replaces 20261017114227_group_area_deletion and 20261017154132_group_area_deletion, neither
+-- ever released, regenerated here after 20261017153848_origin_drop_evidence. A development
+-- database that applied either must first drop "group_area_commitments", "workspaces"."deleted_at"
+-- (its index and check go with it) and the old name's row in drizzle.__drizzle_migrations;
+-- nothing else needs it.
 SET LOCAL lock_timeout = '5s';--> statement-breakpoint
 CREATE TABLE "group_area_commitments" (
 	"commitment" bytea PRIMARY KEY,

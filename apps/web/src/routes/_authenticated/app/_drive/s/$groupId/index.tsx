@@ -40,10 +40,10 @@ function areaLine(area: AreaState) {
 function FamilySpacePage() {
     const space = useFamilySpace();
     const [creating, setCreating] = useState(false);
-    // Where plans are sold, a family folder waits for one: the pool is empty until it is paid.
-    // Making and deleting family folders follow the same gate.
+    // Where plans are sold, a new family folder waits for one: the pool is empty until it is paid.
+    // Deleting adds no storage, so it never waits: a family whose plan lapsed frees space with it.
     const plan = useFamilyPlanGate(space.userId, space.groupId);
-    const canChange = space.manager && !plan.waiting;
+    const canCreate = space.manager && !plan.waiting;
     const [deleting, setDeleting] = useState<{ workspaceId: string; name: string } | null>(null);
     // A folder whose root did not open has no name to show; it is listed by what it is.
     const rows = [...space.areas].sort((a, b) =>
@@ -69,7 +69,7 @@ function FamilySpacePage() {
                 >
                     Trash
                 </Link>
-                {canChange && (
+                {canCreate && (
                     <Button onClick={() => setCreating(true)}>
                         <FolderPlusIcon />
                         New family folder
@@ -81,7 +81,7 @@ function FamilySpacePage() {
                     icon={FolderPlusIcon}
                     title="No family folders yet"
                     body={
-                        canChange
+                        canCreate
                             ? 'Make one, and everyone in the family can open it.'
                             : plan.waiting && plan.summary
                               ? `Family folders wait for ${space.family} to have a plan.`
@@ -128,7 +128,7 @@ function FamilySpacePage() {
                                         {body}
                                     </div>
                                 )}
-                                {canChange && (
+                                {space.manager && (
                                     <div className="shrink-0 pr-3 sm:pr-5">
                                         <DropdownMenu>
                                             <DropdownMenuTrigger
@@ -165,7 +165,7 @@ function FamilySpacePage() {
                 </ul>
             )}
             <ServerKnowsLine className="mt-auto" />
-            {canChange && (
+            {canCreate && (
                 <NewFamilyFolderDialog
                     userId={space.userId}
                     groupId={space.groupId}
@@ -174,7 +174,7 @@ function FamilySpacePage() {
                     onOpenChange={setCreating}
                 />
             )}
-            {canChange && (
+            {space.manager && (
                 <DeleteFamilyFolderDialog
                     userId={space.userId}
                     groupId={space.groupId}

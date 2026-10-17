@@ -139,6 +139,7 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
 const { groupsRepository, billingRepository, driveRepository, scopedId } =
     await import('@hushos/db');
 const { areaKeyCommitment } = await import('../../crypto/src/area-keys');
+const { tombstoneAt } = await import('../../crypto/src/group-testkit');
 const { closeDatabase, createTestAccount, resetDatabase } = await import('../../db/test/helpers');
 const kit = await import('../test/kit');
 const groups = await import('./server');
@@ -526,6 +527,44 @@ describe('a family without a plan', () => {
             ),
         ).toMatchObject({ code: 'no-plan', status: 402 });
         expect(await kit.head(fam.groupId)).toEqual(head);
+    });
+
+    test('still deletes a family folder, with no plan ever or after one ended: deleting adds no storage', async () => {
+        const deleteCall = async (
+            fam: Awaited<ReturnType<typeof kit.family>>,
+            workspaceId: string,
+            version: number,
+        ) =>
+            (
+                await kit.nextRoster(fam, fam.organizer, kit.entries(fam.h), {
+                    areas: [tombstoneAt(workspaceId, version)],
+                })
+            ).call;
+        // Never had a plan: its first folder goes.
+        const never = await kit.family();
+        // Tombstones are format 2's (design 2.10): the chain switches up at its next roster.
+        never.h.format = 2;
+        await groups.deleteArea(
+            never.organizer.userId,
+            never.groupId,
+            never.areaId,
+            await deleteCall(never, never.areaId, 2),
+        );
+        expect(await kit.head(never.groupId)).toMatchObject({ rosterVersion: 2 });
+        // A plan that ended: a folder made while it ran goes too, freeing its space.
+        const ended = await kit.family();
+        const subscription = await onPlan(ended, 1);
+        const made = await areaCall(ended);
+        await groups.createArea(ended.organizer.userId, ended.groupId, made);
+        await endPlan(ended, subscription);
+        ended.h.format = 2;
+        await groups.deleteArea(
+            ended.organizer.userId,
+            ended.groupId,
+            made.area.workspaceId,
+            await deleteCall(ended, made.area.workspaceId, 2),
+        );
+        expect(await kit.head(ended.groupId)).toMatchObject({ rosterVersion: 3 });
     });
 
     test('an invitation sent while the plan ran can’t be accepted once it ends, and works again once renewed', async () => {

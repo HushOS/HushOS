@@ -1149,6 +1149,18 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await maya.page.goto(path);
     }
 
+    /* The folder row's menu still offers Delete family folder; nothing is deleted here. */
+    async function canStillDelete() {
+        await maya.page
+            .getByRole('button', { name: /^More for / })
+            .first()
+            .click({ timeout: 60_000 });
+        await expect(
+            maya.page.getByRole('menuitem', { name: 'Delete family folder' }),
+        ).toBeVisible();
+        await maya.page.keyboard.press('Escape');
+    }
+
     test('before a plan: Choose a plan comes first, priced monthly and yearly, and nobody can be invited or a folder made', async () => {
         await show(none);
         const choose = maya.page.locator('[data-choose-plan]');
@@ -1173,6 +1185,8 @@ test.describe('family plans, with the billing summary stubbed', () => {
             timeout: 60_000,
         });
         await expect(maya.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
+        // Deleting adds no storage: a folder can still be deleted without a plan.
+        await canStillDelete();
     });
 
     test('a live plan the person pays for: the facts, places quoted as Polar charges them, and every control', async () => {
@@ -1238,6 +1252,22 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(lapsed).toContainText('Nothing has been deleted.');
         await expect(maya.page.getByRole('heading', { name: 'Choose a plan' })).toBeVisible();
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
+        // And a family whose plan ended can delete a folder to free space.
+        await show(
+            {
+                ...none,
+                payer: { userId: 'payer', you: true },
+                lastPlan: {
+                    productName: 'Family (monthly)',
+                    endedAt: new Date(Date.now() - 3 * DAY).toISOString(),
+                },
+            },
+            `/app/s/${groupId}`,
+        );
+        await expect(maya.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await canStillDelete();
 
         // A member who doesn't hold billing: the plan's name and the storage, no money, no controls.
         // The real member payload: the plan's name, the pool and whether a plan is live; nothing else.
