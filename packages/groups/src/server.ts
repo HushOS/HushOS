@@ -220,6 +220,23 @@ const firstKeysOf = (group: GroupRow) => ({
  * signer's ML-DSA key is stored with the statement, so a rebuild needs no
  * account that may since have gone.
  */
+/*
+ * Whether a chain ends at the group's head: its roster (by version and digest,
+ * so another validly signed roster at that version is not it) and its key. A
+ * history cut short, or a record a bug stored short, verifies as a shorter
+ * chain, which every write would then be refused against as the caller's fault.
+ */
+function atHead(
+    chain: StoredChain,
+    head: { rosterVersion: number; rosterDigest: Uint8Array; groupKeyVersion: number },
+) {
+    return (
+        chain.roster.rosterVersion === head.rosterVersion &&
+        chain.rosterDigest === b64(head.rosterDigest) &&
+        chain.groupKeyVersion === head.groupKeyVersion
+    );
+}
+
 async function storedChain(group: GroupRow): Promise<{ chain: StoredChain; revision: number }> {
     const record = await groupsRepository.getChainCache(group.id);
     if (record?.cache)
@@ -232,7 +249,9 @@ async function storedChain(group: GroupRow): Promise<{ chain: StoredChain; revis
                 mlDsaKeys: {},
                 cache: record.cache as StoredChainCache,
             });
-            return { chain, revision: record.revision };
+            // A record at the current revision but short of the head is rebuilt below (and the
+            // rebuild's record replaces it), never trusted.
+            if (atHead(chain, record.head)) return { chain, revision: record.revision };
         } catch {
             // Rebuilt below.
         }
@@ -269,6 +288,9 @@ async function storedChain(group: GroupRow): Promise<{ chain: StoredChain; revis
         // A stored history the server's own acceptance refuses is an operator problem, not the caller's.
         throw unavailable();
     }
+    // So is one that does not end at the head (cut short, or another roster at its version):
+    // kept as the record it would also outlive a repair.
+    if (!atHead(chain, fresh)) throw unavailable();
     await groupsRepository.putChainCache(group.id, fresh.chainRevision, storedRecord(chain));
     return { chain, revision: fresh.chainRevision };
 }

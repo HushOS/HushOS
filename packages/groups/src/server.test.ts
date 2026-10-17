@@ -15,7 +15,8 @@ import {
     scopedId,
 } from '@hushos/db';
 import { areaKeyCommitment } from '../../crypto/src/area-keys';
-import { history } from '../../crypto/src/group-testkit';
+import { acceptStoredChain, storedRecord } from '@hushos/crypto/group-trust/server';
+import { history, mlDsaKeysOf } from '../../crypto/src/group-testkit';
 import { db } from '../../db/src/client';
 import {
     accountIdentityHistory,
@@ -26,6 +27,7 @@ import {
     driveShares,
     groupChainCaches,
     groupHolds,
+    groupKeySuccessions,
     groupMemberships,
     groupRosters,
     users,
@@ -919,6 +921,182 @@ describe('races, replays and the stored chain', () => {
             .from(groupChainCaches)
             .where(eq(groupChainCaches.groupId, fam.groupId));
         expect(record!.chainRevision).toBe(marked.revision);
+    });
+
+    test('a stored history that is tampered with, missing a roster, or cut short is 503: no write is checked against it', async () => {
+        const fam = await family();
+        const { organizer } = fam;
+        for (const _ of [2, 3])
+            await groups.postRoster(
+                organizer.userId,
+                fam.groupId,
+                (await nextRoster(fam, organizer, entries(fam.h))).call,
+            );
+        // Signed once and resent unchanged after each repair, as a client retries a 503.
+        const next = await nextRoster(fam, organizer, entries(fam.h));
+        const at = (version: number) =>
+            and(eq(groupRosters.groupId, fam.groupId), eq(groupRosters.version, version));
+        const rowAt = async (version: number) =>
+            (await db.select().from(groupRosters).where(at(version)))[0]!;
+        const send = async () => {
+            // No record: the server rebuilds from its rows.
+            await db.delete(groupChainCaches).where(eq(groupChainCaches.groupId, fam.groupId));
+            return refusal(groups.postRoster(organizer.userId, fam.groupId, next.call));
+        };
+        const [two, three] = [await rowAt(2), await rowAt(3)];
+
+        // Roster 2's bytes edited (the organizer loses a role), its signatures kept.
+        const text = two.statement.toString('utf8');
+        expect(text).toContain('"billing","guardian","members"');
+        await db
+            .update(groupRosters)
+            .set({ statement: Buffer.from(text.replace('"billing","guardian",', '"billing",')) })
+            .where(at(2));
+        expect(await send()).toMatchObject({ code: 'unavailable', status: 503 });
+        await db.update(groupRosters).set({ statement: two.statement }).where(at(2));
+        // Roster 2 missing.
+        await db.delete(groupRosters).where(at(2));
+        expect(await send()).toMatchObject({ code: 'unavailable', status: 503 });
+        await db.insert(groupRosters).values(two);
+        // The newest roster missing: what is left verifies as a chain at version 2, which
+        // must not stand in for the head at 3 (nor be kept as the record).
+        await db.delete(groupRosters).where(at(3));
+        expect(await send()).toMatchObject({ code: 'unavailable', status: 503 });
+        expect(
+            await db
+                .select()
+                .from(groupChainCaches)
+                .where(eq(groupChainCaches.groupId, fam.groupId)),
+        ).toEqual([]);
+        await db.insert(groupRosters).values(three);
+        expect(await rosterCount(fam.groupId)).toBe(3);
+        // Whole again, the same call lands.
+        await db.delete(groupChainCaches).where(eq(groupChainCaches.groupId, fam.groupId));
+        expect(await groups.postRoster(organizer.userId, fam.groupId, next.call)).toMatchObject({
+            version: 4,
+        });
+    });
+
+    test('a record stored short of the head, or of another roster at its version, is rebuilt on the next read, not trusted', async () => {
+        const fam = await family();
+        const { organizer } = fam;
+        await groups.postRoster(
+            organizer.userId,
+            fam.groupId,
+            (await nextRoster(fam, organizer, entries(fam.h))).call,
+        );
+        // A validly signed roster 3 the group never stored: the organizer drops a role.
+        const fork = await forgedRoster(fam, organizer, (roster) => ({
+            ...roster,
+            members: roster.members.map((entry) =>
+                entry.userId === organizer.userId
+                    ? { ...entry, roles: ['billing', 'members'], sinceVersion: 3 }
+                    : entry,
+            ),
+        }));
+        await groups.postRoster(
+            organizer.userId,
+            fam.groupId,
+            (await nextRoster(fam, organizer, entries(fam.h))).call,
+        );
+        const stored = (rosters: typeof fam.h.rosters) =>
+            acceptStoredChain({
+                groupId: fam.groupId,
+                firstKeys: fam.h.keys[0]!.publicKey,
+                rosters,
+                successions: [],
+                mlDsaKeys: mlDsaKeysOf(organizer.who),
+                cache: null,
+            });
+        const records = {
+            // What the old rebuild stored when the newest row was missing: a chain at 2.
+            short: storedRecord(await stored(fam.h.rosters.slice(0, 2))),
+            // A chain at 3 through the roster the group never stored.
+            forked: storedRecord(await stored([...fam.h.rosters.slice(0, 2), fork])),
+        };
+        for (const [label, record] of Object.entries(records)) {
+            const { revision } = await head(fam.groupId);
+            expect(await groupsRepository.putChainCache(fam.groupId, revision, record)).toBe(true);
+            // The next write is checked against the stored history, lands, and its record is the head's.
+            const next = await nextRoster(fam, organizer, entries(fam.h));
+            expect(
+                await groups.postRoster(organizer.userId, fam.groupId, next.call),
+                label,
+            ).toMatchObject({ version: next.at.rosterVersion });
+            const healed = await groupsRepository.getChainCache(fam.groupId);
+            expect((healed!.cache as { rosterDigests: string[] }).rosterDigests.at(-1)).toBe(
+                next.at.rosterDigest,
+            );
+        }
+    });
+
+    test('a stored head roster swapped for another validly signed one is 503', async () => {
+        const fam = await family();
+        const { organizer } = fam;
+        await groups.postRoster(
+            organizer.userId,
+            fam.groupId,
+            (await nextRoster(fam, organizer, entries(fam.h))).call,
+        );
+        const fork = await forgedRoster(fam, organizer, (roster) => ({
+            ...roster,
+            members: roster.members.map((entry) =>
+                entry.userId === organizer.userId
+                    ? { ...entry, roles: ['billing', 'members'], sinceVersion: 3 }
+                    : entry,
+            ),
+        }));
+        await groups.postRoster(
+            organizer.userId,
+            fam.groupId,
+            (await nextRoster(fam, organizer, entries(fam.h))).call,
+        );
+        const next = await nextRoster(fam, organizer, entries(fam.h));
+        const at3 = and(eq(groupRosters.groupId, fam.groupId), eq(groupRosters.version, 3));
+        const [real] = await db.select().from(groupRosters).where(at3);
+        // Roster 3's row now holds the fork, whole and verifiable, at the same version.
+        await db
+            .update(groupRosters)
+            .set({
+                statement: Buffer.from(fork.statement),
+                digest: createHash('sha256').update(fork.statement).digest(),
+                ed25519Signature: Buffer.from(fork.signature.ed25519),
+                mlDsaSignature: Buffer.from(fork.signature.mlDsa),
+                signerSignature: Buffer.from(fork.signerSignature),
+            })
+            .where(at3);
+        await db.delete(groupChainCaches).where(eq(groupChainCaches.groupId, fam.groupId));
+        expect(
+            await refusal(groups.postRoster(organizer.userId, fam.groupId, next.call)),
+        ).toMatchObject({ code: 'unavailable', status: 503 });
+        await db.update(groupRosters).set(real!).where(at3);
+        expect(await groups.postRoster(organizer.userId, fam.groupId, next.call)).toMatchObject({
+            version: 4,
+        });
+    });
+
+    test('a stored history missing its newest succession is 503', async () => {
+        const { fam, holder } = await withHolder();
+        await groups.leave(holder.userId, fam.groupId);
+        // The holder's departure marked with the succession: the head is roster 3 under key 2.
+        await markLeft(fam, holder, 'roster', { succession: true });
+        expect(await head(fam.groupId)).toMatchObject({ rosterVersion: 3, groupKeyVersion: 2 });
+        const next = await nextRoster(fam, fam.organizer, entries(fam.h));
+        const newest = and(
+            eq(groupKeySuccessions.groupId, fam.groupId),
+            eq(groupKeySuccessions.oldVersion, 1),
+        );
+        const [succession] = await db.select().from(groupKeySuccessions).where(newest);
+        // Without it the rows verify as a chain at roster 3 still under key 1.
+        await db.delete(groupKeySuccessions).where(newest);
+        await db.delete(groupChainCaches).where(eq(groupChainCaches.groupId, fam.groupId));
+        expect(
+            await refusal(groups.postRoster(fam.organizer.userId, fam.groupId, next.call)),
+        ).toMatchObject({ code: 'unavailable', status: 503 });
+        await db.insert(groupKeySuccessions).values(succession!);
+        expect(await groups.postRoster(fam.organizer.userId, fam.groupId, next.call)).toMatchObject(
+            { version: 4 },
+        );
     });
 });
 
