@@ -23,6 +23,7 @@ import { billingApi } from '@/lib/billing-api';
 import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
+import { faqFor } from '@/lib/pricing-faq';
 import { rememberReturn } from '@/lib/return-to';
 import {
     billingQueryOptions,
@@ -171,68 +172,6 @@ export const Route = createFileRoute('/pricing')({
     },
     component: PricingPage,
 });
-
-const paidPlans = {
-    q: 'What do paid plans add?',
-    a: 'Storage, and nothing else. Every plan protects your files the same way: your password never leaves your device and your keys are made on it. Paying only buys more room.',
-};
-
-const faq = [
-    paidPlans,
-    {
-        q: 'Who bills me?',
-        a: 'Polar, our merchant of record. Polar takes the payment, works out sales tax or VAT for your country at checkout, and sends the invoices. Your card details never reach HushOS.',
-    },
-    {
-        q: 'What happens when I cancel?',
-        a: 'Your plan stays until the end of the time you paid for, and you can change your mind before then. After that you are back on Free. Nothing is deleted; uploads pause until you are under your space again.',
-    },
-    {
-        q: 'Can I switch between monthly and yearly?',
-        a: 'Yes. Choose the one you want and the difference is charged, or credited, to your saved card straight away. Paying yearly gets you two months free.',
-    },
-    {
-        q: 'Is running it myself free?',
-        a: 'Yes. HushOS is open source under the AGPL-3.0. Run your own copy with Docker Compose and give everyone as much space as you like. These plans are only for the service we run.',
-    },
-];
-
-/*
- * The questions, with the family ones only where the page offers a family
- * plan, so the FAQ markup in the head never answers for a section that is hidden.
- */
-function faqFor(family: FamilyOffer | null) {
-    if (!family) return faq;
-    const { includedMembers, maxMembers, quotaBytes } = family.plan;
-    const pool = formatQuota(quotaBytes);
-    const familyFaq = [
-        {
-            q: 'What is a family plan?',
-            a: `One plan for up to ${includedMembers} people, or ${maxMembers} with extra places, sharing ${pool}. It gives the family folders everyone in the family can open, end-to-end encrypted, and everyone keeps their own private space. Family folders are on the web for now; the iPhone and Android apps add them soon.`,
-        },
-        {
-            q: 'Who pays for a family plan?',
-            a: 'The person who chooses the plan for the family pays for it, through Polar, and is the one who adds or removes places. Everyone else needs only a HushOS account, and Free is enough.',
-        },
-        {
-            q: 'What happens if someone leaves the family?',
-            a: 'They lose the family folders straight away, and HushOS replaces the folders’ keys, which can take a few minutes. Their own files stay theirs.',
-        },
-        {
-            q: 'What happens when a family plan is cancelled?',
-            a: 'The person who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for. After that, nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
-        },
-    ];
-    return [
-        {
-            ...paidPlans,
-            a: `${paidPlans.a} A family plan buys shared room: family folders for everyone in it.`,
-        },
-        ...faq.slice(1, -1),
-        ...familyFaq,
-        ...faq.slice(-1),
-    ];
-}
 
 /* The lowest monthly price in the page's currency, for the description tag. */
 function cheapest(plans: Plan[], currency: string) {
@@ -721,12 +660,10 @@ function FamilySection({ offer, hasSession }: { offer: FamilyOffer; hasSession: 
                     {offer.size}
                 </p>
                 <p className="max-w-[36em] text-base leading-relaxed">
-                    Family folders that everyone in the family can open, end-to-end encrypted.
-                    Everyone keeps their own private space too, with its own storage.
+                    Family folders that every member can open, end-to-end encrypted. {offer.pool}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                    Family folders are on the web for now; the iPhone and Android apps add them
-                    soon.
+                    Family folders are on the web for now.
                 </p>
             </div>
             <div className="flex flex-col gap-4 border-t border-rule pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10">
