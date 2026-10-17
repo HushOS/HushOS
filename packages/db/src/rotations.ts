@@ -457,27 +457,26 @@ export async function rotateNodeIn(
         return 'ok';
     }
     const rotated = item.rotated!;
-    // Signed over what is stored: the node's kind and unchanged metadata version, and
-    // each version's own object and suite. A version not on this node is not written.
-    const stored = rotated.versions.length
-        ? await tx
-              .select({
-                  id: fileVersions.id,
-                  objectId: fileVersions.objectId,
-                  contentSuite: driveObjects.contentSuite,
-              })
-              .from(fileVersions)
-              .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
-              .where(
-                  and(
-                      inArray(
-                          fileVersions.id,
-                          rotated.versions.map((v) => v.id),
-                      ),
-                      eq(fileVersions.nodeId, item.id),
-                  ),
-              )
-        : [];
+    // Exactly the node's ready versions, each once, as the work listed them: one left out
+    // would stay sealed under the old key, which nobody can reach once the rotation
+    // finishes, and one that is not ready (discarded since the read, which does not move
+    // the node's change sequence) cannot be stored. Either way the client re-reads.
+    const ready = await tx
+        .select({
+            id: fileVersions.id,
+            objectId: fileVersions.objectId,
+            contentSuite: driveObjects.contentSuite,
+        })
+        .from(fileVersions)
+        .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
+        .where(and(eq(fileVersions.nodeId, item.id), eq(fileVersions.status, 'ready')));
+    const submitted = new Set(rotated.versions.map((v) => v.id));
+    if (
+        submitted.size !== rotated.versions.length ||
+        submitted.size !== ready.length ||
+        ready.some((row) => !submitted.has(row.id))
+    )
+        return 'stale';
     const statements: SignedStatement[] = [
         metadataSigned(
             {
@@ -490,16 +489,17 @@ export async function rotateNodeIn(
             rotated.metadataSignature,
         ),
     ];
+    // Signed over what is stored: the node's kind and unchanged metadata version, and
+    // each version's own object and suite.
     for (const version of rotated.versions) {
-        const row = stored.find((v) => v.id === version.id);
-        if (!row?.objectId) continue;
+        const row = ready.find((v) => v.id === version.id)!;
         statements.push(
             versionSigned(
                 {
                     workspaceId: input.workspaceId,
                     nodeId: item.id,
                     versionId: version.id,
-                    objectId: row.objectId,
+                    objectId: row.objectId!,
                     contentSuite: row.contentSuite,
                     contentKeyEnvelope: version.contentKeyEnvelope,
                 },
