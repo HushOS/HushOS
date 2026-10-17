@@ -6,12 +6,16 @@ import { encode } from './keys';
 import { mlDsaKeypair, mlDsaSign } from './pq';
 import {
     metadataContext,
+    openEnvelopeBytes,
+    openOriginKey,
+    openWithOriginKey,
     originOpeningKey,
     rekeyEnvelope,
     sealMetadata,
     wrapOriginKey,
 } from './drive';
 import {
+    carryOrigin,
     compatForm,
     copyForm,
     integrityOf,
@@ -500,21 +504,29 @@ describe('re-keyed records', () => {
     const SAM = '55555555-5555-4555-8555-555555555555';
     const statement = { workspaceId: WS, nodeId: NODE, kind: 'file' as const, metadataVersion: 2 };
     const ctx = { workspaceId: WS, nodeId: NODE, metadataVersion: 2 };
+    const keyCtx = (originEnvelope: Uint8Array, keyEpoch = 3) => ({
+        workspaceId: WS,
+        nodeId: NODE,
+        keyEpoch,
+        record: { kind: 'metadata' as const, metadataVersion: 2 },
+        originEnvelope,
+    });
 
-    test('the rekeyed statements are the canonical arrays the design fixes', async () => {
-        const [current, origin, signature] = [
+    test('the rekeyed statements are the canonical arrays the design fixes, the wrap covered', async () => {
+        const [current, origin, signature, keyEnvelope] = [
             crypto.getRandomValues(new Uint8Array(296)),
             crypto.getRandomValues(new Uint8Array(296)),
             crypto.getRandomValues(new Uint8Array(64)),
+            crypto.getRandomValues(new Uint8Array(72)),
         ];
-        const named = { envelope: origin, signerId: SAM.toUpperCase(), signature };
+        const named = { envelope: origin, signerId: SAM.toUpperCase(), signature, keyEnvelope };
         const metadata = await metadataRekeyedStatement(
             { ...statement, workspaceId: WS.toUpperCase(), keyEpoch: 7 },
             current,
             named,
         );
         expect(new TextDecoder().decode(metadata)).toBe(
-            `["hushos/drive/sig/metadata-rekeyed",1,"${WS}","${NODE}","file",2,7,"${sha(current)}","${sha(origin)}","${SAM}","${sha(signature)}"]`,
+            `["hushos/drive/sig/metadata-rekeyed",1,"${WS}","${NODE}","file",2,7,"${sha(current)}","${sha(origin)}","${SAM}","${sha(signature)}","${sha(keyEnvelope)}"]`,
         );
         const version = await versionRekeyedStatement(
             {
@@ -529,7 +541,7 @@ describe('re-keyed records', () => {
             named,
         );
         expect(new TextDecoder().decode(version)).toBe(
-            `["hushos/drive/sig/version-rekeyed",1,"${WS}","${NODE}","${VERSION}","${OBJECT}",3,7,"${sha(current)}","${sha(origin)}","${SAM}","${sha(signature)}"]`,
+            `["hushos/drive/sig/version-rekeyed",1,"${WS}","${NODE}","${VERSION}","${OBJECT}",3,7,"${sha(current)}","${sha(origin)}","${SAM}","${sha(signature)}","${sha(keyEnvelope)}"]`,
         );
         await expect(
             metadataRekeyedStatement({ ...statement, keyEpoch: 0 }, current, named),
@@ -559,19 +571,19 @@ describe('re-keyed records', () => {
             sam.privateKey,
         );
         const envelope = await rekeyEnvelope(origin, old, fresh, metadataContext(ctx));
-        const keyEnvelope = await wrapOriginKey(originOpeningKey(origin, old), fresh, {
-            workspaceId: WS,
-            nodeId: NODE,
-            keyEpoch: 3,
-            record: { kind: 'metadata', metadataVersion: 2 },
-            originEnvelope: origin,
-        });
-        const rekeySign = async (current: Uint8Array) =>
+        const keyEnvelope = await wrapOriginKey(
+            originOpeningKey(origin, old),
+            fresh,
+            keyCtx(origin),
+        );
+        /* Maya's signature over the record as it stands: the current envelope and the wrap it carries. */
+        const rekeySign = async (current: Uint8Array, wrap = keyEnvelope) =>
             signStatement(
                 await metadataRekeyedStatement({ ...statement, keyEpoch: 3 }, current, {
                     envelope: origin,
                     signerId: SAM,
                     signature: samSignature,
+                    keyEnvelope: wrap,
                 }),
                 maya.privateKey,
             );
@@ -590,12 +602,12 @@ describe('re-keyed records', () => {
         return { sam, maya, old, fresh, origin, samSignature, record, trust, rekeySign };
     }
 
-    test('a re-keyed record reads as its writer’s, and the re-keyer stays in Info', async () => {
+    test('a re-keyed record reads as its writer’s, bound, and the re-keyer stays in Info', async () => {
         const { record, trust, fresh } = await rotated();
         expect(await rekeyedIntegrityOf(record, fresh, trust)).toEqual({
             origin: 'verified',
             rekeyer: 'verified',
-            mismatch: false,
+            bound: true,
         });
         // The legacy reading of the same record by Maya's signature alone never names Sam: it is not hers.
         expect(
@@ -619,29 +631,46 @@ describe('re-keyed records', () => {
         expect(await rekeyedIntegrityOf(forged, fresh, trust)).toEqual({
             origin: 'bad-signature',
             rekeyer: 'verified',
-            mismatch: true,
+            bound: false,
         });
     });
 
-    test('the origin key is not the node key: wrapping the old node key itself opens nothing', async () => {
-        const { record, trust, fresh, old, origin } = await rotated();
-        const asNodeKey = await wrapOriginKey(old, fresh, {
-            workspaceId: WS,
-            nodeId: NODE,
-            keyEpoch: 3,
-            record: { kind: 'metadata', metadataVersion: 2 },
-            originEnvelope: origin,
-        });
-        const verdict = await rekeyedIntegrityOf(
-            { ...record, origin: { ...record.origin, keyEnvelope: asNodeKey } },
-            fresh,
-            trust,
-        );
-        expect(verdict.mismatch).toBe(true);
+    test('a server that garbles only the wrapped key frames nobody: the re-key signature covers it', async () => {
+        const { record, trust, fresh } = await rotated();
+        const garbled = record.origin.keyEnvelope.slice();
+        garbled[30]! ^= 1;
+        expect(
+            await rekeyedIntegrityOf(
+                { ...record, origin: { ...record.origin, keyEnvelope: garbled } },
+                fresh,
+                trust,
+            ),
+        ).toEqual({ origin: 'unchecked', rekeyer: 'bad-signature', bound: null });
     });
 
-    test('a rekeyed signature passes for no other form, and no other form for it', async () => {
+    test('the origin key is not the node key: a wrapped old node key opens nothing', async () => {
+        const { record, trust, fresh, old, origin, rekeySign } = await rotated();
+        const asNodeKey = await wrapOriginKey(old, fresh, keyCtx(origin));
+        const swapped = { ...record, origin: { ...record.origin, keyEnvelope: asNodeKey } };
+        // Unsigned over it, it could be the server's doing: not confirmed, nobody named.
+        expect((await rekeyedIntegrityOf(swapped, fresh, trust)).bound).toBe(null);
+        // Under Maya's verified signature she attested to it: not bound.
+        const attested = {
+            ...swapped,
+            rekeySignature: await rekeySign(record.envelope, asNodeKey),
+        };
+        expect(await rekeyedIntegrityOf(attested, fresh, trust)).toEqual({
+            origin: 'bad-signature',
+            rekeyer: 'verified',
+            bound: false,
+        });
+    });
+
+    test('a missing or bad re-key signature over equal bytes is no mismatch', async () => {
         const { record, trust, fresh, maya } = await rotated();
+        expect(await rekeyedIntegrityOf({ ...record, rekeySignature: null }, fresh, trust)).toEqual(
+            { origin: 'verified', rekeyer: 'unsigned', bound: true },
+        );
         // Maya's ordinary, saved and re-sealed signatures over the current envelope are no rekey signature.
         for (const form of ['ordinary', 'saved', 'resealed'] as const) {
             const signed = await signStatement(
@@ -649,10 +678,9 @@ describe('re-keyed records', () => {
                 maya.privateKey,
             );
             expect(
-                (await rekeyedIntegrityOf({ ...record, rekeySignature: signed }, fresh, trust))
-                    .rekeyer,
+                await rekeyedIntegrityOf({ ...record, rekeySignature: signed }, fresh, trust),
                 form,
-            ).toBe('bad-signature');
+            ).toEqual({ origin: 'verified', rekeyer: 'bad-signature', bound: true });
         }
         // And her rekey signature is none of the three over the current envelope.
         expect(
@@ -662,33 +690,65 @@ describe('re-keyed records', () => {
                 trust.rekeyer,
             ),
         ).toBe('bad-signature');
-        // A version's rekeyed statement over the same bytes is another statement.
-        const asVersion = await versionRekeyedStatement(
-            {
-                workspaceId: WS,
-                nodeId: NODE,
-                versionId: VERSION,
-                objectId: OBJECT,
-                contentSuite: 3,
-                keyEpoch: 3,
-            },
-            record.envelope,
-            {
-                envelope: record.origin.envelope,
-                signerId: SAM,
-                signature: record.origin.signature!,
-            },
-        );
-        expect(await verifyStatement(asVersion, record.rekeySignature!, maya.publicKey)).toBe(
-            false,
-        );
+    });
+
+    test('with no origin signer named, no caller’s trust speaks for one', async () => {
+        const { record, trust, fresh } = await rotated();
+        const gone = { ...record, origin: { ...record.origin, signerId: null } };
+        expect(await rekeyedIntegrityOf(gone, fresh, trust)).toEqual({
+            origin: 'unknown-signer',
+            rekeyer: 'unchecked',
+            bound: true,
+        });
     });
 
     test('what the reader lacks is unchecked, never clean', async () => {
-        const { record, trust, fresh } = await rotated();
-        const unchecked = { origin: 'unchecked', rekeyer: 'unchecked', mismatch: false };
+        const { record, trust, fresh, old } = await rotated();
+        const unchecked = { origin: 'unchecked', rekeyer: 'unchecked', bound: null };
         expect(await rekeyedIntegrityOf(record, null, trust)).toEqual(unchecked);
         expect(await rekeyedIntegrityOf(record, fresh, null)).toEqual(unchecked);
+        // A key the current envelope does not open under: never confirmed, never the re-keyer's fault.
+        expect(await rekeyedIntegrityOf(record, old, trust)).toEqual({
+            origin: 'unchecked',
+            rekeyer: 'verified',
+            bound: null,
+        });
+    });
+
+    test('the next rotation carries a bound origin, re-wrapped for the new epoch', async () => {
+        const { record, fresh, origin } = await rotated();
+        const next = crypto.getRandomValues(new Uint8Array(32));
+        const wrap = await carryOrigin(record, fresh, next, 4);
+        expect(wrap).not.toBeNull();
+        const key = await openOriginKey(wrap!, next, keyCtx(origin, 4));
+        expect(await openWithOriginKey(origin, key, metadataContext(ctx))).toEqual(
+            await openEnvelopeBytes(record.envelope, fresh, metadataContext(ctx)),
+        );
+        // A malformed next wrap is the caller's mistake, not a dropped origin.
+        await expect(carryOrigin(record, fresh, new Uint8Array(16), 4)).rejects.toThrow(
+            CryptoError,
+        );
+        await expect(carryOrigin(record, fresh, next, 0)).rejects.toThrow(CryptoError);
+    });
+
+    test('the next rotation drops an origin that is not bound, whoever signed it', async () => {
+        const { record, fresh, old, origin, rekeySign } = await rotated();
+        const next = crypto.getRandomValues(new Uint8Array(32));
+        // A dishonest re-keyer's mismatch, signed and all: never adopted.
+        const other = await sealMetadata(
+            { name: 'not-sam.md', mime: null, size: 4, modified: null },
+            fresh,
+            ctx,
+        );
+        const forged = { ...record, envelope: other, rekeySignature: await rekeySign(other) };
+        expect(await carryOrigin(forged, fresh, next, 4)).toBeNull();
+        // A wrapped old node key: never passed on to whoever joins later.
+        const asNodeKey = await wrapOriginKey(old, fresh, keyCtx(origin));
+        const leaked = { ...record, origin: { ...record.origin, keyEnvelope: asNodeKey } };
+        expect(await carryOrigin(leaked, fresh, next, 4)).toBeNull();
+        // A key the record does not open under, and a wrap from another epoch.
+        expect(await carryOrigin(record, old, next, 4)).toBeNull();
+        expect(await carryOrigin({ ...record, keyEpoch: 2 }, fresh, next, 4)).toBeNull();
     });
 
     test('the legacy form beside it is honest: the re-keyer’s own work only, and it never refuses', () => {

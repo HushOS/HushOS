@@ -61,7 +61,7 @@ import {
 import { deriveId, type IdKind } from '../src/ids';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
-import { judgeRekeyed, readRekeyed, rekeyedCases } from '../src/rekeyed-testkit';
+import { carriedRekeyed, judgeRekeyed, readRekeyed, rekeyedCases } from '../src/rekeyed-testkit';
 import { isDeepStrictEqual } from 'node:util';
 
 /*
@@ -638,7 +638,7 @@ const rekeyedMade = await rekeyedCases({
     },
 });
 // The declared verdicts must be this twin's own before the other twin is held to them.
-for (const { name, input, expected } of rekeyedMade.cases) {
+for (const { name, input, expected, carried } of rekeyedMade.cases) {
     const read = readRekeyed(input);
     if (!read) throw new Error(`rekeyed case ${name} does not read`);
     const got = await judgeRekeyed(read);
@@ -646,6 +646,8 @@ for (const { name, input, expected } of rekeyedMade.cases) {
         throw new Error(
             `rekeyed case ${name}: ${JSON.stringify(got)} != ${JSON.stringify(expected)}`,
         );
+    if ((await carriedRekeyed(read)) !== carried)
+        throw new Error(`rekeyed case ${name}: carried is not ${carried}`);
 }
 const rekeyed = {
     oldNodeKey: encode(nodeKey),

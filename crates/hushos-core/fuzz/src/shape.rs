@@ -418,5 +418,6 @@ pub fn record_origin(value: &Value) -> Option<RecordOrigin> {
         envelope: bytes(value, "envelope")?,
         signer_id: text(value, "signerId")?,
         signature: bytes(value, "signature")?,
+        key_envelope: bytes(value, "keyEnvelope")?,
     })
 }

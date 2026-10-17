@@ -204,7 +204,7 @@ fn group_side(integrity: &GroupIntegrity) -> Value {
     json!({ "integrity": group_verdict_name(integrity.verdict), "via": integrity.via })
 }
 
-/// The verdict as JSON: `{ origin, rekeyer, mismatch }`, each side `{ integrity, via }` in a group's area.
+/// The verdict as JSON: `{ origin, rekeyer, bound }`, each side `{ integrity, via }` in a group's area.
 pub fn judge(input: &Input) -> Value {
     match (&input.trust, &input.record) {
         (Trust::Personal(trust), record) => {
@@ -219,7 +219,7 @@ pub fn judge(input: &Input) -> Value {
             json!({
                 "origin": integrity_name(verdict.origin),
                 "rekeyer": integrity_name(verdict.rekeyer),
-                "mismatch": verdict.mismatch,
+                "bound": verdict.bound,
             })
         }
         (Trust::Group(trust), record) => {
@@ -234,10 +234,23 @@ pub fn judge(input: &Input) -> Value {
             json!({
                 "origin": group_side(&verdict.origin),
                 "rekeyer": group_side(&verdict.rekeyer),
-                "mismatch": verdict.mismatch,
+                "bound": verdict.bound,
             })
         }
     }
+}
+
+/// Whether the next rotation carries the record's origin: `*_origin_carry` with
+/// the input's node key as the old key, a fresh key and the next epoch. A
+/// refusal of the next wrap's fields counts as not carried; `None` without a node key.
+pub fn carried(input: &Input) -> Option<bool> {
+    let old = input.node_key.clone()?;
+    let fresh = random_bytes(32).unwrap();
+    let carried = match &input.record {
+        Record::Metadata(r) => metadata_origin_carry(old, fresh, r.key_epoch.saturating_add(1), r.clone()),
+        Record::Version(r) => version_origin_carry(old, fresh, r.key_epoch.saturating_add(1), r.clone()),
+    };
+    Some(matches!(carried, Ok(Some(_))))
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -288,7 +301,8 @@ pub struct Rekeyed {
     pub version_statement: String,
     /// Every origin the cases carry, with the record it was sealed for: the fuzz targets' oracle.
     pub origins: Vec<Value>,
-    pub cases: Vec<(String, Value, Value)>,
+    /// Name, input, declared verdict, and whether the next rotation carries the origin.
+    pub cases: Vec<(String, Value, Value, Option<bool>)>,
 }
 
 #[derive(Clone)]
@@ -357,8 +371,8 @@ fn metadata_ctx(s: &MetadataStatement) -> MetadataContext {
     }
 }
 
-fn verdict(origin: &str, rekeyer: &str, mismatch: bool) -> Value {
-    json!({ "origin": origin, "rekeyer": rekeyer, "mismatch": mismatch })
+fn verdict(origin: &str, rekeyer: &str, bound: Option<bool>) -> Value {
+    json!({ "origin": origin, "rekeyer": rekeyer, "bound": bound })
 }
 
 fn side(integrity: &str, via: Option<&str>) -> Value {
@@ -389,6 +403,7 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
             envelope: b.origin_envelope.clone(),
             signer_id: b.signer_id.clone().unwrap(),
             signature: b.signature.clone().unwrap(),
+            key_envelope: b.key_envelope.clone(),
         };
         let signature = if b.metadata {
             metadata_rekey_sign(by.seed.clone(), ms.clone(), b.key_epoch, b.envelope.clone(), origin)
@@ -457,51 +472,57 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
     let r = signer(&m.rekeyer.public_key, &[]);
     let both = json!({ "origin": w, "rekeyer": r });
     let node_key = json!(e(&m.node_key));
-    let mut cases = Vec::new();
+    let k = || node_key.clone();
+    let mut cases: Vec<(String, Value, Value, Option<bool>)> = Vec::new();
+    // The next rotation carries the origin exactly when both open to the same bytes under the case's key.
+    let carried_of = |key: &Value, trust: &Value, expected: &Value| {
+        (!key.is_null()).then(|| expected["bound"] == true || trust.is_null())
+    };
     let mut personal = |name: &str, b: &Built, trust: Value, expected: Value, key: Value| {
+        let carried = carried_of(&key, &trust, &expected);
         let mut input = json_of(b);
         input.insert("nodeKey".into(), key);
         input.insert("trust".into(), trust);
-        cases.push((name.to_string(), Value::Object(input), expected));
+        cases.push((name.to_string(), Value::Object(input), expected, carried));
     };
-    let roster = |key: &[u8], links_loaded: bool| json!({ "trust": "roster", "signer": signer(key, &[]), "via": m.group, "linksLoaded": links_loaded });
-    let k = || node_key.clone();
+    let t = Some(true);
+    let f = Some(false);
 
-    personal("metadata", &metadata, both.clone(), verdict("verified", "verified", false), k());
-    personal("version", &version, both.clone(), verdict("verified", "verified", false), k());
+    personal("metadata", &metadata, both.clone(), verdict("verified", "verified", t), k());
+    personal("version", &version, both.clone(), verdict("verified", "verified", t), k());
     personal(
         "rekeyer not checked",
         &metadata,
         json!({ "origin": w, "rekeyer": null }),
-        verdict("verified", "unknown-signer", false),
+        verdict("verified", "unknown-signer", t),
         k(),
     );
     personal(
         "writer not checked",
         &metadata,
         json!({ "origin": null, "rekeyer": r }),
-        verdict("unknown-signer", "verified", false),
+        verdict("unknown-signer", "verified", t),
         k(),
     );
     personal(
         "writer key replaced",
         &metadata,
         json!({ "origin": signer(&m.stranger, &[&m.writer.public_key]), "rekeyer": r }),
-        verdict("retired-key", "verified", false),
+        verdict("retired-key", "verified", t),
         k(),
     );
     personal(
         "rekeyer key replaced",
         &version,
         json!({ "origin": w, "rekeyer": signer(&m.stranger, &[&m.rekeyer.public_key]) }),
-        verdict("verified", "retired-key", false),
+        verdict("verified", "retired-key", t),
         k(),
     );
     personal(
         "writer signature over another record",
         &sign_as(&Built { signature: Some(m.version.signature.clone()), ..metadata.clone() }, &m.rekeyer),
         both.clone(),
-        verdict("bad-signature", "verified", false),
+        verdict("bad-signature", "verified", t),
         k(),
     );
     let other_name = metadata_seal(
@@ -511,7 +532,7 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
     )
     .unwrap();
     let swapped = sign_as(&Built { envelope: other_name, ..metadata.clone() }, &m.rekeyer);
-    personal("swapped metadata", &swapped, both.clone(), verdict("bad-signature", "verified", true), k());
+    personal("swapped metadata", &swapped, both.clone(), verdict("bad-signature", "verified", f), k());
     let other_content = version_reseal(
         version_ctx(vs),
         vs.content_suite,
@@ -523,7 +544,7 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
         "swapped version",
         &sign_as(&Built { envelope: other_content, ..version.clone() }, &m.rekeyer),
         both.clone(),
-        verdict("bad-signature", "verified", true),
+        verdict("bad-signature", "verified", f),
         k(),
     );
     let foreign = &m.other_version;
@@ -551,7 +572,7 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
             &m.rekeyer,
         ),
         both.clone(),
-        verdict("bad-signature", "verified", true),
+        verdict("bad-signature", "verified", f),
         k(),
     );
     personal(
@@ -571,16 +592,16 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
             &m.rekeyer,
         ),
         both.clone(),
-        verdict("bad-signature", "verified", true),
+        verdict("bad-signature", "verified", f),
         k(),
     );
-    personal("no node key", &metadata, both.clone(), verdict("unchecked", "unchecked", false), Value::Null);
-    personal("trust did not load", &metadata, Value::Null, verdict("unchecked", "unchecked", false), k());
+    personal("no node key", &metadata, both.clone(), verdict("unchecked", "unchecked", None), Value::Null);
+    personal("trust did not load", &metadata, Value::Null, verdict("unchecked", "unchecked", None), k());
     personal(
         "old node key",
         &metadata,
         both.clone(),
-        verdict("bad-signature", "verified", true),
+        verdict("unchecked", "verified", None),
         json!(e(&m.old_node_key)),
     );
     let mut flipped = metadata.rekey_signature.clone().unwrap();
@@ -589,7 +610,7 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
         "rekey signature flipped",
         &Built { rekey_signature: Some(flipped), ..metadata.clone() },
         both.clone(),
-        verdict("bad-signature", "bad-signature", true),
+        verdict("verified", "bad-signature", t),
         k(),
     );
     personal(
@@ -601,165 +622,266 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
             ..metadata.clone()
         },
         both.clone(),
-        verdict("bad-signature", "bad-signature", true),
+        verdict("verified", "bad-signature", t),
         k(),
     );
     personal(
         "rekey signature missing",
         &Built { rekey_signature: None, ..metadata.clone() },
         both.clone(),
-        verdict("bad-signature", "unsigned", true),
+        verdict("verified", "unsigned", t),
         k(),
     );
     personal(
         "rekey signature missing, rekeyer not checked",
         &Built { rekey_signature: None, ..version.clone() },
         json!({ "origin": w, "rekeyer": null }),
-        verdict("bad-signature", "unsigned", true),
+        verdict("verified", "unsigned", t),
         k(),
     );
     personal(
         "writer account gone",
         &Built { signer_id: None, ..metadata.clone() },
         json!({ "origin": null, "rekeyer": r }),
-        verdict("unknown-signer", "unchecked", false),
+        verdict("unknown-signer", "unchecked", t),
+        k(),
+    );
+    personal(
+        "writer account gone, trust passed anyway",
+        &Built { signer_id: None, ..metadata.clone() },
+        both.clone(),
+        verdict("unknown-signer", "unchecked", t),
         k(),
     );
     personal(
         "origin unsigned",
         &Built { signature: None, ..metadata.clone() },
         both.clone(),
-        verdict("bad-signature", "bad-signature", true),
+        verdict("unsigned", "bad-signature", t),
         k(),
     );
+    let mut garbled = metadata.key_envelope.clone();
+    garbled[40] ^= 1;
+    personal(
+        "wrap garbled",
+        &Built { key_envelope: garbled, ..metadata.clone() },
+        both.clone(),
+        verdict("unchecked", "bad-signature", None),
+        k(),
+    );
+    let as_content_key = version_reseal(
+        version_ctx(vs),
+        1,
+        m.node_key.clone(),
+        ContentKey { key: version_origin_key.clone().into(), plaintext_size: 0, thumbnail_bytes: 0 },
+    )
+    .unwrap();
     personal(
         "origin key as a content key",
-        &Built {
-            key_envelope: version_reseal(
-                version_ctx(vs),
-                1,
-                m.node_key.clone(),
-                ContentKey { key: version_origin_key.clone().into(), plaintext_size: 0, thumbnail_bytes: 0 },
-            )
-            .unwrap(),
-            ..version.clone()
-        },
+        &Built { key_envelope: as_content_key.clone(), ..version.clone() },
         both.clone(),
-        verdict("bad-signature", "verified", true),
+        verdict("unchecked", "bad-signature", None),
         k(),
     );
     personal(
-        "origin key as a node key",
-        &Built {
-            key_envelope: node_wrap(
-                NodeKeyContext {
-                    workspace_id: ms.workspace_id.clone(),
-                    node_id: ms.node_id.clone(),
-                    parent_id: m.parent_id.clone(),
-                    parent_key_epoch: m.key_epoch,
-                    key_epoch: m.key_epoch,
-                },
-                m.node_key.clone(),
-                metadata_origin_key.clone(),
-            )
-            .unwrap(),
-            ..metadata.clone()
-        },
+        "origin key as a content key, attested",
+        &sign_as(&Built { key_envelope: as_content_key.clone(), ..version.clone() }, &m.rekeyer),
         both.clone(),
-        verdict("bad-signature", "verified", true),
+        verdict("bad-signature", "verified", f),
+        k(),
+    );
+    personal(
+        "origin key as a node key, attested",
+        &sign_as(
+            &Built {
+                key_envelope: node_wrap(
+                    NodeKeyContext {
+                        workspace_id: ms.workspace_id.clone(),
+                        node_id: ms.node_id.clone(),
+                        parent_id: m.parent_id.clone(),
+                        parent_key_epoch: m.key_epoch,
+                        key_epoch: m.key_epoch,
+                    },
+                    m.node_key.clone(),
+                    metadata_origin_key.clone(),
+                )
+                .unwrap(),
+                ..metadata.clone()
+            },
+            &m.rekeyer,
+        ),
+        both.clone(),
+        verdict("bad-signature", "verified", f),
+        k(),
+    );
+    personal(
+        "old node key as the origin key, attested",
+        &sign_as(
+            &Built {
+                key_envelope: origin_key_wrap(
+                    key_ctx(true, &m.metadata.envelope),
+                    m.node_key.clone(),
+                    m.old_node_key.clone(),
+                )
+                .unwrap(),
+                ..metadata.clone()
+            },
+            &m.rekeyer,
+        ),
+        both.clone(),
+        verdict("bad-signature", "verified", f),
         k(),
     );
     personal(
         "stale epoch",
         &Built { key_epoch: m.key_epoch - 1, ..metadata.clone() },
         both.clone(),
-        verdict("bad-signature", "bad-signature", true),
+        verdict("unchecked", "bad-signature", None),
+        k(),
+    );
+    personal(
+        "epoch 0",
+        &Built { key_epoch: 0, ..metadata.clone() },
+        json!({ "origin": w, "rekeyer": null }),
+        verdict("unchecked", "unknown-signer", None),
+        k(),
+    );
+    let mut not_uuid = metadata_json(ms);
+    not_uuid["nodeId"] = json!("n1");
+    personal(
+        "node id not a uuid",
+        &Built { statement: not_uuid, ..metadata.clone() },
+        json!({ "origin": w, "rekeyer": null }),
+        verdict("unchecked", "unknown-signer", None),
         k(),
     );
     personal(
         "rekeyed by the writer",
         &sign_as(&metadata, &m.writer),
         json!({ "origin": w, "rekeyer": w }),
-        verdict("verified", "verified", false),
+        verdict("verified", "verified", t),
         k(),
     );
 
     let mut family = |name: &str, b: &Built, group: Value, expected: Value, key: Value| {
+        let carried = carried_of(&key, &group, &expected);
         let mut input = json_of(b);
         input.insert("nodeKey".into(), key);
         input.insert("group".into(), group);
-        cases.push((name.to_string(), Value::Object(input), expected));
+        cases.push((name.to_string(), Value::Object(input), expected, carried));
     };
+    let roster = |key: &[u8], links_loaded: bool| json!({ "trust": "roster", "signer": signer(key, &[]), "via": m.group, "linksLoaded": links_loaded });
     let g = Some(m.group.as_str());
-    let both_roster = || json!({ "origin": roster(&m.writer.public_key, true), "originPersonal": null, "rekeyer": roster(&m.rekeyer.public_key, true), "rekeyerPersonal": null });
+    let both_roster = json!({
+        "origin": roster(&m.writer.public_key, true), "originPersonal": null,
+        "rekeyer": roster(&m.rekeyer.public_key, true), "rekeyerPersonal": null,
+    });
+    let with = |key: &str, value: Value| {
+        let mut group = both_roster.clone();
+        group[key] = value;
+        group
+    };
+    let reads = |origin: Value, rekeyer: Value, bound: Option<bool>| json!({ "origin": origin, "rekeyer": rekeyer, "bound": bound });
     family(
         "family writer left",
         &metadata,
-        json!({ "origin": { "trust": "former-member", "signer": w, "linksLoaded": true }, "originPersonal": null, "rekeyer": roster(&m.rekeyer.public_key, true), "rekeyerPersonal": null }),
-        json!({ "origin": side("former-member", None), "rekeyer": side("verified", g), "mismatch": false }),
+        with("origin", json!({ "trust": "former-member", "signer": w, "linksLoaded": true })),
+        reads(side("former-member", None), side("verified", g), t),
         k(),
     );
     family(
         "family writer on the roster",
         &version,
-        both_roster(),
-        json!({ "origin": side("verified", g), "rekeyer": side("verified", g), "mismatch": false }),
+        both_roster.clone(),
+        reads(side("verified", g), side("verified", g), t),
         k(),
     );
     family(
         "family roster unavailable",
         &metadata,
         json!({ "origin": { "trust": "unchecked" }, "originPersonal": w, "rekeyer": { "trust": "unchecked" }, "rekeyerPersonal": r }),
-        json!({ "origin": side("unchecked", None), "rekeyer": side("unchecked", None), "mismatch": false }),
+        reads(side("unchecked", None), side("unchecked", None), t),
         k(),
     );
     family(
         "family swapped metadata",
         &swapped,
-        both_roster(),
-        json!({ "origin": side("bad-signature", None), "rekeyer": side("verified", g), "mismatch": true }),
+        both_roster.clone(),
+        reads(side("bad-signature", None), side("verified", g), f),
         k(),
     );
     family(
         "family rekeyer left",
         &metadata,
-        json!({ "origin": roster(&m.writer.public_key, true), "originPersonal": null, "rekeyer": { "trust": "former-member", "signer": r, "linksLoaded": true }, "rekeyerPersonal": null }),
-        json!({ "origin": side("verified", g), "rekeyer": side("former-member", None), "mismatch": false }),
+        with("rekeyer", json!({ "trust": "former-member", "signer": r, "linksLoaded": true })),
+        reads(side("verified", g), side("former-member", None), t),
         k(),
     );
     family(
         "family rekeyer unknown key, links not loaded",
         &metadata,
-        json!({ "origin": roster(&m.writer.public_key, true), "originPersonal": null, "rekeyer": roster(&m.stranger, false), "rekeyerPersonal": null }),
-        json!({ "origin": side("verified", g), "rekeyer": side("unchecked", None), "mismatch": false }),
+        with("rekeyer", roster(&m.stranger, false)),
+        reads(side("verified", g), side("unchecked", None), t),
         k(),
     );
     family(
         "family rekeyer unknown key, links loaded",
         &metadata,
-        json!({ "origin": roster(&m.writer.public_key, true), "originPersonal": null, "rekeyer": roster(&m.stranger, true), "rekeyerPersonal": null }),
-        json!({ "origin": side("bad-signature", None), "rekeyer": side("bad-signature", None), "mismatch": true }),
+        with("rekeyer", roster(&m.stranger, true)),
+        reads(side("verified", g), side("bad-signature", None), t),
         k(),
     );
+    family(
+        "family rekeyer key conflict",
+        &metadata,
+        with("rekeyer", json!({ "trust": "key-conflict" })),
+        reads(side("verified", g), side("key-conflict", None), t),
+        k(),
+    );
+    family(
+        "family rekey signature stripped, roster unavailable",
+        &Built { rekey_signature: None, ..metadata.clone() },
+        with("rekeyer", json!({ "trust": "unchecked" })),
+        reads(side("verified", g), side("unsigned", None), t),
+        k(),
+    );
+    family(
+        "family wrap broken, attested by a former member",
+        &sign_as(&Built { key_envelope: as_content_key, ..version.clone() }, &m.rekeyer),
+        with("rekeyer", json!({ "trust": "former-member", "signer": r, "linksLoaded": true })),
+        reads(side("bad-signature", None), side("former-member", None), f),
+        k(),
+    );
+    family(
+        "family writer account gone",
+        &Built { signer_id: None, ..metadata.clone() },
+        both_roster.clone(),
+        reads(side("unknown-signer", None), side("unchecked", None), t),
+        k(),
+    );
+    let mut outside = with("origin", json!({ "trust": "outside" }));
+    outside["originPersonal"] = w.clone();
     family(
         "family writer outside the roster",
         &metadata,
-        json!({ "origin": { "trust": "outside" }, "originPersonal": w, "rekeyer": roster(&m.rekeyer.public_key, true), "rekeyerPersonal": null }),
-        json!({ "origin": side("verified", None), "rekeyer": side("verified", g), "mismatch": false }),
+        outside,
+        reads(side("verified", None), side("verified", g), t),
         k(),
     );
+    let mut conflict = with("origin", json!({ "trust": "key-conflict" }));
+    conflict["originPersonal"] = w.clone();
     family(
         "family writer key conflict",
         &metadata,
-        json!({ "origin": { "trust": "key-conflict" }, "originPersonal": w, "rekeyer": roster(&m.rekeyer.public_key, true), "rekeyerPersonal": null }),
-        json!({ "origin": side("key-conflict", None), "rekeyer": side("verified", g), "mismatch": false }),
+        conflict,
+        reads(side("key-conflict", None), side("verified", g), t),
         k(),
     );
     family(
         "family no node key",
         &metadata,
-        both_roster(),
-        json!({ "origin": side("unchecked", None), "rekeyer": side("unchecked", None), "mismatch": false }),
+        both_roster.clone(),
+        reads(side("unchecked", None), side("unchecked", None), None),
         Value::Null,
     );
 
@@ -768,6 +890,7 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
             envelope: b.origin_envelope.clone(),
             signer_id: b.signer_id.clone().unwrap(),
             signature: b.signature.clone().unwrap(),
+            key_envelope: b.key_envelope.clone(),
         };
         e(&if b.metadata {
             metadata_rekeyed_statement(ms.clone(), b.key_epoch, b.envelope.clone(), origin)

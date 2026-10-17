@@ -502,9 +502,10 @@ fn main() {
         },
     });
     // The declared verdicts must be this twin's own before the other twin is held to them.
-    for (name, input, expected) in &made.cases {
+    for (name, input, expected, carried) in &made.cases {
         let read = rekeyed::read(input).unwrap_or_else(|| panic!("rekeyed case {name} does not read"));
         assert_eq!(&rekeyed::judge(&read), expected, "rekeyed case {name}");
+        assert_eq!(rekeyed::carried(&read), *carried, "rekeyed case {name}: carried");
     }
     let rekeyed = json!({
         "oldNodeKey": e(&node_key),
@@ -519,7 +520,7 @@ fn main() {
         "metadataStatement": made.metadata_statement,
         "versionStatement": made.version_statement,
         "origins": made.origins,
-        "cases": made.cases.iter().map(|(name, input, expected)| json!({ "name": name, "input": input, "expected": expected })).collect::<Vec<_>>(),
+        "cases": made.cases.iter().map(|(name, input, expected, carried)| json!({ "name": name, "input": input, "expected": expected, "carried": carried })).collect::<Vec<_>>(),
     });
 
     // Scoped ids: the same fixed seeds and scopes as the web's fixture, so both carry known answers.

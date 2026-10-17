@@ -97,14 +97,14 @@ pub mod fuzzing {
         crate::envelope::open_with_opening_key(origin_key, envelope, aad).ok()
     }
 
-    /// A metadata envelope's associated data.
-    pub fn metadata_aad(ctx: &crate::MetadataContext) -> Vec<u8> {
-        crate::drive::metadata_context(ctx)
+    /// A metadata envelope's associated data, or none when its fields are refused.
+    pub fn metadata_aad(ctx: &crate::MetadataContext) -> Option<Vec<u8>> {
+        crate::drive::metadata_context(ctx).ok()
     }
 
-    /// A version envelope's associated data in `suite`.
-    pub fn version_aad(ctx: &crate::VersionContext, suite: u32) -> Vec<u8> {
-        crate::drive::version_context(ctx, suite)
+    /// A version envelope's associated data in `suite`, or none when its fields are refused.
+    pub fn version_aad(ctx: &crate::VersionContext, suite: u32) -> Option<Vec<u8>> {
+        crate::drive::version_context(ctx, suite).ok()
     }
 }
 

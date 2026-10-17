@@ -65,7 +65,7 @@ import {
     openOriginKey,
     openWithOriginKey,
 } from '../src/drive';
-import { judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
+import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
 import { chain, core, groups, people, shareGrantee, signed, web, type Json } from './fixtures';
 
 /*
@@ -563,6 +563,7 @@ function recordOriginOf(value: unknown): RecordOrigin | undefined {
         envelope: bytes(value, 'envelope'),
         signerId: text(value, 'signerId'),
         signature: bytes(value, 'signature'),
+        keyEnvelope: bytes(value, 'keyEnvelope'),
     });
 }
 
@@ -1005,23 +1006,23 @@ async function plaintexts(nodeKey: Uint8Array, record: RekeyedRecord) {
 }
 
 /*
- * A re-keyed record's verdict, personal or in a group's area, with the
- * invariants of targets.rs: no mismatch for a record the reader can check
- * means the origin holds the current envelope's bytes, verified means the
- * statements build, and an origin sealed for another record never passes.
+ * A re-keyed record's verdict, personal or in a group's area, and whether the
+ * next rotation carries its origin, with the invariants of targets.rs:
+ * - bound true means the origin holds the current envelope's bytes, and an
+ *   origin sealed for another record never gets there;
+ * - bound false means the reader did not see equal bytes;
+ * - the next rotation carries the origin exactly when both open to equal bytes;
+ * - verified means the origin's statement builds.
  */
 async function recordIntegrity(value: Doc): Promise<Verdict | undefined> {
     const input = readRekeyed(value);
     if (!input) return undefined;
     const verdict = (await judgeRekeyed(input)) as Json;
-    const checkable = input.trust.kind === 'group' || input.trust.trust !== null;
-    if (verdict.mismatch === false && checkable && input.nodeKey) {
-        const both = await plaintexts(input.nodeKey, input.record);
-        invariant(both !== undefined, 'a record that is no mismatch opens both ways');
-        invariant(
-            sameBytes(both[0], both[1]),
-            'a record that is no mismatch holds other bytes than its origin',
-        );
+    const carried = await carriedRekeyed(input);
+    const both = input.nodeKey ? await plaintexts(input.nodeKey, input.record) : undefined;
+    const equal = both !== undefined && sameBytes(both[0], both[1]);
+    if (verdict.bound === true) {
+        invariant(equal, 'a bound record holds other bytes than its origin');
         const known = knownOrigin(input.record.origin.envelope);
         if (known) {
             const { envelope: _, ...sealedFor } = known;
@@ -1031,39 +1032,26 @@ async function recordIntegrity(value: Doc): Promise<Verdict | undefined> {
             );
         }
     }
+    if (verdict.bound === false) invariant(!equal, 'a record whose bytes match read as not bound');
+    if (input.nodeKey)
+        invariant(
+            carried === equal,
+            'the next rotation carried an origin it should not, or dropped a bound one',
+        );
+    else invariant(carried === null, 'a rotation without the node key carried something');
+    // A missing or bad re-key signature no longer touches the origin's verdict (it is a mark of its
+    // own), so only the origin's statement must build for it to verify.
     const verified = verdict.origin === 'verified' || verdict.origin?.integrity === 'verified';
-    if (verified && verdict.mismatch === false) {
+    if (verified) {
         const r = input.record;
-        const signer = r.origin.signerId;
-        const origin = {
-            envelope: r.origin.envelope,
-            signerId: signer ?? '',
-            signature: r.origin.signature ?? new Uint8Array(),
-        };
-        // The rekeyed statement names the origin's signer; with them gone only the plaintext binds it.
-        const built =
-            (await holds(() =>
-                r.record === 'metadata'
-                    ? metadataStatementAs('ordinary', r.statement, r.origin.envelope)
-                    : versionStatementAs('ordinary', r.statement, r.origin.envelope),
-            )) &&
-            (signer === null ||
-                (await holds(() =>
-                    r.record === 'metadata'
-                        ? metadataRekeyedStatement(
-                              { ...r.statement, keyEpoch: r.keyEpoch },
-                              r.envelope,
-                              origin,
-                          )
-                        : versionRekeyedStatement(
-                              { ...r.statement, keyEpoch: r.keyEpoch },
-                              r.envelope,
-                              origin,
-                          ),
-                )));
-        invariant(built, 'a verified re-keyed record whose statements do not build');
+        const built = await holds(() =>
+            r.record === 'metadata'
+                ? metadataStatementAs('ordinary', r.statement, r.origin.envelope)
+                : versionStatementAs('ordinary', r.statement, r.origin.envelope),
+        );
+        invariant(built, 'a verified re-keyed record whose origin statement does not build');
     }
-    return ok(verdict);
+    return ok({ ...verdict, carried });
 }
 
 const KEY_ENVELOPE_BYTES = 72;

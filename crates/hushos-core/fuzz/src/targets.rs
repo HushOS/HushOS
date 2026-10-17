@@ -634,7 +634,7 @@ fn plaintexts(node_key: &[u8], record: &rekeyed::Record) -> Option<(Vec<u8>, Vec
                 &r.origin,
                 &r.envelope,
                 OriginRecord::Metadata { metadata_version: s.metadata_version },
-                fuzzing::metadata_aad(&ctx),
+                fuzzing::metadata_aad(&ctx)?,
             )
         }
         rekeyed::Record::Version(r) => {
@@ -652,7 +652,7 @@ fn plaintexts(node_key: &[u8], record: &rekeyed::Record) -> Option<(Vec<u8>, Vec
                 &r.origin,
                 &r.envelope,
                 OriginRecord::Version { version_id: s.version_id.clone() },
-                fuzzing::version_aad(&ctx, s.content_suite),
+                fuzzing::version_aad(&ctx, s.content_suite)?,
             )
         }
     };
@@ -676,75 +676,63 @@ fn plaintexts(node_key: &[u8], record: &rekeyed::Record) -> Option<(Vec<u8>, Vec
 
 /*
  * A re-keyed record's verdict, personal or in a group's area, as the shared
- * cases' input carries it. Invariants:
- * - a record the reader can check that is not a mismatch has an origin whose
- *   bytes are the current envelope's (verified implies equal plaintext);
- * - an origin verdict that verified implies the origin's statement builds,
- *   and the rekeyed one too unless the origin's signer is gone (the re-keyer
- *   then reads unchecked, and only the plaintext binds the record);
- * - an origin the fixtures sealed for another node or version never passes.
+ * cases' input carries it, and whether the next rotation carries its origin
+ * (`*_origin_carry` with the input's node key as the old key). Invariants:
+ * - bound true means the origin holds the current envelope's bytes, and an
+ *   origin the fixtures sealed for another node or version never gets there;
+ * - bound false means the reader did not see equal bytes;
+ * - the next rotation carries the origin exactly when both open to equal
+ *   bytes, whatever the signatures say: a mismatch, or a wrapped old node
+ *   key, is never carried on;
+ * - an origin verdict that verified implies the origin's statement builds.
  */
 pub fn record_integrity(value: &Value) -> Option<Value> {
     let input = rekeyed::read(value)?;
-    let verdict = rekeyed::judge(&input);
-    let checkable = match &input.trust {
-        rekeyed::Trust::Personal(trust) => trust.is_some(),
-        rekeyed::Trust::Group(_) => true,
-    };
-    if verdict["mismatch"] == false && checkable {
-        if let Some(node_key) = &input.node_key {
-            let (written, current) =
-                plaintexts(node_key, &input.record).expect("a record that is no mismatch opens both ways");
-            assert_eq!(written, current, "a record that is no mismatch holds other bytes than its origin");
-            let (envelope, origin) = match &input.record {
-                rekeyed::Record::Metadata(r) => (&r.origin.envelope, named_record(&input.record)),
-                rekeyed::Record::Version(r) => (&r.origin.envelope, named_record(&input.record)),
-            };
-            if let Some(known) = known_origin(envelope) {
-                let mut sealed_for = known.clone();
-                sealed_for.as_object_mut().unwrap().remove("envelope");
-                assert_eq!(sealed_for, origin, "an origin sealed for another record passed");
-            }
+    let mut verdict = rekeyed::judge(&input);
+    let carried = rekeyed::carried(&input);
+    let equal = input
+        .node_key
+        .as_ref()
+        .and_then(|key| plaintexts(key, &input.record))
+        .is_some_and(|(written, current)| written == current);
+    if verdict["bound"] == true {
+        assert!(equal, "a bound record holds other bytes than its origin");
+        let envelope = match &input.record {
+            rekeyed::Record::Metadata(r) => &r.origin.envelope,
+            rekeyed::Record::Version(r) => &r.origin.envelope,
+        };
+        if let Some(known) = known_origin(envelope) {
+            let mut sealed_for = known.clone();
+            sealed_for.as_object_mut().unwrap().remove("envelope");
+            assert_eq!(sealed_for, named_record(&input.record), "an origin sealed for another record passed");
         }
     }
+    if verdict["bound"] == false {
+        assert!(!equal, "a record whose bytes match read as not bound");
+    }
+    match &input.node_key {
+        Some(_) => assert_eq!(
+            carried,
+            Some(equal),
+            "the next rotation carried an origin it should not, or dropped a bound one"
+        ),
+        None => assert_eq!(carried, None, "a rotation without the node key carried something"),
+    }
+    // A missing or bad re-key signature no longer touches the origin's verdict (it is a mark of its
+    // own), so only the origin's statement must build for it to verify.
     let verified = verdict["origin"] == "verified" || verdict["origin"]["integrity"] == "verified";
-    if verified && verdict["mismatch"] == false {
+    if verified {
         let built = match &input.record {
             rekeyed::Record::Metadata(r) => {
                 fuzzing::metadata_statement_as("ordinary", &r.statement, &r.origin.envelope).is_some()
-                    && r.origin.signer_id.as_ref().is_none_or(|signer| {
-                        metadata_rekeyed_statement(
-                            r.statement.clone(),
-                            r.key_epoch,
-                            r.envelope.clone(),
-                            RecordOrigin {
-                                envelope: r.origin.envelope.clone(),
-                                signer_id: signer.clone(),
-                                signature: r.origin.signature.clone().unwrap_or_default(),
-                            },
-                        )
-                        .is_ok()
-                    })
             }
             rekeyed::Record::Version(r) => {
                 fuzzing::version_statement_as("ordinary", &r.statement, &r.origin.envelope).is_some()
-                    && r.origin.signer_id.as_ref().is_none_or(|signer| {
-                        version_rekeyed_statement(
-                            r.statement.clone(),
-                            r.key_epoch,
-                            r.envelope.clone(),
-                            RecordOrigin {
-                                envelope: r.origin.envelope.clone(),
-                                signer_id: signer.clone(),
-                                signature: r.origin.signature.clone().unwrap_or_default(),
-                            },
-                        )
-                        .is_ok()
-                    })
             }
         };
-        assert!(built, "a verified re-keyed record whose statements do not build");
+        assert!(built, "a verified re-keyed record whose origin statement does not build");
     }
+    verdict["carried"] = json!(carried);
     Some(ok(verdict))
 }
 
@@ -789,7 +777,7 @@ pub fn origin_open(data: &[u8]) -> Value {
         fixture["metadataOriginKey"].as_str().unwrap(),
         "an origin key opened that was not sealed"
     );
-    let aad = fuzzing::metadata_aad(&ctx);
+    let aad = fuzzing::metadata_aad(&ctx).expect("the fixture's context");
     if origin.len() > 24 + 4096 + 16 {
         return refused();
     }

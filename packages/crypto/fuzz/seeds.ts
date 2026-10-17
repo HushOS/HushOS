@@ -134,6 +134,7 @@ export function documents(target: Target): Uint8Array[] {
                                     envelope: rekeyed.origin.envelope,
                                     signerId: rekeyed.origin.signerId,
                                     signature: rekeyed.origin.signature,
+                                    keyEnvelope: rekeyed.origin.keyEnvelope,
                                 },
                                 publicKey: f.rekeyed.rekeyer.signingPublicKey,
                                 signature: rekeyed.rekeySignature,

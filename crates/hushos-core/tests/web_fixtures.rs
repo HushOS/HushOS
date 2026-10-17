@@ -845,11 +845,13 @@ fn rekeyed_record(value: &Value) -> rekeyed::Input {
 fn the_web_s_rekeyed_records_read_here_as_the_web_declared_every_case() {
     let fixture = &fixture()["rekeyed"];
     let cases = fixture["cases"].as_array().unwrap();
-    assert!(cases.len() >= 30, "the cases are there");
+    assert!(cases.len() >= 40, "the cases are there");
     for case in cases {
         let name = s(case, "name");
         let input = rekeyed::read(&case["input"]).unwrap_or_else(|| panic!("{name} reads"));
         assert_eq!(rekeyed::judge(&input), case["expected"], "{name}");
+        // The next rotation carries the origin exactly when the web said it would.
+        assert_eq!(rekeyed::carried(&input), case["carried"].as_bool(), "{name}: carried");
     }
 }
 
@@ -869,6 +871,7 @@ fn the_web_s_rekeyed_statements_origin_keys_and_raw_reseals_are_this_core_s() {
             envelope: origin_envelope.clone(),
             signer_id: s(origin, "signerId"),
             signature: b(origin, "signature"),
+            key_envelope: b(origin, "keyEnvelope"),
         };
         let key_epoch = n(record, "keyEpoch");
         // The statement bytes, built here from the same fields, and the web's signature over them.

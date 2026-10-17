@@ -62,7 +62,7 @@ import web from '../../../crates/hushos-core/fixtures/web.json';
 import { decode, encode, wrappingKey } from './keys';
 import { accountKeyContext } from './protocol';
 import core from './__fixtures__/core.json';
-import { judgeRekeyed, readRekeyed } from './rekeyed-testkit';
+import { carriedRekeyed, judgeRekeyed, readRekeyed } from './rekeyed-testkit';
 
 /* The file's bytes as the fixture writes them; an empty file is the empty string, which decode refuses. */
 const fileOf = (value: string) => (value === '' ? new Uint8Array(0) : decode(value));
@@ -705,12 +705,19 @@ describe('records sealed by the Rust core', () => {
     });
 
     it('reads every rekeyed case the core declared exactly as the core reads it', async () => {
-        const cases = core.rekeyed.cases as { name: string; input: unknown; expected: unknown }[];
-        expect(cases.length).toBeGreaterThanOrEqual(30);
-        for (const { name, input, expected } of cases) {
+        const cases = core.rekeyed.cases as {
+            name: string;
+            input: unknown;
+            expected: unknown;
+            carried: boolean | null;
+        }[];
+        expect(cases.length).toBeGreaterThanOrEqual(40);
+        for (const { name, input, expected, carried } of cases) {
             const read = readRekeyed(input);
             expect(read, name).toBeDefined();
             expect(await judgeRekeyed(read!), name).toEqual(expected);
+            // The next rotation carries the origin exactly when the core said it would.
+            expect(await carriedRekeyed(read!), name).toBe(carried);
         }
     });
 
@@ -728,6 +735,7 @@ describe('records sealed by the Rust core', () => {
                 envelope: originEnvelope,
                 signerId: origin.signerId,
                 signature: decode(origin.signature),
+                keyEnvelope: decode(origin.keyEnvelope),
             };
             const statement =
                 which === 'metadata'

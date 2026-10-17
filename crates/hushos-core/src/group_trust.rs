@@ -2485,6 +2485,10 @@ fn group_integrity(
     signed: bool,
     check: impl Fn(Option<TrustedKeys>) -> Integrity,
 ) -> GroupIntegrity {
+    // No signature is unsigned whatever the roster says: an unloaded roster must not hide a stripped one.
+    if !signed {
+        return GroupIntegrity { verdict: GroupVerdict::Unsigned, via: None };
+    }
     // Without the writer's served identity and links, a key their chain retired may be missing.
     let unknown = |integrity: Integrity, links_loaded: bool| {
         if integrity == Integrity::BadSignature && !links_loaded {
@@ -2496,9 +2500,7 @@ fn group_integrity(
     let (verdict, via) = match trust {
         GroupWriterTrust::Outside => (check(personal).into(), None),
         GroupWriterTrust::Unchecked => (GroupVerdict::Unchecked, None),
-        GroupWriterTrust::KeyConflict => {
-            (if signed { GroupVerdict::KeyConflict } else { GroupVerdict::Unsigned }, None)
-        }
+        GroupWriterTrust::KeyConflict => (GroupVerdict::KeyConflict, None),
         GroupWriterTrust::FormerMember { signer, links_loaded } => {
             match unknown(check(Some(signer)), links_loaded) {
                 Integrity::Verified
@@ -2552,17 +2554,19 @@ pub fn group_version_integrity(
     })
 }
 
-/// What a reader shows for a re-keyed record in a group's area: the origin's
-/// verdict in light of the origin signer's `trust` (so a removed member's file
-/// reads `FormerMember`, named after them, never as the re-keyer's), the
-/// re-keyer's in light of theirs (Info only), and whether the binding failed.
-/// On a mismatch `origin` is `BadSignature`, shown as the re-keyer's.
+/// What a reader shows for a re-keyed record in a group's area, as
+/// [`crate::RekeyedVerdict`] says: the origin's verdict in light of the origin
+/// signer's `trust` (so a removed member's file reads `FormerMember`, named
+/// after them, never as the re-keyer's) when `bound` is true, `BadSignature`
+/// when it is false, `Unchecked` when it is `None`; and the re-keyer's in
+/// light of theirs. A missing or bad re-key signature, or a re-keyer in key
+/// conflict, is an Unverified mark, never a mismatch on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GroupRekeyedVerdict {
     pub origin: GroupIntegrity,
     pub rekeyer: GroupIntegrity,
-    pub mismatch: bool,
+    pub bound: Option<bool>,
 }
 
 /// Whose keys a re-keyed record's two signatures are checked under in a
@@ -2581,25 +2585,38 @@ pub struct GroupRekeyedTrust {
 fn group_rekeyed(rekeyed: Option<Rekeyed>, trust: GroupRekeyedTrust) -> GroupRekeyedVerdict {
     let Some(rekeyed) = rekeyed else {
         let unchecked = GroupIntegrity { verdict: GroupVerdict::Unchecked, via: None };
-        return GroupRekeyedVerdict { origin: unchecked.clone(), rekeyer: unchecked, mismatch: false };
+        return GroupRekeyedVerdict { origin: unchecked.clone(), rekeyer: unchecked, bound: None };
     };
+    // Attested: the re-key signature verified under the current key the group's trust names for them.
+    let attested = std::cell::Cell::new(false);
     let rekeyer = group_integrity(
         trust.rekeyer,
         trust.rekeyer_personal,
         rekeyed.rekey_signature.is_some(),
-        |trusted| rekeyed.rekeyer(trusted.as_ref()),
+        |trusted| {
+            let integrity = rekeyed.rekeyer(trusted.as_ref());
+            attested.set(integrity == Integrity::Verified);
+            integrity
+        },
     );
-    // As breaks_binding: missing, or bad under keys the reader trusts (a roster's included).
-    let broken = matches!(rekeyer.verdict, GroupVerdict::BadSignature | GroupVerdict::Unsigned);
-    if !rekeyed.bound || broken {
-        let bad = GroupIntegrity { verdict: GroupVerdict::BadSignature, via: None };
-        return GroupRekeyedVerdict { origin: bad, rekeyer, mismatch: true };
-    }
-    let origin =
-        group_integrity(trust.origin, trust.origin_personal, rekeyed.origin_signature.is_some(), |trusted| {
-            rekeyed.origin(trusted.as_ref())
-        });
-    GroupRekeyedVerdict { origin, rekeyer, mismatch: false }
+    let bound = rekeyed.bound(attested.get());
+    let origin = match bound {
+        // With no origin signer named, no roster or pin speaks for anyone: judged under no keys at all.
+        Some(true) if rekeyed.origin_signer_gone => {
+            group_integrity(GroupWriterTrust::Outside, None, rekeyed.origin_signature.is_some(), |trusted| {
+                rekeyed.origin(trusted.as_ref())
+            })
+        }
+        Some(true) => group_integrity(
+            trust.origin,
+            trust.origin_personal,
+            rekeyed.origin_signature.is_some(),
+            |trusted| rekeyed.origin(trusted.as_ref()),
+        ),
+        Some(false) => GroupIntegrity { verdict: GroupVerdict::BadSignature, via: None },
+        None => GroupIntegrity { verdict: GroupVerdict::Unchecked, via: None },
+    };
+    GroupRekeyedVerdict { origin, rekeyer, bound }
 }
 
 /// What a reader shows for re-keyed metadata in a group's area
@@ -5124,10 +5141,23 @@ mod tests {
         let written =
             metadata_sign(f.holder.keys.signing_seed.to_vec(), statement.clone(), origin.clone()).unwrap();
         let envelope = crate::metadata_rekey(ctx, old.clone(), fresh.clone(), origin.clone()).unwrap();
+        let key_envelope = crate::origin_key_wrap(
+            crate::OriginKeyContext {
+                workspace_id: AREA.into(),
+                node_id: node.into(),
+                key_epoch: 2,
+                record: crate::OriginRecord::Metadata { metadata_version: 1 },
+                origin_envelope: origin.clone(),
+            },
+            fresh.clone(),
+            crate::origin_opening_key(origin.clone(), old).unwrap(),
+        )
+        .unwrap();
         let named = crate::RecordOrigin {
             envelope: origin.clone(),
             signer_id: f.holder.user_id.clone(),
             signature: written.clone(),
+            key_envelope: key_envelope.clone(),
         };
         let record = RekeyedMetadata {
             statement: statement.clone(),
@@ -5137,18 +5167,7 @@ mod tests {
                 envelope: origin.clone(),
                 signer_id: Some(f.holder.user_id.clone()),
                 signature: Some(written),
-                key_envelope: crate::origin_key_wrap(
-                    crate::OriginKeyContext {
-                        workspace_id: AREA.into(),
-                        node_id: node.into(),
-                        key_epoch: 2,
-                        record: crate::OriginRecord::Metadata { metadata_version: 1 },
-                        origin_envelope: origin.clone(),
-                    },
-                    fresh.clone(),
-                    crate::origin_opening_key(origin, old).unwrap(),
-                )
-                .unwrap(),
+                key_envelope,
             },
             rekey_signature: Some(
                 crate::metadata_rekey_sign(
@@ -5172,7 +5191,7 @@ mod tests {
             GroupRekeyedVerdict {
                 origin: is(GroupVerdict::FormerMember, None),
                 rekeyer: is(GroupVerdict::Verified, Some(GROUP)),
-                mismatch: false,
+                bound: Some(true),
             }
         );
         // The legacy form names only the organizer, who vouches for nothing: what readers saw before.

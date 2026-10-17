@@ -1982,22 +1982,25 @@ describe('scoped verdicts', () => {
             holder.signer.signingKey,
         );
         const envelope = await rekeyEnvelope(origin, old, fresh, metadataContext(ctx));
-        const named = { envelope: origin, signerId: holder.userId, signature: written };
+        const keyEnvelope = await wrapOriginKey(originOpeningKey(origin, old), fresh, {
+            workspaceId: AREA,
+            nodeId: NODE,
+            keyEpoch: 2,
+            record: { kind: 'metadata', metadataVersion: 1 },
+            originEnvelope: origin,
+        });
+        const named = {
+            envelope: origin,
+            signerId: holder.userId,
+            signature: written,
+            keyEnvelope,
+        };
         const record = {
             record: 'metadata' as const,
             statement,
             keyEpoch: 2,
             envelope,
-            origin: {
-                ...named,
-                keyEnvelope: await wrapOriginKey(originOpeningKey(origin, old), fresh, {
-                    workspaceId: AREA,
-                    nodeId: NODE,
-                    keyEpoch: 2,
-                    record: { kind: 'metadata', metadataVersion: 1 },
-                    originEnvelope: origin,
-                }),
-            },
+            origin: named,
             rekeySignature: await signStatement(
                 await metadataRekeyedStatement({ ...statement, keyEpoch: 2 }, envelope, named),
                 organizer.signer.signingKey,
@@ -2012,7 +2015,7 @@ describe('scoped verdicts', () => {
         expect(await groupRekeyedIntegrityOf(record, fresh, trust)).toEqual({
             origin: { integrity: 'former-member', via: null },
             rekeyer: { integrity: 'verified', via: GROUP },
-            mismatch: false,
+            bound: true,
         });
         // The legacy form names only the organizer, who vouches for nothing: what readers saw before.
         expect(

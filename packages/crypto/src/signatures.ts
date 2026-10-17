@@ -7,7 +7,9 @@ import {
     openEnvelopeBytes,
     openOriginKey,
     openWithOriginKey,
+    originKeyContext,
     versionEnvelopeBytes,
+    wrapOriginKey,
     type OriginKeyContext,
 } from './drive';
 import { CryptoError } from './errors';
@@ -315,11 +317,16 @@ export function copyForm(prior: Integrity | null, fromLink: boolean): SignatureF
 }
 
 /*
- * A record as its writer signed it, before a rotation re-sealed it: the
- * envelope, who the server says signed it and the signature. What a rekeyed
- * statement names.
+ * A record as its writer signed it, before a rotation re-sealed it (the
+ * envelope, who the server says signed it, the signature), and the wrapped key
+ * the rotation hands readers to open it. What a rekeyed statement names.
  */
-export type RecordOrigin = { envelope: Uint8Array; signerId: string; signature: Uint8Array };
+export type RecordOrigin = {
+    envelope: Uint8Array;
+    signerId: string;
+    signature: Uint8Array;
+    keyEnvelope: Uint8Array;
+};
 /* The node key's epoch after the rotation, beside the record's fields. */
 export type Rekeyed<T> = T & { keyEpoch: number };
 
@@ -334,12 +341,15 @@ async function rekeyedTail(
         await digest(origin.envelope),
         text(origin.signerId, 'user id'),
         await digest(origin.signature),
+        // The wrapped key too: a server that garbles it alone breaks the re-keyer's signature.
+        await digest(origin.keyEnvelope),
     ];
 }
 
 /*
  * ["hushos/drive/sig/metadata-rekeyed", 1, workspaceId, nodeId, kind, metadataVersion, keyEpoch,
- *  sha256(metadataEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature)]
+ *  sha256(metadataEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature),
+ *  sha256(originKeyEnvelope)]
  * What the account running a rotation signs over metadata it re-keyed while
  * keeping the writer's record: that it re-sealed that origin under the node
  * key at `keyEpoch`. Who wrote it is the origin signature's business.
@@ -363,7 +373,8 @@ export async function metadataRekeyedStatement(
 
 /*
  * ["hushos/drive/sig/version-rekeyed", 1, workspaceId, nodeId, versionId, objectId, contentSuite,
- *  keyEpoch, sha256(contentKeyEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature)]
+ *  keyEpoch, sha256(contentKeyEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature),
+ *  sha256(originKeyEnvelope)]
  * See metadataRekeyedStatement.
  */
 export async function versionRekeyedStatement(
@@ -629,93 +640,132 @@ export type RekeyedRecord =
           origin: ServedOrigin;
           rekeySignature: Uint8Array | null;
       };
-/* The keys a reader trusts for a re-keyed record's two signers; null for someone not checked. */
+/*
+ * The keys a reader trusts for a re-keyed record's two signers; null for
+ * someone not checked. The origin's are ignored when the record names no
+ * origin signer.
+ */
 export type RekeyedTrust = { origin: TrustedSigner | null; rekeyer: TrustedSigner | null };
 /*
- * What a reader shows for a re-keyed record: `origin` is the record's verdict,
- * named after the origin's signer; `rekeyer` the re-keyer's, for the Info line
- * only. With `mismatch` the binding failed (the origin did not open, its bytes
- * differ from the current envelope's, or the re-keyer's signature is missing
- * or bad under a key the reader trusts): `origin` is then `bad-signature`,
- * shown as the re-keyer's.
+ * What a reader shows for a re-keyed record:
+ * - `bound`: true when the reader opened both the origin and the current
+ *   envelope and their bytes are equal; false when they differ, or when the
+ *   wrapped key or the origin does not open under a re-keyer signature that
+ *   verified (the re-keyer attested to them); null when it could not be
+ *   confirmed (the current envelope does not open under the reader's node key,
+ *   or the wrap or origin does not open and no verified signature covers
+ *   them): what a server alone can cause.
+ * - `origin`: with `bound` true, the origin's verdict under its signer's keys,
+ *   named after the origin's signer; `bad-signature` when false; `unchecked`
+ *   when null.
+ * - `rekeyer`: the re-keyer's verdict over the rekeyed statement. Info only
+ *   when it verified, retired, is an unknown signer or unchecked; a missing or
+ *   bad signature (or, in a group's area, a key conflict) is an Unverified
+ *   mark, "the re-key isn't attested", never a mismatch on its own.
+ * Name a person as at fault only when their verified signature covers what
+ * failed; otherwise say it could not be confirmed.
  */
-export type RekeyedVerdict = { origin: Integrity; rekeyer: Integrity; mismatch: boolean };
+export type RekeyedVerdict = { origin: Integrity; rekeyer: Integrity; bound: boolean | null };
+
+/* Why an origin is not bound to the current envelope, from the reader's side. */
+type Unbound = 'current' | 'origin' | 'differ';
 
 /*
- * Whether the origin, opened with the key wrapped beside it, holds exactly the
- * bytes the current envelope holds under the node key. Any refusal on the way
- * (a length, a context, a tag) is false.
+ * The origin's opening key, when the origin opens with it to exactly the bytes
+ * the current envelope holds under `nodeKey`; otherwise why not: `current`
+ * (the current envelope's context, length or tag is refused), `origin` (the
+ * wrap's or the origin's), or `differ`. The current envelope is opened first,
+ * so a server that garbles anything of the origin's never makes the reader's
+ * own key look wrong. Throws only what is not a CryptoError.
  */
-async function originBound(nodeKey: Uint8Array, record: RekeyedRecord) {
+async function openOrigin(
+    nodeKey: Uint8Array,
+    record: RekeyedRecord,
+    keyEpoch = record.keyEpoch,
+): Promise<{ key: Uint8Array } | { unbound: Unbound }> {
     const { statement: s, origin } = record;
-    let aad: Uint8Array;
-    let keyCtx: OriginKeyContext;
-    try {
-        if (record.record === 'metadata') {
-            const fits = (envelope: Uint8Array) => envelope.length <= METADATA_ENVELOPE_MAX_BYTES;
-            if (!fits(record.envelope) || !fits(origin.envelope)) return false;
-            aad = metadataContext({
+    const refused = async <T>(run: () => T | Promise<T>): Promise<T | undefined> => {
+        try {
+            return await run();
+        } catch (error) {
+            if (error instanceof CryptoError) return undefined;
+            throw error;
+        }
+    };
+    let aad: Uint8Array | undefined;
+    let fits: (envelope: Uint8Array) => boolean;
+    let position: OriginKeyContext['record'];
+    if (record.record === 'metadata') {
+        const m = record.statement;
+        aad = await refused(() =>
+            metadataContext({
                 workspaceId: s.workspaceId,
                 nodeId: s.nodeId,
-                metadataVersion: record.statement.metadataVersion,
-            });
-            keyCtx = {
-                workspaceId: s.workspaceId,
-                nodeId: s.nodeId,
-                keyEpoch: record.keyEpoch,
-                record: { kind: 'metadata', metadataVersion: record.statement.metadataVersion },
-                originEnvelope: origin.envelope,
-            };
-        } else {
-            const v = record.statement;
-            const length = versionEnvelopeBytes(v.contentSuite);
-            if (record.envelope.length !== length || origin.envelope.length !== length)
-                return false;
-            aad = contentKeyContext({
+                metadataVersion: m.metadataVersion,
+            }),
+        );
+        fits = (envelope) => envelope.length <= METADATA_ENVELOPE_MAX_BYTES;
+        position = { kind: 'metadata', metadataVersion: m.metadataVersion };
+    } else {
+        const v = record.statement;
+        aad = await refused(() =>
+            contentKeyContext({
                 workspaceId: v.workspaceId,
                 nodeId: v.nodeId,
                 versionId: v.versionId,
                 objectId: v.objectId,
                 suite: v.contentSuite,
-            });
-            keyCtx = {
-                workspaceId: v.workspaceId,
-                nodeId: v.nodeId,
-                keyEpoch: record.keyEpoch,
-                record: { kind: 'version', versionId: v.versionId },
+            }),
+        );
+        const length = await refused(() => versionEnvelopeBytes(v.contentSuite));
+        fits = (envelope) => envelope.length === length;
+        position = { kind: 'version', versionId: v.versionId };
+    }
+    if (!aad || nodeKey.length !== 32 || !fits(record.envelope)) return { unbound: 'current' };
+    const current = await refused(() => openEnvelopeBytes(record.envelope, nodeKey, aad));
+    if (!current) return { unbound: 'current' };
+    try {
+        if (!fits(origin.envelope) || origin.keyEnvelope.length !== KEY_ENVELOPE_BYTES)
+            return { unbound: 'origin' };
+        const key = await refused(() =>
+            openOriginKey(origin.keyEnvelope, nodeKey, {
+                workspaceId: s.workspaceId,
+                nodeId: s.nodeId,
+                keyEpoch,
+                record: position,
                 originEnvelope: origin.envelope,
-            };
+            }),
+        );
+        if (!key) return { unbound: 'origin' };
+        const written = await refused(() => openWithOriginKey(origin.envelope, key, aad));
+        if (!written) {
+            key.fill(0);
+            return { unbound: 'origin' };
         }
-        if (nodeKey.length !== 32 || origin.keyEnvelope.length !== KEY_ENVELOPE_BYTES) return false;
-        const originKey = await openOriginKey(origin.keyEnvelope, nodeKey, keyCtx);
-        let written: Uint8Array | undefined;
-        let current: Uint8Array | undefined;
-        try {
-            written = await openWithOriginKey(origin.envelope, originKey, aad);
-            current = await openEnvelopeBytes(record.envelope, nodeKey, aad);
-            return (
-                written.length === current.length &&
-                written.every((byte, i) => byte === current![i])
-            );
-        } finally {
-            originKey.fill(0);
-            written?.fill(0);
-            current?.fill(0);
+        const same =
+            written.length === current.length && written.every((byte, i) => byte === current[i]);
+        written.fill(0);
+        if (!same) {
+            key.fill(0);
+            return { unbound: 'differ' };
         }
-    } catch (error) {
-        if (error instanceof CryptoError) return false;
-        throw error;
+        return { key };
+    } finally {
+        current.fill(0);
     }
 }
 
 /*
- * A re-keyed record's checks, before trust: whether its origin opens to the
- * current envelope's bytes, the origin's verdict under any keys, and the
+ * A re-keyed record's checks, before trust: whether its origin is bound to the
+ * current envelope (given whether a verified re-keyer signature attests to
+ * the wrap and origin), the origin's verdict under any keys, and the
  * re-keyer's. The group core applies its own trust to both (group-trust.ts).
  */
 export type RekeyedChecks = {
-    bound: boolean;
+    bound: (attested: boolean) => boolean | null;
     originSigned: boolean;
+    /* The record names no origin signer: whatever trust a caller passes for the origin is not theirs. */
+    originSignerGone: boolean;
     rekeySigned: boolean;
     origin: (trusted: TrustedSigner | null) => Promise<Integrity>;
     rekeyer: (trusted: TrustedSigner | null) => Promise<Integrity>;
@@ -735,6 +785,7 @@ export async function rekeyedChecks(
             envelope: origin.envelope,
             signerId: origin.signerId!,
             signature: origin.signature,
+            keyEnvelope: origin.keyEnvelope,
         };
     };
     const rekeyed =
@@ -751,13 +802,22 @@ export async function rekeyedChecks(
                       record.envelope,
                       named(),
                   );
+    const opened = await openOrigin(nodeKey, record);
+    if ('key' in opened) opened.key.fill(0);
+    const signerGone = origin.signerId === null;
     return {
-        bound: await originBound(nodeKey, record),
+        bound: (attested) => {
+            if ('key' in opened) return true;
+            if (opened.unbound === 'differ') return false;
+            if (opened.unbound === 'origin' && attested) return false;
+            return null;
+        },
         originSigned: !!origin.signature,
+        originSignerGone: signerGone,
         rekeySigned: !!record.rekeySignature,
-        origin: (trusted) => integrityOf(forms, origin.signature, trusted),
+        origin: (trusted) => integrityOf(forms, origin.signature, signerGone ? null : trusted),
         rekeyer: (trusted) =>
-            rekeyerIntegrityOf(rekeyed, record.rekeySignature, trusted, origin.signerId === null),
+            rekeyerIntegrityOf(rekeyed, record.rekeySignature, trusted, signerGone),
     };
 }
 
@@ -794,15 +854,10 @@ async function rekeyerIntegrityOf(
     }
 }
 
-/* A re-keyer's verdict that breaks the binding: a signature missing, or bad under a key the reader trusts. */
-export function breaksBinding(rekeyer: string) {
-    return rekeyer === 'bad-signature' || rekeyer === 'unsigned';
-}
-
 const unchecked = (): RekeyedVerdict => ({
     origin: 'unchecked',
     rekeyer: 'unchecked',
-    mismatch: false,
+    bound: null,
 });
 
 /*
@@ -820,10 +875,57 @@ export async function rekeyedIntegrityOf(
     try {
         const checks = await rekeyedChecks(record, nodeKey);
         const rekeyer = await checks.rekeyer(trust.rekeyer);
-        if (!checks.bound || breaksBinding(rekeyer))
-            return { origin: 'bad-signature', rekeyer, mismatch: true };
-        return { origin: await checks.origin(trust.origin), rekeyer, mismatch: false };
+        const bound = checks.bound(rekeyer === 'verified');
+        const origin =
+            bound === true
+                ? await checks.origin(trust.origin)
+                : bound === false
+                  ? 'bad-signature'
+                  : 'unchecked';
+        return { origin, rekeyer, bound };
     } catch {
         return unchecked();
+    }
+}
+
+/*
+ * The next rotation of a record that already carries an origin: the origin's
+ * opening key out of its wrap under `oldKey` (the node key at
+ * `record.keyEpoch`), re-wrapped under `newKey` at `targetEpoch`, but only
+ * after the rotating client's own bound check (the origin opens with that key
+ * to exactly the current envelope's bytes). Send the result as the record's
+ * new originKeyEnvelope and sign the rekeyed statement over it. Anything less
+ * is null: drop the origin and sign the record legacy re-sealed, so an honest
+ * rotation never adopts a dishonest re-keyer's mismatch or passes a wrapped
+ * old node key on to whoever joins later. Throws a CryptoError only for a
+ * malformed `newKey` or `targetEpoch`.
+ */
+export async function carryOrigin(
+    record: RekeyedRecord,
+    oldKey: Uint8Array,
+    newKey: Uint8Array,
+    targetEpoch: number,
+): Promise<Uint8Array | null> {
+    if (!(newKey instanceof Uint8Array) || newKey.length !== 32)
+        throw new CryptoError('Invalid node key.');
+    const { statement: s, origin } = record;
+    const next: OriginKeyContext = {
+        workspaceId: s.workspaceId,
+        nodeId: s.nodeId,
+        keyEpoch: targetEpoch,
+        record:
+            record.record === 'metadata'
+                ? { kind: 'metadata', metadataVersion: record.statement.metadataVersion }
+                : { kind: 'version', versionId: record.statement.versionId },
+        originEnvelope: origin.envelope,
+    };
+    // The next wrap's context is checked before anything is opened: a malformed one is the caller's.
+    await originKeyContext(next);
+    const opened = await openOrigin(oldKey, record);
+    if (!('key' in opened)) return null;
+    try {
+        return await wrapOriginKey(opened.key, newKey, next);
+    } finally {
+        opened.key.fill(0);
     }
 }

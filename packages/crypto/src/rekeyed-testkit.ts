@@ -12,8 +12,10 @@ import {
     type VersionRecord,
 } from './drive';
 import { groupRekeyedIntegrityOf, type GroupWriterTrust } from './group-trust';
+import { CryptoError } from './errors';
 import { decode, encode } from './keys';
 import {
+    carryOrigin,
     metadataRekeyedStatement,
     metadataStatement,
     rekeyedIntegrityOf,
@@ -189,12 +191,31 @@ export function readRekeyed(value: unknown): RekeyedInput | undefined {
     return { record, nodeKey, trust: { kind: 'personal', trust } };
 }
 
-/* The verdict as JSON: { origin, rekeyer, mismatch }, each side { integrity, via } in a group's area. */
+/* The verdict as JSON: { origin, rekeyer, bound }, each side { integrity, via } in a group's area. */
 export async function judgeRekeyed(input: RekeyedInput): Promise<Doc> {
     if (input.trust.kind === 'personal')
         return { ...(await rekeyedIntegrityOf(input.record, input.nodeKey, input.trust.trust)) };
     const { kind: _, ...trust } = input.trust;
     return { ...(await groupRekeyedIntegrityOf(input.record, input.nodeKey, trust)) };
+}
+
+/*
+ * Whether the next rotation carries the record's origin: carryOrigin with the
+ * input's node key as the old key, a fresh key, and the next epoch. A
+ * refusal of the next wrap's fields counts as not carried; null without a node key.
+ */
+export async function carriedRekeyed(input: RekeyedInput): Promise<boolean | null> {
+    if (!input.nodeKey) return null;
+    try {
+        const fresh = crypto.getRandomValues(new Uint8Array(32));
+        return (
+            (await carryOrigin(input.record, input.nodeKey, fresh, input.record.keyEpoch + 1)) !==
+            null
+        );
+    } catch (error) {
+        if (error instanceof CryptoError) return false;
+        throw error;
+    }
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -236,17 +257,22 @@ export type CaseMaterial = {
     /* The same metadata sealed under the old key for another node of the workspace, and signed there. */
     otherNode: { statement: MetadataStatement; envelope: Uint8Array; signature: Uint8Array };
 };
-export type RekeyedCase = { name: string; input: Doc; expected: Doc };
+/*
+ * A case: the record and what the reader holds, the verdict both twins
+ * declare, and whether the next rotation carries its origin (carryOrigin with
+ * the case's node key as the old key; null when the case holds none).
+ */
+export type RekeyedCase = { name: string; input: Doc; expected: Doc; carried: boolean | null };
 
 const e = (value: Uint8Array) => encode(value);
 const signer = (current: Uint8Array, retired: Uint8Array[] = []) => ({
     current: e(current),
     retired: retired.map(e),
 });
-const verdict = (origin: string, rekeyer: string, mismatch: boolean) => ({
+const verdict = (origin: string, rekeyer: string, bound: boolean | null) => ({
     origin,
     rekeyer,
-    mismatch,
+    bound,
 });
 const side = (integrity: string, via: string | null = null) => ({ integrity, via });
 
@@ -286,6 +312,7 @@ async function signed(built: Built, by: CaseSigner): Promise<Built> {
         envelope: built.origin.envelope,
         signerId: built.origin.signerId!,
         signature: built.origin.signature!,
+        keyEnvelope: built.origin.keyEnvelope,
     };
     const statement =
         built.record === 'metadata'
@@ -406,13 +433,22 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
     const both = { origin: W, rekeyer: R };
     const nodeKey = e(m.nodeKey);
     const cases: RekeyedCase[] = [];
+    // The next rotation carries the origin exactly when both open to the same bytes under the case's key.
+    const carriedOf = (key: string | null, trust: unknown, expected: Doc) =>
+        key === null ? null : expected.bound === true || trust === null;
     const personal = (
         name: string,
         built: Built,
         trust: unknown,
         expected: Doc,
         key: string | null = nodeKey,
-    ) => cases.push({ name, input: { ...json(built), nodeKey: key, trust }, expected });
+    ) =>
+        cases.push({
+            name,
+            input: { ...json(built), nodeKey: key, trust },
+            expected,
+            carried: carriedOf(key, trust, expected),
+        });
     const roster = (key: Uint8Array, linksLoaded = true) => ({
         trust: 'roster',
         signer: signer(key),
@@ -425,35 +461,41 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
         group: unknown,
         expected: Doc,
         key: string | null = nodeKey,
-    ) => cases.push({ name, input: { ...json(built), nodeKey: key, group }, expected });
+    ) =>
+        cases.push({
+            name,
+            input: { ...json(built), nodeKey: key, group },
+            expected,
+            carried: carriedOf(key, group, expected),
+        });
 
     // As a rotation writes them.
-    personal('metadata', metadata, both, verdict('verified', 'verified', false));
-    personal('version', version, both, verdict('verified', 'verified', false));
+    personal('metadata', metadata, both, verdict('verified', 'verified', true));
+    personal('version', version, both, verdict('verified', 'verified', true));
     // Whom the reader has checked: the Info line and the verdict, apart.
     personal(
         'rekeyer not checked',
         metadata,
         { origin: W, rekeyer: null },
-        verdict('verified', 'unknown-signer', false),
+        verdict('verified', 'unknown-signer', true),
     );
     personal(
         'writer not checked',
         metadata,
         { origin: null, rekeyer: R },
-        verdict('unknown-signer', 'verified', false),
+        verdict('unknown-signer', 'verified', true),
     );
     personal(
         'writer key replaced',
         metadata,
         { origin: signer(m.stranger, [m.writer.publicKey]), rekeyer: R },
-        verdict('retired-key', 'verified', false),
+        verdict('retired-key', 'verified', true),
     );
     personal(
         'rekeyer key replaced',
         version,
         { origin: W, rekeyer: signer(m.stranger, [m.rekeyer.publicKey]) },
-        verdict('verified', 'retired-key', false),
+        verdict('verified', 'retired-key', true),
     );
     // The writer's signature over another record, faithfully re-keyed: bad, and the writer's.
     personal(
@@ -463,16 +505,16 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
             m.rekeyer,
         ),
         both,
-        verdict('bad-signature', 'verified', false),
+        verdict('bad-signature', 'verified', true),
     );
-    // What the re-keyer sealed is not what was written: the re-keyer's, and a mismatch.
+    // What the re-keyer sealed is not what was written: both opened, the bytes differ.
     const otherName = await sealMetadata(
         { ...m.metadata.plaintext, name: `${m.metadata.plaintext.name} (swapped)` },
         m.nodeKey,
         { workspaceId: ms.workspaceId, nodeId: ms.nodeId, metadataVersion: ms.metadataVersion },
     );
     const swapped = await signed({ ...metadata, envelope: otherName }, m.rekeyer);
-    personal('swapped metadata', swapped, both, verdict('bad-signature', 'verified', true));
+    personal('swapped metadata', swapped, both, verdict('bad-signature', 'verified', false));
     const otherContent = await sealVersion(
         { ...m.version.record, contentKey: new Uint8Array(32).fill(9) },
         m.nodeKey,
@@ -482,9 +524,10 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
         'swapped version',
         await signed({ ...version, envelope: otherContent }, m.rekeyer),
         both,
-        verdict('bad-signature', 'verified', true),
+        verdict('bad-signature', 'verified', false),
     );
-    // An origin sealed for another version, the same bytes sealed again for this one: the context refuses it.
+    // An origin sealed for another version, the same bytes sealed again for this one: the context
+    // refuses it, under a re-key signature that verified, so the re-keyer attested to it.
     const foreign = m.otherVersion;
     personal(
         'origin from another version',
@@ -506,7 +549,7 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
             m.rekeyer,
         ),
         both,
-        verdict('bad-signature', 'verified', true),
+        verdict('bad-signature', 'verified', false),
     );
     personal(
         'origin from another node',
@@ -527,28 +570,28 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
             m.rekeyer,
         ),
         both,
-        verdict('bad-signature', 'verified', true),
+        verdict('bad-signature', 'verified', false),
     );
     // What the reader lacks: never clean.
-    personal('no node key', metadata, both, verdict('unchecked', 'unchecked', false), null);
-    personal('trust did not load', metadata, null, verdict('unchecked', 'unchecked', false));
+    personal('no node key', metadata, both, verdict('unchecked', 'unchecked', null), null);
+    personal('trust did not load', metadata, null, verdict('unchecked', 'unchecked', null));
+    // The current envelope does not open under the reader's key: nobody is named.
     personal(
         'old node key',
         metadata,
         both,
-        verdict('bad-signature', 'verified', true),
+        verdict('unchecked', 'verified', null),
         e(m.oldNodeKey),
     );
-    // The re-keyer's signature.
+    // The re-key signature alone: never a mismatch over equal bytes, an Unverified mark instead.
     const flipped = metadata.rekeySignature!.slice();
     flipped[5]! ^= 1;
     personal(
         'rekey signature flipped',
         { ...metadata, rekeySignature: flipped },
         both,
-        verdict('bad-signature', 'bad-signature', true),
+        verdict('verified', 'bad-signature', true),
     );
-    // The re-keyer's legacy signature over the current envelope is no binding.
     personal(
         'rekey signature in a writer form',
         {
@@ -559,100 +602,154 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
             ),
         },
         both,
-        verdict('bad-signature', 'bad-signature', true),
+        verdict('verified', 'bad-signature', true),
     );
     personal(
         'rekey signature missing',
         { ...metadata, rekeySignature: null },
         both,
-        verdict('bad-signature', 'unsigned', true),
+        verdict('verified', 'unsigned', true),
     );
     personal(
         'rekey signature missing, rekeyer not checked',
         { ...version, rekeySignature: null },
         { origin: W, rekeyer: null },
-        verdict('bad-signature', 'unsigned', true),
+        verdict('verified', 'unsigned', true),
     );
-    // The writer's account is gone: nobody to name, nothing laundered.
+    // The writer's account is gone: nobody to name, nothing laundered, whatever trust is passed.
     personal(
         'writer account gone',
         { ...metadata, origin: { ...metadata.origin, signerId: null } },
         { origin: null, rekeyer: R },
-        verdict('unknown-signer', 'unchecked', false),
+        verdict('unknown-signer', 'unchecked', true),
+    );
+    personal(
+        'writer account gone, trust passed anyway',
+        { ...metadata, origin: { ...metadata.origin, signerId: null } },
+        both,
+        verdict('unknown-signer', 'unchecked', true),
     );
     personal(
         'origin unsigned',
         { ...metadata, origin: { ...metadata.origin, signature: null } },
         both,
-        verdict('bad-signature', 'bad-signature', true),
+        verdict('unsigned', 'bad-signature', true),
     );
-    // The origin key under another label: as a legacy content key, or as a node key.
+    // The wrapped key garbled by the server alone: the re-key signature covers it, so nobody is framed.
+    const garbled = metadata.origin.keyEnvelope.slice();
+    garbled[40]! ^= 1;
+    personal(
+        'wrap garbled',
+        { ...metadata, origin: { ...metadata.origin, keyEnvelope: garbled } },
+        both,
+        verdict('unchecked', 'bad-signature', null),
+    );
+    // The origin key under another label: as a legacy content key, or as a node key. Unsigned over
+    // it, that could be anyone; under a verified re-key signature, the re-keyer attested to it.
+    const asContentKey = await wrapContentKey(versionOriginKey, m.nodeKey, versionCtx(vs));
     personal(
         'origin key as a content key',
-        {
-            ...version,
-            origin: {
-                ...version.origin,
-                keyEnvelope: await wrapContentKey(versionOriginKey, m.nodeKey, versionCtx(vs)),
-            },
-        },
+        { ...version, origin: { ...version.origin, keyEnvelope: asContentKey } },
         both,
-        verdict('bad-signature', 'verified', true),
+        verdict('unchecked', 'bad-signature', null),
     );
     personal(
-        'origin key as a node key',
-        {
-            ...metadata,
-            origin: {
-                ...metadata.origin,
-                keyEnvelope: await wrapNodeKey(metadataOriginKey, m.nodeKey, {
-                    workspaceId: ms.workspaceId,
-                    nodeId: ms.nodeId,
-                    parentId: m.parentId,
-                    parentKeyEpoch: m.keyEpoch,
-                    keyEpoch: m.keyEpoch,
-                }),
-            },
-        },
+        'origin key as a content key, attested',
+        await signed(
+            { ...version, origin: { ...version.origin, keyEnvelope: asContentKey } },
+            m.rekeyer,
+        ),
         both,
-        verdict('bad-signature', 'verified', true),
+        verdict('bad-signature', 'verified', false),
+    );
+    personal(
+        'origin key as a node key, attested',
+        await signed(
+            {
+                ...metadata,
+                origin: {
+                    ...metadata.origin,
+                    keyEnvelope: await wrapNodeKey(metadataOriginKey, m.nodeKey, {
+                        workspaceId: ms.workspaceId,
+                        nodeId: ms.nodeId,
+                        parentId: m.parentId,
+                        parentKeyEpoch: m.keyEpoch,
+                        keyEpoch: m.keyEpoch,
+                    }),
+                },
+            },
+            m.rekeyer,
+        ),
+        both,
+        verdict('bad-signature', 'verified', false),
+    );
+    // The old node key wrapped where the origin key goes, attested: the reader opens nothing with it.
+    personal(
+        'old node key as the origin key, attested',
+        await signed(
+            {
+                ...metadata,
+                origin: {
+                    ...metadata.origin,
+                    keyEnvelope: await wrapOriginKey(
+                        m.oldNodeKey,
+                        m.nodeKey,
+                        keyCtx('metadata', ms, m.metadata.envelope),
+                    ),
+                },
+            },
+            m.rekeyer,
+        ),
+        both,
+        verdict('bad-signature', 'verified', false),
     );
     personal(
         'stale epoch',
         { ...metadata, keyEpoch: m.keyEpoch - 1 },
         both,
-        verdict('bad-signature', 'bad-signature', true),
+        verdict('unchecked', 'bad-signature', null),
+    );
+    // Fields neither twin accepts in a context: refused alike, never confirmed.
+    personal(
+        'epoch 0',
+        { ...metadata, keyEpoch: 0 },
+        { origin: W, rekeyer: null },
+        verdict('unchecked', 'unknown-signer', null),
+    );
+    personal(
+        'node id not a uuid',
+        { ...metadata, statement: { ...ms, nodeId: 'n1' } },
+        { origin: W, rekeyer: null },
+        verdict('unchecked', 'unknown-signer', null),
     );
     personal(
         'rekeyed by the writer',
         await signed(metadata, m.writer),
         { origin: W, rekeyer: W },
-        verdict('verified', 'verified', false),
+        verdict('verified', 'verified', true),
     );
 
     // In a family's area: the origin judged as the group judges its signer.
+    const bothRoster = {
+        origin: roster(m.writer.publicKey),
+        originPersonal: null,
+        rekeyer: roster(m.rekeyer.publicKey),
+        rekeyerPersonal: null,
+    };
     family(
         'family writer left',
         metadata,
         {
+            ...bothRoster,
             origin: { trust: 'former-member', signer: W, linksLoaded: true },
-            originPersonal: null,
-            rekeyer: roster(m.rekeyer.publicKey),
-            rekeyerPersonal: null,
         },
-        { origin: side('former-member'), rekeyer: side('verified', m.group), mismatch: false },
+        { origin: side('former-member'), rekeyer: side('verified', m.group), bound: true },
     );
-    family(
-        'family writer on the roster',
-        version,
-        {
-            origin: roster(m.writer.publicKey),
-            originPersonal: null,
-            rekeyer: roster(m.rekeyer.publicKey),
-            rekeyerPersonal: null,
-        },
-        { origin: side('verified', m.group), rekeyer: side('verified', m.group), mismatch: false },
-    );
+    family('family writer on the roster', version, bothRoster, {
+        origin: side('verified', m.group),
+        rekeyer: side('verified', m.group),
+        bound: true,
+    });
     family(
         'family roster unavailable',
         metadata,
@@ -662,84 +759,75 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
             rekeyer: { trust: 'unchecked' },
             rekeyerPersonal: R,
         },
-        { origin: side('unchecked'), rekeyer: side('unchecked'), mismatch: false },
+        { origin: side('unchecked'), rekeyer: side('unchecked'), bound: true },
     );
-    family(
-        'family swapped metadata',
-        swapped,
-        {
-            origin: roster(m.writer.publicKey),
-            originPersonal: null,
-            rekeyer: roster(m.rekeyer.publicKey),
-            rekeyerPersonal: null,
-        },
-        { origin: side('bad-signature'), rekeyer: side('verified', m.group), mismatch: true },
-    );
+    family('family swapped metadata', swapped, bothRoster, {
+        origin: side('bad-signature'),
+        rekeyer: side('verified', m.group),
+        bound: false,
+    });
     family(
         'family rekeyer left',
         metadata,
-        {
-            origin: roster(m.writer.publicKey),
-            originPersonal: null,
-            rekeyer: { trust: 'former-member', signer: R, linksLoaded: true },
-            rekeyerPersonal: null,
-        },
-        { origin: side('verified', m.group), rekeyer: side('former-member'), mismatch: false },
+        { ...bothRoster, rekeyer: { trust: 'former-member', signer: R, linksLoaded: true } },
+        { origin: side('verified', m.group), rekeyer: side('former-member'), bound: true },
     );
     family(
         'family rekeyer unknown key, links not loaded',
         metadata,
-        {
-            origin: roster(m.writer.publicKey),
-            originPersonal: null,
-            rekeyer: roster(m.stranger, false),
-            rekeyerPersonal: null,
-        },
-        { origin: side('verified', m.group), rekeyer: side('unchecked'), mismatch: false },
+        { ...bothRoster, rekeyer: roster(m.stranger, false) },
+        { origin: side('verified', m.group), rekeyer: side('unchecked'), bound: true },
     );
     family(
         'family rekeyer unknown key, links loaded',
         metadata,
-        {
-            origin: roster(m.writer.publicKey),
-            originPersonal: null,
-            rekeyer: roster(m.stranger),
-            rekeyerPersonal: null,
-        },
-        { origin: side('bad-signature'), rekeyer: side('bad-signature'), mismatch: true },
+        { ...bothRoster, rekeyer: roster(m.stranger) },
+        { origin: side('verified', m.group), rekeyer: side('bad-signature'), bound: true },
+    );
+    family(
+        'family rekeyer key conflict',
+        metadata,
+        { ...bothRoster, rekeyer: { trust: 'key-conflict' } },
+        { origin: side('verified', m.group), rekeyer: side('key-conflict'), bound: true },
+    );
+    family(
+        'family rekey signature stripped, roster unavailable',
+        { ...metadata, rekeySignature: null },
+        { ...bothRoster, rekeyer: { trust: 'unchecked' } },
+        { origin: side('verified', m.group), rekeyer: side('unsigned'), bound: true },
+    );
+    family(
+        'family wrap broken, attested by a former member',
+        await signed(
+            { ...version, origin: { ...version.origin, keyEnvelope: asContentKey } },
+            m.rekeyer,
+        ),
+        { ...bothRoster, rekeyer: { trust: 'former-member', signer: R, linksLoaded: true } },
+        { origin: side('bad-signature'), rekeyer: side('former-member'), bound: false },
+    );
+    family(
+        'family writer account gone',
+        { ...metadata, origin: { ...metadata.origin, signerId: null } },
+        bothRoster,
+        { origin: side('unknown-signer'), rekeyer: side('unchecked'), bound: true },
     );
     family(
         'family writer outside the roster',
         metadata,
-        {
-            origin: { trust: 'outside' },
-            originPersonal: W,
-            rekeyer: roster(m.rekeyer.publicKey),
-            rekeyerPersonal: null,
-        },
-        { origin: side('verified'), rekeyer: side('verified', m.group), mismatch: false },
+        { ...bothRoster, origin: { trust: 'outside' }, originPersonal: W },
+        { origin: side('verified'), rekeyer: side('verified', m.group), bound: true },
     );
     family(
         'family writer key conflict',
         metadata,
-        {
-            origin: { trust: 'key-conflict' },
-            originPersonal: W,
-            rekeyer: roster(m.rekeyer.publicKey),
-            rekeyerPersonal: null,
-        },
-        { origin: side('key-conflict'), rekeyer: side('verified', m.group), mismatch: false },
+        { ...bothRoster, origin: { trust: 'key-conflict' }, originPersonal: W },
+        { origin: side('key-conflict'), rekeyer: side('verified', m.group), bound: true },
     );
     family(
         'family no node key',
         metadata,
-        {
-            origin: roster(m.writer.publicKey),
-            originPersonal: null,
-            rekeyer: roster(m.rekeyer.publicKey),
-            rekeyerPersonal: null,
-        },
-        { origin: side('unchecked'), rekeyer: side('unchecked'), mismatch: false },
+        bothRoster,
+        { origin: side('unchecked'), rekeyer: side('unchecked'), bound: null },
         null,
     );
 
@@ -748,6 +836,7 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
             envelope: built.origin.envelope,
             signerId: built.origin.signerId!,
             signature: built.origin.signature!,
+            keyEnvelope: built.origin.keyEnvelope,
         };
         return e(
             built.record === 'metadata'

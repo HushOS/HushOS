@@ -325,14 +325,18 @@ For each record it re-seals, a rotation that keeps the origin:
 
     ```
     ["hushos/drive/sig/metadata-rekeyed", 1, workspaceId, nodeId, kind, metadataVersion, keyEpoch,
-     sha256(metadataEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature)]
+     sha256(metadataEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature),
+     sha256(originKeyEnvelope)]
     ["hushos/drive/sig/version-rekeyed", 1, workspaceId, nodeId, versionId, objectId, contentSuite, keyEpoch,
-     sha256(contentKeyEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature)]
+     sha256(contentKeyEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature),
+     sha256(originKeyEnvelope)]
     ```
 
-    It says "I re-sealed this origin under the key at this epoch", nothing about who wrote it. Its domains are tried only by the rekeyed check, never by `integrityOf` over a current envelope, and its arity differs from every writer form, so no signature passes for another form in either direction.
+    It says "I re-sealed this origin under the key at this epoch, and this is the key that opens it", nothing about who wrote it. The wrapped key is covered so that a server that garbles only the wrap breaks the re-keyer's signature with it, and can never make the re-keyer look as if they had wrapped the wrong key. Its domains are tried only by the rekeyed check, never by `integrityOf` over a current envelope, and its arity differs from every writer form, so no signature passes for another form in either direction.
 
 A second rotation carries the origin, its signer and its signature byte for byte: it opens the origin key from its wrap under the old node key and wraps it under the new one, re-seals the current envelope raw, and signs a new rekeyed statement. The origin never changes until a write outside a rotation (a rename, a new version) replaces the record.
+
+**The next rotation checks before it carries** (`carryOrigin`; Rust `metadata_origin_carry`, `version_origin_carry`). For every record that already has an origin, the rotating client unwraps the opening key under the old node key, opens the origin with it, and compares the bytes with the current envelope's, exactly as a reader does, before it re-wraps the key and signs. If any step fails (the wrap or the origin does not open, or the bytes differ), the helper returns nothing: the client drops the origin and signs the record legacy `resealed`. Without the check an honest rotation would sign its name under a dishonest re-keyer's mismatch, and a wrapped old node key (which a reader's check refuses, but nothing else does) would be wrapped again for whoever holds the next key, members who join later included. It refuses only a malformed new key or epoch, which is the caller's error, not a reason to drop the origin.
 
 **Unsigned origins are not re-keyed** (decision D6). A record with no writer signature has nothing to keep; it is re-sealed and signed with the re-sealed statement as before, so the grammar never needs a null signer.
 
@@ -346,13 +350,17 @@ For a record that carries an origin, the reader, holding the node key at the rec
 
 Comparing plaintext is what makes it safe. If the re-keyer only stated "this matches", it could pair Sam's signature with other bytes at the same node and version, and Sam would appear to have written them.
 
-The verdict (`rekeyedIntegrityOf` / `metadata_rekeyed_integrity`, `version_rekeyed_integrity`; in a group's area `groupRekeyedIntegrityOf` / `group_*_rekeyed_integrity`) is `{ origin, rekeyer, mismatch }`:
+The verdict (`rekeyedIntegrityOf` / `metadata_rekeyed_integrity`, `version_rekeyed_integrity`; in a group's area `groupRekeyedIntegrityOf` / `group_*_rekeyed_integrity`) is `{ origin, rekeyer, bound }`. `bound` keeps what the plaintext showed apart from what the re-keyer's signature says (decision D4, amended after review):
 
-- **The record reads as its origin**, named after the origin's signer: verified, retired key, former member and so on, exactly as if no rotation had happened. A removed member's file reads `former-member`, "Written by Sam, who has left Lindqvist family", with its Unverified mark.
-- **The re-keyer appears in Info only** and never adds a mark (decision D5): "Keys replaced by Maya", or "by someone you haven't checked".
-- **A binding failure reads `bad-signature`, attributed to the re-keyer, with `mismatch`** (decision D4): the origin key or the origin does not open, the plaintexts differ, or the re-keyer's signature is missing or does not hold under a key the reader trusts for them (a roster's key included). The copy says "What Maya locked again doesn't match what was written. Don't trust this item." A re-keyer the reader has not checked does not break the binding: the plaintext comparison is the binding, and their signature only names them.
-- **It fails closed:** no node key at the record's epoch, or trust that did not load, reads `unchecked` for both.
-- **The origin's signer is gone** (their account deleted, the id nulled): the rekeyed statement names them and cannot be rebuilt, so the re-keyer reads `unchecked`; the origin reads as a signature by nobody the reader trusts. Nothing is laundered, and the plaintext still binds the record.
+- **`bound: true`**: the reader opened the origin and the current envelope and their bytes are equal. The record reads as its origin, named after the origin's signer: verified, retired key, former member and so on, exactly as if no rotation had happened. A removed member's file reads `former-member`, "Written by Sam, who has left Lindqvist family", with its Unverified mark.
+- **`bound: false`**: the reader opened both and the bytes differ, or the wrapped key or the origin does not open under a re-keyer signature that verified (under a current key the reader trusts for them, a roster's included), so the re-keyer attested to the very bytes that failed. `origin` is `bad-signature`.
+- **`bound: null`** (couldn't confirm): anything the server alone could cause. The current envelope does not open under the reader's node key; the wrap or the origin does not open and no verified re-keyer signature covers it; the fields are refused before anything opens (an epoch of 0, an id that is no lowercase UUID). `origin` is `unchecked`.
+- **The re-keyer's verdict is its own.** Verified, retired, an unknown signer or unchecked appear in Info only (decision D5): "Keys replaced by Maya", or "by someone you haven't checked". A missing or bad re-key signature, or a re-keyer in key conflict inside a group's area, over bytes that are bound, is an Unverified mark ("The re-key isn't attested"), never a mismatch: it says nothing about the bytes, which the reader compared itself.
+- **No signature is unsigned before any trust is consulted**, in a group's area too: a roster that did not load never hides a stripped signature as merely unchecked.
+- **It fails closed:** no node key at the record's epoch, or trust that did not load, reads `unchecked` for both, `bound: null`.
+- **The origin's signer is gone** (their account deleted, the id nulled): the verdict judges the origin under no keys whatever trust the caller passes, so a caller cannot lend someone else's keys to an unnamed origin. The origin reads as a signature by nobody the reader trusts, and the rekeyed statement, which names the signer, cannot be rebuilt, so the re-keyer reads `unchecked`. Nothing is laundered, and the plaintext still binds the record.
+
+**Who the copy blames.** Name a person as at fault only when their verified signature covers what failed: "What Maya locked again doesn't match what was written. Don't trust this item." holds only for `bound: false` under Maya's verified re-key signature, or for bytes that differ under it. Everything else says it couldn't be confirmed ("HushOS couldn't confirm this item since its keys were replaced"), since a server can produce it on its own.
 
 A record with no origin is read exactly as before. Records re-signed by rotations before this ships keep their wrong attribution: their writers' signatures were overwritten and cannot be recovered, and the release notes say so.
 
@@ -373,7 +381,8 @@ Shipped iOS and Android apps do not read origins yet. In personal workspaces a r
 
 - About 300 bytes per re-keyed metadata record (up to 4.1 KB with a long name's origin) and 320 per version, inline in listings: roughly 0.7 GB per million re-keyed files, against 6.7 GB for the hybrid upgrade.
 - **A current key holder working with the server** can bring back a genuine earlier record by its real author at the same version, named as re-keyer. That is the rollback power the server already has; a rotation used to prevent it incidentally. Accepted.
-- **ChaCha20-Poly1305 does not commit to its key.** A writer who crafts a ciphertext that opens under two keys could, with a re-keyer's help, have the second reading shown after a rotation under their own signature. Only the writer can make such a ciphertext, so it changes only which of their own readings is shown. Accepted.
+- **ChaCha20-Poly1305 does not commit to its key: equivocation across a rotation.** A writer who crafts an origin ciphertext that opens to one plaintext under HChaCha20(K_old, nonce) and to another under a second key S′, colluding with a re-keyer who wraps S′ instead of the real opening key, can have the second reading shown after the rotation, under the writer's own signature, while readers before the rotation saw the first. It matters wherever a reading is pinned at a point in time: report snapshots and holds, which must record which reading they captured. A re-keyer alone cannot do it: finding an S′ that opens a ciphertext an honest writer made takes about 2^128 Poly1305 trials. Accepted, and recorded for the report-snapshot follow-up (D10).
+- **A departed member who kept old keys** gets nothing new to read: they could already open the origin under K_old before they left, and the current envelope and the wrap are under keys they never held. The one change is that K_old-sealed origins persist on the server instead of being overwritten by the rotation, so a departed member who later obtains a copy of the server's rows can still open those origins (as they could open the same bytes before the rotation).
 - **Version signatures still do not bind the object's ciphertext**, as before: someone holding the content key, with the server, can swap the object under the writer's signature. A version 2 writer form could close it with the hybrid upgrade.
 - **Copies and moves between spaces still re-attribute** to the copier or mover (docs/envelope-migrations.md 6; decision D12). The origin mechanism cannot follow a copy: the copy's ids and contexts are new, so the writer's envelope does not open there. Out of scope here, and flagged.
 - The hybrid upgrade (docs/identity-pq-design.md 7) reuses the origin columns instead of re-signing as the owner (decision D11).
