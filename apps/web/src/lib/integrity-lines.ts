@@ -180,7 +180,8 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
             };
         }
         case 'former-member': {
-            const who = memberWords(named, 'someone');
+            // Unnamed as Info's "Changed by" leaves them: nobody this person checked, nor on the list.
+            const who = memberWords(named, 'someone you haven’t checked');
             return {
                 text: `${version ? 'Added' : 'Written'} by ${who}, who has left ${family ?? 'the family'}.`,
                 action: null,
@@ -364,8 +365,8 @@ export function rekeyedLines(
             const by = words(note!.by, 'you');
             const phrase: Partial<Record<RekeyNote['integrity'], string | null>> = {
                 verified: by ? `Keys replaced by ${by}` : null,
-                'retired-key': `Keys replaced by ${by ?? 'someone'}, with keys since replaced`,
-                'former-member': `Keys replaced by ${by ?? 'someone'}, who has left ${names.family?.name ?? 'the family'}`,
+                'retired-key': `Keys replaced by ${by ?? 'someone you haven’t checked'}, with keys since replaced`,
+                'former-member': `Keys replaced by ${by ?? 'someone you haven’t checked'}, who has left ${names.family?.name ?? 'the family'}`,
                 'unknown-signer': 'Keys replaced by someone you haven’t checked',
                 unchecked: 'HushOS couldn’t check who replaced its keys',
             };
