@@ -97,7 +97,7 @@ bun run check
 bun run build
 ```
 
-CI runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun run build` on pull requests and pushes to `main`. After all three pass on `main`, it builds and publishes the web and migration images to GHCR. See [self-hosting](docs/self-hosting.md#container-publishing) for image names and tags.
+CI runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun run build` on pull requests and pushes to `main`. The Chromium and WebKit suites run against that one production build (`bun run start`, web and jobs worker; the families-on suite still uses the dev server, see `ci.yml`), split into shards by measured time in `scripts/e2e-shard.sh`; changes that touch only Markdown outside `apps/web/src/content` or `docs/`, or only the MDX pages, skip them. `CI ok` passes when every job that ran passed, and is the one check to require. After check passes on `main`, it builds and publishes the web, migration and worker images to GHCR; the deploy waits for those and the Linux browser suites, not WebKit, whose failures on `main` open or update a `WebKit failed on main` issue. See [self-hosting](docs/self-hosting.md#container-publishing) for image names and tags.
 
 ## Fuzzing
 
@@ -124,7 +124,7 @@ A crash lands in `crates/hushos-core/fuzz/artifacts/<target>/` or `packages/cryp
 2. Replay the input in the other twin: copy it into the other corpus directory and run `bun run fuzz:diff`, which replays both corpora.
 3. Decide which twin is wrong against the design docs, fix both if the rule was never written down, and add a regression test beside the code (or a case in the shared fixtures, `bun run fixtures`). Say in the change if it moves what either twin accepts, and check the shipped clients.
 
-CI (`.github/workflows/fuzz.yml`) runs every target for 30 s per engine and the differential on pull requests that touch either twin, and every night each target for 10 minutes per engine on a corpus cached from the night before (minimised before it is saved), uploading crash and diverging inputs as artifacts. The `Rust core tests` job in `ci.yml` runs `cargo test -p hushos-core` on every pull request.
+CI (`.github/workflows/fuzz.yml`) runs every target for 30 s per engine and the differential on pull requests that touch either twin, and every night each target for 10 minutes per engine on a corpus cached from the night before (minimised before it is saved), uploading crash and diverging inputs as artifacts. The `Rust core tests` job in `ci.yml` runs `cargo test -p hushos-core` when `crates/`, the Cargo files, or `packages/crypto` change.
 
 ## Environment and project status
 
