@@ -594,6 +594,59 @@ pub fn accept(value: &Value) -> Option<Value> {
     Some(ok(verdict))
 }
 
+/* The current key the input names for the re-keyer: personal trust, or the group's (its personal one outside the roster). */
+fn rekeyer_current(input: &rekeyed::Input) -> Option<Vec<u8>> {
+    match &input.trust {
+        rekeyed::Trust::Personal(trust) => trust.as_ref()?.rekeyer.as_ref().map(|k| k.current.clone()),
+        rekeyed::Trust::Group(group) => match &group.rekeyer {
+            GroupWriterTrust::Roster { signer, .. } | GroupWriterTrust::FormerMember { signer, .. } => {
+                Some(signer.current.clone())
+            }
+            GroupWriterTrust::Outside => group.rekeyer_personal.as_ref().map(|k| k.current.clone()),
+            GroupWriterTrust::Unchecked | GroupWriterTrust::KeyConflict => None,
+        },
+    }
+}
+
+/* Whether the re-key signature verifies under that key over the record as served. */
+fn rekey_attested(input: &rekeyed::Input) -> bool {
+    let Some(key) = rekeyer_current(input) else {
+        return false;
+    };
+    let origin_of = |o: &ServedOrigin| -> Option<RecordOrigin> {
+        Some(RecordOrigin {
+            envelope: o.envelope.clone(),
+            signer_id: o.signer_id.clone()?,
+            signature: o.signature.clone()?,
+            key_envelope: o.key_envelope.clone(),
+        })
+    };
+    match &input.record {
+        rekeyed::Record::Metadata(r) => match (origin_of(&r.origin), &r.rekey_signature) {
+            (Some(origin), Some(signature)) => metadata_rekeyed_verify(
+                key,
+                r.statement.clone(),
+                r.key_epoch,
+                r.envelope.clone(),
+                origin,
+                signature.clone(),
+            ),
+            _ => false,
+        },
+        rekeyed::Record::Version(r) => match (origin_of(&r.origin), &r.rekey_signature) {
+            (Some(origin), Some(signature)) => version_rekeyed_verify(
+                key,
+                r.statement.clone(),
+                r.key_epoch,
+                r.envelope.clone(),
+                origin,
+                signature.clone(),
+            ),
+            _ => false,
+        },
+    }
+}
+
 /* An origin the shared fixtures sealed, and the record it was sealed for. */
 fn known_origin(envelope: &[u8]) -> Option<&'static Value> {
     let encoded = shape::encoded(envelope);
@@ -680,7 +733,8 @@ fn plaintexts(node_key: &[u8], record: &rekeyed::Record) -> Option<(Vec<u8>, Vec
  * (`*_origin_carry` with the input's node key as the old key). Invariants:
  * - bound true means the origin holds the current envelope's bytes, and an
  *   origin the fixtures sealed for another node or version never gets there;
- * - bound false means the reader did not see equal bytes;
+ * - bound false means the reader opened both envelopes to different bytes,
+ *   or the re-key signature verifies under the re-keyer's current key;
  * - the next rotation carries the origin exactly when both open to equal
  *   bytes, whatever the signatures say: a mismatch, or a wrapped old node
  *   key, is never carried on;
@@ -708,7 +762,17 @@ pub fn record_integrity(value: &Value) -> Option<Value> {
         }
     }
     if verdict["bound"] == false {
-        assert!(!equal, "a record whose bytes match read as not bound");
+        // Not bound is the re-keyer's word or the reader's own sight: both envelopes opened to
+        // different bytes, or the re-key signature verifies under the re-keyer's current key.
+        let differ = input
+            .node_key
+            .as_ref()
+            .and_then(|key| plaintexts(key, &input.record))
+            .is_some_and(|(written, current)| written != current);
+        assert!(
+            differ || rekey_attested(&input),
+            "a record read as not bound with neither different bytes nor the re-keyer's word"
+        );
     }
     match &input.node_key {
         Some(_) => assert_eq!(

@@ -746,9 +746,18 @@ describe('re-keyed records', () => {
         const asNodeKey = await wrapOriginKey(old, fresh, keyCtx(origin));
         const leaked = { ...record, origin: { ...record.origin, keyEnvelope: asNodeKey } };
         expect(await carryOrigin(leaked, fresh, next, 4)).toBeNull();
-        // A key the record does not open under, and a wrap from another epoch.
-        expect(await carryOrigin(record, old, next, 4)).toBeNull();
+        // A wrap from another epoch.
         expect(await carryOrigin({ ...record, keyEpoch: 2 }, fresh, next, 4)).toBeNull();
+        // A key the current envelope does not open under, or ids no context takes, stop the rotation.
+        await expect(carryOrigin(record, old, next, 4)).rejects.toThrow(CryptoError);
+        await expect(
+            carryOrigin(
+                { ...record, statement: { ...record.statement, nodeId: 'n1' } },
+                fresh,
+                next,
+                4,
+            ),
+        ).rejects.toThrow(CryptoError);
     });
 
     test('the legacy form beside it is honest: the re-keyer’s own work only, and it never refuses', () => {

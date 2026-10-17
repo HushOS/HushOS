@@ -27,7 +27,7 @@ use crate::drive::{
     OriginKeyContext, OriginRecord, VersionContext, KEY_ENVELOPE_BYTES, METADATA_ENVELOPE_MAX_BYTES,
 };
 use crate::envelope::{context, open, open_key, open_with_opening_key};
-use crate::error::{input, CoreResult};
+use crate::error::{input, CoreError, CoreResult};
 use crate::identity::KEM_PUBLIC_KEY_BYTES;
 use crate::pq::{ml_dsa_sign, ml_dsa_verify, ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SIGNATURE_BYTES};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
@@ -1231,18 +1231,24 @@ pub fn version_rekeyed_integrity(
 /*
  * The next rotation of a record that already carries an origin: the origin's
  * opening key out of its wrap under `old_key`, re-wrapped under `new_key` at
- * `target_epoch`, but only after the reader's own bound check (the origin
- * opens with that key to exactly the current envelope's bytes). Anything less
- * is `None`: the caller drops the origin and signs the record legacy
- * re-sealed, so an honest rotation never adopts a dishonest re-keyer's
- * mismatch or passes a wrapped old node key on to whoever joins later.
+ * `target_epoch`, but only after the rotating client's own bound check (the
+ * origin opens with that key to exactly the current envelope's bytes). An
+ * origin that is not bound is `None`: the caller drops it and signs the record
+ * legacy re-sealed, so an honest rotation never signs its name under a
+ * dishonest re-keyer's mismatch. A record the rotator itself cannot open (its
+ * old key does not open the current envelope, or the served ids, version or
+ * suite are refused) is an error, not a dropped origin: the rotation has the
+ * wrong key or the wrong row, and must stop rather than re-seal blind.
  */
 fn carry(sealed: Sealed, old_key: &[u8], new_key: &[u8], target_epoch: u64) -> CoreResult<Option<Vec<u8>>> {
     expect_len("newKey", new_key, KEY_BYTES)?;
     let next = origin_key_context(&OriginKeyContext { key_epoch: target_epoch, ..sealed.key_ctx.clone() })?;
     match sealed.open(old_key) {
         Ok(key) => Ok(Some(crate::envelope::seal(new_key, &key, &next)?)),
-        Err(_) => Ok(None),
+        Err(Unbound::Current) => Err(CoreError::Sealed(
+            "This item does not open under the key this rotation holds. Load the folder again.".into(),
+        )),
+        Err(Unbound::Origin | Unbound::Differ) => Ok(None),
     }
 }
 
@@ -1251,8 +1257,9 @@ fn carry(sealed: Sealed, old_key: &[u8], new_key: &[u8], target_epoch: u64) -> C
 /// it as the record's new `originKeyEnvelope`, and sign the rekeyed statement
 /// over it), or `None` when the origin is not bound to the current envelope
 /// under `old_key` (the node key at `record.key_epoch`): drop the origin and
-/// sign the record legacy re-sealed. Refuses only a malformed `new_key` or
-/// `target_epoch`.
+/// sign the record legacy re-sealed. Refuses a malformed `new_key` or
+/// `target_epoch`, served ids, version or suite the contexts refuse, and a
+/// current envelope `old_key` does not open: those stop the rotation.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn metadata_origin_carry(
     old_key: Vec<u8>,
@@ -2170,8 +2177,12 @@ mod tests {
                 .unwrap();
         leaked.rekey_signature = Some(rekey_signed(&r.maya, &leaked));
         assert_eq!(carry(leaked, &r.fresh), None, "a wrapped old node key is never passed on");
-        assert_eq!(carry(r.record.clone(), &r.old), None);
         assert_eq!(carry(RekeyedMetadata { key_epoch: 2, ..r.record.clone() }, &r.fresh), None);
+        // A key the current envelope does not open under is the rotation's own mistake: it stops.
+        assert!(metadata_origin_carry(r.old.clone(), next.clone(), 4, r.record.clone()).is_err());
+        let mut nameless = r.record.clone();
+        nameless.statement.node_id = "n1".into();
+        assert!(metadata_origin_carry(r.fresh.clone(), next.clone(), 4, nameless).is_err());
     }
 
     #[test]

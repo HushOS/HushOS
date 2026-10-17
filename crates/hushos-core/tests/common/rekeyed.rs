@@ -242,7 +242,8 @@ pub fn judge(input: &Input) -> Value {
 
 /// Whether the next rotation carries the record's origin: `*_origin_carry` with
 /// the input's node key as the old key, a fresh key and the next epoch. A
-/// refusal of the next wrap's fields counts as not carried; `None` without a node key.
+/// refusal (fields the contexts refuse, a current envelope the key does not
+/// open) counts as not carried; `None` without a node key.
 pub fn carried(input: &Input) -> Option<bool> {
     let old = input.node_key.clone()?;
     let fresh = random_bytes(32).unwrap();
@@ -732,6 +733,31 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
         verdict("bad-signature", "verified", f),
         k(),
     );
+    let attested_content_key =
+        sign_as(&Built { key_envelope: as_content_key.clone(), ..version.clone() }, &m.rekeyer);
+    personal(
+        "origin key as a content key, attested under a retired key",
+        &attested_content_key,
+        json!({ "origin": w, "rekeyer": signer(&m.stranger, &[&m.rekeyer.public_key]) }),
+        verdict("unchecked", "retired-key", None),
+        k(),
+    );
+    personal(
+        "swapped metadata, rekey signature missing",
+        &Built { rekey_signature: None, ..swapped.clone() },
+        both.clone(),
+        verdict("bad-signature", "unsigned", f),
+        k(),
+    );
+    let mut swapped_flipped = swapped.rekey_signature.clone().unwrap();
+    swapped_flipped[7] ^= 1;
+    personal(
+        "swapped metadata, rekey signature bad",
+        &Built { rekey_signature: Some(swapped_flipped), ..swapped.clone() },
+        both.clone(),
+        verdict("bad-signature", "bad-signature", f),
+        k(),
+    );
     personal(
         "stale epoch",
         &Built { key_epoch: m.key_epoch - 1, ..metadata.clone() },
@@ -850,6 +876,27 @@ pub fn rekeyed_cases(m: &CaseMaterial) -> Rekeyed {
         &sign_as(&Built { key_envelope: as_content_key, ..version.clone() }, &m.rekeyer),
         with("rekeyer", json!({ "trust": "former-member", "signer": r, "linksLoaded": true })),
         reads(side("bad-signature", None), side("former-member", None), f),
+        k(),
+    );
+    family(
+        "family wrap broken, rekeyer key conflict",
+        &attested_content_key,
+        with("rekeyer", json!({ "trust": "key-conflict" })),
+        reads(side("unchecked", None), side("key-conflict", None), None),
+        k(),
+    );
+    family(
+        "family wrap broken, roster unavailable",
+        &attested_content_key,
+        with("rekeyer", json!({ "trust": "unchecked" })),
+        reads(side("unchecked", None), side("unchecked", None), None),
+        k(),
+    );
+    family(
+        "family wrap broken, rekeyer unknown key, links loaded",
+        &attested_content_key,
+        with("rekeyer", roster(&m.stranger, true)),
+        reads(side("unchecked", None), side("bad-signature", None), None),
         k(),
     );
     family(

@@ -57,6 +57,7 @@ import {
     type RecordOrigin,
     type RekeyedRecord,
     type VersionStatement,
+    verifyStatement,
 } from '../src/signatures';
 import {
     contentKeyContext,
@@ -941,6 +942,48 @@ async function accept(input: Json): Promise<Verdict> {
     return ok(verdict);
 }
 
+/* The current key the input names for the re-keyer: personal trust, or the group's (its personal one outside the roster). */
+function rekeyerCurrent(input: NonNullable<ReturnType<typeof readRekeyed>>) {
+    if (input.trust.kind === 'personal') return input.trust.trust?.rekeyer?.current ?? null;
+    const trust = input.trust.rekeyer;
+    if (trust.trust === 'roster' || trust.trust === 'former-member') return trust.signer.current;
+    if (trust.trust === 'outside') return input.trust.rekeyerPersonal?.current ?? null;
+    return null;
+}
+
+/* Whether the re-key signature verifies under that key over the record as served. */
+async function rekeyAttested(input: NonNullable<ReturnType<typeof readRekeyed>>) {
+    const key = rekeyerCurrent(input);
+    const r = input.record;
+    if (!key || !r.rekeySignature || r.origin.signerId === null || !r.origin.signature)
+        return false;
+    const origin = {
+        envelope: r.origin.envelope,
+        signerId: r.origin.signerId,
+        signature: r.origin.signature,
+        keyEnvelope: r.origin.keyEnvelope,
+    };
+    let statement: Uint8Array;
+    try {
+        statement =
+            r.record === 'metadata'
+                ? await metadataRekeyedStatement(
+                      { ...r.statement, keyEpoch: r.keyEpoch },
+                      r.envelope,
+                      origin,
+                  )
+                : await versionRekeyedStatement(
+                      { ...r.statement, keyEpoch: r.keyEpoch },
+                      r.envelope,
+                      origin,
+                  );
+    } catch (error) {
+        if (error instanceof CryptoError) return false;
+        throw error;
+    }
+    return verifyStatement(statement, r.rekeySignature, key);
+}
+
 /* An origin the shared fixtures sealed, with the record it was sealed for. */
 function knownOrigin(envelope: Uint8Array): Doc | undefined {
     const encoded = encode(envelope);
@@ -1010,7 +1053,8 @@ async function plaintexts(nodeKey: Uint8Array, record: RekeyedRecord) {
  * next rotation carries its origin, with the invariants of targets.rs:
  * - bound true means the origin holds the current envelope's bytes, and an
  *   origin sealed for another record never gets there;
- * - bound false means the reader did not see equal bytes;
+ * - bound false means the reader opened both envelopes to different bytes,
+ *   or the re-key signature verifies under the re-keyer's current key;
  * - the next rotation carries the origin exactly when both open to equal bytes;
  * - verified means the origin's statement builds.
  */
@@ -1032,7 +1076,15 @@ async function recordIntegrity(value: Doc): Promise<Verdict | undefined> {
             );
         }
     }
-    if (verdict.bound === false) invariant(!equal, 'a record whose bytes match read as not bound');
+    if (verdict.bound === false) {
+        // Not bound is the re-keyer's word or the reader's own sight: both envelopes opened to
+        // different bytes, or the re-key signature verifies under the re-keyer's current key.
+        const differ = both !== undefined && !sameBytes(both[0], both[1]);
+        invariant(
+            differ || (await rekeyAttested(input)),
+            "a record read as not bound with neither different bytes nor the re-keyer's word",
+        );
+    }
     if (input.nodeKey)
         invariant(
             carried === equal,

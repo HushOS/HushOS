@@ -202,7 +202,8 @@ export async function judgeRekeyed(input: RekeyedInput): Promise<Doc> {
 /*
  * Whether the next rotation carries the record's origin: carryOrigin with the
  * input's node key as the old key, a fresh key, and the next epoch. A
- * refusal of the next wrap's fields counts as not carried; null without a node key.
+ * refusal (fields the contexts refuse, a current envelope the key does not
+ * open) counts as not carried; null without a node key.
  */
 export async function carriedRekeyed(input: RekeyedInput): Promise<boolean | null> {
     if (!input.nodeKey) return null;
@@ -703,6 +704,33 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
         both,
         verdict('bad-signature', 'verified', false),
     );
+    // Attestation is the re-keyer's current key only: a broken wrap signed under a key they have
+    // since replaced could be anyone's now, so it is not confirmed either way.
+    const attestedContentKey = await signed(
+        { ...version, origin: { ...version.origin, keyEnvelope: asContentKey } },
+        m.rekeyer,
+    );
+    personal(
+        'origin key as a content key, attested under a retired key',
+        attestedContentKey,
+        { origin: W, rekeyer: signer(m.stranger, [m.rekeyer.publicKey]) },
+        verdict('unchecked', 'retired-key', null),
+    );
+    // Bytes that differ are not bound whatever the re-key signature says.
+    personal(
+        'swapped metadata, rekey signature missing',
+        { ...swapped, rekeySignature: null },
+        both,
+        verdict('bad-signature', 'unsigned', false),
+    );
+    const swappedFlipped = swapped.rekeySignature!.slice();
+    swappedFlipped[7]! ^= 1;
+    personal(
+        'swapped metadata, rekey signature bad',
+        { ...swapped, rekeySignature: swappedFlipped },
+        both,
+        verdict('bad-signature', 'bad-signature', false),
+    );
     personal(
         'stale epoch',
         { ...metadata, keyEpoch: m.keyEpoch - 1 },
@@ -804,6 +832,25 @@ export async function rekeyedCases(m: CaseMaterial): Promise<{
         ),
         { ...bothRoster, rekeyer: { trust: 'former-member', signer: R, linksLoaded: true } },
         { origin: side('bad-signature'), rekeyer: side('former-member'), bound: false },
+    );
+    // The same broken wrap where the group's trust confirms no current key for the re-keyer.
+    family(
+        'family wrap broken, rekeyer key conflict',
+        attestedContentKey,
+        { ...bothRoster, rekeyer: { trust: 'key-conflict' } },
+        { origin: side('unchecked'), rekeyer: side('key-conflict'), bound: null },
+    );
+    family(
+        'family wrap broken, roster unavailable',
+        attestedContentKey,
+        { ...bothRoster, rekeyer: { trust: 'unchecked' } },
+        { origin: side('unchecked'), rekeyer: side('unchecked'), bound: null },
+    );
+    family(
+        'family wrap broken, rekeyer unknown key, links loaded',
+        attestedContentKey,
+        { ...bothRoster, rekeyer: roster(m.stranger) },
+        { origin: side('unchecked'), rekeyer: side('bad-signature'), bound: null },
     );
     family(
         'family writer account gone',

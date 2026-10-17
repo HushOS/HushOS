@@ -894,11 +894,13 @@ export async function rekeyedIntegrityOf(
  * `record.keyEpoch`), re-wrapped under `newKey` at `targetEpoch`, but only
  * after the rotating client's own bound check (the origin opens with that key
  * to exactly the current envelope's bytes). Send the result as the record's
- * new originKeyEnvelope and sign the rekeyed statement over it. Anything less
- * is null: drop the origin and sign the record legacy re-sealed, so an honest
- * rotation never adopts a dishonest re-keyer's mismatch or passes a wrapped
- * old node key on to whoever joins later. Throws a CryptoError only for a
- * malformed `newKey` or `targetEpoch`.
+ * new originKeyEnvelope and sign the rekeyed statement over it. An origin
+ * that is not bound is null: drop it and sign the record legacy re-sealed, so
+ * an honest rotation never signs its name under a dishonest re-keyer's
+ * mismatch. Throws a CryptoError for a malformed `newKey` or `targetEpoch`,
+ * for served ids, version or suite the contexts refuse, and when `oldKey`
+ * does not open the current envelope: the rotation has the wrong key or the
+ * wrong row, and must stop rather than re-seal blind.
  */
 export async function carryOrigin(
     record: RekeyedRecord,
@@ -922,7 +924,13 @@ export async function carryOrigin(
     // The next wrap's context is checked before anything is opened: a malformed one is the caller's.
     await originKeyContext(next);
     const opened = await openOrigin(oldKey, record);
-    if (!('key' in opened)) return null;
+    if (!('key' in opened)) {
+        if (opened.unbound === 'current')
+            throw new CryptoError(
+                'This item does not open under the key this rotation holds. Load the folder again.',
+            );
+        return null;
+    }
     try {
         return await wrapOriginKey(opened.key, newKey, next);
     } finally {

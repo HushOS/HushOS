@@ -1432,6 +1432,9 @@ export function createGroupSession(host: GroupHost) {
                 } catch {
                     bytes = new Uint8Array(0);
                 }
+            // No signature is unsigned before any trust is looked up: a lookup that fails (and
+            // reads unchecked) must not hide a stripped one.
+            if (!bytes) return { integrity: 'unsigned', via: null };
             try {
                 const id = signer?.toLowerCase() ?? null;
                 if (!id || id === me)
