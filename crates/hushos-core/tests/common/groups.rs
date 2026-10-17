@@ -711,6 +711,7 @@ pub fn cache_json(cache: &GroupChainCache) -> Value {
         "areaKeys": cache.area_keys,
         "areaRoots": cache.area_roots,
         "retiredAreas": cache.retired_areas,
+        "cacheVersion": cache.cache_version,
         "ownEntryWrongAt": cache.own_entry_wrong_at,
     })
 }
@@ -804,6 +805,13 @@ pub fn cache_of(value: &Value) -> Result<Option<GroupChainCache>, String> {
         retired_areas: match &value["retiredAreas"] {
             Value::Null => vec![],
             retired => strings(retired, "retiredAreas")?,
+        },
+        // Absent: a cache written before format 2. Anything but a small number is no cache.
+        cache_version: match &value["cacheVersion"] {
+            Value::Null => 1,
+            version => {
+                version.as_u64().and_then(|v| u8::try_from(v).ok()).ok_or_else(|| bad("cacheVersion"))?
+            }
         },
     }))
 }
@@ -3478,12 +3486,35 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         let before = GroupChainCache {
             area_roots: HashMap::new(),
             retired_areas: vec![],
+            cache_version: 1,
             ..accepted_to(&old, 1, &everyone).cache()
         };
         cases.push((
             "cache-before-format-2",
             CaseInput { cache: Some(before), rosters: old.rosters[1..].to_vec(), ..from_one(&old) },
             accepted(2),
+        ));
+        // A version 2 cache whose root commitments were emptied is no cache from before format
+        // 2: its own version says it carries them, so it is refused, not read as uncommitted.
+        // Through a roster that lists no area, so only the cache's version can refuse it.
+        let mut quiet = History::format_2();
+        quiet.roster(&organizer, members.clone(), None);
+        quiet.roster(
+            &organizer,
+            vec![owner.clone(), active(&adult, &[GroupRole::Billing, GroupRole::Members])],
+            None,
+        );
+        cases.push((
+            "cache-v2-roots-emptied",
+            CaseInput {
+                cache: Some(GroupChainCache {
+                    area_roots: HashMap::new(),
+                    ..accepted_to(&quiet, 2, &everyone).cache()
+                }),
+                rosters: vec![],
+                ..from_one(&quiet)
+            },
+            refused.clone(),
         ));
     }
     cases

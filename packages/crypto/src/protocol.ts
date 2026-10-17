@@ -56,3 +56,12 @@ export const GROUP_OPERATIONS = [
     'groupStoreOpen',
     'groupPreviousRoot',
 ] as const;
+
+/*
+ * What the crypto worker answers a write in a family folder under a key whose
+ * path is not rooted at the folder's current key (design 2.10, F14): a key
+ * change has not reached it yet. Uploads wait it out, as for a server's 409
+ * `rotating`, instead of failing; everything else shows it.
+ */
+export const KEY_CHANGE_PENDING =
+    'This folder’s keys changed: the key change has not reached it yet.';

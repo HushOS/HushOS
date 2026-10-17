@@ -9,6 +9,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { afterFamilyChange } from '@/lib/families';
@@ -19,9 +20,9 @@ import { cue } from '@/lib/sounds';
 /*
  * "Delete family folder", for those who manage the family (groups design
  * 2.10): the folder's tombstone on the member list, sent at once. It is gone
- * for everyone straight away; the server keeps its files 30 days, as the
- * trash keeps things, then deletes them. Nothing on the family's side brings
- * it back, and the copy says so.
+ * for everyone straight away, and the server deletes its files after 30 days.
+ * Deleting destroys no key: whoever kept copies or keys keeps them, as after
+ * a removal, and the copy says so.
  */
 export function DeleteFamilyFolderDialog({
     userId,
@@ -61,7 +62,7 @@ export function DeleteFamilyFolderDialog({
             toast.add({
                 type: 'success',
                 title: `“${folder.name}” is deleted`,
-                description: 'Its files are deleted for good in 30 days.',
+                description: 'Its files are deleted from the server after 30 days.',
             });
             onOpenChange(false);
             onDeleted();
@@ -87,9 +88,9 @@ export function DeleteFamilyFolderDialog({
                 <AlertDialogHeader>
                     <AlertDialogTitle>Delete “{folder?.name}”?</AlertDialogTitle>
                     <AlertDialogDescription>
-                        It goes for everyone in {family} straight away. Its files stay in Trash on
-                        the server for 30 days, where no one in the family can open them, then
-                        they’re deleted for good. The folder can’t be restored.
+                        It disappears for everyone in {family} now. Its files are deleted from the
+                        server after 30 days. Anyone who kept copies or keys keeps them, as after
+                        someone is removed. The folder can’t be restored.
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 {error && (
@@ -100,7 +101,8 @@ export function DeleteFamilyFolderDialog({
                 <AlertDialogFooter>
                     <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
                     <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
-                        {busy ? 'Deleting…' : 'Delete family folder'}
+                        {busy && <Spinner className="size-4" />}
+                        Delete
                     </Button>
                 </AlertDialogFooter>
             </AlertDialogContent>

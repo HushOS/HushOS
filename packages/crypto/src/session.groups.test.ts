@@ -1586,15 +1586,18 @@ describe('the write version (F9)', () => {
             nodes: [r.rotatedRoot(), r.childListing],
         });
         const write = () => fresh.call('driveCreateNodes', newFolder(f.ws, f.area.root.id, 5));
-        const rename = () =>
+        // The folder just made under the rotated root: CHILD itself is reached only through the
+        // root's previous key, so it takes nothing until the walk re-keys it (design 2.10, F14).
+        const rename = (nodeId = LATER) =>
             fresh.call('driveSealMetadata', {
                 workspaceId: f.ws,
-                nodeId: CHILD,
+                nodeId,
                 kind: 'folder',
                 metadataVersion: 2,
                 metadata: folder('Renamed'),
             });
         await expect(write()).resolves.toBeTruthy();
+        await expect(rename(CHILD)).rejects.toThrow(/keys changed/);
         for (const [over, reason] of [
             [{ servedVersion: 1 }, 'server-behind'],
             // A server ahead of the chain also makes the self-grant suspect: the area grant opens.
@@ -1676,6 +1679,95 @@ describe('the write version (F9)', () => {
         await expect(
             fresh.call('driveCreateNodes', newFolder(f.ws, f.area.root.id, 1)),
         ).resolves.toBeTruthy();
+    });
+
+    test('design 2.10 (F14): a folder reached only through a previous key takes no write until the walk re-keys it', async () => {
+        const f = await family();
+        const r = await rotated(f);
+        const { alice, bob, groupId, ws, area } = f;
+        const below = (who: typeof alice, epoch: number, id: string) =>
+            who.call('driveCreateNodes', newFolder(ws, CHILD, epoch, id));
+        const rename = (who: typeof alice) =>
+            who.call('driveSealMetadata', {
+                workspaceId: ws,
+                nodeId: CHILD,
+                kind: 'folder',
+                metadataVersion: 2,
+                metadata: folder('Renamed'),
+            });
+        // Bob, with only the new folder key, opens the child through the root's previous key: he
+        // reads it, and puts nothing under it (a server saying no walk is running changes nothing).
+        await bob.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: r.grantTo(BOB),
+            granterMlDsaPublicKey: alice.served.mlDsaPublicKey,
+            selfGrant: null,
+        });
+        const listed = await bob.call('driveOpenNodes', {
+            workspaceId: ws,
+            nodes: [r.rotatedRoot(), r.childListing],
+        });
+        expect(listed.nodes.map((node) => node.metadata?.name)).toEqual(['Family', 'Inside']);
+        await expect(below(bob, 1, LATER)).rejects.toThrow(/keys changed/);
+        await expect(rename(bob)).rejects.toThrow(/keys changed/);
+        // Alice made the child before the rotation: her cached key is rooted at folder key 1, and
+        // takes nothing now either, though it never went near a previous envelope.
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: r.rotation.selfGrant,
+        });
+        await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        await expect(below(alice, 1, LATER)).rejects.toThrow(/keys changed/);
+        // The walk re-keys the child under the root's new key; then it is written.
+        const walked = await alice.call('driveRotateNodes', {
+            workspaceId: ws,
+            targetEpoch: 5,
+            granterUserId: ALICE,
+            signers: {},
+            group: { groupId, staged: null, writers: [] },
+            nodes: [
+                {
+                    id: CHILD,
+                    kind: 'folder',
+                    parentId: area.root.id,
+                    parentKeyEpoch: 5,
+                    keyEpoch: 1,
+                    wrappedParentKeyEpoch: 1,
+                    keyEnvelope: r.child.nodes[0]!.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: r.child.nodes[0]!.metadataEnvelope,
+                    metadataSigner: ALICE,
+                    metadataSignature: r.child.nodes[0]!.metadataSignature,
+                    versions: [],
+                    shares: [],
+                    links: [],
+                },
+            ],
+        });
+        const node = walked.nodes[0]!;
+        if (node.error !== undefined) throw new Error(node.error);
+        await alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [CHILD] });
+        await expect(below(alice, 5, LATER)).resolves.toBeTruthy();
+        // And Bob, listing the re-keyed child under the new root, writes under it too.
+        await bob.call('driveOpenNodes', {
+            workspaceId: ws,
+            nodes: [
+                {
+                    ...r.childListing,
+                    parentKeyEpoch: 5,
+                    keyEpoch: 5,
+                    keyEnvelope: node.keyEnvelope,
+                },
+            ],
+        });
+        await expect(below(bob, 5, OTHER_WS.replace('d6d6d6d6', 'c7c7c7c7'))).resolves.toBeTruthy();
     });
 
     test('design 2.10 (F11): deleting a folder stages its tombstone alone, and the folder is written and opened no more', async () => {

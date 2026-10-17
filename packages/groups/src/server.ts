@@ -429,8 +429,23 @@ async function checkRoster(
             .filter((entry) => entry.sinceVersion === roster.rosterVersion)
             .map((entry) => ({ userId: entry.userId, status: entry.status, roles: entry.roles })),
         dropsHolder: next.droppedHolder,
+        commitments: commitmentsOf(roster),
     } as groupsRepository.ParsedRoster;
     return { roster, digest: next.rosterDigest, next, parsed };
+}
+
+/*
+ * Every area key and root commitment a roster's key rows list (design 2.6,
+ * 2.10), as bytes: the repository refuses one another group listed already.
+ */
+function commitmentsOf(roster: Roster) {
+    return (roster.areas ?? []).flatMap((row) =>
+        row.retired
+            ? []
+            : [row.commitment, ...(row.rootCommitment ? [row.rootCommitment] : [])].map((at) =>
+                  Buffer.from(at, 'base64url'),
+              ),
+    );
 }
 
 /* A succession checked as every device will check it, continuing the chain after the call's roster. */
@@ -1301,6 +1316,7 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
                 roles: member.roles,
             })),
             dropsHolder: false,
+            commitments: commitmentsOf(roster),
         } as groupsRepository.ParsedRoster,
         keySeal: keySeal!,
         area: areaInput(area),

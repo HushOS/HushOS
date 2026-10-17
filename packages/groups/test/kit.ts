@@ -19,7 +19,6 @@ import { driveRepository, groupsRepository, scopedId } from '@hushos/db';
 // The group core's test kit and area commitments: test-only, not package exports.
 import { areaKeyCommitment } from '../../crypto/src/area-keys';
 import {
-    areaKeyAt,
     groupIdFor,
     history,
     person,
@@ -292,6 +291,19 @@ export async function rotationWire(
     };
 }
 
+/*
+ * The keys the kit gives a group's areas and their roots, one per area and
+ * version: the server refuses a commitment another group listed (design 2.10),
+ * so groups in one test never share one (the core's testkit keys are per
+ * workspace id only when it is its AREA).
+ */
+export function kitAreaKey(workspaceId: string, version: number) {
+    return new Uint8Array(createHash('sha256').update(`area:${workspaceId}:${version}`).digest());
+}
+export function kitRootKey(workspaceId: string, version: number) {
+    return new Uint8Array(createHash('sha256').update(`root:${workspaceId}:${version}`).digest());
+}
+
 export type Family = Awaited<ReturnType<typeof family>>;
 
 /*
@@ -309,10 +321,15 @@ export async function family(creator?: Member) {
         {
             workspaceId: areaId,
             workspaceKeyVersion: 1,
-            commitment: await areaKeyCommitment(areaKeyAt(areaId, 1)),
+            commitment: await areaKeyCommitment(kitAreaKey(areaId, 1)),
         },
     ];
-    const h = await history('family', { groupId, areas });
+    const h = await history('family', {
+        groupId,
+        areas,
+        areaKey: kitAreaKey,
+        rootKey: kitRootKey,
+    });
     const first = await h.roster(organizer.who, [organizer.who.entry(ORGANIZER)]);
     const at = { rosterVersion: 1, rosterDigest: await rosterDigest(first.statement) };
     const body = {
@@ -438,6 +455,6 @@ export async function nextAreaRow(workspaceId: string, version: number): Promise
     return {
         workspaceId,
         workspaceKeyVersion: version,
-        commitment: await areaKeyCommitment(areaKeyAt(workspaceId, version)),
+        commitment: await areaKeyCommitment(kitAreaKey(workspaceId, version)),
     };
 }

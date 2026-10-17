@@ -48,6 +48,7 @@ import {
     forgedRoster,
     grantWire,
     head,
+    kitAreaKey,
     member,
     nextAreaRow,
     nextRoster,
@@ -3104,6 +3105,60 @@ describe('roster format 2 and deleting a family folder (route 30, groups design 
         expect(row!.deletedAt).not.toBeNull();
     });
 
+    test('an area or top-folder commitment another family listed is refused, whatever the chain says', async () => {
+        const { fam: first } = await photosFamily();
+        const firstRows = first.h.statements.flatMap((roster) => roster.areas ?? []);
+        const takenRoot = firstRows.find((row) => row.rootCommitment)!.rootCommitment!;
+        const second = await family();
+        second.h.format = 2;
+        const newArea = async (commitment: string, rootCommitment: string) => {
+            const areaSeed = randomBytes(16).toString('base64url');
+            const areaId = scopedId('workspace', second.groupId, areaSeed)!;
+            const { at, call } = await nextRoster(second, second.organizer, entries(second.h), {
+                areas: [
+                    { workspaceId: areaId, workspaceKeyVersion: 1, commitment, rootCommitment },
+                ],
+            });
+            // Each attempt leaves the kit's history ahead of the server: take it back.
+            const sent = {
+                ...call,
+                area: {
+                    workspaceId: areaId,
+                    idSeed: areaSeed,
+                    root: await rootWire(areaId, second.organizer.who),
+                    selfGrant: selfGrant(areaId),
+                },
+                grants: [
+                    await grantWire(
+                        second.groupId,
+                        areaId,
+                        1,
+                        second.organizer.who,
+                        second.organizer.who,
+                        at,
+                    ),
+                ],
+            };
+            const answer = await refusal(
+                groups.createArea(second.organizer.userId, second.groupId, sent),
+            ).catch(() => null);
+            second.h.statements.pop();
+            second.h.rosters.pop();
+            return answer;
+        };
+        const fresh = async () => areaRootCommitment(randomBytes(32));
+        // The first family's folder key, and its top folder's key, each under another family.
+        expect(
+            await newArea(await areaKeyCommitment(kitAreaKey(first.areaId, 1)), await fresh()),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'area-commitment' } });
+        expect(await newArea(await areaKeyCommitment(randomBytes(32)), takenRoot)).toMatchObject({
+            code: 'invalid',
+            data: { reason: 'area-commitment' },
+        });
+        // Fresh keys land.
+        expect(await newArea(await areaKeyCommitment(randomBytes(32)), await fresh())).toBeNull();
+    });
+
     test('a format 1 roster after a format 2 one is refused, and format 1 chains still take rosters', async () => {
         const fam = await family();
         // Format 1 throughout still lands.
@@ -3119,6 +3174,39 @@ describe('roster format 2 and deleting a family folder (route 30, groups design 
             await refusal(groups.postRoster(fam.organizer.userId, fam.groupId, down.call)),
         ).toMatchObject({ code: 'invalid', data: { reason: 'roster-chain' } });
         expect(await rosterCount(fam.groupId)).toBe(3);
+    });
+
+    test('during the walk a roster rotation started, no Drive batch re-keys or re-wraps the top folder', async () => {
+        const fam = await family();
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        await groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+            ...rotated.call,
+            rotation,
+            grants,
+        });
+        const [root] = await db
+            .select()
+            .from(driveNodes)
+            .where(and(eq(driveNodes.workspaceId, fam.areaId), isNull(driveNodes.parentId)));
+        // A re-wrap of the root under the area's current version, from a member, during the pass.
+        const { results } = await driveServer.rotateNodes(
+            fam.organizer.userId,
+            fam.areaId,
+            root!.id,
+            [
+                {
+                    id: root!.id,
+                    changeSeq: root!.changeSeq!,
+                    parentKeyEpoch: 2,
+                    keyEnvelope: b64(randomBytes(72)),
+                    rotated: null,
+                },
+            ],
+        );
+        expect(results).toEqual([{ id: root!.id, status: 'forbidden' }]);
+        const [after] = await db.select().from(driveNodes).where(eq(driveNodes.id, root!.id));
+        expect(after!.keyEnvelope).toEqual(root!.keyEnvelope);
+        expect(after!.changeSeq).toBe(root!.changeSeq);
     });
 
     test('a Drive rotation started at a family folder’s top folder is refused; its key moves only with a roster', async () => {

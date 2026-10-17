@@ -1315,8 +1315,8 @@ test.describe('deleting a family folder', () => {
         await ida.page.getByRole('button', { name: 'More for Photos' }).click();
         await ida.page.getByRole('menuitem', { name: 'Delete family folder' }).click();
         const confirm = ida.page.getByRole('alertdialog', { name: 'Delete “Photos”?' });
-        await expect(confirm).toContainText('30 days');
-        await expect(confirm).toContainText('can’t be restored');
+        await expect(confirm).toContainText('deleted from the server after 30 days');
+        await expect(confirm).toContainText('Anyone who kept copies or keys keeps them');
         const deleted = ida.page.waitForResponse(
             (response) =>
                 response.request().method() === 'POST' &&
@@ -1325,7 +1325,7 @@ test.describe('deleting a family folder', () => {
                 ),
             { timeout: 90_000 },
         );
-        await confirm.getByRole('button', { name: 'Delete family folder' }).click();
+        await confirm.getByRole('button', { name: 'Delete', exact: true }).click();
         expect((await deleted).status()).toBe(200);
         await expect(confirm).toHaveCount(0, { timeout: 60_000 });
         await expect(ida.page.locator('[data-area="Photos"]')).toHaveCount(0, { timeout: 60_000 });

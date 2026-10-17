@@ -26,6 +26,7 @@ import {
     driveNodes,
     driveObjectDeletions,
     driveObjects,
+    driveReports,
     driveShares,
     driveUploads,
     fileVersions,
@@ -1181,6 +1182,8 @@ describe('departures', () => {
                     rootId: root.id,
                     targetEpoch: target,
                     userId: creator.userId,
+                    // The root's re-key stands in for its roster's (applyRotation).
+                    byRoster: id === root.id,
                     nodes: [
                         {
                             id,
@@ -1301,6 +1304,8 @@ describe('departures', () => {
                     rootId: root.id,
                     targetEpoch: target,
                     userId: creator.userId,
+                    // The root's re-key stands in for its roster's (applyRotation).
+                    byRoster: id === root.id,
                     nodes: [
                         {
                             id,
@@ -1399,6 +1404,8 @@ describe('departures', () => {
                 rootId: root.id,
                 targetEpoch: target,
                 userId: creator.userId,
+                // The root's re-key stands in for its roster's (applyRotation).
+                byRoster: true,
                 nodes: [
                     {
                         id: root.id,
@@ -1504,6 +1511,8 @@ describe('departures', () => {
                 rootId: root.id,
                 targetEpoch: target,
                 userId: creator.userId,
+                // The root's re-key stands in for its roster's (applyRotation).
+                byRoster: true,
                 nodes: [
                     {
                         id: root.id,
@@ -1528,6 +1537,8 @@ describe('departures', () => {
                 rootId: root.id,
                 targetEpoch: target,
                 userId: creator.userId,
+                // The root's re-key stands in for its roster's (applyRotation).
+                byRoster: true,
                 nodes: [
                     {
                         id: root.id,
@@ -2024,6 +2035,8 @@ describe('departures', () => {
                     rootId: root.id,
                     targetEpoch: t1,
                     userId: creator.userId,
+                    // The root's re-key stands in for its roster's (applyRotation).
+                    byRoster: id === root.id,
                     nodes: [
                         {
                             id,
@@ -2475,6 +2488,8 @@ describe('departures', () => {
                 rootId: root.id,
                 targetEpoch: target,
                 userId: creator.userId,
+                // The root's re-key stands in for its roster's (applyRotation).
+                byRoster: id === root.id,
                 nodes: [
                     {
                         id,
@@ -3604,6 +3619,20 @@ describe('deleting a family folder (groups design 2.10)', () => {
         expect(await rostersAt(group.groupId, next.rosterVersion + 1)).toEqual([]);
     });
 
+    test('the delete route changes nothing but the folder: a roster that also changes an entry is refused', async () => {
+        const { creator, member, group, head, photos } = await withPhotos();
+        expect(
+            await groups.appendChain({
+                ...rosterWrite(group, head, creator.userId, 'retire and promote', {
+                    changes: [{ userId: member.userId, status: 'active', roles: ['members'] }],
+                }),
+                route: { kind: 'retire', workspaceId: photos },
+            }),
+        ).toEqual({ status: 'invalid', reason: 'area-delete' });
+        expect((await areaRow(photos)).deletedAt).toBeNull();
+        expect((await membership(group.groupId, member.userId))!.roles).toEqual([]);
+    });
+
     test('only a members holder deletes, and only a folder of this family', async () => {
         const { creator, member, group, head, photos } = await withPhotos();
         expect(await retire(group, head, member.userId, photos)).toEqual({ status: 'forbidden' });
@@ -3688,5 +3717,39 @@ describe('deleting a family folder (groups design 2.10)', () => {
         // The family and its live folder stay.
         expect(await isMember(creator.userId, group.areaId)).toBe(true);
         expect(await groups.purgeDeletedAreas(30)).toBe(0);
+    });
+
+    test('a folder an open or held report names waits for the report, evidence and all', async () => {
+        const { creator, group, head, photos, root } = await withPhotos();
+        await okHead(await retire(group, head, creator.userId, photos));
+        await db
+            .update(workspaces)
+            .set({ deletedAt: sql`now() - make_interval(days => 31)` })
+            .where(eq(workspaces.id, photos));
+        const reportId = randomUUID();
+        await db.insert(driveReports).values({
+            id: reportId,
+            workspaceId: photos,
+            nodeId: root.id,
+            nodeKind: 'folder',
+            keyEpoch: root.keyEpoch,
+            category: 'other',
+            reason: 'Reported before the folder was deleted',
+        });
+        // Open: nothing of it goes.
+        expect(await groups.purgeDeletedAreas(30)).toBe(0);
+        expect(await db.select().from(driveNodes).where(eq(driveNodes.id, root.id))).toHaveLength(
+            1,
+        );
+        // Resolved but held: still nothing.
+        await db
+            .update(driveReports)
+            .set({ status: 'dismissed', heldAt: new Date() })
+            .where(eq(driveReports.id, reportId));
+        expect(await groups.purgeDeletedAreas(30)).toBe(0);
+        // Let go: the folder goes.
+        await db.update(driveReports).set({ heldAt: null }).where(eq(driveReports.id, reportId));
+        expect(await groups.purgeDeletedAreas(30)).toBe(1);
+        expect(await db.select().from(workspaces).where(eq(workspaces.id, photos))).toEqual([]);
     });
 });

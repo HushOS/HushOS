@@ -12,6 +12,7 @@ import {
 } from './drive';
 import { madeFor } from './ids';
 import { pgCode } from './readiness';
+import { unheldWorkspaceCondition } from './reports';
 import {
     rootWorkIn,
     rotateNodeIn,
@@ -29,6 +30,7 @@ import {
     driveObjects,
     driveRotations,
     driveShares,
+    groupAreaCommitments,
     groupChainCaches,
     groupDepartures,
     groupHolds,
@@ -116,6 +118,11 @@ export type ParsedRoster = SignedStatementInput & {
     changes: EntryChange[];
     /* Acceptance's own answer: whether it takes `members` from someone active before. */
     dropsHolder: boolean;
+    /*
+     * Every area key and root commitment the roster's key rows list, as parsed (32 bytes
+     * each): refused when another group's roster listed one already (recordCommitments).
+     */
+    commitments?: Buffer[];
     readonly [parsed]: 'roster';
 };
 
@@ -429,6 +436,29 @@ function rosterRow(groupId: string, roster: ParsedRoster, digest: Buffer) {
     };
 }
 
+/*
+ * A roster's area and root commitments, kept across groups (design 2.10): one
+ * already listed by another group's roster refuses the write, so no family
+ * folder's key, or top folder's key, is ever another group's. Within a group
+ * the core refuses a repeat before this is reached.
+ */
+async function recordCommitments(tx: Tx, groupId: string, roster: ParsedRoster) {
+    const commitments = roster.commitments ?? [];
+    if (commitments.length === 0) return;
+    const stored = await tx
+        .insert(groupAreaCommitments)
+        .values(
+            commitments.map((commitment) => ({
+                commitment,
+                groupId,
+                rosterVersion: roster.version,
+            })),
+        )
+        .onConflictDoNothing()
+        .returning({ commitment: groupAreaCommitments.commitment });
+    if (stored.length !== commitments.length) invalid('area-commitment');
+}
+
 async function writeCache(tx: Tx, groupId: string, revision: number, cache: unknown) {
     await tx
         .insert(groupChainCaches)
@@ -712,7 +742,9 @@ async function insertArea(tx: Tx, groupId: string, uploader: string, area: AreaI
  * rotations, the area count), no rotation is due for it any more, and every
  * share and link inside it is revoked. Its files stay until
  * purgeDeletedAreas takes them with the rest, after Drive's trash retention.
- * Called after lockAreas.
+ * The roster carries no entry change, so no lockAreas ran: the UPDATE takes
+ * the area's row lock itself, after the group's, the order Drive writes
+ * (nextChangeSeq) and departures take them in.
  */
 async function retireArea(tx: Tx, groupId: string, workspaceId: string) {
     const [area] = await tx
@@ -1180,6 +1212,7 @@ export async function createGroup(input: {
                     .returning();
                 if (!group) return refuse(await replay());
                 await tx.insert(groupRosters).values(rosterRow(input.id, input.roster, digest));
+                await recordCommitments(tx, input.id, input.roster);
                 await tx.insert(groupMemberships).values({
                     groupId: input.id,
                     userId: input.creatorUserId,
@@ -1241,6 +1274,16 @@ export async function appendChain(input: {
     const { groupId, uploaderUserId: uploader, route, roster, succession } = input;
     if (route.kind === 'succession' ? roster || !succession : !roster)
         return { status: 'invalid', reason: 'route-shape' };
+    // Deleting a family folder changes nothing else: no entry, no succession, no rotation.
+    if (
+        route.kind === 'retire' &&
+        (roster!.changes.length > 0 ||
+            succession ||
+            (input.rotations?.length ?? 0) > 0 ||
+            (input.grants?.length ?? 0) > 0 ||
+            (input.seals?.length ?? 0) > 0)
+    )
+        return { status: 'invalid', reason: 'area-delete' };
     if (
         (roster && roster.signerUserId !== uploader) ||
         (succession && succession.signerUserId !== uploader)
@@ -1343,6 +1386,7 @@ export async function appendChain(input: {
                     if (pending.length > 0)
                         return refuse({ status: 'left-due', userIds: pending.sort() });
                     await tx.insert(groupRosters).values(rosterRow(groupId, roster, rosterDigest!));
+                    await recordCommitments(tx, groupId, roster);
                     // 6. The diff policy, and whether a holder is dropped.
                     const dropsHolder = await applyRoster(
                         tx,
@@ -3039,7 +3083,9 @@ export async function fillableGrants(groupId: string, userId: string) {
 
 /*
  * Family folders deleted more than `days` ago (docs/groups-design.md 2.10:
- * Drive's trash retention), each purged whole in its own transaction under
+ * Drive's trash retention) that no open or held report names (a report's
+ * evidence, origin drops included, stays until it lets go, as the deletion
+ * outbox keeps the objects it names), each purged whole in its own transaction under
  * its group's lock and then its own row: every object in it queued for
  * deletion from the store (the outbox the delete-objects job drains, replica
  * copies after their own window), then the workspace row, which takes its
@@ -3054,6 +3100,8 @@ export async function purgeDeletedAreas(days: number, limit = 20) {
             and(
                 isNotNull(workspaces.deletedAt),
                 sql`${workspaces.deletedAt} < now() - make_interval(days => ${days})`,
+                // Evidence first: a folder an open or held report names waits for the report.
+                unheldWorkspaceCondition(workspaces.id),
             ),
         )
         .orderBy(workspaces.deletedAt)
@@ -3066,7 +3114,13 @@ export async function purgeDeletedAreas(days: number, limit = 20) {
             const [area] = await tx
                 .select({ id: workspaces.id })
                 .from(workspaces)
-                .where(and(eq(workspaces.id, id), isNotNull(workspaces.deletedAt)))
+                .where(
+                    and(
+                        eq(workspaces.id, id),
+                        isNotNull(workspaces.deletedAt),
+                        unheldWorkspaceCondition(workspaces.id),
+                    ),
+                )
                 .for('update');
             if (!area) return false;
             await tx.execute(sql`

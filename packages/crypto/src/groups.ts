@@ -1126,7 +1126,10 @@ export async function checkAreaRoot(
     if (chain.retiredAreas.includes(workspaceId)) throw new CryptoError(RETIRED);
     if (!listedArea(chain, workspaceId, workspaceKeyVersion))
         throw new CryptoError('This area key version is not on the group’s member list.');
-    const listed = chain.areaRoots[workspaceId]?.[workspaceKeyVersion - 1] ?? null;
+    // An explicit null is a version a format 1 roster listed; no entry at all is no answer.
+    const roots = Object.hasOwn(chain.areaRoots, workspaceId) ? chain.areaRoots[workspaceId]! : [];
+    const listed = roots[workspaceKeyVersion - 1];
+    if (listed === undefined) throw new CryptoError(NOT_LISTED_ROOT);
     if (listed === null) return false;
     if ((await areaRootCommitment(rootKey)) !== listed) throw new CryptoError(NOT_LISTED_ROOT);
     return true;

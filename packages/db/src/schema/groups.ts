@@ -419,3 +419,22 @@ export const groupStorage = pgTable(
     },
     (table) => [check('group_storage_quota_valid', sql`${table.quotaBytes} >= 0`)],
 );
+
+/*
+ * Every area key and area root commitment a stored roster lists
+ * (docs/groups-design.md 2.6, 2.10), across all groups: the core refuses a
+ * repeat within one group's chain, and this refuses one across groups, so no
+ * family folder's key (or top folder's key) is ever another group's. Written
+ * with the roster that lists it; history like the roster itself.
+ */
+export const groupAreaCommitments = pgTable(
+    'group_area_commitments',
+    {
+        commitment: bytea('commitment').primaryKey(),
+        groupId: uuid('group_id')
+            .notNull()
+            .references(() => groups.id, { onDelete: 'cascade' }),
+        rosterVersion: integer('roster_version').notNull(),
+    },
+    (table) => [check('group_area_commitments_valid', sql`octet_length(${table.commitment}) = 32`)],
+);

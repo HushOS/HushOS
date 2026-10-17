@@ -175,6 +175,10 @@ pub struct GroupChainCache {
     /// The areas the chain retired, sorted (design 2.10).
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub retired_areas: Vec<String>,
+    /// The cache's own format: 2 carries `area_roots` and `retired_areas`; 1 is
+    /// a cache written before roster format 2, which carries neither.
+    #[cfg_attr(feature = "uniffi", uniffi(default = 1))]
+    pub cache_version: u8,
     pub own_entry_wrong_at: Vec<u64>,
 }
 
@@ -472,6 +476,8 @@ const TOO_MANY_AREAS: &str = "A family has at most 1,024 areas.";
 const REUSED_KEY: &str = "This area key was used before: a rotation needs a new one.";
 const REUSED_ROOT: &str = "This folder key was used before: a rotation needs a new one.";
 pub(crate) const DOWNGRADE: &str = "This member list is in an older format than the one before it.";
+/* The cache format this core writes (`GroupChainCache::cache_version`). */
+const CACHE_VERSION: u8 = 2;
 
 /*
  * What the chain has listed of its areas so far (2.4, 2.6, 2.10), folded
@@ -791,7 +797,16 @@ fn check_cache(group_id: &str, cache: GroupChainCache) -> CoreResult<Cached> {
         if cache.area_roots.keys().any(|id| !cache.area_keys.contains_key(id)) {
             return Err(bad());
         }
-        let before_format_2 = cache.area_roots.is_empty();
+        // The cache's own version says what it carries (design 2.10): 2 has every area's roots and
+        // the retired areas; 1, a cache written before format 2, has neither and described none.
+        let before_format_2 = match cache.cache_version {
+            1 => true,
+            CACHE_VERSION => false,
+            _ => return Err(bad()),
+        };
+        if before_format_2 && (!cache.area_roots.is_empty() || !cache.retired_areas.is_empty()) {
+            return Err(bad());
+        }
         for (workspace_id, list) in &cache.area_keys {
             let roots = cache.area_roots.entry(workspace_id.clone()).or_default();
             if before_format_2 {
@@ -1669,6 +1684,7 @@ fn accept(
         area_keys: area_keys.clone(),
         area_roots: area_roots.clone(),
         retired_areas: retired_areas.clone(),
+        cache_version: CACHE_VERSION,
         own_entry_wrong_at: own_entry_wrong_at.clone(),
     };
     let chain = AcceptedRosters {

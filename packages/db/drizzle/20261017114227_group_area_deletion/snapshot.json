@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "afbfd101-a42f-4f59-ab97-a4625896996b",
+    "id": "6cbbb401-6d1b-40e4-8078-a46531589e63",
     "prevIds": ["3baa363a-ccc2-4366-9fb8-2dff9451aa11"],
     "ddl": [
         {
@@ -193,6 +193,12 @@
         {
             "isRlsEnabled": false,
             "name": "file_versions",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "group_area_commitments",
             "entityType": "tables",
             "schema": "public"
         },
@@ -5378,6 +5384,45 @@
             "table": "file_versions"
         },
         {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "commitment",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_area_commitments"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "group_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_area_commitments"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "roster_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_area_commitments"
+        },
+        {
             "type": "uuid",
             "typeSchema": null,
             "notNull": true,
@@ -9990,6 +10035,19 @@
             "columnsTo": ["id"],
             "onUpdate": "NO ACTION",
             "onDelete": "CASCADE",
+            "name": "group_area_commitments_group_id_groups_id_fkey",
+            "entityType": "fks",
+            "schema": "public",
+            "table": "group_area_commitments"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["group_id"],
+            "schemaTo": "public",
+            "tableTo": "groups",
+            "columnsTo": ["id"],
+            "onUpdate": "NO ACTION",
+            "onDelete": "CASCADE",
             "name": "group_chain_caches_group_id_groups_id_fkey",
             "entityType": "fks",
             "schema": "public",
@@ -10815,6 +10873,14 @@
             "entityType": "pks"
         },
         {
+            "columns": ["commitment"],
+            "nameExplicit": false,
+            "name": "group_area_commitments_pkey",
+            "schema": "public",
+            "table": "group_area_commitments",
+            "entityType": "pks"
+        },
+        {
             "columns": ["group_id"],
             "nameExplicit": false,
             "name": "group_chain_caches_pkey",
@@ -11591,6 +11657,13 @@
             "entityType": "checks",
             "schema": "public",
             "table": "file_versions"
+        },
+        {
+            "value": "octet_length(\"commitment\") = 32",
+            "name": "group_area_commitments_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "group_area_commitments"
         },
         {
             "value": "\"chain_revision\" >= 1",

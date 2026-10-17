@@ -1389,10 +1389,12 @@ pub fn area_root_check(
     if listed_area(&chain, &workspace_id, workspace_key_version).is_none() {
         return Err(input("This area key version is not on the group’s member list."));
     }
+    // An explicit `None` is a version a format 1 roster listed; no entry at all is no answer.
     let index = version_index(workspace_key_version);
-    let Some(listed) =
-        chain.area_roots.get(&workspace_id).and_then(|roots| roots.get(index)).cloned().flatten()
-    else {
+    let Some(listed) = chain.area_roots.get(&workspace_id).and_then(|roots| roots.get(index)).cloned() else {
+        return Err(input(NOT_LISTED_ROOT));
+    };
+    let Some(listed) = listed else {
         return Ok(false);
     };
     if area_root_commitment(&root_key)? != listed {
@@ -3627,23 +3629,58 @@ pub(crate) mod tests {
             .to_string()
             .contains("deleted"));
         // roster_check_next is acceptance: a hand-built revival is refused there too.
+        // The roster after the tombstone, the member list as it stands, a new key for the folder.
+        let _ = (members, removal);
         let revival = roster_sign(
             Roster {
+                roster_version: retired.roster.roster_version + 1,
+                previous_roster_digest: retired.roster_digest.clone(),
                 areas: vec![RosterArea {
                     workspace_id: AREA.into(),
-                    workspace_key_version: 3,
+                    workspace_key_version: 2,
                     commitment: area_key_commitment(&area_key_at(AREA, 3)).unwrap(),
                     root_commitment: Some(area_root_commitment(&root_key_at(AREA, 3)).unwrap()),
                     retired: false,
                 }],
-                members,
-                ..removal
+                ..retired.roster.clone()
             },
             group_seed_at(1),
             o.keys.clone(),
         )
         .unwrap();
-        assert!(crate::group_trust::roster_check_next(retired, revival, ml_dsa_keys(&people), None).is_err());
+        let refused =
+            crate::group_trust::roster_check_next(retired, revival, ml_dsa_keys(&people), None).unwrap_err();
+        assert!(
+            refused.to_string().contains("This family folder was deleted: it cannot be used again."),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn format_2_a_root_version_with_no_entry_is_refused_only_an_explicit_none_is_uncommitted() {
+        let (o, a) = (Person::new(1), Person::new(2));
+        let v2 = crate::group_trust::roster_first(
+            GROUP.into(),
+            GroupKind::Family,
+            owner(&o),
+            Some(vec![key_with_root(AREA, 1)]),
+            Some(2),
+        )
+        .unwrap();
+        // Chains as acceptance would never make them: the answer must come from the entry,
+        // never from its absence.
+        let forged = |area_roots: HashMap<String, Vec<Option<String>>>| {
+            let chain =
+                Arc::try_unwrap(chain_of_rosters(vec![v2.clone()], &o, &[&o, &a])).expect("one owner");
+            Arc::new(AcceptedRosters { area_roots, ..chain })
+        };
+        let not_listed = "This folder’s key is not the one the group’s member list names.";
+        for roots in [HashMap::new(), HashMap::from([(AREA.to_string(), vec![])])] {
+            let refused = area_root_check(forged(roots), AREA.into(), 1, root_key_at(AREA, 1)).unwrap_err();
+            assert!(refused.to_string().contains(not_listed), "{refused}");
+        }
+        let explicit = HashMap::from([(AREA.to_string(), vec![None])]);
+        assert_eq!(area_root_check(forged(explicit), AREA.into(), 1, root_key_at(AREA, 9)), Ok(false));
     }
 
     #[test]

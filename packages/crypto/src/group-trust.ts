@@ -135,6 +135,11 @@ export type GroupChainCache = {
     areaRoots?: Record<string, (string | null)[]>;
     /* The areas the chain retired, sorted (design 2.10). Absent before format 2: none. */
     retiredAreas?: string[];
+    /*
+     * The cache's own format: 2 (CACHE_VERSION) carries areaRoots and retiredAreas;
+     * absent is a cache written before format 2, which carries neither.
+     */
+    cacheVersion?: number;
     ownEntryWrongAt: number[];
     /* A device's own cache never has an origin; the server's record says 'server' (StoredChainCache). */
     origin?: undefined;
@@ -315,6 +320,8 @@ const TOO_MANY_AREAS = 'A family has at most 1,024 areas.';
 const REUSED_KEY = 'This area key was used before: a rotation needs a new one.';
 const REUSED_ROOT = 'This folder key was used before: a rotation needs a new one.';
 const DOWNGRADE = 'This member list is in an older format than the one before it.';
+/* The cache format this core writes (GroupChainCache.cacheVersion): root commitments and retired areas. */
+const CACHE_VERSION = 2;
 const NOT_FOLLOWING_AREAS = 'This member list does not follow from the one before.';
 
 /*
@@ -703,14 +710,23 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
                 digestOf(at, 'area key commitment'),
             );
         }
-        // Root commitments beside them (null for a format 1 row), and the retired areas: a cache
-        // from before format 2 has neither, and described none (design 2.10).
-        // (An empty areaRoots reads the same as none, as the Rust core's record cannot tell them
-        // apart.)
+        // Root commitments beside them (null for a format 1 row), and the retired areas, as the
+        // cache's own version says (design 2.10): version 2 carries both, every area's roots
+        // listed; a cache written before format 2 (no version) has neither and described none.
+        const cacheVersion = cache.cacheVersion ?? 1;
+        if (cacheVersion !== 1 && cacheVersion !== CACHE_VERSION) throw bad();
+        const beforeFormat2 = cacheVersion === 1;
         if (cache.areaRoots !== undefined && !plain(cache.areaRoots)) throw bad();
         const cachedRoots = (cache.areaRoots ?? {}) as Record<string, unknown>;
         if (Object.keys(cachedRoots).some((id) => !Object.hasOwn(areaKeys, id))) throw bad();
-        const beforeFormat2 = Object.keys(cachedRoots).length === 0;
+        if (
+            beforeFormat2 &&
+            (Object.keys(cachedRoots).length > 0 ||
+                ((cache.retiredAreas as unknown[] | undefined)?.length ?? 0) > 0)
+        )
+            throw bad();
+        if (!beforeFormat2 && (cache.areaRoots === undefined || cache.retiredAreas === undefined))
+            throw bad();
         const areaRoots: Record<string, (string | null)[]> = {};
         for (const [workspaceId, list] of Object.entries(areaKeys)) {
             const roots = beforeFormat2
@@ -1437,6 +1453,7 @@ async function accept(input: Accepting) {
                 Object.entries(areaRoots).map(([id, list]) => [id, [...list]]),
             ),
             retiredAreas: [...retiredAreas],
+            cacheVersion: CACHE_VERSION,
             ownEntryWrongAt: [...ownEntryWrongAt],
         },
     };

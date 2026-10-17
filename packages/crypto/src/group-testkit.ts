@@ -370,8 +370,20 @@ export async function groupIdFor(creatorUserId: string, idSeed: string) {
  */
 export async function history(
     kind: 'family' | 'org' = 'family',
-    options: { groupId?: string; areas?: RosterArea[]; format?: RosterFormat } = {},
+    options: {
+        groupId?: string;
+        areas?: RosterArea[];
+        format?: RosterFormat;
+        /*
+         * The keys default rotations give an area (areaKeyAt, rootKeyAt by default): a server
+         * test that stores several groups passes its own, so no two groups share a key.
+         */
+        areaKey?: (workspaceId: string, version: number) => Uint8Array;
+        rootKey?: (workspaceId: string, version: number) => Uint8Array;
+    } = {},
 ) {
+    const keyOf = options.areaKey ?? areaKeyAt;
+    const rootOf = options.rootKey ?? rootKeyAt;
     const groupId = options.groupId ?? GROUP;
     const rosters: SignedGroupStatement[] = [];
     const successions: SignedGroupStatement[] = [];
@@ -423,15 +435,18 @@ export async function history(
                                 .sort()
                                 .map(async (workspaceId) => {
                                     const next = areaVersions.get(workspaceId)! + 1;
-                                    return format === 2
-                                        ? await keyRowAt(workspaceId, next)
-                                        : {
-                                              workspaceId,
-                                              workspaceKeyVersion: next,
-                                              commitment: await areaKeyCommitment(
-                                                  areaKeyAt(workspaceId, next),
-                                              ),
-                                          };
+                                    const row: RosterArea = {
+                                        workspaceId,
+                                        workspaceKeyVersion: next,
+                                        commitment: await areaKeyCommitment(
+                                            keyOf(workspaceId, next),
+                                        ),
+                                    };
+                                    if (format === 2)
+                                        row.rootCommitment = await areaRootCommitment(
+                                            rootOf(workspaceId, next),
+                                        );
+                                    return row;
                                 }),
                         )
                       : []);
@@ -3084,12 +3099,25 @@ export async function groupCases(): Promise<GroupCase[]> {
         const {
             areaRoots: _roots,
             retiredAreas: _retired,
+            cacheVersion: _version,
             ...before
         } = (await acceptedTo(old, 1, everyone)).cache;
         cases.push({
             name: 'cache-before-format-2',
             input: { ...fromOne(old), cache: before, rosters: old.rosters.slice(1) },
             expected: accepted(2),
+        });
+        // A version 2 cache whose root commitments were emptied is no cache from before format
+        // 2: its own version says it carries them, so it is refused, not read as uncommitted.
+        // Through a roster that lists no area, so only the cache's version can refuse it.
+        const quiet = await history('family', { format: 2 });
+        await quiet.roster(organizer, members);
+        await quiet.roster(organizer, [owner, adult.entry(['billing', 'members'])]);
+        const quietCache = (await acceptedTo(quiet, 2, everyone)).cache;
+        cases.push({
+            name: 'cache-v2-roots-emptied',
+            input: { ...fromOne(quiet), cache: { ...quietCache, areaRoots: {} }, rosters: [] },
+            expected: refused,
         });
     }
     return cases;

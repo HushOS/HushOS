@@ -33,6 +33,7 @@ import {
     type Person,
 } from './group-testkit';
 import { acceptRosters, checkNextRoster, firstRoster, nextRoster } from './group-trust';
+import { deepFreeze, markAccepted } from './accepted';
 import { encode } from './keys';
 
 /*
@@ -98,7 +99,9 @@ describe('roster format 2 (design 2.10)', () => {
         // row without its root, nor a tombstone with a key.
         expect(() => rosterStatement({ ...two, format: 1 })).toThrow('Invalid roster area');
         const { rootCommitment: _, ...noRoot } = await keyRowAt(AREA, 1);
-        expect(() => rosterStatement({ ...two, areas: [noRoot] })).toThrow();
+        expect(() => rosterStatement({ ...two, areas: [noRoot] })).toThrow(
+            'Invalid area root commitment.',
+        );
         const keyed = (await keyRowAt(AREA, 1)).commitment;
         expect(() =>
             rosterStatement({ ...two, areas: [{ ...tombstoneAt(AREA, 2), commitment: keyed }] }),
@@ -107,7 +110,7 @@ describe('roster format 2 (design 2.10)', () => {
         const relabelled = new TextEncoder().encode(
             new TextDecoder().decode(rosterStatement(two)).replace('roster",2,', 'roster",1,'),
         );
-        expect(() => parseRoster(relabelled)).toThrow();
+        expect(() => parseRoster(relabelled)).toThrow('Invalid roster area.');
     });
 
     test('builders take a root key with every format 2 key, and never build a lower format', async () => {
@@ -210,6 +213,26 @@ describe('roster format 2 (design 2.10)', () => {
         );
     });
 
+    test('a root version with no entry at all is refused; only an explicit null reads as uncommitted', async () => {
+        const { o, a, members } = await people();
+        const h = await history('family', { format: 2 });
+        await h.roster(o, members);
+        const chain = await acceptedOf(h, [o, a]);
+        // Chains as acceptance would never make them, registered as if it had: the reader's
+        // answer must come from the entry, never from its absence.
+        const forged = (areaRoots: Record<string, (string | null)[]>) =>
+            markAccepted(deepFreeze({ ...chain, areaRoots })) as typeof chain;
+        await expect(checkAreaRoot(forged({}), AREA, 1, rootKeyAt(AREA, 1))).rejects.toThrow(
+            'This folder’s key is not the one the group’s member list names.',
+        );
+        await expect(
+            checkAreaRoot(forged({ [AREA]: [] }), AREA, 1, rootKeyAt(AREA, 1)),
+        ).rejects.toThrow('This folder’s key is not the one the group’s member list names.');
+        expect(await checkAreaRoot(forged({ [AREA]: [null] }), AREA, 1, rootKeyAt(AREA, 9))).toBe(
+            false,
+        );
+    });
+
     test('a retired area is written, granted and rotated no more, and its earlier grants still open', async () => {
         const { o, a, owner } = await people();
         const members = [owner, a.entry([])];
@@ -305,12 +328,20 @@ describe('roster format 2 (design 2.10)', () => {
         ).rejects.toThrow('deleted');
         // checkNextRoster is acceptance: a hand-built revival is refused there too.
         const key = await groupKeyAt(1);
+        // The roster after the tombstone, the member list as it stands, a new key for the folder.
         const revival = await signRoster(
-            { ...removal, areas: [await keyRowAt(AREA, 3)], members },
+            {
+                ...retired.roster,
+                rosterVersion: retired.roster.rosterVersion + 1,
+                previousRosterDigest: retired.rosterDigest,
+                areas: [await keyRowAt(AREA, 2)],
+            },
             key,
             o.signer,
         );
-        await expect(checkNextRoster(retired, revival, mlDsaKeysOf(o, a), null)).rejects.toThrow();
+        await expect(checkNextRoster(retired, revival, mlDsaKeysOf(o, a), null)).rejects.toThrow(
+            'This family folder was deleted: it cannot be used again.',
+        );
     });
 
     test('a retired area stops counting toward the family’s 1,024', async () => {
