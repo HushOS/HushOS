@@ -1,0 +1,40 @@
+e2e/saved-unlock.spec.ts
+  s_c56e31c87cddde::t_9427d7b930c8f6 6-9,12,17,28,30,36,40
+  s_c56e31c87cddde::t_b7a1ed52279c9b 1-5,10-11,13-16,18-27,29,31-35,37-39,41-44
+packages/auth/src/client.test.ts
+  s_c56e31c87cddde::t_c3b264e9985cdc 33-34,37-43,243-354,424-432
+packages/auth/src/client.ts
+  s_c56e31c87cddde::t_515d7aa4d0eb7a 490-495,506-512,514-515,519-522
+packages/auth/src/crypto-transport.test.ts
+  s_c56e31c87cddde::t_8d7518cfe30195 1-36
+packages/auth/src/crypto-transport.ts
+  s_c56e31c87cddde::t_456fc9947914fe 29-30,73-77
+packages/auth/src/worker.test.ts
+  s_c56e31c87cddde::t_7732b616486079 1,55-76
+packages/auth/src/worker.ts
+  s_c56e31c87cddde::t_ac74d007faad96 5,31-32,41
+packages/crypto/src/device.test.ts
+  s_c56e31c87cddde::t_008116749bd9bc 1-51
+packages/crypto/src/device.ts
+  s_c56e31c87cddde::t_cfd26b8579a8a2 1,53-69,71
+packages/crypto/src/errors.ts
+  s_c56e31c87cddde::t_8f24353154fc63 20-31
+packages/crypto/src/index.ts
+  s_c56e31c87cddde::t_3650f676e15156 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "70536c122c4e0efcfc95686d134b4405d8faedf1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
