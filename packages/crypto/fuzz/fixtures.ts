@@ -47,6 +47,8 @@ export const web = () => read('crates/hushos-core/fixtures/web.json');
 export const groups = () => read('packages/crypto/src/__fixtures__/core-groups.json');
 /* crates/hushos-core/fixtures/web-groups.json: the same history as this twin signed it. */
 export const webGroups = () => read('crates/hushos-core/fixtures/web-groups.json');
+/* crates/hushos-core/fixtures/area-ledger-scenarios.json: the family write rules as steps. */
+export const ledgerScenarios = () => read('crates/hushos-core/fixtures/area-ledger-scenarios.json');
 
 type Served = {
     statement: string;

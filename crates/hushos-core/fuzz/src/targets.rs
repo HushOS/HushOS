@@ -35,6 +35,7 @@ pub const TARGETS: &[&str] = &[
     "accept",
     "record_integrity",
     "origin_open",
+    "area_ledger",
 ];
 
 /// The verdict of `target` on `data`; `None` for a target this crate does not have.
@@ -55,6 +56,7 @@ pub fn verdict(target: &str, data: &[u8]) -> Option<Value> {
         "accept" => with_json(data, accept),
         "record_integrity" => with_json(data, record_integrity),
         "origin_open" => origin_open(data),
+        "area_ledger" => with_json(data, area_ledger),
         _ => return None,
     })
 }
@@ -854,4 +856,22 @@ pub fn origin_open(data: &[u8]) -> Value {
         }
         None => refused(),
     }
+}
+
+/// The family write rules on any sequence of steps (`tests/common/area_ledger.rs`):
+/// every step's outcome, which the web's ledger must match. Invariant: every
+/// key envelope the ledger made opens, under the key its parent holds, to the
+/// key the ledger handed back.
+pub fn area_ledger(value: &Value) -> Option<Value> {
+    let steps = crate::area_ledger::read_steps(value.get("steps")?)?;
+    let run = crate::area_ledger::run_steps(&steps);
+    for made in &run.made {
+        if made["parentKey"].as_str().is_some_and(|key| !key.is_empty()) {
+            assert!(
+                crate::area_ledger::opens_as_made(made),
+                "a key envelope the ledger made opens to its key"
+            );
+        }
+    }
+    Some(ok(json!({ "outcomes": run.outcomes })))
 }

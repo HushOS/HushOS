@@ -61,6 +61,7 @@ const MAX_LEN: Record<Target, number> = {
     accept: 4096,
     record_integrity: 32768,
     origin_open: 8192,
+    area_ledger: 16384,
 };
 
 /* Waits (up to two minutes) until at least a fifth of memory is free: a heavy run beside another once took the machine down. */
