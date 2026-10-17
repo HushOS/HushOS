@@ -71,6 +71,17 @@ jobs:
             - name: The committed route tree matches the built one
               run: git diff --exit-code -- apps/web/src/routeTree.gen.ts
 
+    # The Rust core's own tests (units, doc examples, both fixture directions): nothing else in
+    # CI runs cargo. Stable, with the build cached, so a warm run is a minute or two.
+    rust:
+        name: Rust core tests
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v7
+            - uses: Swatinem/rust-cache@v2
+            - run: cargo test -p hushos-core --locked
+
     # Chromium and the phone-sized Chromium for mobile.spec.ts; WebKit has its own job below.
     # Each browser's suite is split across runners that run side by side: a public repository's
     # standard runners cost nothing, and the plan does not offer larger ones. The setup takes

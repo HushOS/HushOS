@@ -99,6 +99,33 @@ bun run build
 
 CI runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun run build` on pull requests and pushes to `main`. After all three pass on `main`, it builds and publishes the web and migration images to GHCR. See [self-hosting](docs/self-hosting.md#container-publishing) for image names and tags.
 
+## Fuzzing
+
+The crypto twins, `crates/hushos-core` and `packages/crypto`, are fuzzed on everything that parses or verifies bytes a server hands them: the statement grammar, rosters and group key successions, the seal and grant statements and openers (the key seal under varied contexts and readers too), identity envelopes and keys statements, succession links and consent, shares, device statements, fingerprints and pins, and acceptance of a whole roster history. Each target asserts three things: nothing panics (Rust) or throws anything but a `CryptoError` (TypeScript); what a parser accepts re-encodes to exactly its bytes; a verify or open that says yes implies its statement builds. The same target names and input formats serve both twins, so any finding replays in the other.
+
+- **Rust**: cargo-fuzz targets in `crates/hushos-core/fuzz` (its own workspace; the verdict code is `src/targets.rs`). It builds with the nightly pinned in `fuzz/rust-toolchain.toml` (`rustup toolchain install` inside `fuzz/` installs it) and needs cargo-fuzz: `cargo install cargo-fuzz@0.13.2 --locked`. `accept` and `roster_build` build structured inputs with `arbitrary` (`src/structured.rs`).
+- **TypeScript**: Jazzer.js targets in `packages/crypto/fuzz` (`verdicts.ts`, entry points in `jazzer.ts`). They run on Node 22 or later from an esbuild bundle: under Bun, Jazzer.js starts but never instruments, so it fuzzes blind.
+- **Property tests**: `packages/crypto/src/*.property.test.ts` (fast-check) run with `bun run test`.
+- **Differential**: `bun run fuzz:diff` builds `crates/hushos-core/fuzz/examples/verdicts.rs` and feeds both twins the same inputs (seeds, fast-check edits of them, and whatever the corpora hold); the verdicts and outputs must match exactly. Refusal messages are not compared. `FUZZ_DIFF_RUNS` (default 150) sets the edits per target; at least half of them must be compared (neither twin skipping them as misshapen), and every seed must be. Corpus files are replayed newest first, up to `FUZZ_DIFF_CORPUS` (default 300) per directory.
+
+```sh
+bun run fuzz                          # every target, both engines, 60 s each
+bun run fuzz:rust accept --time 120   # one target, one engine
+bun run fuzz:js roster
+bun run fuzz:diff
+bun run fuzz all roster --merge       # minimise a corpus (-merge=1), as CI does before caching it
+```
+
+Runs are sequential, one fuzzer process at a time (`-jobs=1 -workers=1`, `CARGO_BUILD_JOBS=8`, `-rss_limit_mb=2048`), wait while less than a fifth of memory is free, and are capped at 120 s per target locally. Seeds are written from the shared fixtures into `crates/hushos-core/fuzz/corpus/<target>` and `packages/crypto/fuzz/corpus/<target>` (gitignored; `bun run --cwd packages/crypto fuzz:seeds` rewrites them).
+
+A crash lands in `crates/hushos-core/fuzz/artifacts/<target>/` or `packages/crypto/fuzz/artifacts/<target>/`, a divergence in `packages/crypto/fuzz/artifacts/diff-<target>-<hash>`. To triage:
+
+1. Reproduce: `cd crates/hushos-core/fuzz && cargo fuzz run --fuzz-dir . <target> artifacts/<target>/<file>`, or `node packages/crypto/node_modules/@jazzer.js/core/dist/cli.js packages/crypto/fuzz/.build/jazzer.cjs -f <target> <file>` after any `bun run fuzz:js` has built the bundle. `cargo fuzz tmin --fuzz-dir . <target> <file>` (in the same directory) minimises a Rust crash.
+2. Replay the input in the other twin: copy it into the other corpus directory and run `bun run fuzz:diff`, which replays both corpora.
+3. Decide which twin is wrong against the design docs, fix both if the rule was never written down, and add a regression test beside the code (or a case in the shared fixtures, `bun run fixtures`). Say in the change if it moves what either twin accepts, and check the shipped clients.
+
+CI (`.github/workflows/fuzz.yml`) runs every target for 30 s per engine and the differential on pull requests that touch either twin, and every night each target for 10 minutes per engine on a corpus cached from the night before (minimised before it is saved), uploading crash and diverging inputs as artifacts. The `Rust core tests` job in `ci.yml` runs `cargo test -p hushos-core` on every pull request.
+
 ## Environment and project status
 
 `bun run setup` is idempotent, preserves existing settings, and adds missing auth/email defaults. `bun run infra:down` preserves data; avoid removing volumes unless you intend to discard that local database. Keep the generated `.env` when reusing the volume: changing only the password variable does not change an existing Postgres role's password.

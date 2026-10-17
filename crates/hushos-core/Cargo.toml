@@ -12,6 +12,8 @@ crate-type = ["lib", "staticlib", "cdylib"]
 default = ["uniffi"]
 # Swift and Kotlin bindings. Off for a plain Rust or WebAssembly build.
 uniffi = ["dep:uniffi"]
+# The statement grammar's parser and encoder, public for the fuzz targets in fuzz/ only.
+fuzzing = []
 
 [dependencies]
 opaque-ke = { version = "4.0.0", features = ["argon2"] }

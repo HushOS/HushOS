@@ -1,0 +1,5 @@
+# The nightly the fuzz targets build with (cargo-fuzz needs nightly for its sanitizer flags).
+# Pinned so a nightly regression never fails CI by itself; move it on purpose.
+[toolchain]
+channel = "nightly-2026-10-16"
+profile = "minimal"
