@@ -1,0 +1,165 @@
+packages/billing/src/provider.ts
+  s_c56e31c87cddde::t_a7e2e8c57934e2 1-270
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_c818b2d8685122 3-20,31-81,82-123,127,129-134,141-145,147-152,155-157,159-166,168-169,172-178,190-204,207-215,224,229-236,238,246,248-254,281-283,309-339,379-403,406-408,410-499,511-564,566-567,568-571,592-640,641-679,680-688,694-713,715-731,733-735
+  s_c56e31c87cddde::t_825b0b8ef5de61 736-743,746,748,750-751,752-753,756-805,836-838,846-853,857,859-860,862-864,867-869,871-873,875,877-878,881-882,889-898,901-905,907-910,918-919,921-934
+  s_c56e31c87cddde::t_6315c53cdcfeb4 1-2,21-25,27,124-126,128,135-140,146,153-154,170-171,179-184,188-189,205-206,216-223,225-228,237,239-245,268-272,276-280,284-286,340-346,354-357,360-367,377-378,500-510,565,572-581,689-693,714,732,747,754-755,806,811,813-814,816-817,825-827,833-835,839-845,854-855,858
+  s_c56e31c87cddde::t_80a8c600fab7cf 158,167,185-187,247,255-267,273-275,289-310,347-353,358-359,368-376,404-405,409,744-745,749
+  s_c56e31c87cddde::t_db901a33a97b2b 26,29-31,582-591,807-810,812,815,818-824,828-832,856,861,865-866,870,874,876,879-880,883-888,899-900,906,911-917,920
+packages/groups/src/server.billing.test.ts
+  s_c56e31c87cddde::t_84345e3ebb65b2 1-2,4-138,143-156,162-164,167-168,170-181,186-289
+  s_c56e31c87cddde::t_9c4e6945a5b146 290-302,521
+  s_c56e31c87cddde::t_edbc324ef153f1 165,169,303-326
+  s_c56e31c87cddde::t_754b5b27362446 142,157-161,166,182-185,327-411
+  s_c56e31c87cddde::t_6e2c3f7e70f55d 3,139-141,413-521
+packages/db/src/billing.groups.test.ts
+  s_c56e31c87cddde::t_419a7b6095e89b 1-2,15-25,27-48,50-235
+  s_c56e31c87cddde::t_4ecd70dabfd5a7 236-260
+  s_c56e31c87cddde::t_e863b1f5359b97 3-12,14,26,49
+  s_c56e31c87cddde::t_54475bec3b483d 13,261-275
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_a85701dd94224c 137
+  s_c56e31c87cddde::t_d310566888aa2b 88
+apps/web/package.json
+  s_c56e31c87cddde::t_24bfccf88b97c8 33
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_abe8c86f843b4d 19,610-615,799-809,1172-1227
+apps/web/src/lib/groups/copy.ts
+  s_c56e31c87cddde::t_78936a47b9dccc 26-31,75-83,85-87,89-91
+  s_c56e31c87cddde::t_99b0f3fbb893c4 104
+  s_c56e31c87cddde::t_190a2df6f86d71 84,88,98-99,102-103,105-107
+bun.lock
+  s_c56e31c87cddde::t_89587d04104867 38,243,252
+  s_c56e31c87cddde::t_bf8e1d0b9fe252 275
+docs/groups-server.md
+  s_c56e31c87cddde::t_ac759b86c333bd 232-234,265
+  s_c56e31c87cddde::t_1510d9b9c4b21b 126
+docs/self-hosting.md
+  s_c56e31c87cddde::t_b4d55154d53daa 536-543,549-550
+  s_c56e31c87cddde::t_c77a0651666fa9 547-548
+  s_c56e31c87cddde::t_4b52174d689abb 195,544-546
+  s_c56e31c87cddde::t_35ba5050e09321 533
+packages/billing/scripts/seed.ts
+  s_c56e31c87cddde::t_e31f70cc718c6a 4-5,144-152,160,162-214,216-237,239-277,279-280
+  s_c56e31c87cddde::t_4b6a17850804c8 153-159,161,215,238,278
+packages/billing/src/api.ts
+  s_c56e31c87cddde::t_756d8f6f6e1634 24-37,43-44,46-63,66-68,76-83
+  s_c56e31c87cddde::t_bf74f3c637671c 38-42,45,64-65,69-75,211-227
+packages/billing/src/protocol.ts
+  s_c56e31c87cddde::t_ba28fe534acbd2 6-36
+  s_c56e31c87cddde::t_db31f7d5de4871 37-44
+  s_c56e31c87cddde::t_942863eb605728 45-70
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_7dd43402fa3fc6 17,23-24,33,37-48,75-103,105,109-118,133-188,248-297,345-347,349-358,373-396,400-414,416-427,454-456,518-521,524-525,1014-1076,1102-1321,1323-1328,1331,1339-1346,1348-1349,1350-1356,1372-1553,1555-1560,1563,1566-1572,1574-1580,1583,1597,1601-1608
+  s_c56e31c87cddde::t_8dd807da84db9c 119-129,348,397-399,415,522-523,1322,1329-1330,1332-1338,1347,1357-1371,1554,1561-1562,1564-1565,1573,1581-1582,1584-1596,1598-1600,1609-1634,1660-1663,1665,1680,1684-1717
+  s_c56e31c87cddde::t_a69d7ecea2ddf9 445-451,453,1077-1101,1635-1659,1664,1666-1679,1681-1683,1718,1792-1840
+  s_c56e31c87cddde::t_7d423a2e12d160 452,1719-1791
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_0175509effc591 5,7-8,10-31,33,35-43,531-536,539-543,569-570,576-579,618-619,621
+  s_c56e31c87cddde::t_471e3fe628ea6b 34
+  s_c56e31c87cddde::t_be18347151b1a7 32
+packages/db/drizzle/20261017121401_group_billing/migration.sql
+  s_c56e31c87cddde::t_09e128607b8388 1-30,32-56
+  s_c56e31c87cddde::t_6729836bf865d5 31
+packages/db/drizzle/20261017121401_group_billing/snapshot.json
+  s_c56e31c87cddde::t_72044a87569c03 1-3,5-5644,5658-12446
+  s_c56e31c87cddde::t_018ba59b483394 4,5645-5657
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_22ce70a2301b4a 8-11,258-350,357-369,371-397,403-404,410-447,453-517,520-570
+  s_c56e31c87cddde::t_2f427a9567281a 448-452,518-519
+  s_c56e31c87cddde::t_00bc589ec933cb 351-356,370,398-402,405-409
+  s_c56e31c87cddde::t_2743f01663ddca 1,14-15,571-603
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_13a4f074f8f422 27,1254-1261,1263-1266,1269-1275,1286-1301
+  s_c56e31c87cddde::t_9fcc73f4a0926f 2,1267-1268
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_92bfb9216f5c12 39,1048-1052,1146-1147
+  s_c56e31c87cddde::t_16d40391c574be 2,37,1634-1657,1686,1763,1766-1770,1804,1819-1823
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_228c689c6d56f7 1-12,14,82-145,151-167
+  s_c56e31c87cddde::t_93f3f574b073a9 146-150
+packages/db/src/schema/groups.ts
+  s_c56e31c87cddde::t_b32b89a55464d9 400-421
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_0d413f143e4c9f 14-16,22,185-246,248-250,252-258,261-269
+  s_c56e31c87cddde::t_b73059cb28015d 247,251,259-260
+  s_c56e31c87cddde::t_adb2a8e38d4c8c 10,270,279-282
+  s_c56e31c87cddde::t_9eac2567085532 271-278
+packages/groups/package.json
+  s_c56e31c87cddde::t_fd87ca5c689651 16,25
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_c6434f3db81615 27,841-845,941,1289,1322-1323,1378,1820-1853,1864-1873
+  s_c56e31c87cddde::t_7d52f4bdc84236 28-30,32-34,1920-1925
+  s_c56e31c87cddde::t_e05584f67e31d3 1903-1906,1908-1909,1913-1915,1917-1919,1927,1942-1944
+  s_c56e31c87cddde::t_f433cfbd4d3418 31,1645-1659,1667,1907,1916,2029-2033
+packages/groups/test/setup.ts
+  s_c56e31c87cddde::t_584d6db31258cd 5-8,10-12
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_b738b04081223b 13,32,82-93
+  s_c56e31c87cddde::t_980753d0c0b35c 119-121,130-133
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_c56e31c87cddde::t_b2f2ed78c8a54c 1,8-10,28-37,49-65
+packages/jobs/src/worker.ts
+  s_c56e31c87cddde::t_0a665f40ea6d5b 1,21,90-98
+packages/billing/src/groups-gate.test.ts
+  s_c56e31c87cddde::t_f957906809434f 1-45
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_5e066790fb71ea 1-54
+packages/db/test/global-setup.ts
+  s_c56e31c87cddde::t_8b0d4ad490b21a 2,31-52,73-78
+packages/groups/src/protocol.ts
+  s_c56e31c87cddde::t_134cdfab0f1f40 19
+  s_c56e31c87cddde::t_dcefb5eaa246d6 20
+packages/jobs/package.json
+  s_c56e31c87cddde::t_57d98a69eb314b 11,27-28
+packages/jobs/src/client.test.ts
+  s_c56e31c87cddde::t_727b99f326490e 1-48
+packages/jobs/vitest.config.ts
+  s_c56e31c87cddde::t_665522a638e96e 1-8
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_a8b8c5d60d1f5e 1784-1787,1789-1791
+  s_c56e31c87cddde::t_f46179442a6b58 1788
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_79c4e6d8e7b705 14
+apps/web/src/lib/family-billing.ts
+  s_c56e31c87cddde::t_bc74fc75b3fd40 1-265
+  s_c56e31c87cddde::t_3ac73e73a8a77b 266-283
+apps/web/src/components/families/family-billing.tsx
+  s_c56e31c87cddde::t_086f2e65f8ec44 1-1033
+  s_c56e31c87cddde::t_116b8785468e3d 1034-1053
+apps/web/src/lib/family-billing.test.ts
+  s_c56e31c87cddde::t_3a0ed469b6dfd0 1-235
+  s_c56e31c87cddde::t_b9c2367779f45b 236-258
+DESIGN.md
+  s_c56e31c87cddde::t_78118a635e3d52 396
+apps/web/src/components/families/create-family-dialog.tsx
+  s_c56e31c87cddde::t_c08092763f1346 14,38-39,87-89
+apps/web/src/components/families/let-in-dialog.tsx
+  s_c56e31c87cddde::t_2cb10fe90bfc23 30,37,42,75-83,124-127,193,264-265,273-274,503-522
+apps/web/src/components/families/members.tsx
+  s_c56e31c87cddde::t_64235050953192 110,118-119,134-145
+apps/web/src/lib/billing-api.ts
+  s_c56e31c87cddde::t_60b16104a981cc 1,15-26
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/index.tsx
+  s_c56e31c87cddde::t_f8957a6a0f7e2a 8,42,51-53,58-60,67-68,93-94,139,147-149,160-162,226-244,266,293-301
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_c56e31c87cddde::t_e521750a25f234 6,35-37,62,74,76-78,126
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_05a428a7a775db 1052-1251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f8b49d0d5453ad267e7eebc634b7f9eb44c65c4",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
