@@ -1,0 +1,44 @@
+apps/web/src/lib/integrity-lines.ts
+  s_c56e31c87cddde::t_f0b478533306ef 556
+  s_c56e31c87cddde::t_5bb834b782523f 454-464,483-486,489-497,559,561
+apps/web/src/lib/integrity-lines.test.ts
+  s_c56e31c87cddde::t_91a400a491efbc 303-330
+  s_c56e31c87cddde::t_c9a545f4ed0c2f 546-556,558-572,574-593,595-599
+  s_c56e31c87cddde::t_75355253baa6e3 557
+  s_c56e31c87cddde::t_869683dad6b94f 573
+  s_c56e31c87cddde::t_04971555243573 594
+docs/groups-server.md
+  s_c56e31c87cddde::t_21c7c8c4f95dce 269
+docs/integrity-design.md
+  s_c56e31c87cddde::t_751b4765e1aac0 298,381
+docs/self-hosting.md
+  s_c56e31c87cddde::t_906cbc9117caa0 196
+packages/db/drizzle/20261017153848_origin_drop_evidence/migration.sql
+  s_c56e31c87cddde::t_71dcf88c99042e 1-17
+packages/db/drizzle/20261017153848_origin_drop_evidence/snapshot.json
+  s_c56e31c87cddde::t_52f06cfa66bd73 1-12518
+packages/db/src/drive.rekeyed.test.ts
+  s_c56e31c87cddde::t_301efc567b0fc7 2-15,47-48,190-197,201-202,210,214-215,232-239,243-251,852-1155
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_80a99d53751f6e 14
+packages/db/src/rotations.ts
+  s_c56e31c87cddde::t_5e42dc99bc51f1 442-445,453,555-559,567,827-830,837,839-840,850,852-853,872-876
+packages/db/src/schema/drive.ts
+  s_c56e31c87cddde::t_f4e27329e3e8d3 310-318,329-332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff17b381e89cfd97d91d450b6b8456626d5b9cc5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
