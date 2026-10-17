@@ -920,6 +920,60 @@ describe('races, replays and the stored chain', () => {
             .where(eq(groupChainCaches.groupId, fam.groupId));
         expect(record!.chainRevision).toBe(marked.revision);
     });
+
+    test('a stored history that is tampered with, missing a roster, or cut short is 503: no write is checked against it', async () => {
+        const fam = await family();
+        const { organizer } = fam;
+        for (const _ of [2, 3])
+            await groups.postRoster(
+                organizer.userId,
+                fam.groupId,
+                (await nextRoster(fam, organizer, entries(fam.h))).call,
+            );
+        // Signed once and resent unchanged after each repair, as a client retries a 503.
+        const next = await nextRoster(fam, organizer, entries(fam.h));
+        const at = (version: number) =>
+            and(eq(groupRosters.groupId, fam.groupId), eq(groupRosters.version, version));
+        const rowAt = async (version: number) =>
+            (await db.select().from(groupRosters).where(at(version)))[0]!;
+        const send = async () => {
+            // No record: the server rebuilds from its rows.
+            await db.delete(groupChainCaches).where(eq(groupChainCaches.groupId, fam.groupId));
+            return refusal(groups.postRoster(organizer.userId, fam.groupId, next.call));
+        };
+        const [two, three] = [await rowAt(2), await rowAt(3)];
+
+        // Roster 2's bytes edited (the organizer loses a role), its signatures kept.
+        const text = two.statement.toString('utf8');
+        expect(text).toContain('"billing","guardian","members"');
+        await db
+            .update(groupRosters)
+            .set({ statement: Buffer.from(text.replace('"billing","guardian",', '"billing",')) })
+            .where(at(2));
+        expect(await send()).toMatchObject({ code: 'unavailable', status: 503 });
+        await db.update(groupRosters).set({ statement: two.statement }).where(at(2));
+        // Roster 2 missing.
+        await db.delete(groupRosters).where(at(2));
+        expect(await send()).toMatchObject({ code: 'unavailable', status: 503 });
+        await db.insert(groupRosters).values(two);
+        // The newest roster missing: what is left verifies as a chain at version 2, which
+        // must not stand in for the head at 3 (nor be kept as the record).
+        await db.delete(groupRosters).where(at(3));
+        expect(await send()).toMatchObject({ code: 'unavailable', status: 503 });
+        expect(
+            await db
+                .select()
+                .from(groupChainCaches)
+                .where(eq(groupChainCaches.groupId, fam.groupId)),
+        ).toEqual([]);
+        await db.insert(groupRosters).values(three);
+        expect(await rosterCount(fam.groupId)).toBe(3);
+        // Whole again, the same call lands.
+        await db.delete(groupChainCaches).where(eq(groupChainCaches.groupId, fam.groupId));
+        expect(await groups.postRoster(organizer.userId, fam.groupId, next.call)).toMatchObject({
+            version: 4,
+        });
+    });
 });
 
 describe('areas', () => {

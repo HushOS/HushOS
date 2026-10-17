@@ -269,6 +269,13 @@ async function storedChain(group: GroupRow): Promise<{ chain: StoredChain; revis
         // A stored history the server's own acceptance refuses is an operator problem, not the caller's.
         throw unavailable();
     }
+    // So is one cut short: it verifies as a shorter chain, which every write would then be
+    // refused against as the caller's fault, and which kept as the record would outlive a repair.
+    if (
+        chain.roster.rosterVersion !== fresh.rosterVersion ||
+        chain.groupKeyVersion !== fresh.groupKeyVersion
+    )
+        throw unavailable();
     await groupsRepository.putChainCache(group.id, fresh.chainRevision, storedRecord(chain));
     return { chain, revision: fresh.chainRevision };
 }

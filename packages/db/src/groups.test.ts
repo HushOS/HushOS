@@ -26,6 +26,7 @@ import {
     driveNodes,
     driveShares,
     driveUploads,
+    fileVersions,
     groupInvitations,
     groupKeySeals,
     groupKeySuccessions,
@@ -2534,6 +2535,431 @@ describe('departures', () => {
         expect(await send(child.id, target, { legacy: 'ordinary' })).toBe('unsupported');
         expect(await send(child.id, target, { legacy: 'resealed' })).toBe('ok');
         expect((await nodeNow(child.id)).metadataOriginEnvelope).toBeNull();
+    });
+
+    /*
+     * A removal and the walk its rotation starts, against the Drive writes that
+     * could leave something under keys the removed member held: emptying the
+     * trash, and completing an upload begun before the removal. Every one of
+     * those writes and every walk step locks the area's row first, so the
+     * orders below are the ones the database can produce; each test fixes
+     * one: the removal commits, the walk reads its work, the write lands, the
+     * walk sends what it read.
+     */
+    describe('a removal racing its walk', () => {
+        const nodeRow = async (id: string) =>
+            (await db.select().from(driveNodes).where(eq(driveNodes.id, id)))[0]!;
+        const epoch = async (group: Family) =>
+            (await drive.allocateKeyEpochs(group.areaId, 1))!.from;
+
+        async function folder(
+            group: Family,
+            userId: string,
+            parent: { id: string; keyEpoch: number },
+        ) {
+            const made = await signed.createFolders({
+                workspaceId: group.areaId,
+                userId,
+                folders: [
+                    {
+                        id: randomUUID(),
+                        parentId: parent.id,
+                        envelopes: {
+                            keyEpoch: await epoch(group),
+                            parentKeyEpoch: parent.keyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            metadataEnvelope: randomBytes(100),
+                        },
+                    },
+                ],
+            });
+            if (made.status !== 'created') throw new Error(made.status);
+            return made.nodes[0]!;
+        }
+
+        /* Begins an upload of a new file under `parent`, or of a new version of `file`. */
+        async function begin(
+            group: Family,
+            userId: string,
+            into:
+                | { parent: { id: string; keyEpoch: number } }
+                | { file: { id: string; keyEpoch: number; currentVersionId: string | null } },
+        ) {
+            const objectId = randomUUID();
+            const contentKeyEnvelope = randomBytes(72);
+            const node =
+                'parent' in into
+                    ? {
+                          existing: false as const,
+                          id: randomUUID(),
+                          parentId: into.parent.id,
+                          envelopes: {
+                              keyEpoch: await epoch(group),
+                              parentKeyEpoch: into.parent.keyEpoch,
+                              keyEnvelope: randomBytes(72),
+                              metadataEnvelope: randomBytes(100),
+                          },
+                      }
+                    : {
+                          existing: true as const,
+                          id: into.file.id,
+                          keyEpoch: into.file.keyEpoch,
+                          expectedVersionId: into.file.currentVersionId,
+                      };
+            const begun = await signed.beginUpload({
+                workspaceId: group.areaId,
+                userId,
+                node,
+                version: { id: randomUUID(), contentKeyEnvelope },
+                object: {
+                    id: objectId,
+                    objectKey: `ws/${group.areaId}/${objectId}`,
+                    contentSuite: 2,
+                    chunkSize: 8 * 1024 * 1024,
+                    chunkCount: 1,
+                    contentNonce: randomBytes(16),
+                    ciphertextSize: 1024n,
+                },
+                multipartId: `mp-${objectId}`,
+                expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            });
+            if (begun.status !== 'ok') throw new Error(begun.status);
+            return { uploadId: begun.uploadId, nodeId: node.id, contentKeyEnvelope };
+        }
+
+        /* Both steps of completing, as the Drive domain runs them for `writer`. */
+        async function complete(group: Family, uploadId: string, writer: string) {
+            const started = await drive.startCompleting(group.areaId, uploadId, writer);
+            if (started.status !== 'ok') return started;
+            return drive.finishCompleting(group.areaId, uploadId, 1024n, writer);
+        }
+
+        async function file(
+            group: Family,
+            userId: string,
+            parent: { id: string; keyEpoch: number },
+        ) {
+            const begun = await begin(group, userId, { parent });
+            const done = await complete(group, begun.uploadId, userId);
+            if (done.status !== 'published') throw new Error(done.status);
+            return { node: done.node, contentKeyEnvelope: begun.contentKeyEnvelope };
+        }
+
+        /* Three members, the area's root, a folder Trips in it, and a photo there. */
+        async function familyFolder() {
+            const members = await threeMembers();
+            const root = await areaRoot(members.group, members.creator.userId);
+            const trips = await folder(members.group, members.creator.userId, root);
+            const photo = await file(members.group, members.creator.userId, trips);
+            return { ...members, root, trips, photo };
+        }
+
+        /* The creator removes `stayer` (route 19), rotating the area: the walk's target. */
+        async function removeStayer(family: Awaited<ReturnType<typeof familyFolder>>) {
+            const { creator, stayer, group, head, root } = family;
+            const rotation = await rotationNow(group, root.id, creator.userId, []);
+            await okHead(
+                await groups.appendChain({
+                    groupId: group.groupId,
+                    uploaderUserId: creator.userId,
+                    expectedRevision: head.revision,
+                    route: { kind: 'remove' as const, userId: stayer.userId },
+                    roster: roster(head, creator.userId, 'remove stayer', {
+                        changes: [{ userId: stayer.userId, status: 'left', roles: [] }],
+                    }),
+                    rotations: [rotation],
+                    cache: {},
+                }),
+            );
+            expect((await membership(group.groupId, stayer.userId))!.state).toBe('removed');
+            return rotation.targetEpoch;
+        }
+
+        /* What the walk reads: every node it still has to visit (one page holds them here). */
+        async function work(group: Family, rootId: string, targetEpoch: number) {
+            const page = await rotations.listRotationWork({
+                workspaceId: group.areaId,
+                rootId,
+                targetEpoch,
+            });
+            expect(page.nextCursor).toBeNull();
+            return page.nodes;
+        }
+
+        /*
+         * Sends what the walk read, parents first, as a client does: a fresh key
+         * for each node below the target, every version it listed re-wrapped
+         * under it. Each node's outcome, by id.
+         */
+        async function send(
+            group: Family,
+            rootId: string,
+            targetEpoch: number,
+            userId: string,
+            nodes: rotations.RotationWorkNode[],
+        ) {
+            const outcomes: Record<string, string> = {};
+            for (const node of nodes) {
+                const [result] = await signed.rotateNodes({
+                    workspaceId: group.areaId,
+                    rootId,
+                    targetEpoch,
+                    userId,
+                    nodes: [
+                        {
+                            id: node.id,
+                            changeSeq: node.changeSeq!,
+                            parentKeyEpoch: targetEpoch,
+                            keyEnvelope: randomBytes(72),
+                            rotated:
+                                node.keyEpoch >= targetEpoch
+                                    ? null
+                                    : {
+                                          metadataEnvelope: randomBytes(100),
+                                          versions: node.versions.map((version) => ({
+                                              id: version.id,
+                                              contentKeyEnvelope: randomBytes(72),
+                                          })),
+                                          shares: [],
+                                          links: [],
+                                          unsealableLinks: [],
+                                      },
+                        },
+                    ],
+                });
+                outcomes[node.id] = result!.status;
+            }
+            return outcomes;
+        }
+
+        /*
+         * What is still under a key the removed member held: a live node of the
+         * area below the target (by its own epoch, or, below the top folder, by
+         * the one it is wrapped under), or a ready version still carrying a
+         * content key envelope written before the walk re-keyed its file.
+         */
+        async function underOldKeys(group: Family, targetEpoch: number, written: Buffer[]) {
+            const nodes = await db
+                .select()
+                .from(driveNodes)
+                .where(and(eq(driveNodes.workspaceId, group.areaId), isNull(driveNodes.purgedAt)));
+            const versions = await db
+                .select()
+                .from(fileVersions)
+                .where(
+                    and(
+                        eq(fileVersions.workspaceId, group.areaId),
+                        eq(fileVersions.status, 'ready'),
+                    ),
+                );
+            return [
+                ...nodes
+                    .filter(
+                        (node) =>
+                            node.keyEpoch < targetEpoch ||
+                            (node.parentId !== null && node.parentKeyEpoch < targetEpoch),
+                    )
+                    .map((node) => `node ${node.id}`),
+                ...versions
+                    .filter((version) =>
+                        written.some((envelope) => version.contentKeyEnvelope?.equals(envelope)),
+                    )
+                    .map((version) => `version ${version.id}`),
+            ];
+        }
+
+        test('emptying the trash mid-walk: refused to the removed member; a member’s purge drops out of the walk, which still finishes', async () => {
+            const family = await familyFolder();
+            const { creator, stayer, group, root, trips, photo } = family;
+            // In the trash: a file with a ready version, and a folder, which has no version for
+            // the walk's exact-versions rule (#37) to catch it by.
+            const old = await file(group, creator.userId, trips);
+            const attic = await folder(group, creator.userId, trips);
+            for (const nodeId of [old.node.id, attic.id])
+                expect(
+                    await drive.trashNode({
+                        workspaceId: group.areaId,
+                        nodeId,
+                        writer: creator.userId,
+                    }),
+                ).toMatchObject({ status: 'ok' });
+            const target = await removeStayer(family);
+            const read = await work(group, root.id, target);
+            expect(read.map((node) => node.id).sort()).toEqual(
+                [trips.id, photo.node.id, old.node.id, attic.id].sort(),
+            );
+            // The removed member empties the trash: refused under the area's lock, nothing purged.
+            await expect(drive.emptyTrash(group.areaId, 100, stayer.userId)).rejects.toBeInstanceOf(
+                drive.AccessEndedError,
+            );
+            expect((await nodeRow(old.node.id)).purgedAt).toBeNull();
+            // A member empties it between the walk's read and its send.
+            expect(await drive.emptyTrash(group.areaId, 100, creator.userId)).toEqual({
+                purged: 2,
+                remaining: 0,
+            });
+            // The walk sends what it read. The purged two are not found and get no key back: a
+            // tombstone keeps no envelope, and its version stays purged.
+            expect(await send(group, root.id, target, creator.userId, read)).toEqual({
+                [trips.id]: 'ok',
+                [photo.node.id]: 'ok',
+                [old.node.id]: 'not-found',
+                [attic.id]: 'not-found',
+            });
+            for (const nodeId of [old.node.id, attic.id])
+                expect(await nodeRow(nodeId)).toMatchObject({
+                    keyEnvelope: null,
+                    metadataEnvelope: null,
+                });
+            const [oldVersion] = await db
+                .select()
+                .from(fileVersions)
+                .where(eq(fileVersions.id, old.node.currentVersionId!));
+            expect(oldVersion).toMatchObject({ status: 'purged', contentKeyEnvelope: null });
+            // Nothing the purge left is work the walk waits on: it finishes, all under new keys.
+            expect(await work(group, root.id, target)).toEqual([]);
+            expect(
+                await rotations.finishRotation({
+                    workspaceId: group.areaId,
+                    rootId: root.id,
+                    targetEpoch: target,
+                }),
+            ).toBe(true);
+            expect(
+                await underOldKeys(group, target, [
+                    photo.contentKeyEnvelope,
+                    old.contentKeyEnvelope,
+                ]),
+            ).toEqual([]);
+        });
+
+        test('completing an upload mid-walk: refused to the removed member; a member’s lands only where the walk re-keys it, or by attaching under the new key', async () => {
+            const family = await familyFolder();
+            const { creator, stayer, group, root, trips, photo } = family;
+            const doc = await file(group, creator.userId, trips);
+            // Begun before the removal, under keys every member held: two new versions of the
+            // photo, one of the doc, a new file in Trips, and one by the member about to go.
+            const winner = await begin(group, creator.userId, { file: photo.node });
+            const loser = await begin(group, creator.userId, { file: photo.node });
+            const late = await begin(group, creator.userId, { file: doc.node });
+            const fresh = await begin(group, creator.userId, { parent: trips });
+            const theirs = await begin(group, stayer.userId, { parent: trips });
+            const target = await removeStayer(family);
+
+            // The removed member's upload never becomes a file: refused under the area's lock at
+            // either step (as if the first had landed before the removal).
+            await expect(
+                drive.startCompleting(group.areaId, theirs.uploadId, stayer.userId),
+            ).rejects.toBeInstanceOf(drive.AccessEndedError);
+            await db
+                .update(driveUploads)
+                .set({ status: 'completing', completingAt: new Date() })
+                .where(eq(driveUploads.id, theirs.uploadId));
+            await expect(
+                drive.finishCompleting(group.areaId, theirs.uploadId, 1024n, stayer.userId),
+            ).rejects.toBeInstanceOf(drive.AccessEndedError);
+
+            const read = await work(group, root.id, target);
+            expect(read.map((node) => node.id).sort()).toEqual(
+                [trips.id, photo.node.id, doc.node.id, fresh.nodeId, theirs.nodeId].sort(),
+            );
+            // Before the walk reaches Trips: two uploads finish. They publish under keys the
+            // walk has yet to replace (their envelopes were written at begin, before the
+            // removal), so the walk must not take a batch that leaves them out.
+            expect(await complete(group, winner.uploadId, creator.userId)).toMatchObject({
+                status: 'published',
+            });
+            expect(await complete(group, fresh.uploadId, creator.userId)).toMatchObject({
+                status: 'published',
+            });
+            // The photo's other version now conflicts. Attached to the photo or beside it in
+            // Trips, it would go under a key the removed member holds: it waits.
+            expect(await complete(group, loser.uploadId, creator.userId)).toMatchObject({
+                status: 'conflicted',
+            });
+            const photoNow = await nodeRow(photo.node.id);
+            expect(
+                await signed.attachUpload(group.areaId, loser.uploadId, {
+                    mode: 'same-node',
+                    userId: creator.userId,
+                    keyEpoch: photoNow.keyEpoch,
+                    contentKeyEnvelope: randomBytes(72),
+                }),
+            ).toMatchObject({ status: 'rotating' });
+            const besideTrips = async (parentKeyEpoch: number) =>
+                signed.attachUpload(group.areaId, loser.uploadId, {
+                    mode: 'sibling',
+                    userId: creator.userId,
+                    node: {
+                        id: randomUUID(),
+                        parentId: trips.id,
+                        keyEpoch: await epoch(group),
+                        parentKeyEpoch,
+                        keyEnvelope: randomBytes(72),
+                        metadataEnvelope: randomBytes(100),
+                    },
+                    contentKeyEnvelope: randomBytes(72),
+                });
+            expect(await besideTrips(trips.keyEpoch)).toMatchObject({ status: 'rotating' });
+
+            // The walk sends what it read: the photo and the new file moved since, so it is told
+            // to read again rather than leave their new versions under the old keys.
+            expect(await send(group, root.id, target, creator.userId, read)).toEqual({
+                [trips.id]: 'ok',
+                [photo.node.id]: 'stale',
+                [doc.node.id]: 'ok',
+                [fresh.nodeId]: 'stale',
+                [theirs.nodeId]: 'ok',
+            });
+            const again = await work(group, root.id, target);
+            expect(again.map((node) => node.id).sort()).toEqual(
+                [photo.node.id, fresh.nodeId].sort(),
+            );
+            expect(await send(group, root.id, target, creator.userId, again)).toEqual({
+                [photo.node.id]: 'ok',
+                [fresh.nodeId]: 'ok',
+            });
+
+            // After the walk passed the doc: its new version, begun under the doc's old key, is
+            // conflicted, and lands only attached under the doc's new key.
+            expect(await complete(group, late.uploadId, creator.userId)).toMatchObject({
+                status: 'conflicted',
+            });
+            const docNow = await nodeRow(doc.node.id);
+            expect(docNow.keyEpoch).toBe(target);
+            expect(
+                await signed.attachUpload(group.areaId, late.uploadId, {
+                    mode: 'same-node',
+                    userId: creator.userId,
+                    keyEpoch: docNow.keyEpoch,
+                    contentKeyEnvelope: randomBytes(72),
+                }),
+            ).toMatchObject({ status: 'published' });
+            // Trips is re-keyed: the waiting version goes in beside it, under Trips' new key.
+            expect(await besideTrips(target)).toMatchObject({ status: 'published' });
+
+            // The walk finishes, and nothing is under a key the removed member held; their own
+            // upload never published.
+            expect(await work(group, root.id, target)).toEqual([]);
+            expect(
+                await rotations.finishRotation({
+                    workspaceId: group.areaId,
+                    rootId: root.id,
+                    targetEpoch: target,
+                }),
+            ).toBe(true);
+            expect(
+                await underOldKeys(group, target, [
+                    photo.contentKeyEnvelope,
+                    doc.contentKeyEnvelope,
+                    winner.contentKeyEnvelope,
+                    loser.contentKeyEnvelope,
+                    late.contentKeyEnvelope,
+                    fresh.contentKeyEnvelope,
+                ]),
+            ).toEqual([]);
+            expect((await nodeRow(theirs.nodeId)).currentVersionId).toBeNull();
+        });
     });
 });
 
