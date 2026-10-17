@@ -24,6 +24,8 @@ import {
     areaGrants,
     driveLinks,
     driveNodes,
+    driveObjectDeletions,
+    driveObjects,
     driveShares,
     driveUploads,
     fileVersions,
@@ -3485,5 +3487,206 @@ describe('the workspace owners backfill', () => {
         expect(messages.join('\n')).toMatch(
             /workspace_owners: 1 workspace\(s\) have no personal_workspaces row/,
         );
+    });
+});
+
+describe('deleting a family folder (groups design 2.10)', () => {
+    /* A family of two with a second folder, "photos", holding a root, a share and a link. */
+    async function withPhotos() {
+        const creator = await createTestAccount();
+        const group = await family(creator);
+        const member = await accepted(group.groupId, creator.userId);
+        let head = await okHead(
+            await groups.appendChain(admission(group, group.head, creator.userId, member.userId)),
+        );
+        const areaSeed = seed();
+        const photos = scopedId('workspace', group.groupId, areaSeed)!;
+        head = await okHead(
+            await groups.appendChain({
+                ...rosterWrite(group, head, creator.userId, 'photos'),
+                route: {
+                    kind: 'area',
+                    area: {
+                        workspaceId: photos,
+                        idSeed: areaSeed,
+                        quotaBytes: 1n << 30n,
+                        selfGrant: selfGrant(),
+                    },
+                },
+            }),
+        );
+        const granted = await groups.storeGrants({
+            groupId: group.groupId,
+            uploaderUserId: creator.userId,
+            grants: [grant(head, photos, member.userId, creator.userId)],
+        });
+        expect(granted.status).toBe('ok');
+        for (const workspaceId of [group.areaId, photos])
+            await db
+                .insert(workspaceKeys)
+                .values({ ...selfGrant(), workspaceId, userId: member.userId });
+        const range = await drive.allocateKeyEpochs(photos, 1);
+        const made = await signed.createRoot({
+            workspaceId: photos,
+            userId: creator.userId,
+            id: randomUUID(),
+            envelopes: {
+                keyEpoch: range!.from,
+                parentKeyEpoch: 1,
+                keyEnvelope: randomBytes(72),
+                metadataEnvelope: randomBytes(100),
+            },
+        });
+        if (made.status !== 'created') throw new Error(made.status);
+        const outsider = await createTestAccount();
+        const shared = await drive.createShare({
+            workspaceId: photos,
+            nodeId: made.root.id,
+            granterUserId: creator.userId,
+            granteeUserId: outsider.userId,
+            role: 'viewer',
+            keyEpoch: made.root.keyEpoch,
+            shareEnvelope: randomBytes(4565),
+        });
+        if (shared.status !== 'ok') throw new Error(shared.status);
+        return { creator, member, group, head, photos, root: made.root, share: shared.share.id };
+    }
+    const retire = (group: Family, head: Head, uploader: string, workspaceId: string) =>
+        groups.appendChain({
+            ...rosterWrite(group, head, uploader, `retire ${workspaceId}`),
+            route: { kind: 'retire', workspaceId },
+        });
+    const areaIdsOf = async (userId: string) =>
+        (await groups.spacesFor(userId)).flatMap((space) => space.areas.map((a) => a.workspaceId));
+
+    test('is gone for every member at once: spaces, Drive, grants, self-grants and shares', async () => {
+        const { creator, member, group, head, photos, share } = await withPhotos();
+        expect(await areaIdsOf(member.userId)).toContain(photos);
+        expect(await isMember(member.userId, photos)).toBe(true);
+        const next = await okHead(await retire(group, head, creator.userId, photos));
+        expect((await areaRow(photos)).deletedAt).not.toBeNull();
+        for (const userId of [creator.userId, member.userId]) {
+            expect(await areaIdsOf(userId)).toEqual([group.areaId]);
+            expect(await isMember(userId, photos)).toBe(false);
+        }
+        // The family's other folder is untouched.
+        expect(await isMember(member.userId, group.areaId)).toBe(true);
+        // Shares inside it stop at once.
+        const [row] = await db.select().from(driveShares).where(eq(driveShares.id, share));
+        expect(row!.revokedAt).not.toBeNull();
+        // Nothing more is granted or wrapped there, and nothing more is owed or due there.
+        expect(
+            await groups.storeGrants({
+                groupId: group.groupId,
+                uploaderUserId: creator.userId,
+                grants: [grant(next, photos, member.userId, creator.userId)],
+            }),
+        ).toEqual({ status: 'invalid', reason: 'area' });
+        expect(
+            await groups.putSelfGrant({
+                groupId: group.groupId,
+                workspaceId: photos,
+                userId: member.userId,
+                grant: selfGrant(),
+            }),
+        ).toEqual({ status: 'area' });
+        expect((await groups.listAreas(group.groupId)).map((a) => a.workspaceId)).toEqual([
+            group.areaId,
+        ]);
+        expect((await groups.missingGrants(group.groupId)).map((g) => g.workspaceId)).not.toContain(
+            photos,
+        );
+        // A second deletion of the same folder is refused, and nothing is written.
+        expect(await retire(group, next, creator.userId, photos)).toEqual({
+            status: 'invalid',
+            reason: 'area',
+        });
+        expect(await rostersAt(group.groupId, next.rosterVersion + 1)).toEqual([]);
+    });
+
+    test('only a members holder deletes, and only a folder of this family', async () => {
+        const { creator, member, group, head, photos } = await withPhotos();
+        expect(await retire(group, head, member.userId, photos)).toEqual({ status: 'forbidden' });
+        const other = await family(await createTestAccount());
+        expect(await retire(group, head, creator.userId, other.areaId)).toEqual({
+            status: 'invalid',
+            reason: 'area',
+        });
+        expect((await areaRow(photos)).deletedAt).toBeNull();
+        expect((await areaRow(other.areaId)).deletedAt).toBeNull();
+    });
+
+    test('a removal after it marks only the live folders due, and the folder stops counting', async () => {
+        const { creator, member, group, head, photos } = await withPhotos();
+        const next = await okHead(await retire(group, head, creator.userId, photos));
+        await okHead(
+            await groups.appendChain({
+                ...rosterWrite(group, next, creator.userId, 'remove member', {
+                    changes: [{ userId: member.userId, status: 'left', roles: [] }],
+                }),
+                route: { kind: 'remove', userId: member.userId },
+            }),
+        );
+        expect(await groups.listRotationsDue(group.groupId)).toEqual([group.areaId]);
+        // The limit counts live folders: with two allowed, the deleted one leaves room for one.
+        const areaSeed = seed();
+        const head3 = await headNow(group.groupId);
+        await okHead(
+            await groups.appendChain({
+                ...rosterWrite(group, head3, creator.userId, 'third'),
+                route: {
+                    kind: 'area',
+                    area: {
+                        workspaceId: scopedId('workspace', group.groupId, areaSeed)!,
+                        idSeed: areaSeed,
+                        quotaBytes: 1n,
+                        selfGrant: selfGrant(),
+                        limit: 2,
+                    },
+                },
+            }),
+        );
+    });
+
+    test('the purge takes it with everything in it after 30 days, never before', async () => {
+        const { creator, group, head, photos, root } = await withPhotos();
+        const objectId = randomUUID();
+        await db.insert(driveObjects).values({
+            id: objectId,
+            workspaceId: photos,
+            objectKey: `ws/${photos}/${objectId}`,
+            chunkSize: 1,
+            chunkCount: 1,
+            contentNonce: randomBytes(16),
+            ciphertextSize: 10n,
+            status: 'ready',
+        });
+        await okHead(await retire(group, head, creator.userId, photos));
+        const deletedAgo = (days: number) =>
+            db
+                .update(workspaces)
+                .set({ deletedAt: sql`now() - make_interval(days => ${days})` })
+                .where(eq(workspaces.id, photos));
+        await deletedAgo(29);
+        expect(await groups.purgeDeletedAreas(30)).toBe(0);
+        expect(await areaRow(photos)).toBeDefined();
+        const [kept] = await db.select().from(driveNodes).where(eq(driveNodes.id, root.id));
+        expect(kept).toBeDefined();
+        await deletedAgo(31);
+        expect(await groups.purgeDeletedAreas(30)).toBe(1);
+        expect(await db.select().from(workspaces).where(eq(workspaces.id, photos))).toEqual([]);
+        expect(await db.select().from(driveNodes).where(eq(driveNodes.id, root.id))).toEqual([]);
+        expect(
+            await db.select().from(areaGrants).where(eq(areaGrants.workspaceId, photos)),
+        ).toEqual([]);
+        // Its objects are queued for deletion from the store, not left for the orphan sweep.
+        const [queued] = await db
+            .select()
+            .from(driveObjectDeletions)
+            .where(eq(driveObjectDeletions.objectId, objectId));
+        expect(queued).toMatchObject({ objectKey: `ws/${photos}/${objectId}`, published: true });
+        // The family and its live folder stay.
+        expect(await isMember(creator.userId, group.areaId)).toBe(true);
+        expect(await groups.purgeDeletedAreas(30)).toBe(0);
     });
 });

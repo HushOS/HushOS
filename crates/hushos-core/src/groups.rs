@@ -15,7 +15,7 @@ use crate::canonical::{
 };
 use crate::contacts::digest_hex;
 use crate::error::{input, CoreError, CoreResult};
-use crate::group_trust::AcceptedRosters;
+use crate::group_trust::{version_index, AcceptedRosters};
 use crate::identity::{IdentityKeys, PinnedKeys, ServedKeys, SuccessionLink, KEM_PUBLIC_KEY_BYTES};
 use crate::ids::{check_id, IdKind};
 use crate::pq::{
@@ -323,19 +323,41 @@ pub struct Roster {
     /// removes a member rotates every area.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub areas: Vec<RosterArea>,
+    /// The statement's format (design 2.10): 1, rows of three fields, as
+    /// shipped; or 2, rows that also commit to the area root's key, and
+    /// retirement rows. A chain never goes back from 2 to 1.
+    #[cfg_attr(feature = "uniffi", uniffi(default = 1))]
+    pub format: u8,
 }
 
-/// One area key a roster lists.
+/// One area row a roster lists: a key (a new area or a rotation) or, in
+/// format 2, the area's tombstone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RosterArea {
     pub workspace_id: String,
     pub workspace_key_version: u64,
-    /// [`area_key_commitment`] of the area key at that version, base64url.
+    /// [`area_key_commitment`] of the area key at that version, base64url;
+    /// empty on a retirement row.
     pub commitment: String,
+    /// Format 2 key rows only: the commitment of the area root's node key at
+    /// that version (design 2.10), base64url.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub root_commitment: Option<String>,
+    /// Format 2 only: the area's tombstone, at its next version, with no key.
+    #[cfg_attr(feature = "uniffi", uniffi(default = false))]
+    pub retired: bool,
 }
 
+/// The formats a roster statement may have (design 2.10).
+pub(crate) const ROSTER_FORMATS: [u8; 2] = [1, 2];
+/* The tags of a format 2 area row. */
+const KEY_ROW: &str = "key";
+const RETIRED_ROW: &str = "retired";
+
 const AREA_COMMIT_INFO: &[u8] = b"hushos/group/area-key/v2";
+/* The area root's key commitment (design 2.10): its own label, never the area key's. */
+const AREA_ROOT_COMMIT_INFO: &[u8] = b"hushos/group/area-root/v1";
 
 /// The commitment a roster lists for an area key (design 2.6): HKDF-SHA-256 of
 /// the key, salt 32 zero bytes, info `"hushos/group/area-key/v2"`, 32 bytes,
@@ -349,9 +371,25 @@ const AREA_COMMIT_INFO: &[u8] = b"hushos/group/area-key/v2";
 #[doc(hidden)]
 pub fn area_key_commitment(workspace_key: &[u8]) -> CoreResult<String> {
     crate::bytes::expect_len("workspace key", workspace_key, 32)?;
+    commit(workspace_key, AREA_COMMIT_INFO)
+}
+
+/// The commitment a format 2 roster lists for an area root's node key at an
+/// area version (design 2.10): HKDF-SHA-256 of the key, salt 32 zero bytes,
+/// info `"hushos/group/area-root/v1"`, 32 bytes, base64url. Of the key alone;
+/// the root, area and version are where the roster lists it and what the
+/// root's key envelope binds. Not exported to the apps (`roster_next`
+/// computes it); public only for the cross-twin fixtures.
+#[doc(hidden)]
+pub fn area_root_commitment(root_key: &[u8]) -> CoreResult<String> {
+    crate::bytes::expect_len("area root key", root_key, 32)?;
+    commit(root_key, AREA_ROOT_COMMIT_INFO)
+}
+
+fn commit(key: &[u8], info: &[u8]) -> CoreResult<String> {
     let mut out = [0u8; 32];
-    hkdf::Hkdf::<Sha256>::new(Some(&[0u8; 32]), workspace_key)
-        .expand(AREA_COMMIT_INFO, &mut out)
+    hkdf::Hkdf::<Sha256>::new(Some(&[0u8; 32]), key)
+        .expand(info, &mut out)
         .map_err(|_| input("HKDF failed"))?;
     Ok(encode(&out))
 }
@@ -360,29 +398,56 @@ pub fn area_key_commitment(workspace_key: &[u8]) -> CoreResult<String> {
 /// to the same. As many as a family may have areas, so the roster that removes
 /// someone from a family, rotating every area, always fits (about 110 KB).
 pub(crate) const MAX_ROSTER_AREA_ROWS: usize = 1024;
-/// The most areas a family's chain may list (`check_areas`): a removal rotates
-/// them all, so a family past this could never remove anyone. Areas are never
-/// retired yet; a tombstone row that stops a deleted area counting must come
-/// before area deletion ships.
+/// The most live areas a family's chain may list (`check_areas`): a removal
+/// rotates them all, so a family past this could never remove anyone. A
+/// retired area (a format 2 tombstone, design 2.10) no longer counts and is
+/// never rotated again.
 pub(crate) const MAX_FAMILY_AREAS: usize = 1024;
 
-fn area_parts(areas: &[RosterArea]) -> CoreResult<Value> {
+fn area_parts(areas: &[RosterArea], format: u8) -> CoreResult<Value> {
     if areas.len() > MAX_ROSTER_AREA_ROWS {
         return Err(input("Invalid roster areas."));
     }
     let rows = areas
         .iter()
         .map(|area| {
+            let id = uuid(&area.workspace_id, "workspace id")?;
+            let version = integer(area.workspace_key_version, "workspace key version")?;
+            if format == 1 {
+                // Format 1 has neither root commitments nor retirement rows.
+                if area.root_commitment.is_some() || area.retired {
+                    return Err(input("Invalid roster area."));
+                }
+                return Ok(json!([id, version, digest_of(&area.commitment, "area key commitment")?]));
+            }
+            if area.retired {
+                if !area.commitment.is_empty() || area.root_commitment.is_some() {
+                    return Err(input("Invalid roster area."));
+                }
+                return Ok(json!([id, version, RETIRED_ROW]));
+            }
+            let root = area.root_commitment.as_deref().ok_or_else(|| input("Invalid roster area."))?;
             Ok(json!([
-                uuid(&area.workspace_id, "workspace id")?,
-                integer(area.workspace_key_version, "workspace key version")?,
+                id,
+                version,
+                KEY_ROW,
                 digest_of(&area.commitment, "area key commitment")?,
+                digest_of(root, "area root commitment")?,
             ]))
         })
         .collect::<CoreResult<Vec<_>>>()?;
     // One row per area, sorted by workspace id.
     ascending(&areas.iter().map(|area| area.workspace_id.as_str()).collect::<Vec<_>>(), "roster areas")?;
     Ok(Value::Array(rows))
+}
+
+/* A roster's format, checked: 1 or 2. */
+pub(crate) fn roster_format(roster: &Roster) -> CoreResult<u8> {
+    if ROSTER_FORMATS.contains(&roster.format) {
+        Ok(roster.format)
+    } else {
+        Err(input("Invalid roster format."))
+    }
 }
 
 impl Roster {
@@ -442,6 +507,7 @@ pub fn roster_statement(roster: Roster) -> CoreResult<Vec<u8>> {
 }
 
 pub(crate) fn roster_bytes(roster: &Roster) -> CoreResult<Vec<u8>> {
+    let format = roster_format(roster)?;
     let version = integer(roster.roster_version, "roster version")?;
     // Version 1 has no previous roster: its digest is the empty string, and only then.
     let previous = if version == 1 {
@@ -463,7 +529,7 @@ pub(crate) fn roster_bytes(roster: &Roster) -> CoreResult<Vec<u8>> {
     ascending(&roster.members.iter().map(|m| m.user_id.as_str()).collect::<Vec<_>>(), "roster members")?;
     encode_statement(&[
         json!(ROSTER_DOMAIN),
-        json!(1),
+        json!(format),
         json!(uuid(&roster.group_id, "group id")?),
         json!(roster.kind.as_str()),
         json!(version),
@@ -471,7 +537,7 @@ pub(crate) fn roster_bytes(roster: &Roster) -> CoreResult<Vec<u8>> {
         json!(integer(roster.group_key_version, "group key version")?),
         json!(uuid(&roster.signer_user_id, "user id")?),
         Value::Array(members),
-        area_parts(&roster.areas)?,
+        area_parts(&roster.areas, format)?,
     ])
 }
 
@@ -484,7 +550,12 @@ pub fn roster_parse(statement: Vec<u8>) -> CoreResult<Roster> {
 
 pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
     let parts = parse_statement(statement, "roster")?;
-    if parts.len() != 10 || parts[0] != json!(ROSTER_DOMAIN) || parts[1] != json!(1) {
+    let format = match parts.get(1).and_then(Value::as_u64) {
+        Some(1) => 1u8,
+        Some(2) => 2u8,
+        _ => return Err(input("Invalid roster.")),
+    };
+    if parts.len() != 10 || parts[0] != json!(ROSTER_DOMAIN) {
         return Err(input("Invalid roster."));
     }
     let areas = parts[9]
@@ -492,12 +563,43 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
         .ok_or_else(|| input("Invalid roster areas."))?
         .iter()
         .map(|row| {
-            let fields =
-                row.as_array().filter(|f| f.len() == 3).ok_or_else(|| input("Invalid roster area."))?;
+            let fields = row.as_array().ok_or_else(|| input("Invalid roster area."))?;
+            let head = |fields: &[Value]| -> CoreResult<(String, u64)> {
+                Ok((text(&fields[0], "workspace id")?.into(), number(&fields[1], "workspace key version")?))
+            };
+            if format == 1 {
+                if fields.len() != 3 {
+                    return Err(input("Invalid roster area."));
+                }
+                let (workspace_id, workspace_key_version) = head(fields)?;
+                return Ok(RosterArea {
+                    workspace_id,
+                    workspace_key_version,
+                    commitment: text(&fields[2], "area key commitment")?.into(),
+                    root_commitment: None,
+                    retired: false,
+                });
+            }
+            if fields.len() == 3 && fields[2] == json!(RETIRED_ROW) {
+                let (workspace_id, workspace_key_version) = head(fields)?;
+                return Ok(RosterArea {
+                    workspace_id,
+                    workspace_key_version,
+                    commitment: String::new(),
+                    root_commitment: None,
+                    retired: true,
+                });
+            }
+            if fields.len() != 5 || fields[2] != json!(KEY_ROW) {
+                return Err(input("Invalid roster area."));
+            }
+            let (workspace_id, workspace_key_version) = head(fields)?;
             Ok(RosterArea {
-                workspace_id: text(&fields[0], "workspace id")?.into(),
-                workspace_key_version: number(&fields[1], "workspace key version")?,
-                commitment: text(&fields[2], "area key commitment")?.into(),
+                workspace_id,
+                workspace_key_version,
+                commitment: text(&fields[3], "area key commitment")?.into(),
+                root_commitment: Some(text(&fields[4], "area root commitment")?.into()),
+                retired: false,
             })
         })
         .collect::<CoreResult<Vec<_>>>()?;
@@ -544,6 +646,7 @@ pub(crate) fn parse_roster(statement: &[u8]) -> CoreResult<Roster> {
         signer_user_id: text(&parts[7], "user id")?.into(),
         members,
         areas,
+        format,
     };
     require_canonical(statement, &roster_bytes(&roster)?, "roster")?;
     Ok(roster)
@@ -1157,6 +1260,10 @@ pub fn area_grant_seal(
     }
     sealer_holds(&chain, &ctx.granter_user_id, &granter)?;
     area_of(&ctx.group_id, &ctx.workspace_id, &area_id_seed)?;
+    // A retired area (design 2.10) is granted no more, at any version.
+    if chain.retired_areas.contains(&ctx.workspace_id) {
+        return Err(input(RETIRED));
+    }
     // Only a key the chain lists for that area and version: a new area or a rotation is a roster
     // first.
     let commitment = area_key_commitment(&workspace_key)?;
@@ -1252,8 +1359,50 @@ fn listed_area<'a>(
 /// version is no protection against the server (design 2.6).
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn area_write_version(chain: Arc<AcceptedRosters>, workspace_id: String) -> Option<u64> {
+    // A retired area (design 2.10) is written no more.
+    if chain.retired_areas.contains(&workspace_id) {
+        return None;
+    }
     chain.area_keys.get(&workspace_id).map(|list| list.len() as u64)
 }
+
+/// Whether an area root's key is the one the chain committed to at that area
+/// version (design 2.10): what decides the root is current, beside its
+/// envelope opening under the area key at that version. `true` when the
+/// chain lists a root commitment there and the key has it; `false` when the
+/// version was listed by a format 1 roster, which committed to no root (the
+/// caller keeps the previous rule, the envelope opening). Refused when the
+/// key's commitment is another, the version is not listed, or the area is
+/// retired.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn area_root_check(
+    chain: Arc<AcceptedRosters>,
+    workspace_id: String,
+    workspace_key_version: u64,
+    root_key: Vec<u8>,
+) -> CoreResult<bool> {
+    let root_key = Zeroizing::new(root_key);
+    integer(workspace_key_version, "workspace key version")?;
+    if chain.retired_areas.contains(&workspace_id) {
+        return Err(input(RETIRED));
+    }
+    if listed_area(&chain, &workspace_id, workspace_key_version).is_none() {
+        return Err(input("This area key version is not on the group’s member list."));
+    }
+    let index = version_index(workspace_key_version);
+    let Some(listed) =
+        chain.area_roots.get(&workspace_id).and_then(|roots| roots.get(index)).cloned().flatten()
+    else {
+        return Ok(false);
+    };
+    if area_root_commitment(&root_key)? != listed {
+        return Err(input(NOT_LISTED_ROOT));
+    }
+    Ok(true)
+}
+
+const NOT_LISTED_ROOT: &str = "This folder’s key is not the one the group’s member list names.";
+pub(crate) const RETIRED: &str = "This family folder was deleted: it cannot be used again.";
 
 /// The row a roster carries for an area's next key: version one above the
 /// chain's latest (1 for a new area), and the key's commitment. Refused for a
@@ -1264,17 +1413,23 @@ pub fn next_area_key(
     chain: Arc<AcceptedRosters>,
     workspace_id: String,
     workspace_key: Vec<u8>,
+    root_key: Option<Vec<u8>>,
 ) -> CoreResult<RosterArea> {
-    let mut rows = area_rows(&chain, vec![AreaKey { workspace_id, workspace_key }])?;
+    let format = if root_key.is_some() { 2 } else { chain.roster.format };
+    let mut rows =
+        area_rows(&chain, vec![AreaKey { workspace_id, workspace_key, root_key }], format, vec![])?;
     Ok(rows.remove(0))
 }
 
-/// An area's new key, for `roster_next` to turn into its row.
+/// An area's new key, for `roster_next` to turn into its row, and in format 2
+/// the node key its root folder gets at that version (design 2.10).
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct AreaKey {
     pub workspace_id: String,
     pub workspace_key: Vec<u8>,
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub root_key: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for AreaKey {
@@ -1284,46 +1439,114 @@ impl std::fmt::Debug for AreaKey {
 }
 
 const EARLIER_KEY: &str = "This is one of the group’s earlier keys: a rotation needs a new one.";
+const EARLIER_ROOT: &str = "This folder key was used before: a rotation needs a new one.";
+const NO_ROOT_KEY: &str = "A new area key needs its folder’s key beside it.";
+const OLD_FORMAT: &str = "This member list format has no folder keys or deleted folders.";
+const NOT_AN_AREA: &str = "This folder is not one of the group’s.";
 
-/// The rows a roster carries for new area keys (2.4, 2.6): each at its area's
-/// next version (1 for a new area), with the key's commitment, sorted by
-/// workspace id. Refused when an area appears twice, or a key's commitment
-/// repeats: two of the new keys alike, or any key the group had before, in
-/// any area at any version (the commitment depends on the key alone, so this
-/// is one HKDF per new key and a set lookup). Acceptance refuses the same
-/// (`check_areas`); this only says so before a holder signs. Keys are wiped
-/// as they are used, and only their commitments are kept.
-pub(crate) fn area_rows(chain: &AcceptedRosters, keys: Vec<AreaKey>) -> CoreResult<Vec<RosterArea>> {
-    rows_after(&chain.area_keys, keys)
+/// The rows a roster carries for new area keys and retirements (2.4, 2.6,
+/// 2.10): each key at its area's next version (1 for a new area), with the
+/// key's commitment and, in format 2, its root key's; each retired area at
+/// its next version with no key; sorted by workspace id. Refused when an area
+/// appears twice, a key's commitment or a root key's commitment repeats (two
+/// of the new ones alike, or any listed before, in any area at any version),
+/// a retired area gets a key or a second tombstone, an area the chain never
+/// listed is retired, format 2 lacks a root key or format 1 is given one or a
+/// retirement. Acceptance refuses the same (`check_areas`); this only says so
+/// before a holder signs. Keys are wiped as they are used, and only their
+/// commitments are kept.
+pub(crate) fn area_rows(
+    chain: &AcceptedRosters,
+    keys: Vec<AreaKey>,
+    format: u8,
+    retire: Vec<String>,
+) -> CoreResult<Vec<RosterArea>> {
+    let listed =
+        ListedAreas { keys: &chain.area_keys, roots: &chain.area_roots, retired: &chain.retired_areas };
+    rows_after(listed, keys, format, retire)
+}
+
+/* What a chain has listed so far, as the rows that come next must follow it. */
+pub(crate) struct ListedAreas<'a> {
+    pub(crate) keys: &'a HashMap<String, Vec<String>>,
+    pub(crate) roots: &'a HashMap<String, Vec<Option<String>>>,
+    pub(crate) retired: &'a [String],
 }
 
 /*
- * The same rows after the commitments `listed` already holds (a chain's
- * `area_keys`; nothing for roster version 1): `area_rows` and `roster_first`
- * are its only callers, as the web's rowsAfter.
+ * The same rows after what `listed` already holds (a chain's; nothing for
+ * roster version 1): `area_rows` and `roster_first` are its only callers, as
+ * the web's rowsAfter.
  */
 pub(crate) fn rows_after(
-    listed: &HashMap<String, Vec<String>>,
+    listed: ListedAreas<'_>,
     keys: Vec<AreaKey>,
+    format: u8,
+    retire: Vec<String>,
 ) -> CoreResult<Vec<RosterArea>> {
+    if !ROSTER_FORMATS.contains(&format) {
+        return Err(input("Invalid roster format."));
+    }
+    if format == 1 && !retire.is_empty() {
+        return Err(input(OLD_FORMAT));
+    }
     let mut areas = HashSet::new();
-    for key in &keys {
-        uuid(&key.workspace_id, "workspace id")?;
-        if !areas.insert(key.workspace_id.clone()) {
+    for workspace_id in keys.iter().map(|key| &key.workspace_id).chain(retire.iter()) {
+        uuid(workspace_id, "workspace id")?;
+        if !areas.insert(workspace_id.clone()) {
             return Err(input("Invalid roster areas."));
         }
+        if listed.retired.contains(workspace_id) {
+            return Err(input(RETIRED));
+        }
     }
-    let before: HashSet<&String> = listed.values().flatten().collect();
+    let versions = |workspace_id: &str| listed.keys.get(workspace_id).map_or(0, Vec::len) as u64;
+    let before: HashSet<&String> = listed.keys.values().flatten().collect();
+    let roots_before: HashSet<&String> = listed.roots.values().flatten().flatten().collect();
     let mut fresh = HashSet::new();
+    let mut fresh_roots = HashSet::new();
     let mut rows = vec![];
     for key in keys {
         let workspace_key = Zeroizing::new(key.workspace_key);
+        let root_key = key.root_key.map(Zeroizing::new);
+        if (format == 1) != root_key.is_none() {
+            return Err(input(if format == 1 { OLD_FORMAT } else { NO_ROOT_KEY }));
+        }
         let commitment = area_key_commitment(&workspace_key)?;
         if before.contains(&commitment) || !fresh.insert(commitment.clone()) {
             return Err(input(EARLIER_KEY));
         }
-        let version = listed.get(&key.workspace_id).map_or(0, Vec::len) as u64 + 1;
-        rows.push(RosterArea { workspace_id: key.workspace_id, workspace_key_version: version, commitment });
+        let root_commitment = match &root_key {
+            Some(root_key) => {
+                let root = area_root_commitment(root_key)?;
+                if roots_before.contains(&root) || !fresh_roots.insert(root.clone()) {
+                    return Err(input(EARLIER_ROOT));
+                }
+                Some(root)
+            }
+            None => None,
+        };
+        let version = versions(&key.workspace_id) + 1;
+        rows.push(RosterArea {
+            workspace_id: key.workspace_id,
+            workspace_key_version: version,
+            commitment,
+            root_commitment,
+            retired: false,
+        });
+    }
+    for workspace_id in retire {
+        let version = versions(&workspace_id);
+        if version == 0 {
+            return Err(input(NOT_AN_AREA));
+        }
+        rows.push(RosterArea {
+            workspace_id,
+            workspace_key_version: version + 1,
+            commitment: String::new(),
+            root_commitment: None,
+            retired: true,
+        });
     }
     rows.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
     Ok(rows)
@@ -1346,7 +1569,9 @@ pub fn areas_to_rotate(chain: Arc<AcceptedRosters>, members: Vec<RosterMember>) 
     if !leaving {
         return vec![];
     }
-    let mut areas: Vec<String> = chain.area_keys.keys().cloned().collect();
+    // A retired area (design 2.10) is never rotated again.
+    let mut areas: Vec<String> =
+        chain.area_keys.keys().filter(|id| !chain.retired_areas.contains(id)).cloned().collect();
     areas.sort();
     areas
 }
@@ -1490,6 +1715,7 @@ pub(crate) mod tests {
             signer_user_id: signer.user_id.clone(),
             members,
             areas: vec![],
+            format: 1,
         }
     }
 
@@ -1500,6 +1726,8 @@ pub(crate) mod tests {
             workspace_id: AREA.into(),
             workspace_key_version: 1,
             commitment: area_key_commitment(&AREA_KEY).unwrap(),
+            root_commitment: None,
+            retired: false,
         }]
     }
 
@@ -1745,6 +1973,8 @@ pub(crate) mod tests {
                             commitment: area_key_commitment(&area_key_at(&workspace_id, at + 1)).unwrap(),
                             workspace_id,
                             workspace_key_version: at + 1,
+                            root_commitment: None,
+                            retired: false,
                         })
                         .collect()
                 }
@@ -1786,6 +2016,7 @@ pub(crate) mod tests {
                         signer_user_id: signer.user_id.clone(),
                         members,
                         areas: areas.clone(),
+                        format: 1,
                     }
                 }
                 _ => {
@@ -1801,6 +2032,7 @@ pub(crate) mod tests {
                         signer_user_id: signer.user_id.clone(),
                         members,
                         areas: areas.clone(),
+                        format: 1,
                     }
                 }
             };
@@ -2772,6 +3004,7 @@ pub(crate) mod tests {
             signer_user_id: members[0].user_id.clone(),
             members: members[..MAX_ROSTER_MEMBERS].to_vec(),
             areas: vec![],
+            format: 1,
         };
         let bytes = roster_statement(roster.clone()).unwrap();
         assert_eq!(roster_parse(bytes.clone()).unwrap().members.len(), MAX_ROSTER_MEMBERS);
@@ -2805,6 +3038,8 @@ pub(crate) mod tests {
             workspace_id: SECOND_AREA.into(),
             workspace_key_version: 4,
             commitment: area_key_commitment(&[79; 32]).unwrap(),
+            root_commitment: None,
+            retired: false,
         };
         let listed = Roster { areas: vec![standard[0].clone(), second.clone()], ..roster.clone() };
         let statement = String::from_utf8(roster_statement(listed.clone()).unwrap()).unwrap();
@@ -2958,11 +3193,12 @@ pub(crate) mod tests {
         let chain = accepted_of(&h, &[&o, &a, &h_]);
         let members = vec![own.clone(), a.active(&[]), h_.active(&[GroupRole::Members])];
         let next = |members: Vec<RosterMember>, keys: Option<Vec<AreaKey>>| {
-            crate::group_trust::roster_next(chain.clone(), members, o.user_id.clone(), keys)
+            crate::group_trust::roster_next(chain.clone(), members, o.user_id.clone(), keys, None, None)
         };
         let key = |workspace_id: &str, byte: u8| AreaKey {
             workspace_id: workspace_id.into(),
             workspace_key: vec![byte; 32],
+            root_key: None,
         };
         let refused = |result: CoreResult<Roster>, what: &str| {
             let error = result.unwrap_err().to_string();
@@ -2970,8 +3206,8 @@ pub(crate) mod tests {
         };
         assert_eq!(next(members.clone(), None).unwrap().areas, vec![]);
         let (rotation, created) = (key(AREA, 78), key(SECOND_AREA, 79));
-        let row = next_area_key(chain.clone(), AREA.into(), vec![78; 32]).unwrap();
-        let fresh = next_area_key(chain.clone(), SECOND_AREA.into(), vec![79; 32]).unwrap();
+        let row = next_area_key(chain.clone(), AREA.into(), vec![78; 32], None).unwrap();
+        let fresh = next_area_key(chain.clone(), SECOND_AREA.into(), vec![79; 32], None).unwrap();
         assert_eq!((row.workspace_key_version, fresh.workspace_key_version), (2, 1));
         assert_eq!(
             next(members.clone(), Some(vec![created.clone(), rotation.clone()])).unwrap().areas,
@@ -2982,7 +3218,7 @@ pub(crate) mod tests {
         let earlier = AREA_KEY[0];
         refused(next(members.clone(), Some(vec![key(AREA, earlier)])), "earlier keys");
         refused(next(members.clone(), Some(vec![key(SECOND_AREA, earlier)])), "earlier keys");
-        assert!(next_area_key(chain.clone(), SECOND_AREA.into(), AREA_KEY.to_vec())
+        assert!(next_area_key(chain.clone(), SECOND_AREA.into(), AREA_KEY.to_vec(), None)
             .unwrap_err()
             .to_string()
             .contains("earlier keys"));
@@ -3020,6 +3256,8 @@ pub(crate) mod tests {
                 workspace_id: id(i),
                 workspace_key_version: 1,
                 commitment: area_key_commitment(&key(i, 1)).unwrap(),
+                root_commitment: None,
+                retired: false,
             })
             .collect();
         let members = vec![own.clone(), a.active(&[]), h_.active(&[GroupRole::Members])];
@@ -3028,18 +3266,20 @@ pub(crate) mod tests {
         let chain = accepted_of(&h, &[&o, &a, &h_]);
         assert_eq!(chain.area_keys.len(), MAX_FAMILY_AREAS);
         // No 1,025th area, as roster_next builds it or as a hand-built roster carries it.
-        let extra = AreaKey { workspace_id: SECOND_AREA.into(), workspace_key: vec![79; 32] };
+        let extra = AreaKey { workspace_id: SECOND_AREA.into(), workspace_key: vec![79; 32], root_key: None };
         let error = crate::group_trust::roster_next(
             chain.clone(),
             members.clone(),
             o.user_id.clone(),
             Some(vec![extra]),
+            None,
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("at most 1,024 areas"), "{error}");
         let mut over = History::new();
         over.roster_with(&o, members.clone(), Some(1), Some(rows));
-        let row = next_area_key(chain.clone(), SECOND_AREA.into(), vec![79; 32]).unwrap();
+        let row = next_area_key(chain.clone(), SECOND_AREA.into(), vec![79; 32], None).unwrap();
         over.roster_with(&o, members, Some(1), Some(vec![row]));
         let refused = crate::group_trust::accept_rosters(
             GROUP.into(),
@@ -3059,11 +3299,18 @@ pub(crate) mod tests {
             .into_iter()
             .map(|workspace_id| {
                 let i = usize::from_str_radix(&workspace_id[..8], 16).unwrap();
-                AreaKey { workspace_id, workspace_key: key(i, 2) }
+                AreaKey { workspace_id, workspace_key: key(i, 2), root_key: None }
             })
             .collect();
-        let removal =
-            crate::group_trust::roster_next(chain, removing.clone(), o.user_id.clone(), Some(keys)).unwrap();
+        let removal = crate::group_trust::roster_next(
+            chain,
+            removing.clone(),
+            o.user_id.clone(),
+            Some(keys),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(removal.areas.len(), MAX_FAMILY_AREAS);
         assert!(roster_statement(removal.clone()).unwrap().len() < 120_000);
         h.roster_with(&o, removing, Some(1), Some(removal.areas));
@@ -3117,5 +3364,352 @@ pub(crate) mod tests {
         assert_eq!(open(vec![link.clone(), one_sided.clone()]).unwrap(), AREA_KEY.to_vec());
         // Before the entry, consent is still asked.
         assert!(open(vec![SuccessionLink { consent: None, ..link }, one_sided]).is_err());
+    }
+
+    /*
+     * Roster format 2 (design 2.10), the twins of the web's roster-format.test.ts: each area
+     * version commits to its root's key under its own label (F14), and an area is retired by a
+     * tombstone (F11).
+     */
+    fn root_key_at(workspace_id: &str, version: u64) -> Vec<u8> {
+        vec![if workspace_id == AREA { 150 } else { 170 } + version as u8; 32]
+    }
+
+    fn key_with_root(workspace_id: &str, version: u64) -> AreaKey {
+        AreaKey {
+            workspace_id: workspace_id.into(),
+            workspace_key: area_key_at(workspace_id, version),
+            root_key: Some(root_key_at(workspace_id, version)),
+        }
+    }
+
+    fn chain_of_rosters(rosters: Vec<Roster>, signer: &Person, people: &[&Person]) -> Arc<AcceptedRosters> {
+        let signed = rosters
+            .into_iter()
+            .map(|r| roster_sign(r, group_seed_at(1), signer.keys.clone()).unwrap())
+            .collect();
+        match crate::group_trust::accept_rosters(
+            GROUP.into(),
+            group_public_key(group_seed_at(1)).unwrap(),
+            true,
+            vec![],
+            signed,
+            vec![],
+            ml_dsa_keys(people),
+            reader(),
+            None,
+        )
+        .unwrap()
+        {
+            crate::group_trust::RosterChain::Accepted { chain } => chain,
+            crate::group_trust::RosterChain::Fork { .. } => panic!("forked"),
+        }
+    }
+
+    #[test]
+    fn format_2_the_root_commitment_has_its_own_label_a_known_answer_never_the_area_key_s() {
+        // An independent HKDF-SHA-256 (Python's hmac) over 32 bytes of 9.
+        assert_eq!(area_root_commitment(&[9; 32]).unwrap(), "5BrsGtJdWLo9wvZQh3JBv-Sxey7IKfqk6SCY2qFS3eA");
+        assert_eq!(area_key_commitment(&[9; 32]).unwrap(), "DeklaQOlULr4P8bdSFSC_53YH1zj8EHdlkSEK4PrMyw");
+        assert!(area_root_commitment(&[9; 31]).is_err());
+    }
+
+    #[test]
+    fn format_2_rows_round_trip_and_format_1_carries_neither_roots_nor_tombstones() {
+        let o = Person::new(1);
+        let one = crate::group_trust::roster_first(
+            GROUP.into(),
+            GroupKind::Family,
+            owner(&o),
+            Some(vec![AreaKey {
+                workspace_id: AREA.into(),
+                workspace_key: area_key_at(AREA, 1),
+                root_key: None,
+            }]),
+            None,
+        )
+        .unwrap();
+        let bytes = roster_statement(one.clone()).unwrap();
+        assert!(String::from_utf8(bytes.clone()).unwrap().starts_with(r#"["hushos/group/roster",1,"#));
+        assert_eq!(roster_parse(bytes).unwrap(), one);
+        let key_row = RosterArea {
+            root_commitment: Some(area_root_commitment(&root_key_at(AREA, 1)).unwrap()),
+            ..one.areas[0].clone()
+        };
+        let tombstone = RosterArea {
+            workspace_id: SECOND_AREA.into(),
+            workspace_key_version: 2,
+            commitment: String::new(),
+            root_commitment: None,
+            retired: true,
+        };
+        let two = Roster { format: 2, areas: vec![key_row.clone(), tombstone.clone()], ..one.clone() };
+        assert_eq!(roster_parse(roster_statement(two.clone()).unwrap()).unwrap(), two);
+        assert!(roster_statement(Roster { format: 1, ..two.clone() }).is_err());
+        assert!(roster_statement(Roster { format: 3, ..two.clone() }).is_err());
+        assert!(roster_statement(Roster {
+            areas: vec![RosterArea { root_commitment: None, ..key_row.clone() }],
+            ..two.clone()
+        })
+        .is_err());
+        assert!(roster_statement(Roster {
+            areas: vec![RosterArea { commitment: key_row.commitment.clone(), ..tombstone }],
+            ..two.clone()
+        })
+        .is_err());
+        // The statement's version is the format: a format 2 statement relabelled 1 is refused.
+        let relabelled = String::from_utf8(roster_statement(two).unwrap())
+            .unwrap()
+            .replace(r#"roster",2,"#, r#"roster",1,"#);
+        assert!(roster_parse(relabelled.into_bytes()).is_err());
+    }
+
+    #[test]
+    fn format_2_builders_take_a_root_key_with_every_key_and_never_build_a_lower_format() {
+        let (o, a) = (Person::new(1), Person::new(2));
+        let members = vec![owner(&o), a.active(&[])];
+        let plain =
+            AreaKey { workspace_id: AREA.into(), workspace_key: area_key_at(AREA, 1), root_key: None };
+        let first = |keys: Vec<AreaKey>, format: Option<u8>| {
+            crate::group_trust::roster_first(GROUP.into(), GroupKind::Family, owner(&o), Some(keys), format)
+        };
+        assert!(first(vec![plain.clone()], Some(2)).unwrap_err().to_string().contains("folder’s key"));
+        assert!(first(vec![key_with_root(AREA, 1)], None).unwrap_err().to_string().contains("format"));
+        let v2 = first(vec![key_with_root(AREA, 1)], Some(2)).unwrap();
+        assert_eq!(v2.areas[0].root_commitment, Some(area_root_commitment(&root_key_at(AREA, 1)).unwrap()));
+        let v1 = first(vec![plain], None).unwrap();
+        let chain = chain_of_rosters(vec![v2], &o, &[&o, &a]);
+        let next =
+            |chain: &Arc<AcceptedRosters>, keys: Vec<AreaKey>, retire: Vec<String>, format: Option<u8>| {
+                crate::group_trust::roster_next(
+                    chain.clone(),
+                    members.clone(),
+                    o.user_id.clone(),
+                    Some(keys),
+                    Some(retire),
+                    format,
+                )
+            };
+        assert!(next(&chain, vec![], vec![], Some(1)).unwrap_err().to_string().contains("older format"));
+        let v1_chain = chain_of_rosters(vec![v1.clone()], &o, &[&o, &a]);
+        assert!(next(&v1_chain, vec![], vec![AREA.into()], None).unwrap_err().to_string().contains("format"));
+        // A rotation that keeps the root's key is refused before anyone signs it.
+        let hollow = AreaKey { root_key: Some(root_key_at(AREA, 1)), ..key_with_root(AREA, 2) };
+        assert!(next(&chain, vec![hollow], vec![], None)
+            .unwrap_err()
+            .to_string()
+            .contains("folder key was used before"));
+        // Switching up at a boundary: the next roster in format 2, its rotation committed.
+        let up = next(&v1_chain, vec![key_with_root(AREA, 2)], vec![], Some(2)).unwrap();
+        assert_eq!(up.format, 2);
+        let switched = chain_of_rosters(vec![v1, up], &o, &[&o, &a]);
+        assert_eq!(area_root_check(switched.clone(), AREA.into(), 2, root_key_at(AREA, 2)), Ok(true));
+        assert_eq!(area_root_check(switched.clone(), AREA.into(), 1, root_key_at(AREA, 9)), Ok(false));
+        assert_eq!(next(&switched, vec![], vec![], None).unwrap().format, 2);
+    }
+
+    #[test]
+    fn format_2_a_reader_takes_an_area_root_as_current_only_by_its_commitment() {
+        let (o, a) = (Person::new(1), Person::new(2));
+        let v2 = crate::group_trust::roster_first(
+            GROUP.into(),
+            GroupKind::Family,
+            owner(&o),
+            Some(vec![key_with_root(AREA, 1)]),
+            Some(2),
+        )
+        .unwrap();
+        let chain = chain_of_rosters(vec![v2], &o, &[&o, &a]);
+        assert_eq!(area_root_check(chain.clone(), AREA.into(), 1, root_key_at(AREA, 1)), Ok(true));
+        // An earlier or another root key wrapped under the same area version: refused.
+        let other = area_root_check(chain.clone(), AREA.into(), 1, root_key_at(AREA, 2)).unwrap_err();
+        assert!(other.to_string().contains("folder’s key is not the one"), "{other}");
+        assert!(area_root_check(chain, AREA.into(), 2, root_key_at(AREA, 2)).is_err());
+        // A format 1 chain committed to no root: the caller keeps the envelope rule.
+        let mut old = History::new();
+        old.roster(&o, vec![owner(&o), a.active(&[])], None);
+        assert_eq!(area_root_check(accepted_of(&old, &[&o, &a]), AREA.into(), 1, vec![1; 32]), Ok(false));
+    }
+
+    #[test]
+    fn format_2_a_retired_area_is_written_granted_and_rotated_no_more_and_its_earlier_grants_still_open() {
+        let (o, a) = (Person::new(1), Person::new(2));
+        let members = vec![owner(&o), a.active(&[])];
+        let first = crate::group_trust::roster_first(
+            GROUP.into(),
+            GroupKind::Family,
+            owner(&o),
+            Some(vec![key_with_root(AREA, 1), key_with_root(SECOND_AREA, 1)]),
+            Some(2),
+        )
+        .unwrap();
+        let people = [&o, &a];
+        let next = |chain: &Arc<AcceptedRosters>,
+                    members: Vec<RosterMember>,
+                    keys: Vec<AreaKey>,
+                    retire: Vec<String>| {
+            crate::group_trust::roster_next(
+                chain.clone(),
+                members,
+                o.user_id.clone(),
+                Some(keys),
+                Some(retire),
+                None,
+            )
+        };
+        let admitted =
+            next(&chain_of_rosters(vec![first.clone()], &o, &people), members.clone(), vec![], vec![])
+                .unwrap();
+        let before = chain_of_rosters(vec![first.clone(), admitted.clone()], &o, &people);
+        let ctx = AreaGrantContext {
+            group_id: GROUP.into(),
+            workspace_id: AREA.into(),
+            workspace_key_version: 1,
+            grantee_user_id: a.user_id.clone(),
+            grantee_key_version: 1,
+            granter_user_id: o.user_id.clone(),
+            roster_version: before.roster.roster_version,
+            roster_digest: before.roster_digest.clone(),
+        };
+        let seal = |chain: &Arc<AcceptedRosters>, ctx: AreaGrantContext| {
+            area_grant_seal(
+                area_key_at(AREA, 1),
+                ctx,
+                chain.clone(),
+                AREA_SEED.into(),
+                a.kem(),
+                o.keys.clone(),
+            )
+        };
+        let envelope = seal(&before, ctx.clone()).unwrap();
+        let retire = next(&before, members.clone(), vec![], vec![AREA.into()]).unwrap();
+        assert_eq!(retire.areas.len(), 1);
+        assert!(retire.areas[0].retired && retire.areas[0].workspace_key_version == 2);
+        let retired = chain_of_rosters(vec![first.clone(), admitted.clone(), retire.clone()], &o, &people);
+        assert_eq!(retired.retired_areas(), vec![AREA.to_string()]);
+        assert_eq!(area_write_version(retired.clone(), AREA.into()), None);
+        assert_eq!(area_write_version(retired.clone(), SECOND_AREA.into()), Some(1));
+        assert!(area_root_check(retired.clone(), AREA.into(), 1, root_key_at(AREA, 1))
+            .unwrap_err()
+            .to_string()
+            .contains("deleted"));
+        let later = AreaGrantContext {
+            roster_version: retired.roster.roster_version,
+            roster_digest: retired.roster_digest.clone(),
+            ..ctx.clone()
+        };
+        assert!(seal(&retired, later).unwrap_err().to_string().contains("deleted"));
+        let opened = area_grant_open(
+            envelope,
+            ctx,
+            retired.clone(),
+            AREA_SEED.into(),
+            o.ml_dsa(),
+            None,
+            a.user_id.clone(),
+            1,
+            a.keys.clone(),
+        )
+        .unwrap();
+        assert_eq!(opened, area_key_at(AREA, 1));
+        // A removal rotates only the live area; a second tombstone or a new key is refused.
+        let removing = vec![owner(&o), a.entry(&[], 1, MemberStatus::Left)];
+        assert_eq!(areas_to_rotate(retired.clone(), removing.clone()), vec![SECOND_AREA.to_string()]);
+        let removal = next(&retired, removing, vec![key_with_root(SECOND_AREA, 2)], vec![]).unwrap();
+        let after = chain_of_rosters(vec![first, admitted, retire, removal.clone()], &o, &people);
+        assert_eq!(after.roster.roster_version, 4);
+        assert!(next(&retired, members.clone(), vec![], vec![AREA.into()])
+            .unwrap_err()
+            .to_string()
+            .contains("deleted"));
+        assert!(next(&retired, members.clone(), vec![key_with_root(AREA, 3)], vec![])
+            .unwrap_err()
+            .to_string()
+            .contains("deleted"));
+        // roster_check_next is acceptance: a hand-built revival is refused there too.
+        let revival = roster_sign(
+            Roster {
+                areas: vec![RosterArea {
+                    workspace_id: AREA.into(),
+                    workspace_key_version: 3,
+                    commitment: area_key_commitment(&area_key_at(AREA, 3)).unwrap(),
+                    root_commitment: Some(area_root_commitment(&root_key_at(AREA, 3)).unwrap()),
+                    retired: false,
+                }],
+                members,
+                ..removal
+            },
+            group_seed_at(1),
+            o.keys.clone(),
+        )
+        .unwrap();
+        assert!(crate::group_trust::roster_check_next(retired, revival, ml_dsa_keys(&people), None).is_err());
+    }
+
+    #[test]
+    fn format_2_a_retired_area_stops_counting_toward_the_family_s_1024() {
+        let (o, a) = (Person::new(1), Person::new(2));
+        let id = |i: usize| format!("{i:08x}-abcd-4abc-8abc-abcdefabcdef");
+        let key = |i: usize, version: u8, root: u8| {
+            let mut key = vec![0u8; 32];
+            key[..4].copy_from_slice(&(i as u32).to_be_bytes());
+            key[4] = version;
+            key[5] = root;
+            key
+        };
+        let rows: Vec<RosterArea> = (0..MAX_FAMILY_AREAS)
+            .map(|i| RosterArea {
+                workspace_id: id(i),
+                workspace_key_version: 1,
+                commitment: area_key_commitment(&key(i, 1, 0)).unwrap(),
+                root_commitment: Some(area_root_commitment(&key(i, 1, 1)).unwrap()),
+                retired: false,
+            })
+            .collect();
+        let members = vec![owner(&o), a.active(&[])];
+        let first = Roster { format: 2, areas: rows, ..family_roster(members.clone(), &o) };
+        let chain = chain_of_rosters(vec![first.clone()], &o, &[&o, &a]);
+        let extra = AreaKey {
+            workspace_id: SECOND_AREA.into(),
+            workspace_key: vec![79; 32],
+            root_key: Some(vec![80; 32]),
+        };
+        let next = |chain: &Arc<AcceptedRosters>,
+                    members: Vec<RosterMember>,
+                    keys: Vec<AreaKey>,
+                    retire: Vec<String>| {
+            crate::group_trust::roster_next(
+                chain.clone(),
+                members,
+                o.user_id.clone(),
+                Some(keys),
+                Some(retire),
+                None,
+            )
+        };
+        let full = next(&chain, members.clone(), vec![extra.clone()], vec![]).unwrap_err();
+        assert!(full.to_string().contains("at most 1,024 areas"), "{full}");
+        // Retiring one makes room for one, in the same roster.
+        let swap = next(&chain, members.clone(), vec![extra], vec![id(0)]).unwrap();
+        let after = chain_of_rosters(vec![first.clone(), swap.clone()], &o, &[&o, &a]);
+        assert_eq!(after.area_keys.len(), MAX_FAMILY_AREAS + 1);
+        // A removal still fits one roster: the 1,024 live areas, never the retired one.
+        let removing = vec![owner(&o), a.entry(&[], 1, MemberStatus::Left)];
+        let rotate = areas_to_rotate(after.clone(), removing.clone());
+        assert_eq!(rotate.len(), MAX_FAMILY_AREAS);
+        assert!(!rotate.contains(&id(0)));
+        let keys = rotate
+            .into_iter()
+            .map(|workspace_id| {
+                let i = if workspace_id == SECOND_AREA {
+                    5000
+                } else {
+                    usize::from_str_radix(&workspace_id[..8], 16).unwrap()
+                };
+                AreaKey { workspace_id, workspace_key: key(i, 2, 0), root_key: Some(key(i, 2, 1)) }
+            })
+            .collect();
+        let removal = next(&after, removing, keys, vec![]).unwrap();
+        assert_eq!(chain_of_rosters(vec![first, swap, removal], &o, &[&o, &a]).roster.roster_version, 3);
     }
 }

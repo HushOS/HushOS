@@ -315,6 +315,11 @@ export async function familyServer() {
         postRoster: (_groupId: string, call: RosterCallBody) => apply('rosters', call),
         rotateArea: (_groupId: string, _workspaceId: string, call: RosterCallBody) =>
             apply('rotation', call),
+        deleteArea: async (_groupId: string, workspaceId: string, call: RosterCallBody) => {
+            const head = await apply('delete', call);
+            areas.delete(workspaceId);
+            return head;
+        },
         createArea: async (_groupId: string, call: RosterCallBody) => {
             const head = await apply('areas', call);
             const made = call.area!;

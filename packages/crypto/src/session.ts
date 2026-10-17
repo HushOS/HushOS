@@ -2934,8 +2934,22 @@ export function createCryptoSession() {
                         }
                         // A group area's root decides whether the area may be written: only one
                         // whose envelope opened under the area's write version (a withheld root
-                        // rotation's does not, nor does option A's previous-root envelope).
-                        if (areaRoot) groups.rootSeen(workspaceId, node.parentKeyEpoch);
+                        // rotation's does not, nor does option A's previous-root envelope), and
+                        // whose key is the one the roster committed to at that version (design
+                        // 2.10: a root rolled back under the same area key is not current).
+                        if (
+                            areaRoot &&
+                            !(await groups.rootSeen(workspaceId, node.parentKeyEpoch, key))
+                        ) {
+                            const pool = nodeKeysOf(workspaceId);
+                            pool.get(at)?.key.fill(0);
+                            pool.delete(at);
+                            rootOpenedUnder.delete(at);
+                            heldPrevious?.fill(0);
+                            throw new CryptoError(
+                                'This folder’s key is not the one the family’s member list names.',
+                            );
+                        }
                         // Mid-rotation: the same key under the previous parent key opens
                         // children the rotation has not reached; failure to open it is
                         // not failure to open the node.

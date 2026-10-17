@@ -6,8 +6,8 @@ import {
     requireStoredOrAccepted,
     STORED_ACCEPTANCE,
 } from './accepted';
-import { rowsAfter } from './area-keys';
-import { bytesOf, digestOf, integer, uuid } from './canonical';
+import { NOTHING_LISTED, RETIRED, rowsAfter } from './area-keys';
+import { ascending, bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import {
     digestBase64url,
@@ -26,10 +26,12 @@ import {
     parseRoster,
     rosterDigest,
     rosterEntry,
+    rosterFormat,
     rosterStatement,
     sameGroupKey,
     verifyGroup,
     type AreaKey,
+    type RosterFormat,
     type GroupKeySuccession,
     type GroupKind,
     type GroupPublicKey,
@@ -125,6 +127,14 @@ export type GroupChainCache = {
     keyHistory: Record<string, KeySet[]>;
     /* Every commitment each area's rows named, version 1 first. */
     areaKeys: Record<string, string[]>;
+    /*
+     * Every root commitment each area's key rows named, beside areaKeys, null
+     * for a format 1 row (design 2.10). Absent in a cache from before format
+     * 2, which then had none.
+     */
+    areaRoots?: Record<string, (string | null)[]>;
+    /* The areas the chain retired, sorted (design 2.10). Absent before format 2: none. */
+    retiredAreas?: string[];
     ownEntryWrongAt: number[];
     /* A device's own cache never has an origin; the server's record says 'server' (StoredChainCache). */
     origin?: undefined;
@@ -187,6 +197,14 @@ type ChainBody = {
      * commitment the roster that introduced it listed.
      */
     readonly areaKeys: Readonly<Record<string, readonly string[]>>;
+    /*
+     * Every area root commitment, beside areaKeys (design 2.10): what the
+     * root's key at that area version must commit to, or null for a version
+     * a format 1 roster listed. checkAreaRoot reads it.
+     */
+    readonly areaRoots: Readonly<Record<string, readonly (string | null)[]>>;
+    /* The areas the chain retired (tombstones, design 2.10), sorted: never written, granted or rotated again. */
+    readonly retiredAreas: readonly string[];
     /*
      * The roster versions whose entry for the reader named none of the
      * reader's own identities: a hard warning, even when a later roster put it
@@ -295,40 +313,87 @@ const NOT_ROTATED = 'A roster that removes a family member rotates every area.';
 const ADMITS_ON_REMOVAL = 'No one is admitted on the roster that removes a key holder.';
 const TOO_MANY_AREAS = 'A family has at most 1,024 areas.';
 const REUSED_KEY = 'This area key was used before: a rotation needs a new one.';
+const REUSED_ROOT = 'This folder key was used before: a rotation needs a new one.';
+const DOWNGRADE = 'This member list is in an older format than the one before it.';
+const NOT_FOLLOWING_AREAS = 'This member list does not follow from the one before.';
 
 /*
- * The area rows and what a removal asks (2.4, 2.6). Each row a roster carries
- * is a new area at version 1, or a rotation one above the area's latest
- * version on the chain (`areaKeys`, every commitment the chain listed so far),
- * so every version of every area is listed exactly once, and its commitment
- * (of the key alone) is one the chain never listed before, in any area. In a family, where
- * every member opens every area, a roster that marks anyone `left` rotates
- * every area in the same statement: a device that knows of the removal knows
- * of the rotation. And no roster both removes a `members` holder and admits
- * anyone: the admission waits for the roster after the succession, under a
- * key the removed holder never held (the join mark's coverage, 2.4).
+ * What the chain has listed of its areas so far (2.4, 2.6, 2.10), folded from
+ * the held rosters' rows: every key and root commitment by area, version 1
+ * first (null roots for format 1 rows), the retired areas, and every key and
+ * root commitment of any area, so a repeat is one set lookup.
  */
-function checkAreas(
-    areaKeys: Map<string, string[]>,
-    commitments: Set<string>,
-    previous: Roster | undefined,
-    next: Roster,
-) {
+type AreaLedger = {
+    keys: Map<string, string[]>;
+    roots: Map<string, (string | null)[]>;
+    retired: Set<string>;
+    commitments: Set<string>;
+    rootCommitments: Set<string>;
+};
+
+function ledgerOf(cached: Cached | null): AreaLedger {
+    const roots = new Map(
+        Object.entries(cached?.areaRoots ?? {}).map(([id, list]) => [id, [...list]]),
+    );
+    return {
+        keys: new Map(Object.entries(cached?.areaKeys ?? {}).map(([id, list]) => [id, [...list]])),
+        roots,
+        retired: new Set(cached?.retiredAreas ?? []),
+        commitments: new Set(Object.values(cached?.areaKeys ?? {}).flat()),
+        rootCommitments: new Set(
+            [...roots.values()].flat().filter((at): at is string => at !== null),
+        ),
+    };
+}
+
+/*
+ * The area rows and what a removal asks (2.4, 2.6, 2.10). Each key row a
+ * roster carries is a new area at version 1, or a rotation one above the
+ * area's latest version on the chain, so every version of every area is
+ * listed exactly once, and its commitment (of the key alone) is one the chain
+ * never listed before, in any area; in format 2 so is its root commitment. A
+ * retirement row stands at the next version of an area the chain lists, and
+ * after it nothing more is listed for that area. A chain never goes back to
+ * format 1 after a format 2 roster. In a family, where every member opens
+ * every area, a roster that marks anyone `left` rotates every live area in
+ * the same statement (one it retires counts): a device that knows of the
+ * removal knows of the rotation. A family lists at most MAX_FAMILY_AREAS live
+ * areas. And no roster both removes a `members` holder and admits anyone: the
+ * admission waits for the roster after the succession, under a key the
+ * removed holder never held (the join mark's coverage, 2.4).
+ */
+function checkAreas(ledger: AreaLedger, previous: Roster | undefined, next: Roster) {
+    if (previous && rosterFormat(next) < rosterFormat(previous)) throw new CryptoError(DOWNGRADE);
     const rows = next.areas ?? [];
-    for (const row of rows)
-        if (row.workspaceKeyVersion !== (areaKeys.get(row.workspaceId)?.length ?? 0) + 1)
-            throw new CryptoError('This member list does not follow from the one before.');
-    // A commitment depends on the key alone: one listed before, in any area, or twice in this
-    // roster, is a key used before, and a rotation to it rotates nothing.
-    const fresh = new Set<string>();
     for (const row of rows) {
-        if (commitments.has(row.commitment) || fresh.has(row.commitment))
+        // A retired area is spent for good: nothing more is listed for it, a tombstone included.
+        if (ledger.retired.has(row.workspaceId)) throw new CryptoError(RETIRED);
+        const versions = ledger.keys.get(row.workspaceId)?.length ?? 0;
+        if (row.workspaceKeyVersion !== versions + 1 || (row.retired && versions === 0))
+            throw new CryptoError(NOT_FOLLOWING_AREAS);
+    }
+    // A commitment depends on the key alone: one listed before, in any area, or twice in this
+    // roster, is a key used before, and a rotation to it rotates nothing. The same for a root's.
+    const fresh = new Set<string>();
+    const freshRoots = new Set<string>();
+    for (const row of rows) {
+        if (row.retired) continue;
+        if (ledger.commitments.has(row.commitment) || fresh.has(row.commitment))
             throw new CryptoError(REUSED_KEY);
         fresh.add(row.commitment);
+        if (row.rootCommitment === undefined) continue;
+        if (ledger.rootCommitments.has(row.rootCommitment) || freshRoots.has(row.rootCommitment))
+            throw new CryptoError(REUSED_ROOT);
+        freshRoots.add(row.rootCommitment);
     }
-    // A family's removal rotates every area in one roster, so the areas stay within one roster.
-    const created = rows.filter((row) => !areaKeys.has(row.workspaceId)).length;
-    if (next.kind === 'family' && areaKeys.size + created > MAX_FAMILY_AREAS)
+    // A family's removal rotates every live area in one roster, so the live areas stay within one
+    // roster: those listed and not retired, after this roster's new areas and tombstones.
+    const created = rows.filter((row) => !ledger.keys.has(row.workspaceId)).length;
+    const retiring = rows.filter((row) => row.retired).length;
+    if (
+        next.kind === 'family' &&
+        ledger.keys.size - ledger.retired.size + created - retiring > MAX_FAMILY_AREAS
+    )
         throw new CryptoError(TOO_MANY_AREAS);
     if (!previous) return;
     const leaving = next.members.some(
@@ -336,9 +401,10 @@ function checkAreas(
             entry.status === 'left' && rosterEntry(previous, entry.userId)?.status === 'active',
     );
     if (next.kind === 'family' && leaving) {
-        const rotated = new Set(rows.map((row) => row.workspaceId));
-        for (const workspaceId of areaKeys.keys())
-            if (!rotated.has(workspaceId)) throw new CryptoError(NOT_ROTATED);
+        const handled = new Set(rows.map((row) => row.workspaceId));
+        for (const workspaceId of ledger.keys.keys())
+            if (!ledger.retired.has(workspaceId) && !handled.has(workspaceId))
+                throw new CryptoError(NOT_ROTATED);
     }
     const admits = next.members.some(
         (entry) =>
@@ -347,13 +413,21 @@ function checkAreas(
     if (admits && dropsHolder(previous, next)) throw new CryptoError(ADMITS_ON_REMOVAL);
 }
 
-/* Folds a held roster's area rows into the chain's area keys (checkAreas saw to their versions). */
-function foldAreas(areaKeys: Map<string, string[]>, commitments: Set<string>, roster: Roster) {
+/* Folds a held roster's area rows into the ledger (checkAreas saw to their versions). */
+function foldAreas(ledger: AreaLedger, roster: Roster) {
     for (const row of roster.areas ?? []) {
-        const list = areaKeys.get(row.workspaceId) ?? [];
-        list.push(row.commitment);
-        areaKeys.set(row.workspaceId, list);
-        commitments.add(row.commitment);
+        if (row.retired) {
+            ledger.retired.add(row.workspaceId);
+            continue;
+        }
+        const keys = ledger.keys.get(row.workspaceId) ?? [];
+        keys.push(row.commitment);
+        ledger.keys.set(row.workspaceId, keys);
+        const roots = ledger.roots.get(row.workspaceId) ?? [];
+        roots.push(row.rootCommitment ?? null);
+        ledger.roots.set(row.workspaceId, roots);
+        ledger.commitments.add(row.commitment);
+        if (row.rootCommitment !== undefined) ledger.rootCommitments.add(row.rootCommitment);
     }
 }
 
@@ -629,12 +703,54 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
                 digestOf(at, 'area key commitment'),
             );
         }
-        // The last roster's rows are each its area's latest key. Earlier commitments are this
-        // device's own record, trusted as stored (a compromised device is out of scope). At the
-        // first roster there is nothing earlier: its rows are every area there is.
+        // Root commitments beside them (null for a format 1 row), and the retired areas: a cache
+        // from before format 2 has neither, and described none (design 2.10).
+        // (An empty areaRoots reads the same as none, as the Rust core's record cannot tell them
+        // apart.)
+        if (cache.areaRoots !== undefined && !plain(cache.areaRoots)) throw bad();
+        const cachedRoots = (cache.areaRoots ?? {}) as Record<string, unknown>;
+        if (Object.keys(cachedRoots).some((id) => !Object.hasOwn(areaKeys, id))) throw bad();
+        const beforeFormat2 = Object.keys(cachedRoots).length === 0;
+        const areaRoots: Record<string, (string | null)[]> = {};
+        for (const [workspaceId, list] of Object.entries(areaKeys)) {
+            const roots = beforeFormat2
+                ? list.map(() => null)
+                : Object.hasOwn(cachedRoots, workspaceId)
+                  ? cachedRoots[workspaceId]
+                  : [];
+            if (!Array.isArray(roots) || roots.length !== list.length) throw bad();
+            areaRoots[workspaceId] = roots.map((at: unknown) =>
+                at === null ? null : digestOf(at, 'area root commitment'),
+            );
+        }
+        if (cache.retiredAreas !== undefined && !Array.isArray(cache.retiredAreas)) throw bad();
+        const retiredAreas = ascending(
+            ((cache.retiredAreas as unknown[] | undefined) ?? []).map((at) =>
+                uuid(at, 'workspace id'),
+            ),
+            'retired areas',
+        );
+        if (retiredAreas.some((id) => !Object.hasOwn(areaKeys, id))) throw bad();
+        // The last roster's rows are each its area's latest key (and root), or its tombstone.
+        // Earlier commitments are this device's own record, trusted as stored (a compromised
+        // device is out of scope). At the first roster there is nothing earlier: its rows are
+        // every area there is.
         for (const area of roster.areas ?? []) {
             const list = areaKeys[area.workspaceId];
-            if (list?.length !== area.workspaceKeyVersion || list.at(-1) !== area.commitment)
+            if (area.retired) {
+                if (
+                    !retiredAreas.includes(area.workspaceId) ||
+                    list?.length !== area.workspaceKeyVersion - 1
+                )
+                    throw bad();
+                continue;
+            }
+            if (
+                list?.length !== area.workspaceKeyVersion ||
+                list.at(-1) !== area.commitment ||
+                areaRoots[area.workspaceId]!.at(-1) !== (area.rootCommitment ?? null) ||
+                retiredAreas.includes(area.workspaceId)
+            )
                 throw bad();
         }
         if (
@@ -658,6 +774,8 @@ async function checkCache(groupId: string, value: unknown, server: boolean) {
             creatorUserId,
             keyHistory,
             areaKeys,
+            areaRoots,
+            retiredAreas,
             ownEntryWrongAt,
         };
     } catch (error) {
@@ -691,10 +809,8 @@ type State = {
      * tied to (so its signer's entry) are fixed by its statement, whenever it is looked at.
      */
     signatures: Map<string, 'held' | 'not-member' | 'not-old-key'>;
-    /* Every area key commitment the held rosters listed, version 1 first (foldAreas). */
-    areaKeys: Map<string, string[]>;
-    /* Every area key commitment on the chain so far, of any area: a repeat is a key used before. */
-    commitments: Set<string>;
+    /* What the held rosters listed of the areas (foldAreas): keys, roots, tombstones. */
+    areas: AreaLedger;
 };
 
 function stateOf(groupId: string, mlDsaKeys: Record<string, string>, cached: Cached | null): State {
@@ -720,10 +836,7 @@ function stateOf(groupId: string, mlDsaKeys: Record<string, string>, cached: Cac
         refused: new Map(),
         waiting: new Map(),
         signatures: new Map(),
-        areaKeys: new Map(
-            Object.entries(cached?.areaKeys ?? {}).map(([id, list]) => [id, [...list]]),
-        ),
-        commitments: new Set(Object.values(cached?.areaKeys ?? {}).flat()),
+        areas: ledgerOf(cached),
     };
 }
 
@@ -978,7 +1091,7 @@ async function rosterRules(
             throw new CryptoError(HOLDER_LEFT);
     }
     if (previous) checkEntries(previous.roster, roster);
-    checkAreas(state.areaKeys, state.commitments, previous?.roster, roster);
+    checkAreas(state.areas, previous?.roster, roster);
 }
 
 /* What acceptance takes: AcceptInput, with no reader to check (`me` null) when a chain is extended for a check. */
@@ -1147,7 +1260,7 @@ async function accept(input: Accepting) {
         const at = path.get(version)!;
         const previous = state.held.at(-1);
         await rosterRules(state, at.value, at.statement, at.copies, previous);
-        foldAreas(state.areaKeys, state.commitments, at.value);
+        foldAreas(state.areas, at.value);
         state.held.push({
             roster: at.value,
             statement: at.statement,
@@ -1223,10 +1336,15 @@ async function accept(input: Accepting) {
             list.map((set) => ({ ...set })),
         ]),
     );
-    // Every area key the rosters listed, each area's versions in order (checkAreas, foldAreas).
+    // Every area key the rosters listed, each area's versions in order (checkAreas, foldAreas),
+    // with their roots, and the retired areas.
     const areaKeys: Record<string, string[]> = Object.fromEntries(
-        [...state.areaKeys.entries()].map(([id, list]) => [id, [...list]]),
+        [...state.areas.keys.entries()].map(([id, list]) => [id, [...list]]),
     );
+    const areaRoots: Record<string, (string | null)[]> = Object.fromEntries(
+        [...state.areas.roots.entries()].map(([id, list]) => [id, [...list]]),
+    );
+    const retiredAreas = [...state.areas.retired].sort();
     const ownEntryWrongAt = extending ? [...cached.ownEntryWrongAt] : [];
     const mineAt = async (roster: Roster) => {
         const entry = input.me ? rosterEntry(roster, input.me.userId) : undefined;
@@ -1293,6 +1411,8 @@ async function accept(input: Accepting) {
             latest.droppedHolder && outOfLatest?.lastRosterVersion !== latest.roster.rosterVersion,
         keyHistory,
         areaKeys,
+        areaRoots,
+        retiredAreas,
         ownEntryWrongAt,
         ownEntryBehindAt,
         deadBranches,
@@ -1313,6 +1433,10 @@ async function accept(input: Accepting) {
             areaKeys: Object.fromEntries(
                 Object.entries(areaKeys).map(([id, list]) => [id, [...list]]),
             ),
+            areaRoots: Object.fromEntries(
+                Object.entries(areaRoots).map(([id, list]) => [id, [...list]]),
+            ),
+            retiredAreas: [...retiredAreas],
             ownEntryWrongAt: [...ownEntryWrongAt],
         },
     };
@@ -1688,10 +1812,11 @@ export async function foldInEntry(
 export async function firstRoster(
     groupId: string,
     creator: RosterMember,
-    options: { kind: GroupKind; areaKeys?: AreaKey[] },
+    options: { kind: GroupKind; areaKeys?: AreaKey[]; format?: RosterFormat },
 ): Promise<Roster> {
     if (typeof creator !== 'object' || creator === null || !Array.isArray(creator.roles))
         throw new CryptoError('Invalid roster entry.');
+    const format = rosterFormat({ format: options.format });
     const roster: Roster = {
         groupId,
         kind: options.kind,
@@ -1712,7 +1837,8 @@ export async function firstRoster(
                 sinceVersion: 1,
             },
         ],
-        areas: await rowsAfter({}, options.areaKeys ?? []),
+        areas: await rowsAfter(NOTHING_LISTED, options.areaKeys ?? [], format),
+        ...(format === 2 ? { format } : {}),
     };
     const statement = rosterStatement(roster);
     // The very rules acceptance applies to version 1, signatures aside. Unsigned, the group key
@@ -1743,10 +1869,26 @@ export async function nextRoster(
          * of the group's earlier ones: a client cannot hand in a row of its own making.
          */
         areaKeys?: AreaKey[];
+        /*
+         * The areas this roster retires (design 2.10: a deleted family folder), each a tombstone
+         * at its next version. Format 2 only.
+         */
+        retireAreas?: string[];
+        /*
+         * The format to build: the chain's latest by default; a higher one switches the chain
+         * (format 2 keys need their root's key, AreaKey.rootKey); a lower one is refused.
+         */
+        format?: RosterFormat;
     },
 ): Promise<Roster> {
     requireAccepted(chain);
-    const areas = await areaRows(chain, options.areaKeys ?? []);
+    const latest = rosterFormat(chain.roster);
+    const format = rosterFormat({ format: options.format ?? latest });
+    if (format < latest) throw new CryptoError(DOWNGRADE);
+    const areas = await areaRows(chain, options.areaKeys ?? [], {
+        format,
+        retire: options.retireAreas,
+    });
     const version = chain.roster.rosterVersion + 1;
     const roster: Roster = {
         groupId: chain.groupId,
@@ -1767,6 +1909,7 @@ export async function nextRoster(
             })
             .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)),
         areas,
+        ...(format === 2 ? { format } : {}),
     };
     const statement = rosterStatement(roster);
     // The very rules acceptance applies, from the chain's cache, signatures aside.

@@ -66,6 +66,9 @@ export function groupBodyCap(method: string, path: string): number | { roster: R
         return { roster: 'one' };
     if (method === 'POST' && /^groups\/[^/]+\/(areas|members\/[^/]+\/admit)$/.test(tail))
         return { roster: 'none' };
+    // Deleting a family folder: a roster with its tombstone and nothing else (groups design 2.10).
+    if (method === 'POST' && /^groups\/[^/]+\/areas\/[^/]+\/delete$/.test(tail))
+        return { roster: 'none' };
     return SMALL_BODY_BYTES;
 }
 

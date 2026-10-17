@@ -172,6 +172,8 @@ describe('roster routes', () => {
             ['POST', `groups/${GROUP}/areas/${USER}/rotations`, 'one'],
             ['POST', `groups/${GROUP}/members/${USER}/admit`, 'none'],
             ['POST', `groups/${GROUP}/areas`, 'none'],
+            // Deleting a family folder: a roster with its tombstone, no documents (design 2.10).
+            ['POST', `groups/${GROUP}/areas/${USER}/delete`, 'none'],
         ];
         for (const [method, path, documents] of routes) {
             const limit = rosterBodyLimit(10_000, 2, documents);
@@ -262,6 +264,7 @@ describe('roster routes', () => {
             ['PATCH', `groups/${GROUP}/members/${USER}`],
             ['POST', `groups/${GROUP}/areas`],
             ['POST', `groups/${GROUP}/areas/${GROUP}/rotations`],
+            ['POST', `groups/${GROUP}/areas/${GROUP}/delete`],
         ] as const)
             expect((await handle(request(method, path, streamed(2).body))).status).toBe(403);
     });

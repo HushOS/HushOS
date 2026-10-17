@@ -18,7 +18,7 @@
 //!   that let them; [`roster_entry_own`] makes a creator's own entry.
 
 use crate::bytes::{decode, encode};
-use crate::canonical::{bytes_of, digest_of, integer, uuid};
+use crate::canonical::{ascending, bytes_of, digest_of, integer, uuid};
 use crate::contacts::{
     digest_base64url, digest_hex, identity_fingerprint, key_digest, pin_verified, same_key_digest,
 };
@@ -168,6 +168,13 @@ pub struct GroupChainCache {
     pub key_history: HashMap<String, Vec<KeySet>>,
     /// Every commitment each area's rows named, version 1 first.
     pub area_keys: HashMap<String, Vec<String>>,
+    /// Every root commitment each area's key rows named, beside `area_keys`,
+    /// `None` for a format 1 row (design 2.10). Empty in a cache from before
+    /// format 2, which then had none.
+    pub area_roots: HashMap<String, Vec<Option<String>>>,
+    /// The areas the chain retired, sorted (design 2.10).
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub retired_areas: Vec<String>,
     pub own_entry_wrong_at: Vec<u64>,
 }
 
@@ -202,6 +209,8 @@ pub struct AcceptedRosters {
     pub(crate) succession_due: bool,
     pub(crate) key_history: HashMap<String, Vec<KeySet>>,
     pub(crate) area_keys: HashMap<String, Vec<String>>,
+    pub(crate) area_roots: HashMap<String, Vec<Option<String>>>,
+    pub(crate) retired_areas: Vec<String>,
     pub(crate) own_entry_wrong_at: Vec<u64>,
     pub(crate) own_entry_behind_at: Vec<u64>,
     pub(crate) dead_branches: Vec<DeadBranch>,
@@ -267,6 +276,17 @@ impl AcceptedRosters {
     /// checked against the commitment the roster that introduced it listed.
     pub fn area_keys(&self) -> HashMap<String, Vec<String>> {
         self.area_keys.clone()
+    }
+    /// Every area root commitment, beside `area_keys` (design 2.10): what the
+    /// root's key at that area version must commit to, or `None` for a version
+    /// a format 1 roster listed. [`crate::groups::area_root_check`] reads it.
+    pub fn area_roots(&self) -> HashMap<String, Vec<Option<String>>> {
+        self.area_roots.clone()
+    }
+    /// The areas the chain retired (tombstones, design 2.10), sorted: never
+    /// written, granted or rotated again.
+    pub fn retired_areas(&self) -> Vec<String> {
+        self.retired_areas.clone()
     }
     /// The roster versions whose entry for the reader named none of its own
     /// identities: a hard warning, even when a later roster put it right.
@@ -450,37 +470,87 @@ const NOT_ROTATED: &str = "A roster that removes a family member rotates every a
 const ADMITS_ON_REMOVAL: &str = "No one is admitted on the roster that removes a key holder.";
 const TOO_MANY_AREAS: &str = "A family has at most 1,024 areas.";
 const REUSED_KEY: &str = "This area key was used before: a rotation needs a new one.";
+const REUSED_ROOT: &str = "This folder key was used before: a rotation needs a new one.";
+pub(crate) const DOWNGRADE: &str = "This member list is in an older format than the one before it.";
 
 /*
- * The area rows and what a removal asks (2.4, 2.6), as the web's checkAreas.
- * Each row a roster carries is a new area at version 1, or a rotation one
- * above the area's latest version on the chain (`area_keys`), so every
- * version of every area is listed exactly once, and its commitment (of the key
- * alone) is one the chain never listed before, in any area. In a family a roster that
- * marks anyone `left` rotates every area in the same statement. And no roster
- * both removes a `Members` holder and admits anyone.
+ * What the chain has listed of its areas so far (2.4, 2.6, 2.10), folded
+ * from the held rosters' rows, as the web's AreaLedger: every key and root
+ * commitment by area, version 1 first (`None` roots for format 1 rows), the
+ * retired areas, and every key and root commitment of any area, so a repeat
+ * is one set lookup.
  */
-fn check_areas(
-    area_keys: &HashMap<String, Vec<String>>,
-    commitments: &HashSet<String>,
-    previous: Option<&Roster>,
-    next: &Roster,
-) -> CoreResult<()> {
+#[derive(Default)]
+struct AreaLedger {
+    keys: HashMap<String, Vec<String>>,
+    roots: HashMap<String, Vec<Option<String>>>,
+    retired: HashSet<String>,
+    commitments: HashSet<String>,
+    root_commitments: HashSet<String>,
+}
+
+impl AreaLedger {
+    fn of(cache: &GroupChainCache) -> AreaLedger {
+        AreaLedger {
+            keys: cache.area_keys.clone(),
+            roots: cache.area_roots.clone(),
+            retired: cache.retired_areas.iter().cloned().collect(),
+            commitments: cache.area_keys.values().flatten().cloned().collect(),
+            root_commitments: cache.area_roots.values().flatten().flatten().cloned().collect(),
+        }
+    }
+}
+
+/*
+ * The area rows and what a removal asks (2.4, 2.6, 2.10), as the web's
+ * checkAreas. Each key row a roster carries is a new area at version 1, or a
+ * rotation one above the area's latest version on the chain, so every
+ * version of every area is listed exactly once, and its commitment (of the
+ * key alone) is one the chain never listed before, in any area; in format 2
+ * so is its root commitment. A retirement row stands at the next version of
+ * an area the chain lists, and after it nothing more is listed for that area.
+ * A chain never goes back to format 1 after a format 2 roster. In a family a
+ * roster that marks anyone `left` rotates every live area in the same
+ * statement (one it retires counts), and a family lists at most
+ * `MAX_FAMILY_AREAS` live areas. And no roster both removes a `Members`
+ * holder and admits anyone.
+ */
+fn check_areas(ledger: &AreaLedger, previous: Option<&Roster>, next: &Roster) -> CoreResult<()> {
+    if previous.is_some_and(|previous| next.format < previous.format) {
+        return Err(input(DOWNGRADE));
+    }
     for row in &next.areas {
-        let versions = area_keys.get(&row.workspace_id).map_or(0, Vec::len) as u64;
-        if row.workspace_key_version != versions + 1 {
+        // A retired area is spent for good: nothing more is listed for it, a tombstone included.
+        if ledger.retired.contains(&row.workspace_id) {
+            return Err(input(crate::groups::RETIRED));
+        }
+        let versions = ledger.keys.get(&row.workspace_id).map_or(0, Vec::len) as u64;
+        if row.workspace_key_version != versions + 1 || (row.retired && versions == 0) {
             return Err(input("This member list does not follow from the one before."));
         }
     }
     // A commitment depends on the key alone: one listed before, in any area, or twice in this
-    // roster, is a key used before, and a rotation to it rotates nothing.
+    // roster, is a key used before, and a rotation to it rotates nothing. The same for a root's.
     let mut fresh = HashSet::new();
-    if next.areas.iter().any(|row| commitments.contains(&row.commitment) || !fresh.insert(&row.commitment)) {
-        return Err(input(REUSED_KEY));
+    let mut fresh_roots = HashSet::new();
+    for row in next.areas.iter().filter(|row| !row.retired) {
+        if ledger.commitments.contains(&row.commitment) || !fresh.insert(&row.commitment) {
+            return Err(input(REUSED_KEY));
+        }
+        if let Some(root) = &row.root_commitment {
+            if ledger.root_commitments.contains(root) || !fresh_roots.insert(root) {
+                return Err(input(REUSED_ROOT));
+            }
+        }
     }
-    // A family's removal rotates every area in one roster, so the areas stay within one roster.
-    let created = next.areas.iter().filter(|row| !area_keys.contains_key(&row.workspace_id)).count();
-    if next.kind == GroupKind::Family && area_keys.len() + created > crate::groups::MAX_FAMILY_AREAS {
+    // A family's removal rotates every live area in one roster, so the live areas stay within one
+    // roster: those listed and not retired, after this roster's new areas and tombstones.
+    let created = next.areas.iter().filter(|row| !ledger.keys.contains_key(&row.workspace_id)).count();
+    let retiring = next.areas.iter().filter(|row| row.retired).count();
+    if next.kind == GroupKind::Family
+        && (ledger.keys.len() - ledger.retired.len() + created).saturating_sub(retiring)
+            > crate::groups::MAX_FAMILY_AREAS
+    {
         return Err(input(TOO_MANY_AREAS));
     }
     let Some(previous) = previous else {
@@ -492,7 +562,10 @@ fn check_areas(
     });
     if next.kind == GroupKind::Family
         && leaving
-        && area_keys.keys().any(|id| !next.areas.iter().any(|row| &row.workspace_id == id))
+        && ledger
+            .keys
+            .keys()
+            .any(|id| !ledger.retired.contains(id) && !next.areas.iter().any(|row| &row.workspace_id == id))
     {
         return Err(input(NOT_ROTATED));
     }
@@ -506,15 +579,19 @@ fn check_areas(
     Ok(())
 }
 
-/* Folds a held roster's area rows into the chain's area keys (check_areas saw to their versions). */
-fn fold_areas(
-    area_keys: &mut HashMap<String, Vec<String>>,
-    commitments: &mut HashSet<String>,
-    roster: &Roster,
-) {
+/* Folds a held roster's area rows into the ledger (check_areas saw to their versions). */
+fn fold_areas(ledger: &mut AreaLedger, roster: &Roster) {
     for row in &roster.areas {
-        area_keys.entry(row.workspace_id.clone()).or_default().push(row.commitment.clone());
-        commitments.insert(row.commitment.clone());
+        if row.retired {
+            ledger.retired.insert(row.workspace_id.clone());
+            continue;
+        }
+        ledger.keys.entry(row.workspace_id.clone()).or_default().push(row.commitment.clone());
+        ledger.roots.entry(row.workspace_id.clone()).or_default().push(row.root_commitment.clone());
+        ledger.commitments.insert(row.commitment.clone());
+        if let Some(root) = &row.root_commitment {
+            ledger.root_commitments.insert(root.clone());
+        }
     }
 }
 
@@ -593,7 +670,7 @@ fn signed_by_member(
  * fit (zero, or beyond usize on a 32-bit target) is usize::MAX, which no list
  * reaches, never a truncated index that lands on another version.
  */
-fn version_index(version: u64) -> usize {
+pub(crate) fn version_index(version: u64) -> usize {
     version.checked_sub(1).and_then(|index| usize::try_from(index).ok()).unwrap_or(usize::MAX)
 }
 
@@ -707,13 +784,48 @@ fn check_cache(group_id: &str, cache: GroupChainCache) -> CoreResult<Cached> {
                 digest_of(at, "area key commitment")?;
             }
         }
-        // The last roster's rows are each its area's latest key. Earlier commitments are this
-        // device's own record, trusted as stored (a compromised device is out of scope). At the
-        // first roster there is nothing earlier: its rows are every area there is.
+        // Root commitments beside them (`None` for a format 1 row), and the retired areas. A cache
+        // from before format 2 has neither, and described none (design 2.10): its roots read as
+        // `None` for every version.
+        let mut cache = cache.clone();
+        if cache.area_roots.keys().any(|id| !cache.area_keys.contains_key(id)) {
+            return Err(bad());
+        }
+        let before_format_2 = cache.area_roots.is_empty();
+        for (workspace_id, list) in &cache.area_keys {
+            let roots = cache.area_roots.entry(workspace_id.clone()).or_default();
+            if before_format_2 {
+                *roots = vec![None; list.len()];
+            }
+            if roots.len() != list.len() {
+                return Err(bad());
+            }
+            for root in roots.iter().flatten() {
+                digest_of(root, "area root commitment")?;
+            }
+        }
+        for id in &cache.retired_areas {
+            uuid(id, "workspace id")?;
+            if !cache.area_keys.contains_key(id) {
+                return Err(bad());
+            }
+        }
+        ascending(&cache.retired_areas.iter().map(String::as_str).collect::<Vec<_>>(), "retired areas")?;
+        // The last roster's rows are each its area's latest key (and root), or its tombstone.
+        // Earlier commitments are this device's own record, trusted as stored (a compromised
+        // device is out of scope). At the first roster there is nothing earlier: its rows are
+        // every area there is.
+        let retired = |id: &String| cache.retired_areas.contains(id);
         if roster.areas.iter().any(|area| {
-            cache.area_keys.get(&area.workspace_id).is_none_or(|list| {
-                list.len() as u64 != area.workspace_key_version || list.last() != Some(&area.commitment)
-            })
+            let versions = cache.area_keys.get(&area.workspace_id).map(Vec::len);
+            if area.retired {
+                return !retired(&area.workspace_id)
+                    || versions != Some(version_index(area.workspace_key_version));
+            }
+            retired(&area.workspace_id)
+                || versions != usize::try_from(area.workspace_key_version).ok()
+                || cache.area_keys[&area.workspace_id].last() != Some(&area.commitment)
+                || cache.area_roots[&area.workspace_id].last() != Some(&area.root_commitment)
         }) || (roster.roster_version == 1 && cache.area_keys.len() != roster.areas.len())
         {
             return Err(bad());
@@ -724,7 +836,7 @@ fn check_cache(group_id: &str, cache: GroupChainCache) -> CoreResult<Cached> {
                 return Err(bad());
             }
         }
-        Ok(Cached { roster_digests: cache.roster_digests.clone(), statement, roster, cache: cache.clone() })
+        Ok(Cached { roster_digests: cache.roster_digests.clone(), statement, roster, cache })
     };
     checked().map_err(|_| bad())
 }
@@ -758,10 +870,8 @@ struct State<'a> {
      * one copy holds both, else why not.
      */
     signatures: std::cell::RefCell<HashMap<String, Result<(), &'static str>>>,
-    /* Every area key commitment the held rosters listed, version 1 first (fold_areas). */
-    area_keys: HashMap<String, Vec<String>>,
-    /* Every area key commitment on the chain so far, of any area: a repeat is a key used before. */
-    commitments: HashSet<String>,
+    /* What the held rosters listed of the areas (fold_areas): keys, roots, tombstones. */
+    areas: AreaLedger,
 }
 
 impl<'a> State<'a> {
@@ -799,10 +909,7 @@ impl<'a> State<'a> {
             refused: BTreeMap::new(),
             waiting: BTreeMap::new(),
             signatures: std::cell::RefCell::new(HashMap::new()),
-            area_keys: cached.map(|cached| cached.cache.area_keys.clone()).unwrap_or_default(),
-            commitments: cached
-                .map(|cached| cached.cache.area_keys.values().flatten().cloned().collect())
-                .unwrap_or_default(),
+            areas: cached.map(|cached| AreaLedger::of(&cached.cache)).unwrap_or_default(),
         }
     }
 
@@ -1066,7 +1173,7 @@ impl<'a> State<'a> {
         if let Some(previous) = previous {
             check_entries(&previous.roster, roster)?;
         }
-        check_areas(&self.area_keys, &self.commitments, previous.map(|previous| &previous.roster), roster)?;
+        check_areas(&self.areas, previous.map(|previous| &previous.roster), roster)?;
         Ok(())
     }
 }
@@ -1389,7 +1496,7 @@ fn accept(
         let at = &path[&version];
         let previous = state.held.last().cloned();
         state.roster_rules(&at.value, &at.statement, Some(&at.copies), previous.as_ref())?;
-        fold_areas(&mut state.area_keys, &mut state.commitments, &at.value);
+        fold_areas(&mut state.areas, &at.value);
         state.held.push(Held {
             roster: at.value.clone(),
             statement: at.statement.clone(),
@@ -1497,8 +1604,12 @@ fn accept(
     let newest_own = me.into_iter().flat_map(|me| &me.identities).map(|i| i.key_version).max().unwrap_or(0);
     let mut own_entry_behind_at = vec![];
     let fresh = if extending { &state.held[1..] } else { &state.held[..] };
-    // Every area key the rosters listed, each area's versions in order (check_areas, fold_areas).
-    let area_keys = state.area_keys.clone();
+    // Every area key the rosters listed, each area's versions in order (check_areas, fold_areas),
+    // with their roots, and the retired areas.
+    let area_keys = state.areas.keys.clone();
+    let area_roots = state.areas.roots.clone();
+    let mut retired_areas: Vec<String> = state.areas.retired.iter().cloned().collect();
+    retired_areas.sort();
     for at in fresh {
         for entry in &at.roster.members {
             let seen: &mut Vec<KeySet> = key_history.entry(entry.user_id.clone()).or_default();
@@ -1556,6 +1667,8 @@ fn accept(
         creator_user_id: creator_user_id.clone(),
         key_history: key_history.clone(),
         area_keys: area_keys.clone(),
+        area_roots: area_roots.clone(),
+        retired_areas: retired_areas.clone(),
         own_entry_wrong_at: own_entry_wrong_at.clone(),
     };
     let chain = AcceptedRosters {
@@ -1576,6 +1689,8 @@ fn accept(
                 != Some(latest.roster.roster_version),
         key_history,
         area_keys,
+        area_roots,
+        retired_areas,
         own_entry_wrong_at,
         own_entry_behind_at,
         dead_branches,
@@ -1931,13 +2046,13 @@ pub fn roster_entry_fold_in(
 /// let user_id = "00000001-abcd-4abc-8abc-abcdefabcdef".to_string();
 /// let envelope = identity_create(user_id.clone(), vec![7; 32], 1)?;
 /// let creator = roster_entry_own(user_id, public_identity(envelope)?, vec![GroupRole::Members])?;
-/// let area = AreaKey { workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(), workspace_key: vec![77; 32] };
+/// let area = AreaKey { workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(), workspace_key: vec![77; 32], root_key: None, };
 /// let group_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".to_string();
-/// let roster = roster_first(group_id.clone(), GroupKind::Family, creator.clone(), Some(vec![area]))?;
+/// let roster = roster_first(group_id.clone(), GroupKind::Family, creator.clone(), Some(vec![area]), None)?;
 /// assert_eq!((roster.roster_version, roster.areas[0].workspace_key_version), (1, 1));
 /// // A creator who cannot sign the next roster makes no group.
 /// let no_holder = RosterMember { roles: vec![GroupRole::Billing], ..creator };
-/// assert!(roster_first(group_id, GroupKind::Family, no_holder, None).is_err());
+/// assert!(roster_first(group_id, GroupKind::Family, no_holder, None, None).is_err());
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -1946,8 +2061,13 @@ pub fn roster_first(
     kind: GroupKind,
     creator: RosterMember,
     area_keys: Option<Vec<crate::groups::AreaKey>>,
+    format: Option<u8>,
 ) -> CoreResult<Roster> {
-    let areas = crate::groups::rows_after(&HashMap::new(), area_keys.unwrap_or_default())?;
+    let format = format.unwrap_or(1);
+    let nothing = HashMap::new();
+    let no_roots = HashMap::new();
+    let listed = crate::groups::ListedAreas { keys: &nothing, roots: &no_roots, retired: &[] };
+    let areas = crate::groups::rows_after(listed, area_keys.unwrap_or_default(), format, vec![])?;
     let mut roles = creator.roles;
     roles.sort();
     let roster = Roster {
@@ -1959,6 +2079,7 @@ pub fn roster_first(
         signer_user_id: creator.user_id.clone(),
         members: vec![RosterMember { roles, since_version: 1, ..creator }],
         areas,
+        format,
     };
     let statement = roster_bytes(&roster)?;
     // The very rules acceptance applies to version 1, signatures aside. Unsigned, the group key
@@ -1985,7 +2106,14 @@ pub fn roster_next(
     members: Vec<RosterMember>,
     signer_user_id: String,
     area_keys: Option<Vec<crate::groups::AreaKey>>,
+    retire_areas: Option<Vec<String>>,
+    format: Option<u8>,
 ) -> CoreResult<Roster> {
+    // The chain's latest format unless a higher one is asked for (design 2.10); never a lower one.
+    let format = format.unwrap_or(chain.roster.format);
+    if format < chain.roster.format {
+        return Err(input(DOWNGRADE));
+    }
     let version = chain.roster.roster_version + 1;
     let mut members: Vec<RosterMember> = members
         .into_iter()
@@ -2002,7 +2130,12 @@ pub fn roster_next(
     // The new keys of the areas this roster creates or rotates (areas_to_rotate says which a
     // removal needs): the rows are computed here, and refused when a key is any of the group's
     // earlier ones, so a client cannot hand in a row of its own making.
-    let areas = crate::groups::area_rows(&chain, area_keys.unwrap_or_default())?;
+    let areas = crate::groups::area_rows(
+        &chain,
+        area_keys.unwrap_or_default(),
+        format,
+        retire_areas.unwrap_or_default(),
+    )?;
     let roster = Roster {
         group_id: chain.group_id.clone(),
         kind: chain.kind,
@@ -2012,6 +2145,7 @@ pub fn roster_next(
         signer_user_id,
         members,
         areas,
+        format,
     };
     let statement = roster_bytes(&roster)?;
     // The very rules acceptance applies, from the chain's cache, signatures aside.
@@ -3509,6 +3643,8 @@ mod tests {
             vec![owner(&organizer), entry, holder.active(&[GroupRole::Members])],
             organizer.user_id.clone(),
             None,
+            None,
+            None,
         )
         .unwrap();
         h.rosters.push(roster_sign(roster, h.seeds[0].clone(), organizer.keys.clone()).unwrap());
@@ -3555,7 +3691,9 @@ mod tests {
         ];
         let mut rosters = f.h.rosters.clone();
         for step in &steps {
-            let roster = roster_next(chain.clone(), step(&chain), f.organizer.user_id.clone(), None).unwrap();
+            let roster =
+                roster_next(chain.clone(), step(&chain), f.organizer.user_id.clone(), None, None, None)
+                    .unwrap();
             let signed = roster_sign(
                 roster.clone(),
                 f.h.seeds[(chain.group_key_version - 1) as usize].clone(),
@@ -3569,19 +3707,32 @@ mod tests {
         }
         drop(steps);
         assert!(chain.succession_due);
-        assert!(roster_next(chain.clone(), chain.roster.members.clone(), f.organizer.user_id.clone(), None)
-            .unwrap_err()
-            .to_string()
-            .contains("must be replaced first"));
+        assert!(roster_next(
+            chain.clone(),
+            chain.roster.members.clone(),
+            f.organizer.user_id.clone(),
+            None,
+            None,
+            None
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must be replaced first"));
         f.h.rosters = rosters;
         let organizer = f.organizer.clone();
         f.h.succession(&organizer);
         group_succession_check_next(chain.clone(), f.h.successions.last().unwrap().clone(), f.keys.clone())
             .unwrap();
         let chain = accepted(newcomer(&f, Over::default()));
-        let roster =
-            roster_next(chain.clone(), chain.roster.members.clone(), f.organizer.user_id.clone(), None)
-                .unwrap();
+        let roster = roster_next(
+            chain.clone(),
+            chain.roster.members.clone(),
+            f.organizer.user_id.clone(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(roster.group_key_version, 3);
         f.h.rosters.push(roster_sign(roster, f.h.seeds[2].clone(), f.organizer.keys.clone()).unwrap());
         assert_eq!(accepted(newcomer(&f, Over::default())).roster.roster_version, 8);
@@ -3595,15 +3746,24 @@ mod tests {
             chain.clone(),
             vec![owner(&f.organizer), f.adult.active(&[])],
             f.organizer.user_id.clone(),
+            None,
+            None,
             None
         )
         .unwrap_err()
         .to_string()
         .contains("does not follow from the one before"));
-        assert!(roster_next(chain.clone(), chain.roster.members.clone(), f.adult.user_id.clone(), None)
-            .unwrap_err()
-            .to_string()
-            .contains("not signed by a member who holds the group key"));
+        assert!(roster_next(
+            chain.clone(),
+            chain.roster.members.clone(),
+            f.adult.user_id.clone(),
+            None,
+            None,
+            None
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not signed by a member who holds the group key"));
     }
 
     #[test]
@@ -4522,6 +4682,8 @@ mod tests {
             ],
             f.organizer.user_id.clone(),
             None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!((roster.roster_version, roster.group_key_version), (5, 2));
@@ -4708,6 +4870,8 @@ mod tests {
                 f.holder.entry(&[GroupRole::Members], 3, MemberStatus::Left),
             ],
             f.organizer.user_id.clone(),
+            None,
+            None,
             None,
         )
         .unwrap();
@@ -6158,7 +6322,7 @@ mod tests {
     }
 
     fn area_key(workspace_id: &str, key: Vec<u8>) -> crate::groups::AreaKey {
-        crate::groups::AreaKey { workspace_id: workspace_id.into(), workspace_key: key }
+        crate::groups::AreaKey { workspace_id: workspace_id.into(), workspace_key: key, root_key: None }
     }
 
     #[test]
@@ -6173,6 +6337,7 @@ mod tests {
             GroupKind::Family,
             RosterMember { roles, since_version: 7, ..entry },
             Some(vec![area_key(AREA, AREA_KEY.to_vec())]),
+            None,
         )
         .unwrap();
         // Byte for byte what the test history writes for the same creator and area.
@@ -6233,17 +6398,19 @@ mod tests {
             GroupKind::Family,
             members.clone(),
             Some(vec![area_key(SECOND_AREA, vec![101; 32]), area_key(AREA, AREA_KEY.to_vec())]),
+            None,
         )
         .unwrap();
         let ids: Vec<_> =
             roster.areas.iter().map(|row| (row.workspace_id.as_str(), row.workspace_key_version)).collect();
         assert_eq!(ids, [(AREA, 1), (SECOND_AREA, 1)]);
         assert_eq!(roster.areas[0].commitment, crate::groups::area_key_commitment(&AREA_KEY).unwrap());
-        assert!(roster_first(GROUP.into(), GroupKind::Family, members, None).unwrap().areas.is_empty());
+        assert!(roster_first(GROUP.into(), GroupKind::Family, members, None, None).unwrap().areas.is_empty());
         let org = roster_first(
             GROUP.into(),
             GroupKind::Org,
             organizer.active(&[GroupRole::DataAdmin, GroupRole::Members]),
+            None,
             None,
         )
         .unwrap();
@@ -6258,6 +6425,8 @@ mod tests {
             workspace_id: workspace_id.into(),
             workspace_key_version: 1,
             commitment: crate::groups::area_key_commitment(&[key; 32]).unwrap(),
+            root_commitment: None,
+            retired: false,
         };
         // Each with its creator and area keys, what roster_first says, then what acceptance says of
         // the same roster.
@@ -6287,8 +6456,8 @@ mod tests {
         ];
         for (name, creator, keys, message, accepting) in refusals {
             let area_keys = keys.iter().map(|(id, key)| area_key(id, vec![*key; 32])).collect();
-            let error =
-                roster_first(GROUP.into(), GroupKind::Family, creator.clone(), Some(area_keys)).unwrap_err();
+            let error = roster_first(GROUP.into(), GroupKind::Family, creator.clone(), Some(area_keys), None)
+                .unwrap_err();
             assert!(error.to_string().contains(message), "{name}: {error}");
             // The same roster, signed as a client that skipped the checks would sign it.
             let mut h = History::new();
@@ -6307,12 +6476,12 @@ mod tests {
         // a key of the wrong length, a group id outside the canonical form.
         let members = organizer.active(&[GroupRole::Members]);
         let twice = vec![area_key(AREA, AREA_KEY.to_vec()), area_key(AREA, vec![78; 32])];
-        assert!(roster_first(GROUP.into(), GroupKind::Family, members.clone(), Some(twice)).is_err());
+        assert!(roster_first(GROUP.into(), GroupKind::Family, members.clone(), Some(twice), None).is_err());
         let company = organizer.active(&[GroupRole::DataAdmin, GroupRole::Members]);
-        assert!(roster_first(GROUP.into(), GroupKind::Family, company, None).is_err());
+        assert!(roster_first(GROUP.into(), GroupKind::Family, company, None, None).is_err());
         let short = vec![area_key(AREA, vec![77; 31])];
-        assert!(roster_first(GROUP.into(), GroupKind::Family, members.clone(), Some(short)).is_err());
-        assert!(roster_first(GROUP.to_uppercase(), GroupKind::Family, members, None).is_err());
+        assert!(roster_first(GROUP.into(), GroupKind::Family, members.clone(), Some(short), None).is_err());
+        assert!(roster_first(GROUP.to_uppercase(), GroupKind::Family, members, None, None).is_err());
     }
 
     #[test]
@@ -6351,7 +6520,7 @@ mod tests {
         // An earlier identity's keys statement holds too; the creator signs with their current
         // keys, so a first roster naming the earlier ones is one no device takes.
         let earlier = roster_entry_own(adult.user_id.clone(), adult.served(), roles).unwrap();
-        let roster = roster_first(GROUP.into(), GroupKind::Family, earlier, None).unwrap();
+        let roster = roster_first(GROUP.into(), GroupKind::Family, earlier, None, None).unwrap();
         let signed = roster_sign(roster, group_seed_at(1), adult2.keys.clone()).unwrap();
         let chain = accept_rosters(
             GROUP.into(),

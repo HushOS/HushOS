@@ -25,6 +25,8 @@ import {
     areaGrants,
     driveLinks,
     driveNodes,
+    driveObjectDeletions,
+    driveObjects,
     driveRotations,
     driveShares,
     groupChainCaches,
@@ -226,6 +228,8 @@ export type ChainRoute =
     | { kind: 'area'; area: AreaInput }
     /* An area's key rotation, listed on the roster at the next version. */
     | { kind: 'rotation' }
+    /* A family folder's deletion: its tombstone on the roster (docs/groups-design.md 2.10). */
+    | { kind: 'retire'; workspaceId: string }
     /* A succession on its own, no roster. */
     | { kind: 'succession' };
 
@@ -572,6 +576,8 @@ async function upsertGrants(
                 .where(
                     and(
                         eq(workspaces.groupId, groupId),
+                        // A deleted area is granted no more (docs/groups-design.md 2.10).
+                        isNull(workspaces.deletedAt),
                         inArray(
                             workspaces.id,
                             grants.map((grant) => grant.workspaceId),
@@ -666,7 +672,8 @@ async function insertArea(tx: Tx, groupId: string, uploader: string, area: AreaI
         const [row] = await tx
             .select({ areas: count() })
             .from(workspaces)
-            .where(eq(workspaces.groupId, groupId));
+            // A deleted area no longer counts (docs/groups-design.md 2.10).
+            .where(and(eq(workspaces.groupId, groupId), isNull(workspaces.deletedAt)));
         if ((row?.areas ?? 0) >= area.limit) refuse({ status: 'area-limit', limit: area.limit });
     }
     await tx.insert(workspaces).values({
@@ -699,6 +706,39 @@ async function insertArea(tx: Tx, groupId: string, uploader: string, area: AreaI
 }
 
 /*
+ * A family folder's deletion inside the chain write (docs/groups-design.md
+ * 2.10), the roster carrying its tombstone: the area, live and this group's,
+ * is marked deleted, so nothing serves it from now on (spaces, Drive, grants,
+ * rotations, the area count), no rotation is due for it any more, and every
+ * share and link inside it is revoked. Its files stay until
+ * purgeDeletedAreas takes them with the rest, after Drive's trash retention.
+ * Called after lockAreas.
+ */
+async function retireArea(tx: Tx, groupId: string, workspaceId: string) {
+    const [area] = await tx
+        .update(workspaces)
+        .set({ deletedAt: new Date(), rotationDueAt: null })
+        .where(
+            and(
+                eq(workspaces.id, workspaceId),
+                eq(workspaces.groupId, groupId),
+                isNull(workspaces.deletedAt),
+            ),
+        )
+        .returning({ id: workspaces.id });
+    if (!area) invalid('area');
+    const now = new Date();
+    await tx
+        .update(driveShares)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(driveShares.workspaceId, workspaceId), isNull(driveShares.revokedAt)));
+    await tx
+        .update(driveLinks)
+        .set({ revokedAt: now })
+        .where(and(eq(driveLinks.workspaceId, workspaceId), isNull(driveLinks.revokedAt)));
+}
+
+/*
  * An area's key rotation inside the chain write: the area at `fromVersion`,
  * no Drive rotation already running there, the root re-keyed at the target
  * under the new workspace key (its metadata re-sealed and signed by the
@@ -710,7 +750,13 @@ async function applyRotation(tx: Tx, groupId: string, uploader: string, rotation
     const [area] = await tx
         .select({ version: workspaces.workspaceKeyVersion })
         .from(workspaces)
-        .where(and(eq(workspaces.id, rotation.workspaceId), eq(workspaces.groupId, groupId)));
+        .where(
+            and(
+                eq(workspaces.id, rotation.workspaceId),
+                eq(workspaces.groupId, groupId),
+                isNull(workspaces.deletedAt),
+            ),
+        );
     if (!area) invalid('rotation-area');
     if (area!.version !== rotation.fromVersion || rotation.toVersion !== rotation.fromVersion + 1)
         invalid('rotation-version');
@@ -1351,6 +1397,7 @@ export async function appendChain(input: {
                     successionDue = false;
                 }
                 if (route.kind === 'area') await insertArea(tx, groupId, uploader, route.area);
+                if (route.kind === 'retire') await retireArea(tx, groupId, route.workspaceId);
                 if ((input.rotations?.length ?? 0) > 0 && !roster) invalid('rotation-roster');
                 await checkRotationDocuments(tx, groupId, input.rotations ?? []);
                 for (const rotation of input.rotations ?? [])
@@ -2236,7 +2283,13 @@ export async function listRotationsDue(groupId: string) {
         await db
             .select({ id: workspaces.id })
             .from(workspaces)
-            .where(and(eq(workspaces.groupId, groupId), isNotNull(workspaces.rotationDueAt)))
+            .where(
+                and(
+                    eq(workspaces.groupId, groupId),
+                    isNotNull(workspaces.rotationDueAt),
+                    isNull(workspaces.deletedAt),
+                ),
+            )
     ).map((row) => row.id);
 }
 
@@ -2583,6 +2636,8 @@ export async function putSelfGrant(input: {
                         and(
                             eq(workspaces.id, input.workspaceId),
                             eq(workspaces.groupId, input.groupId),
+                            // A deleted area (docs/groups-design.md 2.10) is no area any more.
+                            isNull(workspaces.deletedAt),
                         ),
                     );
                 // An area of another group, or none: the caller is a member, so not `not-member`.
@@ -2660,6 +2715,8 @@ export async function replacePreviousRoot(input: {
                         and(
                             eq(workspaces.id, input.workspaceId),
                             eq(workspaces.groupId, input.groupId),
+                            // A deleted area (docs/groups-design.md 2.10) is no area any more.
+                            isNull(workspaces.deletedAt),
                         ),
                     )
                     .for('no key update');
@@ -2727,6 +2784,7 @@ export async function areaRootWork(input: {
                     and(
                         eq(workspaces.id, input.workspaceId),
                         eq(workspaces.groupId, input.groupId),
+                        isNull(workspaces.deletedAt),
                     ),
                 );
             if (!area) return { status: 'area' as const };
@@ -2792,9 +2850,13 @@ export async function spacesFor(userId: string) {
                 })
                 .from(workspaces)
                 .where(
-                    inArray(
-                        workspaces.groupId,
-                        memberships.map((m) => m.groupId),
+                    and(
+                        inArray(
+                            workspaces.groupId,
+                            memberships.map((m) => m.groupId),
+                        ),
+                        // A deleted family folder is gone for everyone (docs/groups-design.md 2.10).
+                        isNull(workspaces.deletedAt),
                     ),
                 )
                 .orderBy(workspaces.createdAt, workspaces.id);
@@ -2892,7 +2954,7 @@ export async function listAreas(groupId: string) {
             rotationDueAt: workspaces.rotationDueAt,
         })
         .from(workspaces)
-        .where(eq(workspaces.groupId, groupId))
+        .where(and(eq(workspaces.groupId, groupId), isNull(workspaces.deletedAt)))
         .orderBy(workspaces.id);
 }
 
@@ -2917,6 +2979,7 @@ export async function missingGrants(groupId: string) {
         from ${workspaces} w
         join ${groupMemberships} m on m.group_id = w.group_id and m.state = 'active'
         where w.group_id = ${groupId}
+          and w.deleted_at is null
           and not exists (
               select 1 from ${areaGrants} g
               where g.workspace_id = w.id
@@ -2943,6 +3006,7 @@ export async function fillableGrants(groupId: string, userId: string) {
         from ${workspaces} w
         join ${groupMemberships} m on m.group_id = w.group_id and m.state = 'active'
         where w.group_id = ${groupId}
+          and w.deleted_at is null
           and m.user_id <> ${userId}
           and not exists (
               select 1 from ${areaGrants} g
@@ -2971,4 +3035,52 @@ export async function fillableGrants(groupId: string, userId: string) {
         order by w.id, m.user_id
     `);
     return result.rows.map((row) => ({ workspaceId: row.workspace_id, userId: row.user_id }));
+}
+
+/*
+ * Family folders deleted more than `days` ago (docs/groups-design.md 2.10:
+ * Drive's trash retention), each purged whole in its own transaction under
+ * its group's lock and then its own row: every object in it queued for
+ * deletion from the store (the outbox the delete-objects job drains, replica
+ * copies after their own window), then the workspace row, which takes its
+ * nodes, versions, grants, self-grants, documents, storage row, shares,
+ * links and rotations with it. At most `limit` folders a pass; how many went.
+ */
+export async function purgeDeletedAreas(days: number, limit = 20) {
+    const due = await db
+        .select({ id: workspaces.id, groupId: workspaces.groupId })
+        .from(workspaces)
+        .where(
+            and(
+                isNotNull(workspaces.deletedAt),
+                sql`${workspaces.deletedAt} < now() - make_interval(days => ${days})`,
+            ),
+        )
+        .orderBy(workspaces.deletedAt)
+        .limit(limit);
+    let purged = 0;
+    for (const { id, groupId } of due) {
+        const gone = await db.transaction(async (tx) => {
+            // The order every chain write takes: the group first, then its areas.
+            if (groupId) await lockGroup(tx, groupId);
+            const [area] = await tx
+                .select({ id: workspaces.id })
+                .from(workspaces)
+                .where(and(eq(workspaces.id, id), isNotNull(workspaces.deletedAt)))
+                .for('update');
+            if (!area) return false;
+            await tx.execute(sql`
+                insert into ${driveObjectDeletions}
+                    (object_id, workspace_id, object_key, published, replicated)
+                select o.id, o.workspace_id, o.object_key, o.status = 'ready', o.replicated_at is not null
+                from ${driveObjects} o
+                where o.workspace_id = ${id}
+                on conflict do nothing
+            `);
+            await tx.delete(workspaces).where(eq(workspaces.id, id));
+            return true;
+        });
+        if (gone) purged++;
+    }
+    return purged;
 }

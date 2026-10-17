@@ -163,6 +163,8 @@ export function harness(
         createArea: (_groupId: string, call: unknown) => roster('areas', call),
         rotateArea: (_groupId: string, _workspaceId: string, call: unknown) =>
             roster('rotation', call),
+        deleteArea: (_groupId: string, _workspaceId: string, call: unknown) =>
+            roster('delete', call),
         rosters: async () => ({
             rosters: [],
             successions: [],

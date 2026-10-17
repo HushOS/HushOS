@@ -14,9 +14,9 @@ import {
     rotationsRepository,
     scopedId,
 } from '@hushos/db';
-import { areaKeyCommitment } from '../../crypto/src/area-keys';
+import { areaKeyCommitment, areaRootCommitment } from '../../crypto/src/area-keys';
 import { acceptStoredChain, storedRecord } from '@hushos/crypto/group-trust/server';
-import { history, mlDsaKeysOf } from '../../crypto/src/group-testkit';
+import { history, mlDsaKeysOf, tombstoneAt } from '../../crypto/src/group-testkit';
 import { db } from '../../db/src/client';
 import {
     accountIdentityHistory,
@@ -62,6 +62,7 @@ import {
     type Family,
     type Member,
 } from '../test/kit';
+import * as driveServer from '@hushos/drive/server';
 import * as groups from './server';
 import type * as DriveProtocol from '@hushos/drive/protocol';
 
@@ -2937,5 +2938,203 @@ describe('workspace documents ride on the rotation', () => {
             ),
         ).toMatchObject({ code: 'invalid', data: { reason: 'rotation-documents' } });
         expect((await areaOf(fam.areaId)).version).toBe(1);
+    });
+});
+
+describe('roster format 2 and deleting a family folder (route 30, groups design 2.10)', () => {
+    /* A format 2 family of two, with a second folder its organizer made on a format 2 roster. */
+    async function photosFamily() {
+        const fam = await family();
+        const plain = await member();
+        await admitted(fam, plain);
+        // The chain switches up from here (design 2.10): every later roster is format 2.
+        fam.h.format = 2;
+        const areaSeed = randomBytes(16).toString('base64url');
+        const photos = scopedId('workspace', fam.groupId, areaSeed)!;
+        const { at, call } = await nextRoster(fam, fam.organizer, entries(fam.h), {
+            areas: [
+                {
+                    workspaceId: photos,
+                    workspaceKeyVersion: 1,
+                    commitment: await areaKeyCommitment(randomBytes(32)),
+                    rootCommitment: await areaRootCommitment(randomBytes(32)),
+                },
+            ],
+        });
+        await groups.createArea(fam.organizer.userId, fam.groupId, {
+            ...call,
+            area: {
+                workspaceId: photos,
+                idSeed: areaSeed,
+                root: await rootWire(photos, fam.organizer.who),
+                selfGrant: selfGrant(photos),
+            },
+            grants: [
+                await grantWire(fam.groupId, photos, 1, fam.organizer.who, fam.organizer.who, at),
+                await grantWire(fam.groupId, photos, 1, fam.organizer.who, plain.who, at),
+            ],
+        });
+        return { fam, plain, photos };
+    }
+    const deleteCall = async (fam: Family, workspaceId: string, by = fam.organizer) =>
+        (await nextRoster(fam, by, entries(fam.h), { areas: [tombstoneAt(workspaceId, 2)] })).call;
+    const spaceAreas = async (userId: string) =>
+        (await groups.spaces(userId)).flatMap((space) => space.areas.map((a) => a.workspaceId));
+
+    test('a manager deletes a folder: gone from everyone’s spaces, and a later removal rotates only what is left', async () => {
+        const { fam, plain, photos } = await photosFamily();
+        expect(await spaceAreas(plain.userId)).toContain(photos);
+        await groups.deleteArea(
+            fam.organizer.userId,
+            fam.groupId,
+            photos,
+            await deleteCall(fam, photos),
+        );
+        expect(await spaceAreas(plain.userId)).toEqual([fam.areaId]);
+        expect(await spaceAreas(fam.organizer.userId)).toEqual([fam.areaId]);
+        const [row] = await db.select().from(workspaces).where(eq(workspaces.id, photos));
+        expect(row!.deletedAt).not.toBeNull();
+        // The removal's roster rotates the live folder alone (the kit skips the retired one), and
+        // the server takes it with that one rotation.
+        await markLeft(fam, plain, 'remove');
+        expect((await head(fam.groupId)).rosterVersion).toBe(fam.h.statements.length);
+        // A grant into the deleted folder is refused.
+        const at = {
+            rosterVersion: fam.h.statements.length,
+            rosterDigest: await rosterDigest(fam.h.rosters.at(-1)!.statement),
+        };
+        expect(
+            await refusal(
+                groups.postGrants(fam.organizer.userId, fam.groupId, photos, {
+                    grants: [
+                        await grantWire(
+                            fam.groupId,
+                            photos,
+                            1,
+                            fam.organizer.who,
+                            fam.organizer.who,
+                            at,
+                        ),
+                    ],
+                }),
+            ),
+        ).toMatchObject({ code: 'invalid', status: 400 });
+    });
+
+    test('a removal that still rotates the deleted folder is refused by the chain rules', async () => {
+        const { fam, plain, photos } = await photosFamily();
+        await groups.deleteArea(
+            fam.organizer.userId,
+            fam.groupId,
+            photos,
+            await deleteCall(fam, photos),
+        );
+        const before = entries(fam.h).find((entry) => entry.userId === plain.userId)!;
+        const { call } = await nextRoster(
+            fam,
+            fam.organizer,
+            withEntry(fam.h, { ...before, status: 'left' }),
+            {
+                areas: [
+                    {
+                        ...(await nextAreaRow(fam.areaId, 2)),
+                        rootCommitment: await areaRootCommitment(randomBytes(32)),
+                    },
+                    {
+                        workspaceId: photos,
+                        workspaceKeyVersion: 3,
+                        commitment: await areaKeyCommitment(randomBytes(32)),
+                        rootCommitment: await areaRootCommitment(randomBytes(32)),
+                    },
+                ].sort((a, b) => (a.workspaceId < b.workspaceId ? -1 : 1)),
+            },
+        );
+        expect(
+            await refusal(
+                groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, call),
+            ),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'roster-chain' } });
+    });
+
+    test('the delete route takes only the tombstone, from a manager, and no other route takes one', async () => {
+        const { fam, plain, photos } = await photosFamily();
+        // A member who does not manage the family: refused before anything is checked.
+        expect(
+            await refusal(
+                groups.deleteArea(plain.userId, fam.groupId, photos, {
+                    expectedRevision: (await head(fam.groupId)).revision,
+                    roster: wire(fam.h.rosters.at(-1)!),
+                }),
+            ),
+        ).toMatchObject({ status: 403 });
+        // A tombstone standing in for a rotation's row on route 24 is not that rotation.
+        const rotation = await rotationWire(photos, fam.organizer.who, 1);
+        const masquerade = await deleteCall(fam, photos);
+        expect(
+            await refusal(
+                groups.rotateArea(fam.organizer.userId, fam.groupId, photos, {
+                    ...masquerade,
+                    rotation,
+                }),
+            ),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'area-rows' } });
+        // The same tombstone on the delete route, but carrying a grant too: refused.
+        expect(
+            await refusal(
+                groups.deleteArea(fam.organizer.userId, fam.groupId, photos, {
+                    ...masquerade,
+                    grants: [
+                        await grantWire(fam.groupId, fam.areaId, 1, fam.organizer.who, plain.who, {
+                            rosterVersion: 1,
+                            rosterDigest: await rosterDigest(fam.h.rosters[0]!.statement),
+                        }),
+                    ],
+                }),
+            ),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'area-delete' } });
+        // Named for another folder than the one its tombstone retires: refused.
+        expect(
+            await refusal(
+                groups.deleteArea(fam.organizer.userId, fam.groupId, fam.areaId, masquerade),
+            ),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'area-rows' } });
+        // And as it should be: it lands, once.
+        await groups.deleteArea(fam.organizer.userId, fam.groupId, photos, masquerade);
+        const [row] = await db.select().from(workspaces).where(eq(workspaces.id, photos));
+        expect(row!.deletedAt).not.toBeNull();
+    });
+
+    test('a format 1 roster after a format 2 one is refused, and format 1 chains still take rosters', async () => {
+        const fam = await family();
+        // Format 1 throughout still lands.
+        const { call } = await nextRoster(fam, fam.organizer, entries(fam.h));
+        await groups.postRoster(fam.organizer.userId, fam.groupId, call);
+        fam.h.format = 2;
+        const up = await nextRoster(fam, fam.organizer, entries(fam.h));
+        await groups.postRoster(fam.organizer.userId, fam.groupId, up.call);
+        expect((await head(fam.groupId)).rosterVersion).toBe(3);
+        fam.h.format = 1;
+        const down = await nextRoster(fam, fam.organizer, entries(fam.h));
+        expect(
+            await refusal(groups.postRoster(fam.organizer.userId, fam.groupId, down.call)),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'roster-chain' } });
+        expect(await rosterCount(fam.groupId)).toBe(3);
+    });
+
+    test('a Drive rotation started at a family folder’s top folder is refused; its key moves only with a roster', async () => {
+        const fam = await family();
+        const [root] = await db
+            .select()
+            .from(driveNodes)
+            .where(and(eq(driveNodes.workspaceId, fam.areaId), isNull(driveNodes.parentId)));
+        await expect(
+            driveServer.startRotation(fam.organizer.userId, fam.areaId, root!.id),
+        ).rejects.toMatchObject({ code: 'forbidden', status: 403 });
+        expect(
+            await db
+                .select()
+                .from(driveRotations)
+                .where(eq(driveRotations.workspaceId, fam.areaId)),
+        ).toEqual([]);
     });
 });

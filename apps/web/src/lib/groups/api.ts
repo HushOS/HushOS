@@ -167,6 +167,11 @@ export function createGroupsApi(client = () => apiClient()) {
             answer(
                 groups(groupId).areas({ workspaceId }).rotations.post(body(call)),
             ) as Promise<ChainHead>,
+        /* Deleting a family folder: its tombstone on the roster (groups design 2.10). */
+        deleteArea: (groupId: string, workspaceId: string, call: RosterCallBody) =>
+            answer(
+                groups(groupId).areas({ workspaceId }).delete.post(body(call)),
+            ) as Promise<ChainHead>,
         /* 25 */
         spaces: () => answer(client().drive.spaces.get()),
         /* 26 */

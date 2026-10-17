@@ -160,7 +160,33 @@ pub fn standard_areas() -> Vec<RosterArea> {
         workspace_id: AREA.into(),
         workspace_key_version: 1,
         commitment: area_key_commitment(&pattern(32, AREA_KEY_SEED)).unwrap(),
+        root_commitment: None,
+        retired: false,
     }]
+}
+
+/* The node key the testkit gives an area's root at an area version (design 2.10), as the web's. */
+pub fn root_key_at(workspace_id: &str, version: u64) -> Vec<u8> {
+    pattern(32, ((if workspace_id == AREA { 150 } else { 170 }) + version) as u8)
+}
+
+/* A format 2 key row: the testkit's area key and root key at `version`. */
+pub fn key_row_at(workspace_id: &str, version: u64) -> RosterArea {
+    RosterArea {
+        root_commitment: Some(area_root_commitment(&root_key_at(workspace_id, version)).unwrap()),
+        ..area_row(workspace_id, version)
+    }
+}
+
+/* A format 2 tombstone at `version`. */
+pub fn tombstone_at(workspace_id: &str, version: u64) -> RosterArea {
+    RosterArea {
+        workspace_id: workspace_id.into(),
+        workspace_key_version: version,
+        commitment: String::new(),
+        root_commitment: None,
+        retired: true,
+    }
 }
 
 /* The key the testkit's rotations give an area at a version: AREA's are pattern(32, 77 + v - 1). */
@@ -175,6 +201,8 @@ pub fn area_row(workspace_id: &str, version: u64) -> RosterArea {
         workspace_id: workspace_id.into(),
         workspace_key_version: version,
         commitment: area_key_commitment(&area_key_at(workspace_id, version)).unwrap(),
+        root_commitment: None,
+        retired: false,
     }
 }
 
@@ -206,8 +234,11 @@ pub struct History {
     pub successions: Vec<SignedGroupStatement>,
     pub key_count: u8,
     pub kind: GroupKind,
-    /* Each area's latest key version on the history so far. */
+    /* Each area's latest key version on the history so far, and the areas it retired. */
     pub area_versions: std::collections::BTreeMap<String, u64>,
+    pub retired: std::collections::BTreeSet<String>,
+    /* The format the next roster is signed in (design 2.10); a case may switch it. */
+    pub format: u8,
 }
 
 fn same_entry(a: &RosterMember, b: &RosterMember) -> bool {
@@ -233,7 +264,14 @@ impl History {
             key_count: 1,
             kind,
             area_versions: Default::default(),
+            retired: Default::default(),
+            format: 1,
         }
+    }
+
+    /* A history signing format 2 rosters from the first. */
+    pub fn format_2() -> History {
+        History { format: 2, ..History::new() }
     }
 
     pub fn key(&self, version: u8) -> GroupPublicKey {
@@ -274,15 +312,29 @@ impl History {
                         .is_some_and(|before| before.status == MemberStatus::Active)
             })
         });
-        let areas = areas.unwrap_or_else(|| match previous {
-            None => standard_areas(),
-            Some(_) if self.kind == GroupKind::Family && leaving => {
-                self.area_versions.iter().map(|(workspace_id, at)| area_row(workspace_id, at + 1)).collect()
+        let format = self.format;
+        let row_at = |workspace_id: &str, version: u64| {
+            if format == 2 {
+                key_row_at(workspace_id, version)
+            } else {
+                area_row(workspace_id, version)
             }
+        };
+        let areas = areas.unwrap_or_else(|| match previous {
+            None => vec![row_at(AREA, 1)],
+            Some(_) if self.kind == GroupKind::Family && leaving => self
+                .area_versions
+                .iter()
+                .filter(|(workspace_id, _)| !self.retired.contains(*workspace_id))
+                .map(|(workspace_id, at)| row_at(workspace_id, at + 1))
+                .collect(),
             Some(_) => vec![],
         });
         for row in &areas {
             self.area_versions.insert(row.workspace_id.clone(), row.workspace_key_version);
+            if row.retired {
+                self.retired.insert(row.workspace_id.clone());
+            }
         }
         let previous = self.statements.last();
         let mut members: Vec<RosterMember> = members
@@ -313,6 +365,7 @@ impl History {
             signer_user_id: signer.user_id.clone(),
             members,
             areas,
+            format,
         };
         self.rosters.push(roster_sign(roster.clone(), group_seed(key_version), signer.keys.clone()).unwrap());
         self.statements.push(roster);
@@ -561,6 +614,48 @@ pub fn next_verdict(
     json!(if roster && succession { "accepted" } else { "refused" })
 }
 
+/*
+ * An area root's key a reader opened, asked against the accepted chain
+ * (area_root_check, design 2.10), as the web's RootProbe.
+ */
+#[derive(Clone)]
+pub struct RootProbe {
+    pub workspace_id: String,
+    pub workspace_key_version: u64,
+    pub root_key: Vec<u8>,
+}
+
+pub fn root_verdict(chain: Arc<AcceptedRosters>, probe: &RootProbe) -> Value {
+    json!(match area_root_check(
+        chain,
+        probe.workspace_id.clone(),
+        probe.workspace_key_version,
+        probe.root_key.clone()
+    ) {
+        Ok(true) => "current",
+        Ok(false) => "uncommitted",
+        Err(_) => "refused",
+    })
+}
+
+fn root_json(probe: &RootProbe) -> Value {
+    json!({
+        "workspaceId": probe.workspace_id,
+        "workspaceKeyVersion": probe.workspace_key_version,
+        "rootKey": e(&probe.root_key),
+    })
+}
+
+/* A case's root probe, or none for one that is not the shape the web writes (as the fuzzer may make it). */
+fn root_of(v: &Value) -> Option<RootProbe> {
+    let root_key = v.get("rootKey")?.as_str().filter(|key| !key.is_empty())?;
+    Some(RootProbe {
+        workspace_id: v.get("workspaceId")?.as_str()?.to_string(),
+        workspace_key_version: v.get("workspaceKeyVersion")?.as_u64()?,
+        root_key: base64url_decode(root_key.to_string()).ok()?,
+    })
+}
+
 /* What accept_rosters takes, as the shared cases carry it. */
 #[derive(Clone)]
 pub struct CaseInput {
@@ -576,6 +671,8 @@ pub struct CaseInput {
     pub record: Option<RecordProbe>,
     /* When given, the next roster or succession checked on the accepted chain. */
     pub next: Option<NextProbe>,
+    /* When given, an area root's key checked against the accepted chain (design 2.10). */
+    pub root: Option<RootProbe>,
     /* The newcomer's join mark, when the case has one. */
     pub join_mark: Option<JoinMark>,
     /*
@@ -612,6 +709,8 @@ pub fn cache_json(cache: &GroupChainCache) -> Value {
         "creatorUserId": cache.creator_user_id,
         "keyHistory": key_history_json(&cache.key_history),
         "areaKeys": cache.area_keys,
+        "areaRoots": cache.area_roots,
+        "retiredAreas": cache.retired_areas,
         "ownEntryWrongAt": cache.own_entry_wrong_at,
     })
 }
@@ -687,6 +786,25 @@ pub fn cache_of(value: &Value) -> Result<Option<GroupChainCache>, String> {
             .iter()
             .map(|x| x.as_u64().ok_or_else(|| bad("ownEntryWrongAt")))
             .collect::<Result<_, String>>()?,
+        // Root commitments (a string or null each) and retired areas: a cache from before format
+        // 2 has neither (design 2.10), which the core reads as none.
+        area_roots: match &value["areaRoots"] {
+            Value::Null => HashMap::new(),
+            roots => object(roots, "areaRoots")?
+                .iter()
+                .map(|(id, list_of)| {
+                    let roots = list(list_of, "areaRoots")?
+                        .iter()
+                        .map(|at| if at.is_null() { Ok(None) } else { text(at, "areaRoots").map(Some) })
+                        .collect::<Result<_, String>>()?;
+                    Ok((id.clone(), roots))
+                })
+                .collect::<Result<_, String>>()?,
+        },
+        retired_areas: match &value["retiredAreas"] {
+            Value::Null => vec![],
+            retired => strings(retired, "retiredAreas")?,
+        },
     }))
 }
 
@@ -743,6 +861,9 @@ pub fn judge(input: &CaseInput) -> Value {
             });
             if let Some(probe) = &input.record {
                 verdict["record"] = record_verdict(chain.clone(), probe);
+            }
+            if let Some(probe) = &input.root {
+                verdict["root"] = root_verdict(chain.clone(), probe);
             }
             if let Some(probe) = &input.next {
                 verdict["next"] = next_verdict(chain, probe, &input.ml_dsa_keys);
@@ -873,6 +994,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         cache: None,
         record: None,
         next: None,
+        root: None,
         join_mark: None,
         raw_cache: None,
     };
@@ -2865,6 +2987,8 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             workspace_id: id.into(),
             workspace_key_version: version,
             commitment: area_key_commitment(&pattern(32, seed)).unwrap(),
+            root_commitment: None,
+            retired: false,
         };
         let members = || vec![owner.clone(), active(&adult, &[GroupRole::Members])];
         let mut after = |name: &'static str, areas: Vec<RosterArea>, expected: Value| {
@@ -3158,6 +3282,208 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
                 ..from_one(&later)
             },
             reads("verified", Some(GROUP), 1),
+        ));
+    }
+    // Roster format 2 (design 2.10): each area version commits to its root's key under its own
+    // label, and an area is retired by a tombstone at its next version. Old format 1 chains still
+    // verify; a chain switches up at a roster boundary and never back.
+    {
+        let members = vec![owner.clone(), active(&adult, &[GroupRole::Members])];
+        let root = |workspace_id: &str, version: u64, key: Option<Vec<u8>>| RootProbe {
+            workspace_id: workspace_id.into(),
+            workspace_key_version: version,
+            root_key: key.unwrap_or_else(|| root_key_at(workspace_id, version)),
+        };
+        let accepting = |version: u64, root: &str| json!({ "status": "accepted", "rosterVersion": version, "root": root });
+        let mut v2 = History::format_2();
+        v2.roster(&organizer, members.clone(), None);
+        cases.push((
+            "v2-first-roster",
+            CaseInput { root: Some(root(AREA, 1, None)), ..from_one(&v2) },
+            accepting(1, "current"),
+        ));
+        cases.push((
+            "v2-root-mismatch",
+            CaseInput { root: Some(root(AREA, 1, Some(root_key_at(AREA, 2)))), ..from_one(&v2) },
+            accepting(1, "refused"),
+        ));
+        cases.push((
+            "v2-root-unlisted-version",
+            CaseInput { root: Some(root(AREA, 2, None)), ..from_one(&v2) },
+            accepting(1, "refused"),
+        ));
+        let mut v1 = History::new();
+        v1.roster(&organizer, members.clone(), None);
+        cases.push((
+            "v1-root-uncommitted",
+            CaseInput { root: Some(root(AREA, 1, None)), ..from_one(&v1) },
+            accepting(1, "uncommitted"),
+        ));
+        // Up from format 1 at a roster boundary: the rotation's root is committed, the earlier
+        // version's is not.
+        v1.format = 2;
+        v1.roster_with(&organizer, members.clone(), Some(1), Some(vec![key_row_at(AREA, 2)]));
+        cases.push((
+            "v2-switch",
+            CaseInput { root: Some(root(AREA, 2, None)), ..from_one(&v1) },
+            accepting(2, "current"),
+        ));
+        cases.push((
+            "v2-switch-earlier-uncommitted",
+            CaseInput { root: Some(root(AREA, 1, None)), ..from_one(&v1) },
+            accepting(2, "uncommitted"),
+        ));
+        // Never back down: a format 1 roster after a format 2 one.
+        let mut down = History::format_2();
+        down.roster(&organizer, members.clone(), None);
+        down.format = 1;
+        down.roster(
+            &organizer,
+            vec![owner.clone(), active(&adult, &[GroupRole::Billing, GroupRole::Members])],
+            None,
+        );
+        cases.push(("v2-downgrade", from_one(&down), refused.clone()));
+        // A rotation that keeps the root's key (a fresh area key, the old root commitment).
+        let mut hollow = History::format_2();
+        hollow.roster(&organizer, members.clone(), None);
+        hollow.roster_with(
+            &organizer,
+            members.clone(),
+            Some(1),
+            Some(vec![RosterArea {
+                root_commitment: key_row_at(AREA, 1).root_commitment,
+                ..key_row_at(AREA, 2)
+            }]),
+        );
+        cases.push(("v2-root-reused", from_one(&hollow), refused.clone()));
+        // Tombstones: two areas, the second retired at its next version.
+        let plain = vec![owner.clone(), active(&adult, &[])];
+        let two = || {
+            let mut h = History::format_2();
+            h.roster_with(
+                &organizer,
+                plain.clone(),
+                Some(1),
+                Some(vec![key_row_at(AREA, 1), key_row_at(SECOND_AREA, 1)]),
+            );
+            h
+        };
+        let mut retire = two();
+        retire.roster_with(&organizer, plain.clone(), Some(1), Some(vec![tombstone_at(SECOND_AREA, 2)]));
+        cases.push((
+            "retire-area",
+            CaseInput { root: Some(root(SECOND_AREA, 1, None)), ..from_one(&retire) },
+            accepting(2, "refused"),
+        ));
+        for (name, rows) in [
+            ("retire-unknown-area", vec![tombstone_at(THIRD_AREA, 1)]),
+            ("retire-wrong-version", vec![tombstone_at(SECOND_AREA, 3)]),
+        ] {
+            let mut h = two();
+            h.roster_with(&organizer, plain.clone(), Some(1), Some(rows));
+            cases.push((name, from_one(&h), refused.clone()));
+        }
+        let retired_then = |rows: Vec<RosterArea>| {
+            let mut h = two();
+            h.roster_with(&organizer, plain.clone(), Some(1), Some(vec![tombstone_at(SECOND_AREA, 2)]));
+            h.roster_with(&organizer, plain.clone(), Some(1), Some(rows));
+            h
+        };
+        cases.push((
+            "retire-twice",
+            from_one(&retired_then(vec![tombstone_at(SECOND_AREA, 3)])),
+            refused.clone(),
+        ));
+        cases.push((
+            "retired-area-revived",
+            from_one(&retired_then(vec![key_row_at(SECOND_AREA, 3)])),
+            refused.clone(),
+        ));
+        // At the tombstone's own version too: the area's key list never grew, so only the
+        // retirement itself refuses these.
+        cases.push((
+            "retire-twice-at-its-version",
+            from_one(&retired_then(vec![tombstone_at(SECOND_AREA, 2)])),
+            refused.clone(),
+        ));
+        cases.push((
+            "retired-area-revived-at-its-version",
+            from_one(&retired_then(vec![key_row_at(SECOND_AREA, 2)])),
+            refused.clone(),
+        ));
+        // A removal after the retirement rotates only the live area (the history's default skips
+        // the retired one); rotating the retired one too is refused; retiring an area in the
+        // removal's own roster counts as handling it.
+        let left = vec![owner.clone(), adult.entry(&[], 1, MemberStatus::Left)];
+        let mut skips = two();
+        skips.roster_with(&organizer, plain.clone(), Some(1), Some(vec![tombstone_at(SECOND_AREA, 2)]));
+        skips.roster(&organizer, left.clone(), None);
+        cases.push(("removal-skips-retired-area", from_one(&skips), accepted(3)));
+        cases.push((
+            "removal-rotates-retired-area",
+            from_one(&retired_then(vec![key_row_at(AREA, 2), key_row_at(SECOND_AREA, 3)])),
+            refused.clone(),
+        ));
+        let mut both = two();
+        both.roster_with(
+            &organizer,
+            left,
+            Some(1),
+            Some(vec![key_row_at(AREA, 2), tombstone_at(SECOND_AREA, 2)]),
+        );
+        cases.push(("removal-retires-instead", from_one(&both), accepted(2)));
+        // The cache through a tombstone continues; one that forgot the retirement, or changed the
+        // last root commitment, is refused; one from before format 2 (no roots, no retired
+        // areas) is read as what it described.
+        let cached = accepted_to(&skips, 2, &everyone).cache();
+        cases.push((
+            "cache-through-retirement",
+            CaseInput {
+                cache: Some(cached.clone()),
+                rosters: skips.rosters[2..].to_vec(),
+                ..from_one(&skips)
+            },
+            accepted(3),
+        ));
+        // Nothing served after it: only the cache's own check can refuse it.
+        cases.push((
+            "cache-retirement-dropped",
+            CaseInput {
+                cache: Some(GroupChainCache { retired_areas: vec![], ..cached }),
+                rosters: vec![],
+                ..from_one(&skips)
+            },
+            refused.clone(),
+        ));
+        let first = accepted_to(&v2, 1, &everyone).cache();
+        cases.push((
+            "cache-area-roots-tampered",
+            CaseInput {
+                cache: Some(GroupChainCache {
+                    area_roots: HashMap::from([(AREA.to_string(), vec![Some(junk.clone())])]),
+                    ..first
+                }),
+                rosters: vec![],
+                ..from_one(&v2)
+            },
+            refused.clone(),
+        ));
+        let mut old = History::new();
+        old.roster(&organizer, members.clone(), None);
+        old.roster(
+            &organizer,
+            vec![owner.clone(), active(&adult, &[GroupRole::Billing, GroupRole::Members])],
+            None,
+        );
+        let before = GroupChainCache {
+            area_roots: HashMap::new(),
+            retired_areas: vec![],
+            ..accepted_to(&old, 1, &everyone).cache()
+        };
+        cases.push((
+            "cache-before-format-2",
+            CaseInput { cache: Some(before), rosters: old.rosters[1..].to_vec(), ..from_one(&old) },
+            accepted(2),
         ));
     }
     cases
@@ -3605,6 +3931,7 @@ pub fn case_json(name: &str, input: &CaseInput, expected: &Value) -> Value {
             },
             "cache": input.raw_cache.clone().or_else(|| input.cache.as_ref().map(cache_json)),
             "record": input.record.as_ref().map(record_json),
+            "root": input.root.as_ref().map(root_json),
             "next": input.next.as_ref().map(next_json),
             "joinMark": input.join_mark.as_ref().map(|m| json!({
                 "rosterVersion": m.roster_version,
@@ -3643,6 +3970,7 @@ pub fn case_from(value: &Value) -> (String, CaseInput, Value) {
             cache: cache_of(&input["cache"]).unwrap_or(None),
             raw_cache: cache_of(&input["cache"]).err().map(|_| input["cache"].clone()),
             record: record_of(&input["record"]),
+            root: root_of(&input["root"]),
             next: next_of(&input["next"]),
             join_mark: input["joinMark"].as_object().map(|_| JoinMark {
                 roster_version: n(&input["joinMark"], "rosterVersion"),
@@ -3772,10 +4100,13 @@ pub fn roster_of(value: &Value) -> Roster {
                         workspace_id: s(a, "workspaceId"),
                         workspace_key_version: n(a, "workspaceKeyVersion"),
                         commitment: s(a, "commitment"),
+                        root_commitment: a["rootCommitment"].as_str().map(String::from),
+                        retired: a["retired"] == json!(true),
                     })
                     .collect()
             })
             .unwrap_or_default(),
+        format: value["format"].as_u64().map_or(1, |format| format as u8),
     }
 }
 
@@ -4507,6 +4838,8 @@ pub fn seal_cases() -> Vec<SealCase> {
                 workspace_id: AREA.into(),
                 workspace_key_version: 2,
                 commitment: area_key_commitment(&pattern(32, 78)).unwrap(),
+                root_commitment: None,
+                retired: false,
             }]),
         );
         let rotated = accepted_of(&r, &[&o, &a, &g]);
@@ -4692,6 +5025,15 @@ pub fn sealer_cases() -> Vec<SealerCase> {
     let mut gone = History::new();
     gone.roster(&o, vec![owner.clone(), g.entry(&[GroupRole::Members], 1, MemberStatus::Active)], None);
     gone.roster(&o, vec![owner.clone(), g.entry(&[GroupRole::Members], 1, MemberStatus::Left)], None);
+    // Format 2: the area listed, then retired.
+    let mut retired = History::format_2();
+    retired.roster(&o, vec![owner.clone(), g.entry(&[GroupRole::Members], 1, MemberStatus::Active)], None);
+    retired.roster_with(
+        &o,
+        vec![owner.clone(), g.entry(&[GroupRole::Members], 1, MemberStatus::Active)],
+        Some(1),
+        Some(vec![tombstone_at(AREA, 2)]),
+    );
     // Two rosters, the sealer a holder in both.
     let mut two = History::new();
     two.roster(&o, vec![owner.clone(), g.entry(&[GroupRole::Members], 1, MemberStatus::Active)], None);
@@ -4779,6 +5121,12 @@ pub fn sealer_cases() -> Vec<SealerCase> {
             grant: true,
             grant_key_version: 2,
             ..case("granter-version-not-listed", (1, 1), "refused")
+        },
+        // Design 2.10: a retired area is granted no more, even its listed key.
+        SealerCase {
+            rosters: retired.rosters.clone(),
+            grant: true,
+            ..case("granter-retired-area", (1, 1), "refused")
         },
     ]
 }
@@ -5037,9 +5385,13 @@ pub fn first_roster_verdict(c: &FirstRosterCase) -> Option<String> {
     let area_keys = c
         .area_keys
         .iter()
-        .map(|(workspace_id, key)| AreaKey { workspace_id: workspace_id.clone(), workspace_key: key.clone() })
+        .map(|(workspace_id, key)| AreaKey {
+            workspace_id: workspace_id.clone(),
+            workspace_key: key.clone(),
+            root_key: None,
+        })
         .collect();
-    roster_first(c.group_id.clone(), c.kind, c.creator.clone(), Some(area_keys))
+    roster_first(c.group_id.clone(), c.kind, c.creator.clone(), Some(area_keys), None)
         .and_then(roster_statement)
         .ok()
         .map(|statement| e(&statement))

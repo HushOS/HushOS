@@ -52,6 +52,12 @@ export const workspaces = pgTable(
         workspaceKeyVersion: integer('workspace_key_version').notNull().default(1),
         // Set when a member who could open this area leaves or is removed; cleared by the rotation.
         rotationDueAt: timestamp('rotation_due_at', { withTimezone: true }),
+        /*
+         * A group area a manager deleted (its roster tombstone, docs/groups-design.md 2.10):
+         * served to no one from then, and purged with everything in it after Drive's trash
+         * retention (TRASH_RETENTION_DAYS).
+         */
+        deletedAt: timestamp('deleted_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [
@@ -74,5 +80,13 @@ export const workspaces = pgTable(
         index('workspaces_group_idx')
             .on(table.groupId)
             .where(sql`${table.groupId} is not null`),
+        // Only a group's areas are deleted this way, and the purge finds them by when.
+        check(
+            'workspaces_deleted_valid',
+            sql`${table.deletedAt} is null or ${table.groupId} is not null`,
+        ),
+        index('workspaces_deleted_idx')
+            .on(table.deletedAt)
+            .where(sql`${table.deletedAt} is not null`),
     ],
 );

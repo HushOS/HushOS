@@ -45,7 +45,7 @@ import type { AcceptedRosters } from './group-trust';
 import type { ServedKeys, SuccessionLink } from './identity';
 import { successionPath } from './succession-path';
 import { checkId } from './ids';
-import { areaKeyCommitment, rowsAfter } from './area-keys';
+import { RETIRED, areaKeyCommitment, areaRootCommitment, rowsAfter } from './area-keys';
 
 /*
  * The group core's cryptography (docs/groups-design.md 2): the group key and
@@ -241,12 +241,28 @@ export type Roster = {
      * means none (parseRoster always gives the list).
      */
     areas?: RosterArea[];
+    /*
+     * The statement's format (design 2.10): 1, rows of three fields, as
+     * shipped; or 2, rows that also commit to the area root's key, and
+     * retirement rows. Absent means 1 (parseRoster always gives it). A chain
+     * never goes back from 2 to 1.
+     */
+    format?: RosterFormat;
 };
+export type RosterFormat = 1 | 2;
+export const ROSTER_FORMATS: readonly RosterFormat[] = [1, 2];
 export type RosterArea = {
     workspaceId: string;
     workspaceKeyVersion: number;
-    /* areaKeyCommitment of the area key at that version, base64url. */
+    /* areaKeyCommitment of the area key at that version, base64url; "" on a retirement row. */
     commitment: string;
+    /*
+     * Format 2 key rows only: areaRootCommitment of the area root's node key
+     * at that version (design 2.10), base64url.
+     */
+    rootCommitment?: string;
+    /* Format 2 only: the area's tombstone, at its next version, with no key. */
+    retired?: true;
 };
 
 const ROSTER_DOMAIN = 'hushos/group/roster';
@@ -259,33 +275,57 @@ const ROSTER_DOMAIN = 'hushos/group/roster';
  */
 export const MAX_ROSTER_AREA_ROWS = 1024;
 /*
- * The most areas a family's chain may list (checkAreas): a removal rotates
- * them all, so a family past this could never remove anyone. Areas are never
- * retired yet; a tombstone row that stops a deleted area counting must come
- * before area deletion ships.
+ * The most live areas a family's chain may list (checkAreas): a removal
+ * rotates them all, so a family past this could never remove anyone. A
+ * retired area (a format 2 tombstone, design 2.10) no longer counts and is
+ * never rotated again.
  */
 export const MAX_FAMILY_AREAS = 1024;
 
-function areaParts(areas: readonly RosterArea[] | undefined) {
+function areaParts(areas: readonly RosterArea[] | undefined, format: RosterFormat) {
     const list = areas ?? [];
     if (!Array.isArray(list) || list.length > MAX_ROSTER_AREA_ROWS)
         throw new CryptoError('Invalid roster areas.');
     const rows = list.map((area) => {
         if (typeof area !== 'object' || area === null)
             throw new CryptoError('Invalid roster area.');
-        return [
+        const head = [
             uuid(area.workspaceId, 'workspace id'),
             integer(area.workspaceKeyVersion, 'workspace key version'),
+        ] as const;
+        if (format === 1) {
+            // Format 1 has neither root commitments nor retirement rows.
+            if (area.rootCommitment !== undefined || area.retired !== undefined)
+                throw new CryptoError('Invalid roster area.');
+            return [...head, digestOf(area.commitment, 'area key commitment')];
+        }
+        if (area.retired !== undefined) {
+            if (
+                area.retired !== true ||
+                area.commitment !== '' ||
+                area.rootCommitment !== undefined
+            )
+                throw new CryptoError('Invalid roster area.');
+            return [...head, RETIRED_ROW];
+        }
+        return [
+            ...head,
+            KEY_ROW,
             digestOf(area.commitment, 'area key commitment'),
-        ] as [string, number, string];
+            digestOf(area.rootCommitment, 'area root commitment'),
+        ];
     });
     // One row per area, sorted by workspace id.
     ascending(
-        rows.map(([id]) => id),
+        rows.map(([id]) => id as string),
         'roster areas',
     );
     return rows;
 }
+
+/* The tags of a format 2 area row (design 2.10). */
+const KEY_ROW = 'key';
+const RETIRED_ROW = 'retired';
 
 function memberParts(member: RosterMember, kind: GroupKind, rosterVersion: number) {
     if (typeof member !== 'object' || member === null || !Array.isArray(member.roles))
@@ -318,6 +358,9 @@ function memberParts(member: RosterMember, kind: GroupKind, rosterVersion: numbe
  *             mlDsaPublicKeyDigest,kemPublicKeyDigest,status,roles,sinceVersion],...]
  * areas = [[workspaceId,workspaceKeyVersion,commitment],...], the areas this
  *          roster creates or rotates, one row each, sorted by workspace id
+ * Format 2 (design 2.10) is ["hushos/group/roster",2,...] with
+ * areas = [[workspaceId,workspaceKeyVersion,"key",commitment,rootCommitment]
+ *          | [workspaceId,workspaceKeyVersion,"retired"],...]
  * Refuses anything outside the canonical encoding: unsorted or repeated
  * members or roles, a company role in a family, an entry newer than the
  * roster, a previous digest on version 1 or none after it.
@@ -326,6 +369,7 @@ function memberParts(member: RosterMember, kind: GroupKind, rosterVersion: numbe
 export const MAX_ROSTER_MEMBERS = 10_000;
 
 export function rosterStatement(roster: Roster) {
+    const format = rosterFormat(roster);
     const kind = oneOf(roster.kind, GROUP_KINDS, 'group kind');
     const version = integer(roster.rosterVersion, 'roster version');
     // Version 1 has no previous roster: its digest is the empty string, and only then.
@@ -345,7 +389,7 @@ export function rosterStatement(roster: Roster) {
     );
     return encodeStatement([
         ROSTER_DOMAIN,
-        1,
+        format,
         uuid(roster.groupId, 'group id'),
         kind,
         version,
@@ -353,20 +397,47 @@ export function rosterStatement(roster: Roster) {
         integer(roster.groupKeyVersion, 'group key version'),
         uuid(roster.signerUserId, 'user id'),
         members,
-        areaParts(roster.areas),
+        areaParts(roster.areas, format),
     ]);
+}
+
+/* A roster's format: 1 when absent, else 1 or 2. */
+export function rosterFormat(roster: Pick<Roster, 'format'>): RosterFormat {
+    if (roster.format === undefined) return 1;
+    if (!ROSTER_FORMATS.includes(roster.format)) throw new CryptoError('Invalid roster format.');
+    return roster.format;
 }
 
 /* The roster a statement's bytes hold, refused unless the bytes are its canonical encoding. */
 export function parseRoster(statement: Uint8Array): Roster {
     const parts = parseStatement(statement, 'roster');
-    if (parts.length !== 10 || parts[0] !== ROSTER_DOMAIN || parts[1] !== 1)
+    if (
+        parts.length !== 10 ||
+        parts[0] !== ROSTER_DOMAIN ||
+        !ROSTER_FORMATS.includes(parts[1] as RosterFormat)
+    )
         throw new CryptoError('Invalid roster.');
+    const format = parts[1] as RosterFormat;
     if (!Array.isArray(parts[9])) throw new CryptoError('Invalid roster areas.');
     const areas = (parts[9] as unknown[]).map((row) => {
-        if (!Array.isArray(row) || row.length !== 3) throw new CryptoError('Invalid roster area.');
-        const [workspaceId, workspaceKeyVersion, commitment] = row;
-        return { workspaceId, workspaceKeyVersion, commitment } as RosterArea;
+        if (!Array.isArray(row)) throw new CryptoError('Invalid roster area.');
+        if (format === 1) {
+            if (row.length !== 3) throw new CryptoError('Invalid roster area.');
+            const [workspaceId, workspaceKeyVersion, commitment] = row;
+            return { workspaceId, workspaceKeyVersion, commitment } as RosterArea;
+        }
+        if (row.length === 3 && row[2] === RETIRED_ROW) {
+            const [workspaceId, workspaceKeyVersion] = row;
+            return {
+                workspaceId,
+                workspaceKeyVersion,
+                commitment: '',
+                retired: true,
+            } as RosterArea;
+        }
+        if (row.length !== 5 || row[2] !== KEY_ROW) throw new CryptoError('Invalid roster area.');
+        const [workspaceId, workspaceKeyVersion, , commitment, rootCommitment] = row;
+        return { workspaceId, workspaceKeyVersion, commitment, rootCommitment } as RosterArea;
     });
     if (!Array.isArray(parts[8]) || parts[8].length > MAX_ROSTER_MEMBERS)
         throw new CryptoError('Invalid roster members.');
@@ -395,6 +466,8 @@ export function parseRoster(statement: Uint8Array): Roster {
         signerUserId: parts[7],
         members,
         areas,
+        // Format 1 rosters parse to exactly what they always did.
+        ...(format === 2 ? { format } : {}),
     } as Roster;
     requireCanonical(statement, rosterStatement(roster), 'roster');
     return roster;
@@ -955,7 +1028,8 @@ export async function openGroupKey(
 }
 
 /*
- * Seals an area's workspace key to a member: only for an area derived under
+ * Seals an area's workspace key to a member: never for a retired area (design
+ * 2.10), and only for an area derived under
  * the group, and only to an active entry of the accepted roster at the key
  * version the context names.
  */
@@ -976,6 +1050,8 @@ export async function sealAreaGrant(
         throw new CryptoError('Areas are granted only by active members.');
     await sealerHolds(options.chain, ctx.granterUserId, options.granter);
     await areaOf(ctx.groupId, ctx.workspaceId, options.areaIdSeed);
+    // A retired area (design 2.10) is granted no more, at any version.
+    if (options.chain.retiredAreas.includes(ctx.workspaceId)) throw new CryptoError(RETIRED);
     // Only a key the chain lists for that area and version: a new area or a rotation is a
     // roster first.
     if (
@@ -1025,8 +1101,38 @@ function listedArea(chain: AcceptedRosters, workspaceId: string, workspaceKeyVer
  */
 export function areaWriteVersion(chain: AcceptedRosters, workspaceId: string): number | null {
     requireAccepted(chain);
+    // A retired area (design 2.10) is written no more.
+    if (chain.retiredAreas.includes(workspaceId)) return null;
     return areaCommitments(chain, workspaceId)?.length ?? null;
 }
+
+/*
+ * Whether an area root's key is the one the chain committed to at that area
+ * version (design 2.10): what decides the root is current, beside its
+ * envelope opening under the area key at that version. True when the chain
+ * lists a root commitment there and the key has it; false when the version
+ * was listed by a format 1 roster, which committed to no root (the caller
+ * keeps the previous rule, the envelope opening). Refused when the key's
+ * commitment is another, the version is not listed, or the area is retired.
+ */
+export async function checkAreaRoot(
+    chain: AcceptedRosters,
+    workspaceId: string,
+    workspaceKeyVersion: number,
+    rootKey: Uint8Array,
+): Promise<boolean> {
+    requireAccepted(chain);
+    integer(workspaceKeyVersion, 'workspace key version');
+    if (chain.retiredAreas.includes(workspaceId)) throw new CryptoError(RETIRED);
+    if (!listedArea(chain, workspaceId, workspaceKeyVersion))
+        throw new CryptoError('This area key version is not on the group’s member list.');
+    const listed = chain.areaRoots[workspaceId]?.[workspaceKeyVersion - 1] ?? null;
+    if (listed === null) return false;
+    if ((await areaRootCommitment(rootKey)) !== listed) throw new CryptoError(NOT_LISTED_ROOT);
+    return true;
+}
+
+const NOT_LISTED_ROOT = 'This folder’s key is not the one the group’s member list names.';
 
 /*
  * The row a roster would carry for an area's next key (areaRows, for one
@@ -1037,12 +1143,20 @@ export async function nextAreaKey(
     chain: AcceptedRosters,
     workspaceId: string,
     workspaceKey: Uint8Array,
+    rootKey?: Uint8Array,
 ): Promise<RosterArea> {
-    return (await areaRows(chain, [{ workspaceId, workspaceKey }]))[0]!;
+    return (
+        await areaRows(chain, [{ workspaceId, workspaceKey, ...(rootKey ? { rootKey } : {}) }], {
+            format: rootKey ? 2 : rosterFormat(chain.roster),
+        })
+    )[0]!;
 }
 
-/* An area's new key, for nextRoster to turn into its row. */
-export type AreaKey = { workspaceId: string; workspaceKey: Uint8Array };
+/*
+ * An area's new key, for nextRoster to turn into its row, and in format 2 the
+ * node key its root folder gets at that version (design 2.10).
+ */
+export type AreaKey = { workspaceId: string; workspaceKey: Uint8Array; rootKey?: Uint8Array };
 
 /*
  * The rows a roster carries for new area keys (2.4, 2.6): each at its area's
@@ -1054,9 +1168,18 @@ export type AreaKey = { workspaceId: string; workspaceKey: Uint8Array };
  * (checkAreas); this only says so before a holder signs. Only commitments are
  * kept, never copies of the keys.
  */
-export async function areaRows(chain: AcceptedRosters, keys: AreaKey[]): Promise<RosterArea[]> {
+export async function areaRows(
+    chain: AcceptedRosters,
+    keys: AreaKey[],
+    options: { format?: RosterFormat; retire?: readonly string[] } = {},
+): Promise<RosterArea[]> {
     requireAccepted(chain);
-    return rowsAfter(chain.areaKeys, keys);
+    return rowsAfter(
+        { keys: chain.areaKeys, roots: chain.areaRoots, retired: chain.retiredAreas },
+        keys,
+        options.format ?? rosterFormat(chain.roster),
+        options.retire ?? [],
+    );
 }
 
 /*
@@ -1073,7 +1196,12 @@ export function areasToRotate(chain: AcceptedRosters, members: RosterMember[]): 
         (entry) =>
             entry.status === 'left' && rosterEntry(chain.roster, entry.userId)?.status === 'active',
     );
-    return leaving ? Object.keys(chain.areaKeys).sort() : [];
+    // A retired area (design 2.10) is never rotated again.
+    return leaving
+        ? Object.keys(chain.areaKeys)
+              .filter((workspaceId) => !chain.retiredAreas.includes(workspaceId))
+              .sort()
+        : [];
 }
 
 /*

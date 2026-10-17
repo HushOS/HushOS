@@ -55,7 +55,9 @@ export type ChainRoute =
     | { kind: 'member'; userId: string }
     | { kind: 'remove'; userId: string }
     | { kind: 'areas' }
-    | { kind: 'rotation'; workspaceId: string };
+    | { kind: 'rotation'; workspaceId: string }
+    /* Deleting a family folder (groups design 2.10). */
+    | { kind: 'delete'; workspaceId: string };
 
 export type OutboxEntry = {
     v: 1;
@@ -230,6 +232,8 @@ function send(ctx: GroupContext, entry: OutboxEntry): Promise<ChainHead | null> 
             return ctx.api.createArea(groupId, call);
         case 'rotation':
             return ctx.api.rotateArea(groupId, route.workspaceId, call);
+        case 'delete':
+            return ctx.api.deleteArea(groupId, route.workspaceId, call);
     }
 }
 
@@ -679,6 +683,10 @@ const ROUTES: Record<GroupStageOp['kind'], (op: GroupStageOp) => ChainRoute> = {
     rotate: (op) => ({
         kind: 'rotation',
         workspaceId: (op as Extract<GroupStageOp, { kind: 'rotate' }>).rotation.workspaceId,
+    }),
+    retire: (op) => ({
+        kind: 'delete',
+        workspaceId: (op as Extract<GroupStageOp, { kind: 'retire' }>).workspaceId,
     }),
 };
 

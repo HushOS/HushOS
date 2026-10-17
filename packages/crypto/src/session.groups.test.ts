@@ -18,7 +18,7 @@ import {
     type IdentityEnvelope,
     type SuccessionLink,
 } from './identity';
-import { CONTENT_SUITE, wrapPreviousRootKey } from './drive';
+import { CONTENT_SUITE, wrapNodeKey, wrapPreviousRootKey } from './drive';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
@@ -1628,6 +1628,88 @@ describe('the write version (F9)', () => {
                 selfGrant: null,
             }),
         ).resolves.toMatchObject({ version: 1, writable: false, reason: 'no-grant-at-latest' });
+    });
+
+    test('design 2.10 (F14): a top folder under the right folder key but not the key the roster committed to opens nothing and makes nothing writable', async () => {
+        const f = await family();
+        // Every roster this worker writes is format 2, and the folder's first key commits to its root.
+        const first = parseRoster(decode(f.created.body.roster.statement));
+        expect(first.format).toBe(2);
+        expect(first.areas![0]!.rootCommitment).toEqual(expect.any(String));
+        expect(parseRoster(decode(f.admit.body.roster.statement)).format).toBe(2);
+        // A root key wrapped under folder key 1, in the root's own context, by someone holding the
+        // folder key (a server keeping an envelope a revoked recipient's root key sits in).
+        const areaKey = await openAreaSelfGrant(f.alice.root, ALICE, f.groupId, f.area.selfGrant);
+        const posing = encode(
+            await wrapNodeKey(crypto.getRandomValues(new Uint8Array(32)), areaKey, {
+                workspaceId: f.ws,
+                nodeId: f.area.root.id,
+                parentId: f.ws,
+                parentKeyEpoch: 1,
+                keyEpoch: 1,
+            }),
+        );
+        const fresh = await f.alice.device();
+        await f.sync(fresh, f.marks.alice);
+        const open = () =>
+            fresh.call('groupOpenArea', {
+                groupId: f.groupId,
+                workspaceId: f.ws,
+                idSeed: f.area.idSeed,
+                servedVersion: 1,
+                grant: null,
+                selfGrant: f.area.selfGrant,
+            });
+        await open();
+        const listed = await fresh.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [{ ...f.rootListing, keyEnvelope: posing }],
+        });
+        expect(listed.nodes[0]!.error).toBeTruthy();
+        await expect(open()).resolves.toMatchObject({ writable: false, reason: 'root-unknown' });
+        await expect(
+            fresh.call('driveCreateNodes', newFolder(f.ws, f.area.root.id, 1)),
+        ).rejects.toThrow(/keys changed/);
+        // The committed root opens, and then the folder is written.
+        await fresh.call('driveOpenNodes', { workspaceId: f.ws, nodes: [f.rootListing] });
+        await expect(open()).resolves.toMatchObject({ writable: true, reason: null });
+        await expect(
+            fresh.call('driveCreateNodes', newFolder(f.ws, f.area.root.id, 1)),
+        ).resolves.toBeTruthy();
+    });
+
+    test('design 2.10 (F11): deleting a folder stages its tombstone alone, and the folder is written and opened no more', async () => {
+        const f = await family();
+        const staged = await f.alice.call('groupStage', {
+            groupId: f.groupId,
+            expectedRevision: 2,
+            op: { kind: 'retire', workspaceId: f.ws },
+            kems: { [BOB]: f.bob.served.kemPublicKey },
+        });
+        if (staged.outboxId === null) throw new Error('nothing staged');
+        // The tombstone, at the folder's next version, and nothing else: no grant, no rotation.
+        expect(parseRoster(decode(staged.body.roster.statement)).areas).toEqual([
+            { workspaceId: f.ws, workspaceKeyVersion: 2, commitment: '', retired: true },
+        ]);
+        expect(staged.body.grants ?? []).toEqual([]);
+        expect(staged.body.rotations ?? []).toEqual([]);
+        await f.alice.call('groupDrop', { outboxId: staged.outboxId });
+        f.server.store(staged.body);
+        const synced = await f.sync(f.alice, f.marks.alice);
+        expect(synced.view.areas).toEqual({});
+        // Nothing more is written there, on the device that had it open and writable.
+        await expect(
+            f.alice.call('driveCreateNodes', newFolder(f.ws, f.area.root.id, 1)),
+        ).rejects.toThrow();
+        // And a second deletion, or a rotation of it, is refused before anything is signed.
+        await expect(
+            f.alice.call('groupStage', {
+                groupId: f.groupId,
+                expectedRevision: 3,
+                op: { kind: 'retire', workspaceId: f.ws },
+                kems: {},
+            }),
+        ).rejects.toThrow();
     });
 
     test('a family folder’s self-grant never opens as a personal workspace, even before the family loads', async () => {

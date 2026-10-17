@@ -605,6 +605,8 @@ async function checkGrants(
         const grantee = rosterEntry(head, grant.granteeUserId);
         if (!activeWith(grantee) || grantee!.keyVersion !== grant.granteeKeyVersion)
             throw new GroupError('members-changed', REFUSED, 409, { reason: 'grantee' });
+        // A deleted family folder is granted no more (docs/groups-design.md 2.10).
+        if (chain.retiredAreas.includes(grant.workspaceId)) throw invalid('grant-area-retired');
         if ((chain.areaKeys[grant.workspaceId]?.length ?? 0) < grant.workspaceKeyVersion)
             throw invalid('grant-area-version');
         const named = await rosterAt(grant.rosterVersion);
@@ -636,19 +638,23 @@ async function checkGrants(
 
 /*
  * The area rows a roster carries must be exactly what the call writes: a new
- * area at version 1 on the area route, and one row per rotation the call
- * carries, at its new version. A row with no write behind it (an area the
- * server does not have, a rotation that never happens) would list a key the
- * group's files are not under.
+ * area at version 1 on the area route, one row per rotation the call
+ * carries, at its new version, and a tombstone only for the area the delete
+ * route deletes (docs/groups-design.md 2.10). A row with no write behind it
+ * (an area the server does not have, a rotation that never happens, a
+ * tombstone standing in for a rotation's row) would list a key the group's
+ * files are not under, or retire an area the server still serves.
  */
 function checkAreaRows(
     roster: Roster,
-    expected: readonly { workspaceId: string; version: number }[],
+    expected: readonly { workspaceId: string; version: number; retired?: boolean }[],
 ) {
     const rows = (roster.areas ?? [])
-        .map((row) => `${row.workspaceId}:${row.workspaceKeyVersion}`)
+        .map((row) => `${row.workspaceId}:${row.workspaceKeyVersion}:${row.retired === true}`)
         .sort();
-    const want = expected.map((row) => `${row.workspaceId}:${row.version}`).sort();
+    const want = expected
+        .map((row) => `${row.workspaceId}:${row.version}:${row.retired === true}`)
+        .sort();
     if (rows.length !== want.length || rows.some((row, i) => row !== want[i]))
         throw invalid('area-rows');
 }
@@ -843,6 +849,8 @@ async function writeChain(
          * admission's paid place. It throws to stop the write.
          */
         beforeAppend?: () => Promise<void>;
+        /* The delete route's area: its tombstone, at the version after the chain's latest. */
+        retireArea?: string;
     } = {},
 ) {
     const found = await membershipOf(groupId, uploader, 'members');
@@ -878,6 +886,15 @@ async function writeChain(
             workspaceId: rotation.workspaceId,
             version: rotation.toVersion,
         })),
+        ...(options.retireArea
+            ? [
+                  {
+                      workspaceId: options.retireArea,
+                      version: (chain.areaKeys[options.retireArea]?.length ?? 0) + 1,
+                      retired: true,
+                  },
+              ]
+            : []),
     ]);
     let after = checked.next;
     let succession: groupsRepository.ParsedSuccession | undefined;
@@ -937,6 +954,7 @@ async function writeChain(
         ],
         grants,
         route.kind === 'admit' ? route.userId : null,
+        options.retireArea ?? null,
     );
     await options.beforeAppend?.();
     const result = await groupsRepository.appendChain({
@@ -1036,6 +1054,8 @@ async function requireGrantsOwed(
     keyed: readonly { workspaceId: string; version: number }[],
     grants: readonly groupsRepository.GrantInput[],
     admitted: string | null,
+    /* The area this call deletes: nobody is owed its key any more. */
+    retiring: string | null = null,
 ) {
     const granted = new Set(
         grants.map((g) => `${g.workspaceId}:${g.workspaceKeyVersion}:${g.granteeUserId}`),
@@ -1066,7 +1086,9 @@ async function requireGrantsOwed(
     const rotated = new Set(keyed.map((area) => area.workspaceId));
     const unpaid = (await groupsRepository.missingGrants(groupId)).filter(
         (gap) =>
-            !rotated.has(gap.workspaceId) && !grantedTo.has(`${gap.workspaceId}:${gap.userId}`),
+            gap.workspaceId !== retiring &&
+            !rotated.has(gap.workspaceId) &&
+            !grantedTo.has(`${gap.workspaceId}:${gap.userId}`),
     );
     if (unpaid.length > 0)
         throw new GroupError(
@@ -2043,6 +2065,35 @@ export async function createArea(
             newArea: { workspaceId: call.area.workspaceId },
             beforeAppend: () => requirePlan(groupId),
         },
+    );
+}
+
+/*
+ * Deleting a family folder (docs/groups-design.md 2.10): a roster whose only
+ * area row is the folder's tombstone, signed by a `members` holder like every
+ * roster, and nothing else in the call. The repository marks the area deleted
+ * in the same transaction; its files stay for Drive's trash retention, then
+ * the purge job takes them.
+ */
+export async function deleteArea(
+    userId: string,
+    groupId: string,
+    workspaceId: string,
+    call: RosterCall,
+) {
+    if (
+        (call.rotations?.length ?? 0) > 0 ||
+        (call.grants?.length ?? 0) > 0 ||
+        (call.seals?.length ?? 0) > 0 ||
+        call.succession
+    )
+        throw invalid('area-delete');
+    return writeChain(
+        groupId,
+        userId,
+        call,
+        { kind: 'retire', workspaceId },
+        { retireArea: workspaceId },
     );
 }
 

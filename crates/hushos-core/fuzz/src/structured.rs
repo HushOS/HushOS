@@ -270,15 +270,23 @@ pub fn roster(u: &mut Unstructured) -> arbitrary::Result<Value> {
             }))
         })
         .collect::<arbitrary::Result<Vec<_>>>()?;
+    // Format 1 rows, format 2 key rows with a root commitment, and tombstones (design 2.10).
     let areas = (0..u.int_in_range(0..=3u8)?)
         .map(|_| {
-            Ok(json!({
+            let mut row = json!({
                 "workspaceId": plausible(u, USERS)?,
                 "workspaceKeyVersion": version(u)?,
-                "commitment": plausible(u, KEYS)?,
-            }))
+                "commitment": if u.ratio(1, 4)? { String::new() } else { plausible(u, KEYS)? },
+            });
+            match u.int_in_range(0..=2u8)? {
+                1 => row["rootCommitment"] = json!(plausible(u, KEYS)?),
+                2 => row["retired"] = json!(u.ratio(3, 4)?),
+                _ => {}
+            }
+            Ok(row)
         })
         .collect::<arbitrary::Result<Vec<_>>>()?;
+    let format = u.int_in_range(0..=3u8)?;
     let roster_version = version(u)?;
     let previous = if u.ratio(1, 2)? { String::new() } else { plausible(u, KEYS)? };
     Ok(json!({
@@ -290,5 +298,6 @@ pub fn roster(u: &mut Unstructured) -> arbitrary::Result<Value> {
         "signerUserId": plausible(u, USERS)?,
         "members": members,
         "areas": areas,
+        "format": format,
     }))
 }

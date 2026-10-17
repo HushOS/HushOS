@@ -282,6 +282,27 @@ export async function mayStartRotation(userId: string, workspaceId: string) {
 }
 
 /*
+ * Whether `nodeId` is the root of a group area (a family folder's top folder):
+ * its key changes only with a roster rotation, which commits to it
+ * (docs/groups-design.md 2.10), never with a Drive rotation started there.
+ */
+export async function isGroupAreaRoot(workspaceId: string, nodeId: string) {
+    const [row] = await db
+        .select({ id: driveNodes.id })
+        .from(driveNodes)
+        .innerJoin(workspaces, eq(workspaces.id, driveNodes.workspaceId))
+        .where(
+            and(
+                eq(driveNodes.id, nodeId),
+                eq(driveNodes.workspaceId, workspaceId),
+                isNull(driveNodes.parentId),
+                eq(workspaces.ownerKind, 'group'),
+            ),
+        );
+    return row !== undefined;
+}
+
+/*
  * A write in a group area its writer may no longer make: their access ended after the
  * Drive domain checked it (`ended`), or a holder holds them ahead of a removal (`held`).
  */
