@@ -1,0 +1,21 @@
+DESIGN.md
+  s_a965107c48ca30::t_2a2c96c29fb2a8 385
+apps/web/src/identities.css
+  s_a965107c48ca30::t_eab7e02cbf5f30 233-237,315-320,322-326,328-331,333-337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "46ad3ddaa3005785fc4843547b5e1d5dd9b7c404",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
