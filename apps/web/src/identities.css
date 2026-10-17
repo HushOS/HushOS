@@ -230,8 +230,11 @@
     letter-spacing: 0.02em;
 }
 
-/* Covers wipe open as they scroll in; ones already on screen are simply there. */
-@supports (animation-timeline: view()) {
+/*
+ * Covers wipe open as they scroll in; ones already on screen are simply there. Not on
+ * iOS WebKit, where the wipe would trail the scroll (see the reading line below).
+ */
+@supports (animation-timeline: view()) and (not (-webkit-touch-callout: none)) {
     @media (prefers-reduced-motion: no-preference) {
         .cover-wipe {
             position: relative;
@@ -313,6 +316,26 @@
     .read-progress {
         animation: read-progress linear both;
         animation-timeline: scroll(root);
+    }
+}
+/*
+ * iOS and iPadOS WebKit, which every browser there uses, scroll the page off the main
+ * thread but move scroll-driven animations on it, so the line trails the finger. There
+ * it is left out rather than shown lagging. -webkit-touch-callout is supported only
+ * there as far as we know (Safari on the Mac and Chromium do not); Chrome on Android
+ * should keep the line in step, as desktop browsers do. Drop this once WebKit runs
+ * scroll timelines off the main thread.
+ */
+@supports (-webkit-touch-callout: none) {
+    .read-progress {
+        display: none;
+    }
+}
+/* Forced colours would paint it the page's own Canvas colour, so it would vanish. */
+@media (forced-colors: active) {
+    .read-progress {
+        background: CanvasText;
+        forced-color-adjust: none;
     }
 }
 @keyframes read-progress {
