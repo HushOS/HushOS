@@ -98,6 +98,12 @@ import {
 } from './drive';
 
 /*
+ * These build and verify chains with real ML-DSA-65 and Ed25519 keys: about a second a test here,
+ * several times that on a loaded CI runner (one hit 5086 ms against the 5 s default).
+ */
+vi.setConfig({ testTimeout: 30_000 });
+
+/*
  * Every device verifies the roster chain the server serves from version 1,
  * warns loudly only when the person's own marks (their pins, this device's
  * cache) disagree with each other or with that chain, ignores whatever else
