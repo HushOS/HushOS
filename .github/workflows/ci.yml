@@ -18,8 +18,10 @@ concurrency:
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-    # What the change touches, so the jobs it cannot affect stay skipped (and `CI ok` still
-    # passes). Anything unlisted, or a diff that cannot be read, runs everything.
+    # What a pull request touches, so the jobs it cannot affect stay skipped (and `CI ok` still
+    # passes). Anything unlisted, or a diff that cannot be read, runs everything. A push to main
+    # always runs everything: its diff is only against the previous push, so a docs-only commit
+    # after a failed or cancelled one would otherwise deploy code no suite passed.
     changes:
         name: Changed paths
         runs-on: ubuntu-latest
@@ -35,17 +37,13 @@ jobs:
               id: paths
               env:
                   EVENT: ${{ github.event_name }}
-                  BEFORE: ${{ github.event.before }}
               run: |
+                  files=''
                   if [ "$EVENT" = pull_request ]; then
                       files=$(git diff --name-only HEAD^1 HEAD)
-                  elif [ -n "$BEFORE" ] && [ -n "${BEFORE//0/}" ] && git fetch -q --depth=1 origin "$BEFORE"; then
-                      files=$(git diff --name-only "$BEFORE" HEAD)
-                  else
-                      files=''
                   fi
                   if [ -z "$files" ]; then
-                      echo "No diff to read: running everything."
+                      echo "Not a pull request, or no diff to read: running everything."
                       echo "browser=true" >> "$GITHUB_OUTPUT"
                       echo "rust=true" >> "$GITHUB_OUTPUT"
                       exit 0
@@ -54,11 +52,11 @@ jobs:
                   rust=false
                   while IFS= read -r file; do
                       case "$file" in
-                          # Prose, and the pages' MDX copy, which the build job still compiles.
-                          docs/* | apps/web/src/content/*.mdx) ;;
-                          # Served at /design.md, and the suite's own fixtures.
+                          # Served at /design.md, and the suite's own fixtures. In a case
+                          # pattern `*` crosses `/`, so these come before the prose patterns.
                           DESIGN.md | e2e/*) browser=true ;;
-                          *.md) ;;
+                          # Prose only. The pages' MDX renders in the app, so it is not here.
+                          docs/* | *.md) ;;
                           *) browser=true ;;
                       esac
                       # The core, its bindings, and the TypeScript twin its fixtures are checked against.
@@ -243,8 +241,9 @@ jobs:
                       scratchpad/e2e-server.log
                   retention-days: 7
 
-    # Families on, the self-hosting default, in two shards: each block of families.spec.ts is
-    # serial and makes its own people, so the blocks run side by side. The switch is written
+    # Families on, the self-hosting default, in one job: each block of families.spec.ts is serial
+    # and makes its own people, so the blocks run side by side on the two workers. The longest
+    # block (removal, about three minutes) sets the time, so a second shard would gain nothing. The switch is written
     # out rather than left to the default, so a change of default cannot quietly turn this
     # job into a second run of the off path.
     # Still on the dev server, not the production build: leaving a page while it restores the
@@ -252,15 +251,11 @@ jobs:
     # the build, 400 ms on dev), and "removing someone" leaves /app/drive inside that window
     # only on the faster build. Move this job to the build once that product bug is fixed.
     e2e-families:
-        name: Browser tests (families ${{ matrix.shard }}/2)
+        name: Browser tests (families)
         needs: changes
         if: needs.changes.outputs.browser == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
-        strategy:
-            fail-fast: false
-            matrix:
-                shard: [1, 2]
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
@@ -310,7 +305,7 @@ jobs:
             # GROUPS_ENABLED reaches the spec from .env too: with it on, a server that says
             # families are off fails the run instead of skipping it.
             - name: Run the families suite against the dev server
-              run: bun run e2e -- --project=chromium e2e/families.spec.ts --shard=${{ matrix.shard }}/2
+              run: bun run e2e -- --project=chromium e2e/families.spec.ts
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true
@@ -318,7 +313,7 @@ jobs:
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces-families-${{ matrix.shard }}-${{ github.run_attempt }}
+                  name: playwright-traces-families-${{ github.run_attempt }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
@@ -425,7 +420,7 @@ jobs:
               run: |
                   title="WebKit failed on main ${GITHUB_SHA::7}"
                   body="The WebKit suite failed on $GITHUB_SHA: $RUN_URL (traces are in the run's artifacts). Deploys do not wait for WebKit, so this commit may already be live."
-                  number=$(gh issue list --state open --search 'in:title "WebKit failed on main"' --json number,title \
+                  number=$(gh issue list --state open --author app/github-actions --search 'in:title "WebKit failed on main"' --json number,title \
                       --jq '[.[] | select(.title | startswith("WebKit failed on main"))][0].number // empty')
                   if [ -n "$number" ]; then
                       gh issue edit "$number" --title "$title"
