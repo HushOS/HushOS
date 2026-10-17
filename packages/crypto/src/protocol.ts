@@ -54,4 +54,5 @@ export const GROUP_OPERATIONS = [
     'groupForget',
     'groupStoreSeal',
     'groupStoreOpen',
+    'groupPreviousRoot',
 ] as const;

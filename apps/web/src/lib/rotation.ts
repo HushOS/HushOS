@@ -35,8 +35,7 @@ async function quietly(
 ): Promise<void> {
     try {
         await work();
-        finished++;
-        document.documentElement.dataset.keyRotations = String(finished);
+        countFinishedRotation();
     } catch (error) {
         const last = attempt >= RETRY_DELAYS_MS.length;
         if (attempt === 0 || last)
@@ -56,6 +55,12 @@ async function quietly(
         // Every envelope under the root changed: listings and shares are stale.
         await queryClient.invalidateQueries({ queryKey: driveKeys.all });
     }
+}
+
+/* One more key change walked to its end on this page (a family folder's too), for tests to wait on. */
+export function countFinishedRotation() {
+    finished++;
+    document.documentElement.dataset.keyRotations = String(finished);
 }
 
 function retryLater(

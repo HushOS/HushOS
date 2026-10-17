@@ -71,6 +71,7 @@ function harness(
     const verified: { signers: unknown; nodes: unknown[] }[] = [];
     const opened: { granterSigningPublicKey: string | null }[] = [];
     const rotatedWith: unknown[] = [];
+    const groupWith: unknown[] = [];
     const settled: { commit: string[]; drop: string[] } = { commit: [], drop: [] };
     const sealedMetadata: { nodeId: string; signAs: unknown }[] = [];
     let workCalls = 0;
@@ -201,6 +202,7 @@ function harness(
                     links: { id: string }[];
                 }[];
                 rotatedWith.push(input.signers);
+                groupWith.push(input.group ?? null);
                 for (const n of nodes)
                     rotated.push({
                         shares: n.shares.map((s) => s.id),
@@ -242,6 +244,7 @@ function harness(
         resealed,
         rotated,
         rotatedWith,
+        groupWith,
         settled,
         wired,
         verified,
@@ -382,6 +385,23 @@ describe('signatures', () => {
         expect(h.rotatedWith).toEqual([signers]);
         // The keys it made become the node's own only once the server applied the batch.
         expect(h.settled).toEqual({ commit: [A], drop: [] });
+    });
+
+    test('a family folder’s walk whose trust fails to load stops before the worker re-signs anything', async () => {
+        const failing = harness();
+        const refused = createDriveClient(failing.rpc, failing.api, {
+            trustGrantee: failing.trustGrantee,
+            signers: async () => ({}),
+            rotationTrust: async () => {
+                throw new Error('HushOS couldn’t load the family’s members.');
+            },
+        });
+        await refused.open('owner');
+        await expect(refused.walkRotation({ nodeId: A, targetEpoch: 9 })).rejects.toThrow(
+            /family’s members/,
+        );
+        expect(failing.rotated).toEqual([]);
+        expect(failing.wired).toEqual([]);
     });
 
     test('a rotation that cannot load the trust set stops before anything is re-sealed', async () => {

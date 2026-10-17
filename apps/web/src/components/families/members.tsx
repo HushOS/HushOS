@@ -27,6 +27,7 @@ import {
     DropdownMenuContent,
     DropdownMenuGroup,
     DropdownMenuItem,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
@@ -48,14 +49,14 @@ import { memberJoinCode } from '@/lib/groups/join';
 import { stageChange, type StageOutcome } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
 import { LetInDialog } from './let-in-dialog';
+import { RemoveDialog } from './remove-dialog';
 import { WordList } from './word-list';
 
 /*
  * The family page's three lists: who waits to join (for managers, each with
  * "Let them in"), the members (route 3's names with their address beside
  * them, roles in words), and open invitations. Rows are 56px with 36px marks.
- * A member's menu changes roles; removal arrives with step 7, so it is not
- * offered here.
+ * A member's menu changes roles and, last, removes them from the family.
  */
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -165,6 +166,7 @@ export function MemberList({
     view,
     manager,
     names,
+    needsCheck = [],
 }: {
     userId: string;
     groupId: string;
@@ -173,9 +175,12 @@ export function MemberList({
     view: GroupView | null;
     manager: boolean;
     names: Record<string, string>;
+    /* Members whose new keys no signed link reaches: their words need comparing again. */
+    needsCheck?: readonly string[];
 }) {
     const queryClient = useQueryClient();
     const [confirming, setConfirming] = useState<RoleChange | null>(null);
+    const [removing, setRemoving] = useState<FamilyMember | null>(null);
     const [busy, setBusy] = useState(false);
     const [showingCode, setShowingCode] = useState<FamilyMember | null>(null);
     const active = members.filter((member) => member.state === 'active');
@@ -255,7 +260,11 @@ export function MemberList({
                         name={self ? `${member.name} (you)` : member.name}
                         seed={member.userId}
                         data={{ 'data-member': member.email ?? member.userId }}
-                        line={`${member.email} · ${rolesLine(roles)}`}
+                        line={
+                            needsCheck.includes(member.userId)
+                                ? `${member.email} · Check ${who}’s words again`
+                                : `${member.email} · ${rolesLine(roles)}`
+                        }
                     >
                         {manager && !self && (
                             <DropdownMenu>
@@ -301,6 +310,15 @@ export function MemberList({
                                             Show {who}’s join code
                                         </DropdownMenuItem>
                                     </DropdownMenuGroup>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuGroup>
+                                        <DropdownMenuItem
+                                            variant="destructive"
+                                            onClick={() => setRemoving(member)}
+                                        >
+                                            Remove from family
+                                        </DropdownMenuItem>
+                                    </DropdownMenuGroup>
                                 </DropdownMenuContent>
                             </DropdownMenu>
                         )}
@@ -325,6 +343,16 @@ export function MemberList({
                     )}
                 </AlertDialogContent>
             </AlertDialog>
+            {removing && (
+                <RemoveDialog
+                    userId={userId}
+                    groupId={groupId}
+                    family={family}
+                    member={removing}
+                    names={names}
+                    onClose={() => setRemoving(null)}
+                />
+            )}
             {showingCode && (
                 <JoinCodeDialog
                     userId={userId}

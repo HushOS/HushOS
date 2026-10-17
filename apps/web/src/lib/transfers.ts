@@ -8,7 +8,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { renderThumbnail } from '@/lib/thumbnails';
-import { clientFor, invalidateFolders, refuseWrite } from '@/lib/drive';
+import { clientFor, invalidateFolders, refuseWrite, waitsForKeyChange } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { stashAvailable, uploadStash } from '@/lib/stash';
 
@@ -62,8 +62,10 @@ export const transfers = createTransferManager({
     journal: typeof indexedDB === 'undefined' ? undefined : createIndexedDbJournal(),
     stash: stashAvailable() ? uploadStash : undefined,
     openNodes,
-    // A family folder that may not be written, or one a key change has not reached, at prepare.
+    // A family folder that may not be written fails the upload at prepare; one a key change has
+    // not reached yet makes it wait, and it goes once the walk has re-keyed the folder.
     refuseWrite,
+    waitsForKeyChange,
     thumbnail: (file, mime) => renderThumbnail(file, mime),
     onPublished: (node) => {
         if (queryClient) refreshFolderSoon(queryClient, node.parentId);

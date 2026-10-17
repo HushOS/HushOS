@@ -6,6 +6,7 @@ import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { ForkAlert, NoticeList } from '@/components/families/family-alerts';
 import { InviteDialog } from '@/components/families/invite-dialog';
+import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
 import { InvitationList, MemberList, PendingList } from '@/components/families/members';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PageHeader } from '@/components/page-header';
@@ -34,16 +35,14 @@ import {
     useFamilySync,
 } from '@/lib/families';
 import { groupsApi } from '@/lib/groups/api';
+import { familySynced } from '@/lib/families-keys';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
+import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
 
-/*
- * Leaving is built but not offered until a departure can be finished (1c step
- * 7): until a manager marks the person left, which rotates every family
- * folder, nobody can join and roles can't change.
- */
-const LEAVING = false as boolean;
+/* While a key change walks one of the family's folders, the family is checked again this often. */
+const KEY_CHANGE_POLL_MS = 15_000;
 
 export const Route = createFileRoute('/_authenticated/app/_drive/families/$groupId/')({
     head: () => ({ meta: [{ title: 'Family · HushOS' }] }),
@@ -65,7 +64,8 @@ function FamilyPage() {
         ...familyQueryOptions(userId, groupId),
         enabled: summary?.state === 'active',
     });
-    const sync = useFamilySync(userId, groupId, summary);
+    const sync = useFamilySync(userId, groupId, summary, { pollWhileWalking: KEY_CHANGE_POLL_MS });
+    const work = useFamilyWork(groupId);
     const manager = summary?.state === 'active' && canManage(summary.roles);
     const pending = useQuery({
         ...pendingQueryOptions(userId, groupId),
@@ -120,6 +120,7 @@ function FamilyPage() {
     if (result?.status === 'unchecked')
         return <Navigate to="/app/families/$groupId/join" params={{ groupId }} replace />;
     const view = result?.status === 'accepted' ? result.view : null;
+    const areas = result?.status === 'accepted' ? result.areas : [];
     const markLeft = detail.data?.due?.markLeft ?? [];
     const ownWrong = view ? view.ownEntryWrongAt.length > 0 : false;
     const ownBehind = view ? view.ownEntryBehindAt.length > 0 : false;
@@ -184,9 +185,16 @@ function FamilyPage() {
                     <Alert variant="warning" data-left-due>
                         <AlertTitle>{leftDueCopy({ userIds: markLeft }, { names })}</AlertTitle>
                         <AlertDescription>
-                            This version of HushOS can’t finish it yet.
+                            {manager
+                                ? work.running
+                                    ? 'HushOS is finishing it on this device now.'
+                                    : 'HushOS finishes it on this device the next time it checks the family.'
+                                : 'A manager’s device finishes it the next time they open the family.'}
                         </AlertDescription>
                     </Alert>
+                )}
+                {result?.status === 'accepted' && (
+                    <KeyChangeNotice groupId={groupId} family={family} areas={areas} />
                 )}
                 {sync.data && (
                     <NoticeList
@@ -235,6 +243,7 @@ function FamilyPage() {
                     view={view}
                     manager={manager}
                     names={names}
+                    needsCheck={work.needsCheck}
                 />
             )}
             {manager && invitations.data && (
@@ -259,6 +268,15 @@ function FamilyPage() {
                             <dd className="tabular-nums">{view.groupKeyVersion}</dd>
                             <dt className="text-muted-foreground">Family folders</dt>
                             <dd className="tabular-nums">{Object.keys(view.areas).length}</dd>
+                            <dd className="col-span-2">
+                                <FolderKeys
+                                    userId={userId}
+                                    groupId={groupId}
+                                    family={family}
+                                    areas={areas}
+                                    manager={manager}
+                                />
+                            </dd>
                             {view.deadBranches.length > 0 && (
                                 <>
                                     <dt className="text-muted-foreground">Dropped changes</dt>
@@ -279,13 +297,11 @@ function FamilyPage() {
                         </p>
                     )}
                 </details>
-                {LEAVING && (
-                    <div>
-                        <Button variant="destructive-outline" onClick={() => setLeaving(true)}>
-                            Leave family
-                        </Button>
-                    </div>
-                )}
+                <div>
+                    <Button variant="destructive-outline" onClick={() => setLeaving(true)}>
+                        Leave family
+                    </Button>
+                </div>
             </section>
             <ServerKnowsLine className="mt-auto" />
 
@@ -336,13 +352,27 @@ function LeaveDialog({
         setError('');
         try {
             await groupsApi.leave(groupId);
+            // This device forgets the family (chain, keys, records, outbox, folder mirrors); the
+            // settings pin stays as a mark (D7). Its folders' clients go with it.
             const ctx = familyContext(userId);
-            await ctx.lock(groupId, () => wipeGroup(ctx, groupId)).catch(() => {});
+            const wiped = await ctx
+                .lock(groupId, () => wipeGroup(ctx, groupId))
+                .then(() => true)
+                .catch(() => false);
+            familySynced(groupId, { status: 'wiped' });
             cue('droplet');
-            toast.add({ type: 'success', title: `You left ${family}` });
+            // The leave landed either way; a wipe that failed is said, not hidden behind it.
+            if (wiped) toast.add({ type: 'success', title: `You left ${family}` });
+            else
+                toast.add({
+                    type: 'error',
+                    title: `You left ${family}, but this device kept some of it`,
+                    description:
+                        'HushOS couldn’t clear the family’s keys and saved records on this device. Lock or sign out to clear them.',
+                });
             onOpenChange(false);
             await afterFamilyChange(queryClient, userId);
-            await navigate({ to: '/app/families', replace: true });
+            await navigate({ to: '/app/drive', replace: true });
         } catch (cause) {
             cue('error');
             setError(errorCopy(cause, { family }));

@@ -25,6 +25,7 @@ import {
     driveLinks,
     driveNodes,
     driveShares,
+    driveUploads,
     groupInvitations,
     groupKeySeals,
     groupKeySuccessions,
@@ -1113,6 +1114,338 @@ describe('departures', () => {
         ).not.toEqual([]);
         expect(await drive.authorize(stayer.userId, group.areaId, root.id)).toBeNull();
         expect(await isMember(stayer.userId, group.areaId)).toBe(false);
+    });
+
+    test('while a walk runs in a family folder, nothing is made or moved under a folder it has not re-keyed', async () => {
+        const { creator, group } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        const at = async () => (await drive.allocateKeyEpochs(group.areaId, 1))!.from;
+        const folderUnder = async (parentId: string, parentKeyEpoch: number) =>
+            signed.createFolders({
+                workspaceId: group.areaId,
+                userId: creator.userId,
+                folders: [
+                    {
+                        id: randomUUID(),
+                        parentId,
+                        envelopes: {
+                            keyEpoch: await at(),
+                            parentKeyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            metadataEnvelope: randomBytes(100),
+                        },
+                    },
+                ],
+            });
+        const made = await folderUnder(root.id, root.keyEpoch);
+        if (made.status !== 'created') throw new Error(made.status);
+        const trips = made.nodes[0]!;
+        const loose = await folderUnder(root.id, root.keyEpoch);
+        if (loose.status !== 'created') throw new Error(loose.status);
+        const started = await rotations.startRotation({
+            workspaceId: group.areaId,
+            nodeId: root.id,
+            startedBy: creator.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const target = started.rotation.targetEpoch;
+        // Trips is below the target: a new folder there, or one moved in, would sit under a key the
+        // walk only re-wraps. Refused, as the walk's own subtree.
+        expect(await folderUnder(trips.id, trips.keyEpoch)).toMatchObject({
+            status: 'rotating',
+            id: trips.id,
+        });
+        expect(
+            await drive.moveNode({
+                workspaceId: group.areaId,
+                writer: creator.userId,
+                nodeId: loose.nodes[0]!.id,
+                parentId: trips.id,
+                parentKeyEpoch: trips.keyEpoch,
+                keyEnvelope: randomBytes(72),
+            }),
+        ).toMatchObject({ status: 'rotating' });
+        // The walk re-keys the root, then Trips: from then on it takes new folders again.
+        const nodeRow = async (id: string) =>
+            (await db.select().from(driveNodes).where(eq(driveNodes.id, id)))[0]!;
+        for (const [id, parentKeyEpoch] of [
+            [root.id, 1],
+            [trips.id, target],
+        ] as const)
+            expect(
+                await signed.rotateNodes({
+                    workspaceId: group.areaId,
+                    rootId: root.id,
+                    targetEpoch: target,
+                    userId: creator.userId,
+                    nodes: [
+                        {
+                            id,
+                            changeSeq: (await nodeRow(id)).changeSeq!,
+                            parentKeyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            rotated: {
+                                metadataEnvelope: randomBytes(100),
+                                versions: [],
+                                shares: [],
+                                links: [],
+                                unsealableLinks: [],
+                            },
+                        },
+                    ],
+                }),
+            ).toEqual([{ id, status: 'ok' }]);
+        expect(await folderUnder(trips.id, target)).toMatchObject({ status: 'created' });
+    });
+
+    test('while a walk runs, no new version goes under a file it has not re-keyed', async () => {
+        const { creator, group } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        const at = async () => (await drive.allocateKeyEpochs(group.areaId, 1))!.from;
+        const upload = async (
+            node:
+                | { existing: false; id: string; parentId: string; envelopes: never }
+                | {
+                      existing: true;
+                      id: string;
+                      keyEpoch: number;
+                      expectedVersionId: string | null;
+                  },
+        ) => {
+            const objectId = randomUUID();
+            return signed.beginUpload({
+                workspaceId: group.areaId,
+                userId: creator.userId,
+                node,
+                version: { id: randomUUID(), contentKeyEnvelope: randomBytes(72) },
+                object: {
+                    id: objectId,
+                    objectKey: `ws/${group.areaId}/${objectId}`,
+                    contentSuite: 2,
+                    chunkSize: 8 * 1024 * 1024,
+                    chunkCount: 1,
+                    contentNonce: randomBytes(16),
+                    ciphertextSize: 1024n,
+                },
+                multipartId: `mp-${objectId}`,
+                expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+            });
+        };
+        const fileId = randomUUID();
+        const first = await upload({
+            existing: false,
+            id: fileId,
+            parentId: root.id,
+            envelopes: {
+                keyEpoch: await at(),
+                parentKeyEpoch: root.keyEpoch,
+                keyEnvelope: randomBytes(72),
+                metadataEnvelope: randomBytes(100),
+            } as never,
+        });
+        if (first.status !== 'ok') throw new Error(first.status);
+        expect((await drive.startCompleting(group.areaId, first.uploadId)).status).toBe('ok');
+        const published = await drive.finishCompleting(group.areaId, first.uploadId, 1024n);
+        if (published.status !== 'published') throw new Error(published.status);
+        const file = published.node;
+        // A second version under way before the walk starts, which then conflicts.
+        const second = await upload({
+            existing: true,
+            id: file.id,
+            keyEpoch: file.keyEpoch,
+            expectedVersionId: file.currentVersionId,
+        });
+        if (second.status !== 'ok') throw new Error(second.status);
+        const started = await rotations.startRotation({
+            workspaceId: group.areaId,
+            nodeId: root.id,
+            startedBy: creator.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const target = started.rotation.targetEpoch;
+        // A new version would be sealed under the file's key, which the walk has not replaced.
+        expect(
+            await upload({
+                existing: true,
+                id: file.id,
+                keyEpoch: file.keyEpoch,
+                expectedVersionId: file.currentVersionId,
+            }),
+        ).toMatchObject({ status: 'rotating' });
+        // Nor attached to the same node after a conflict.
+        await db
+            .update(driveUploads)
+            .set({ status: 'conflicted' })
+            .where(eq(driveUploads.id, second.uploadId));
+        expect(
+            await signed.attachUpload(group.areaId, second.uploadId, {
+                mode: 'same-node',
+                userId: creator.userId,
+                keyEpoch: file.keyEpoch,
+                contentKeyEnvelope: randomBytes(72),
+            }),
+        ).toMatchObject({ status: 'rotating' });
+        // The walk re-keys the top folder and the file: then a new version goes again.
+        const nodeRow = async (id: string) =>
+            (await db.select().from(driveNodes).where(eq(driveNodes.id, id)))[0]!;
+        for (const [id, parentKeyEpoch] of [
+            [root.id, 1],
+            [file.id, target],
+        ] as const)
+            expect(
+                await signed.rotateNodes({
+                    workspaceId: group.areaId,
+                    rootId: root.id,
+                    targetEpoch: target,
+                    userId: creator.userId,
+                    nodes: [
+                        {
+                            id,
+                            changeSeq: (await nodeRow(id)).changeSeq!,
+                            parentKeyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            rotated: {
+                                metadataEnvelope: randomBytes(100),
+                                versions: [],
+                                shares: [],
+                                links: [],
+                                unsealableLinks: [],
+                            },
+                        },
+                    ],
+                }),
+            ).toEqual([{ id, status: 'ok' }]);
+        const after = await nodeRow(file.id);
+        expect(
+            await upload({
+                existing: true,
+                id: file.id,
+                keyEpoch: target,
+                expectedVersionId: after.currentVersionId,
+            }),
+        ).toMatchObject({ status: 'ok' });
+    });
+
+    test('while a walk runs, nothing is restored to a top folder it has not re-keyed', async () => {
+        const { creator, group } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        const at = async () => (await drive.allocateKeyEpochs(group.areaId, 1))!.from;
+        const folderUnder = async (parentId: string, parentKeyEpoch: number) => {
+            const made = await signed.createFolders({
+                workspaceId: group.areaId,
+                userId: creator.userId,
+                folders: [
+                    {
+                        id: randomUUID(),
+                        parentId,
+                        envelopes: {
+                            keyEpoch: await at(),
+                            parentKeyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            metadataEnvelope: randomBytes(100),
+                        },
+                    },
+                ],
+            });
+            if (made.status !== 'created') throw new Error(made.status);
+            return made.nodes[0]!;
+        };
+        // A folder in a folder, both in Trash: restoring the inner one goes to the top folder.
+        const outer = await folderUnder(root.id, root.keyEpoch);
+        const inner = await folderUnder(outer.id, outer.keyEpoch);
+        for (const nodeId of [inner.id, outer.id])
+            expect(
+                (
+                    await drive.trashNode({
+                        workspaceId: group.areaId,
+                        writer: creator.userId,
+                        nodeId,
+                    })
+                ).status,
+            ).toBe('ok');
+        const started = await rotations.startRotation({
+            workspaceId: group.areaId,
+            nodeId: root.id,
+            startedBy: creator.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const target = started.rotation.targetEpoch;
+        const restore = (parentKeyEpoch: number) =>
+            drive.restoreNode({
+                workspaceId: group.areaId,
+                writer: creator.userId,
+                nodeId: inner.id,
+                toRoot: { parentKeyEpoch, keyEnvelope: randomBytes(72) },
+            });
+        // The top folder is below the target: wrapped under it, the folder's key stays exposed.
+        expect(await restore(root.keyEpoch)).toMatchObject({ status: 'rotating' });
+        // The walk re-keys the top folder: the same restore, under its new key, goes.
+        const rootRow = (await db.select().from(driveNodes).where(eq(driveNodes.id, root.id)))[0]!;
+        expect(
+            await signed.rotateNodes({
+                workspaceId: group.areaId,
+                rootId: root.id,
+                targetEpoch: target,
+                userId: creator.userId,
+                nodes: [
+                    {
+                        id: root.id,
+                        changeSeq: rootRow.changeSeq!,
+                        parentKeyEpoch: 1,
+                        keyEnvelope: randomBytes(72),
+                        rotated: {
+                            metadataEnvelope: randomBytes(100),
+                            versions: [],
+                            shares: [],
+                            links: [],
+                            unsealableLinks: [],
+                        },
+                    },
+                ],
+            }),
+        ).toEqual([{ id: root.id, status: 'ok' }]);
+        expect(await restore(target)).toMatchObject({ status: 'ok' });
+    });
+
+    test('a personal workspace keeps adding under a folder its own rotation has not reached', async () => {
+        const owner = await createTestAccount();
+        await ensureIdentity(owner.userId);
+        const root = await signed.createRoot({
+            workspaceId: owner.workspaceId,
+            userId: owner.userId,
+            id: randomUUID(),
+            envelopes: {
+                keyEpoch: (await drive.allocateKeyEpochs(owner.workspaceId, 1))!.from,
+                parentKeyEpoch: 1,
+                keyEnvelope: randomBytes(72),
+                metadataEnvelope: randomBytes(100),
+            },
+        });
+        if (root.status !== 'created') throw new Error(root.status);
+        const started = await rotations.startRotation({
+            workspaceId: owner.workspaceId,
+            nodeId: root.root.id,
+            startedBy: owner.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        expect(
+            await signed.createFolders({
+                workspaceId: owner.workspaceId,
+                userId: owner.userId,
+                folders: [
+                    {
+                        id: randomUUID(),
+                        parentId: root.root.id,
+                        envelopes: {
+                            keyEpoch: (await drive.allocateKeyEpochs(owner.workspaceId, 1))!.from,
+                            parentKeyEpoch: root.root.keyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            metadataEnvelope: randomBytes(100),
+                        },
+                    },
+                ],
+            }),
+        ).toMatchObject({ status: 'created' });
     });
 
     test("a rotation does not hand the new key on through a departed member's share or link", async () => {

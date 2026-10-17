@@ -193,6 +193,42 @@ export async function activeRotation(tx: Tx | typeof db, workspaceId: string) {
 }
 
 /*
+ * In a group area while a rotation runs: whether `parent` (or, for a new
+ * version, the file itself) is inside the run's
+ * subtree and not re-keyed yet (its key epoch below the target). A node made
+ * there, or moved there, would be wrapped under a key a removed member holds,
+ * and the walk only re-wraps a node already at the target, never re-keys it,
+ * so that key would stay theirs for good (docs/groups-server.md 8, "Uploads
+ * wait"). Refused as `rotating`: the client waits for the walk and tries again.
+ * Personal workspaces keep their rules (a share's rotation there is the
+ * owner's own, and nobody was removed).
+ */
+export async function underUnrotatedParent(tx: Tx, workspaceId: string, parent: Walk) {
+    const rotation = await activeRotation(tx, workspaceId);
+    if (!rotation) return false;
+    const inside =
+        parent.node.id === rotation.nodeId ||
+        parent.ancestors.some((ancestor) => ancestor.id === rotation.nodeId);
+    if (!inside) return false;
+    if (parent.node.key_epoch >= rotation.targetEpoch) {
+        // At the target but still wrapped under its parent's old key (made under an unreached
+        // folder before this rule, or by a server that did not keep it): not reached either.
+        // A top folder is wrapped under its area's key version, which is no node epoch.
+        if (parent.node.parent_id === null) return false;
+        const [row] = await tx
+            .select({ parentKeyEpoch: driveNodes.parentKeyEpoch })
+            .from(driveNodes)
+            .where(eq(driveNodes.id, parent.node.id));
+        if (!row || row.parentKeyEpoch >= rotation.targetEpoch) return false;
+    }
+    const [workspace] = await tx
+        .select({ ownerKind: workspaces.ownerKind })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId));
+    return workspace?.ownerKind === 'group';
+}
+
+/*
  * Locks the workspace row and takes the next change sequence number. With the
  * writer named, a group area also checks, under that lock, that they may
  * still write there (requireStillWriter).
@@ -752,6 +788,8 @@ export async function createFolders(input: {
                     return { status: 'not-found' as const, id: folder.parentId };
                 if (chain.trashed)
                     return { status: 'parent-trashed' as const, id: folder.parentId };
+                if (await underUnrotatedParent(tx, input.workspaceId, chain))
+                    return { status: 'rotating' as const, id: folder.parentId };
                 parentDepth = chain.depth;
                 parentEpoch = chain.node.key_epoch;
                 ancestors = [
@@ -907,6 +945,8 @@ export async function moveNode(input: {
                 walked.ancestors.some((a) => a.id === rotation.nodeId);
             if (self?.prev || (inside(chain) && !inside(destination)))
                 return { status: 'rotating' as const };
+            if (await underUnrotatedParent(tx, input.workspaceId, destination))
+                return { status: 'rotating' as const };
         }
         if (input.parentKeyEpoch !== destination.node.key_epoch) {
             const [current] = await selectNodes(tx, [input.parentId]);
@@ -1036,6 +1076,8 @@ export async function restoreNode(input: {
             if (!input.toRoot) return { status: 'parent-trashed' as const };
             const root = await walk(tx, chain.rootId);
             if (!root) return { status: 'not-found' as const };
+            if (await underUnrotatedParent(tx, input.workspaceId, root))
+                return { status: 'rotating' as const };
             if (input.toRoot.parentKeyEpoch !== root.node.key_epoch)
                 return { status: 'stale' as const };
             if (1 + chain.node.height_bound > MAX_DEPTH) return { status: 'too-deep' as const };
@@ -1257,6 +1299,10 @@ export async function beginUpload(input: UploadBegin) {
             )
                 return { status: 'not-found' as const };
             if (chain.trashed) return { status: 'trashed' as const };
+            // A new version goes under the file's own key: one the walk has not reached is a key
+            // a removed member may hold (the same rule as for a new node's parent).
+            if (await underUnrotatedParent(tx, input.workspaceId, chain))
+                return { status: 'rotating' as const };
             if (chain.node.key_epoch !== input.node.keyEpoch) return { status: 'stale' as const };
             const [current] = await tx
                 .select({ currentVersionId: driveNodes.currentVersionId })
@@ -1276,6 +1322,8 @@ export async function beginUpload(input: UploadBegin) {
             )
                 return { status: 'not-found' as const };
             if (parent.trashed) return { status: 'parent-trashed' as const };
+            if (await underUnrotatedParent(tx, input.workspaceId, parent))
+                return { status: 'rotating' as const };
             if (parent.depth + 1 > MAX_DEPTH) return { status: 'too-deep' as const };
             if (input.node.envelopes.parentKeyEpoch !== parent.node.key_epoch)
                 return { status: 'stale' as const };
@@ -1716,6 +1764,8 @@ export async function attachUpload(
                 await releaseUpload(tx, row, 'aborted');
                 return { status: 'purged' as const };
             }
+            if (await underUnrotatedParent(tx, workspaceId, chain))
+                return { status: 'rotating' as const };
             if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
             const [node] = await tx
                 .select({ currentVersionId: driveNodes.currentVersionId })
@@ -1750,6 +1800,8 @@ export async function attachUpload(
         )
             return { status: 'not-found' as const };
         if (parent.trashed) return { status: 'parent-trashed' as const };
+        if (await underUnrotatedParent(tx, workspaceId, parent))
+            return { status: 'rotating' as const };
         if (parent.depth + 1 > MAX_DEPTH) return { status: 'too-deep' as const };
         if (input.node.parentKeyEpoch !== parent.node.key_epoch)
             return { status: 'stale' as const };
@@ -1993,6 +2045,8 @@ export async function copyFile(input: CopyFile) {
         )
             return { status: 'not-found' as const };
         if (parent.trashed) return { status: 'parent-trashed' as const };
+        if (await underUnrotatedParent(tx, input.workspaceId, parent))
+            return { status: 'rotating' as const };
         if (parent.depth + 1 > MAX_DEPTH) return { status: 'too-deep' as const };
         if (input.node.envelopes.parentKeyEpoch !== parent.node.key_epoch)
             return { status: 'stale' as const };

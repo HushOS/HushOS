@@ -65,13 +65,15 @@ export const clientFor = spaces.clientFor;
 export const clientOfNode = spaces.clientOfNode;
 /* Why nothing may be added to `folder` now, or null: checked before any upload, folder or move into it. */
 export const refuseWrite = spaces.refuseWrite;
+/* Whether that refusal is only a family folder's key change still on its way to `folder`: adds wait. */
+export const waitsForKeyChange = spaces.waitsForKeyChange;
 /* After a lock: every family folder's client forgets what it opened, as the personal one does. */
 export const closeSpaces = spaces.closeAll;
 /* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
 export const forgetSpace = spaces.forget;
 export const pruneSpaces = spaces.prune;
 
-/* Shown while a key change walks a family folder: adding to a folder it has not reached is refused. */
+/* Shown while a key change walks a family folder: adding to a folder it has not reached waits. */
 export const FINISHING_KEY_CHANGE = 'Finishing a key change…';
 
 export const driveKeys = {
@@ -184,6 +186,9 @@ export async function copyInto(
     destination: DriveNode,
     onProgress?: (done: number) => void,
 ) {
+    // A family folder this device may not write, or one a key change has not reached yet.
+    const refused = refuseWrite(destination);
+    if (refused) throw new Error(refused);
     const listing = await queryClient.fetchQuery(
         folderQueryOptions(destination.id, destination.workspaceId),
     );

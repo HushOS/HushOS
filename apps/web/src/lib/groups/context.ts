@@ -9,6 +9,7 @@ import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import type { LoadedSettings } from '@/lib/contacts';
 import type { GroupsApi } from './api';
 import type { GroupStore } from './store';
+import type { AreaState } from './sync';
 
 /*
  * What the families data layer runs on, gathered so each module takes it as
@@ -31,6 +32,10 @@ export type GroupOperation =
     | 'groupRestage'
     | 'groupDrop'
     | 'groupGrants'
+    /* The current family key sealed again to holders whose keys were folded in (route 9). */
+    | 'groupReseal'
+    /* A family folder's previous top-folder key checked, and repaired when it does not open (route 28). */
+    | 'groupPreviousRoot'
     | 'groupForget'
     /* A member's join code over the committed chain, read to them by the person letting them in. */
     | 'groupJoinCode'
@@ -87,11 +92,21 @@ export type RotationSource = {
     ): Promise<AreaRotationInput[]>;
     /* Who wrote what the rotations re-sign, as group verdicts take them. */
     writers(groupId: string): Promise<GroupWriter[]>;
-    /* Walks a running Drive rotation in an area to its end (409 rotating). */
+    /*
+     * Walks a running Drive rotation in an area to its end (409 rotating, a
+     * removal's finish step). `departing`: members on their way out (the one
+     * being removed, those a call marks left), whose records it re-seals.
+     */
     finish(
         groupId: string,
         rotation: { workspaceId: string; rotationId: string; nodeId: string; targetEpoch: number },
+        departing?: readonly string[],
     ): Promise<void>;
+    /*
+     * A sync opened the family's folders (their keys in the worker, their roots
+     * listed): what `finish` walks them with follows the latest of them.
+     */
+    opened?(groupId: string, areas: AreaState[]): void;
 };
 
 export type GroupContext = {

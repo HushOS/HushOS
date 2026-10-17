@@ -89,6 +89,11 @@ export type OutboxEntry = {
      * has this fingerprint. Absent on entries from before it was kept.
      */
     admits?: { userId: string; fingerprint: string };
+    /*
+     * Who the call marks left (a removal's target, the departed it marks):
+     * a walk it has to finish first (409 rotating) re-seals their records.
+     */
+    departing?: string[];
 };
 
 export type SendOutcome =
@@ -233,8 +238,11 @@ function send(ctx: GroupContext, entry: OutboxEntry): Promise<ChainHead | null> 
     }
 }
 
-/* 409 grants-due: the named members' grants on route 22, from the committed chain, then the same bytes again. */
-async function fillGrants(ctx: GroupContext, groupId: string, data: unknown) {
+/*
+ * Grants owed on route 22, from the committed chain: a 409 grants-due's
+ * `missing` (then the same bytes go again), or route 3's `due.grants`.
+ */
+export async function fillGrants(ctx: GroupContext, groupId: string, data: unknown) {
     const missing = (data as { missing?: { workspaceId: string; userId: string }[] } | null)
         ?.missing;
     if (!Array.isArray(missing) || missing.length === 0)
@@ -337,6 +345,9 @@ async function rebuild(
     areas: { workspaceId: string; kinds: string[] }[],
 ): Promise<boolean> {
     if (!ctx.rotations || entry.route.kind === 'create') return false;
+    // A removal's hold lasts 15 minutes and a walk can outlast it: placed again (which extends it)
+    // before the folders are read again, so the person can't draw an epoch above the new target.
+    await renewOrStop(ctx, entry);
     const body = entry.body as RosterCallBody;
     const rotations = await ctx.rotations.read(entry.groupId, areas);
     const writers: GroupWriter[] = await ctx.rotations.writers(entry.groupId);
@@ -356,6 +367,33 @@ async function rebuild(
     entry.notices = [...(entry.notices ?? []), ...cleared(restaged.replaced)];
     await persist(ctx, entry);
     return true;
+}
+
+/*
+ * Places a removal's hold again (route 27 extends a live one), before the
+ * folders are read for the call. A refusal is returned for the caller to say
+ * (a removal stops on it: this manager was paused, or the person is gone);
+ * not-member throws, as everywhere.
+ */
+export async function renewHold(
+    ctx: GroupContext,
+    groupId: string,
+    userId: string,
+): Promise<GroupApiError | null> {
+    try {
+        await ctx.api.hold(groupId, userId);
+        return null;
+    } catch (error) {
+        if (isNotMember(error) || !(error instanceof GroupApiError)) throw error;
+        return error;
+    }
+}
+
+/* A removal's hold placed again, or the reason it could not be, thrown for the caller to say. */
+async function renewOrStop(ctx: GroupContext, entry: OutboxEntry) {
+    if (entry.route.kind !== 'remove') return;
+    const refused = await renewHold(ctx, entry.groupId, entry.route.userId);
+    if (refused) throw refused;
 }
 
 /* The staged-stale data of 409 document-stale, by area: every kind it named. */
@@ -518,7 +556,10 @@ async function refused(
                     status: 'pending',
                     reason: 'The server named a folder this change does not rotate.',
                 };
-            await ctx.rotations.finish(groupId, data);
+            // Judged with everyone this call marks left as on their way out (their records are
+            // re-sealed, never re-signed as this manager's own), and the hold placed again first.
+            await renewOrStop(ctx, entry);
+            await ctx.rotations.finish(groupId, data, entry.departing ?? []);
             return (await rebuild(ctx, entry, [{ workspaceId: data.workspaceId, kinds: [] }]))
                 ? null
                 : { status: 'pending', reason: error.message };
@@ -738,6 +779,11 @@ async function stageLocked(
         ...(op.kind === 'admit'
             ? { admits: { userId: op.userId, fingerprint: op.pin.fingerprint } }
             : {}),
+        ...(op.kind === 'remove'
+            ? { departing: [op.userId] }
+            : op.kind === 'markLeft'
+              ? { departing: [...op.userIds] }
+              : {}),
     };
     return {
         status: 'sent',

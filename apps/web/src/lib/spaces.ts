@@ -3,17 +3,22 @@ import type { NodeView, WorkspaceView } from '@hushos/drive/api';
 import { createDriveClient, createIndexedDbMirror, type DriveClient } from '@hushos/drive/client';
 import type { Pin } from '@hushos/drive/trust';
 import { useQueryClient } from '@tanstack/react-query';
-import { createContext, useContext, useEffect, useRef } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { contactPins, openIdentity, trustedSigners } from '@/lib/contacts';
 import { driveKeys, forgetSpace, pruneSpaces, registerSpace } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { familyContext, type FamilyDetail } from '@/lib/families';
 import { onFamilySynced } from '@/lib/families-keys';
+import { countFinishedRotation } from '@/lib/rotation';
 import { restoreTransfers } from '@/lib/transfers';
+import { groupsApi } from '@/lib/groups/api';
+import { provideRotations } from '@/lib/groups/client';
 import { stageChange } from '@/lib/groups/outbox';
+import { createRotationSource } from '@/lib/groups/rotations';
 import { AREA_MIRROR_PREFIX } from '@/lib/groups/store';
-import { writeRefusal, type AreaState } from '@/lib/groups/sync';
+import { syncLocked, waitsForKeyChange, writeRefusal, type AreaState } from '@/lib/groups/sync';
+import { backoffDelay, ownReasonToWalk, stillRunning, walkToEnd } from '@/lib/groups/walks';
 import { groupWriters } from '@/lib/groups/writers';
 
 /*
@@ -102,9 +107,15 @@ export function areaClient(userId: string, groupId: string, state: AreaState): D
             });
             return checked;
         },
-        // Copies and rotations judge records against these (neither is offered in a family
-        // folder here yet; the worker refuses a family folder's rotation without the family).
+        // Personal keys for writers the family's member list does not speak for.
         signers: async () => trustedSigners(userId),
+        // Copies and key-change walks re-sign records only as the family judges them (1c step
+        // 7); the worker refuses either in a family folder without it.
+        rotationTrust: async () => ({
+            groupId,
+            staged: null,
+            writers: await writersFor(userId, groupId),
+        }),
         openIdentity: (id) => openIdentity(id),
     });
     const area = { userId, groupId, state, client };
@@ -118,6 +129,7 @@ function register(area: Area) {
         groupId: area.groupId,
         client: area.client,
         refuseWrite: (folder) => writeRefusal(areas.get(workspaceId)?.state, folder),
+        waitsForKeyChange: (folder) => waitsForKeyChange(areas.get(workspaceId)?.state, folder),
     });
 }
 
@@ -162,6 +174,202 @@ onFamilySynced((groupId, result) => {
         groupId,
         result.areas.map((state) => state.workspaceId),
     );
+});
+
+/* ------------------------------------------------------------------------ */
+/* Key changes walking family folders                                        */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * A family folder's key change (after a removal, a departure marked left, or
+ * Replace keys) re-keys its top folder with the member list at once; the
+ * rest of the folder is walked here afterwards, batch by batch, every record
+ * re-signed as the family judges it (`rotationTrust`). The walk is the
+ * server's state (route 25's `rotation`), so it resumes from wherever it got
+ * to on the next open, on any device of anyone who manages the family. One
+ * tab walks a folder at a time (a Web Lock per folder), and never under the
+ * family's write lock, so a member list change that has to finish the same
+ * walk first (409 rotating) waits for it instead of racing it.
+ */
+export type FamilyWalk = {
+    groupId: string;
+    workspaceId: string;
+    /* Items re-keyed so far by this tab. */
+    done: number;
+    /* Why the last attempt stopped; it is tried again at the next sync. */
+    error: string | null;
+};
+const walking = new Map<string, Promise<void>>();
+const walkState = new Map<string, FamilyWalk>();
+let walkSnapshot: FamilyWalk[] = [];
+const walkListeners = new Set<() => void>();
+function publishWalks() {
+    walkSnapshot = [...walkState.values()];
+    for (const listener of walkListeners) listener();
+}
+function subscribeWalks(listener: () => void) {
+    walkListeners.add(listener);
+    return () => {
+        walkListeners.delete(listener);
+    };
+}
+/* The key changes this tab is walking (or last failed to walk) in a family's folders. */
+export function useFamilyWalks(groupId: string) {
+    const all = useSyncExternalStore(
+        subscribeWalks,
+        () => walkSnapshot,
+        () => walkSnapshot,
+    );
+    return useMemo(() => all.filter((walk) => walk.groupId === groupId), [all, groupId]);
+}
+
+function areaWalkLock<T>(workspaceId: string, work: () => Promise<T>): Promise<T> {
+    if (typeof navigator !== 'undefined' && navigator.locks)
+        return navigator.locks.request(`hushos-area-walk:${workspaceId}`, work) as Promise<T>;
+    return work();
+}
+
+/*
+ * Walks the key change running in one family folder to its end, with the
+ * family's trust. A walk this tab already runs there is joined, not started
+ * twice; one that ended meanwhile (another tab, another device) answers 404
+ * and is done. The folder's client comes from the family's latest sync, or
+ * from a sync now (the caller holds the family's write lock when it is the
+ * outbox finishing a walk a member list change met).
+ */
+export function walkArea(
+    userId: string,
+    groupId: string,
+    rotation: {
+        workspaceId: string;
+        rotationId: string | null;
+        nodeId: string;
+        targetEpoch: number;
+    },
+    departing: readonly string[] = [],
+): Promise<void> {
+    const workspaceId = rotation.workspaceId;
+    const held = walking.get(workspaceId);
+    if (held) return held;
+    const run = areaWalkLock(workspaceId, async () => {
+        let area = areas.get(workspaceId);
+        if (!area || area.groupId !== groupId) {
+            await syncLocked(familyContext(userId), groupId, { flush: false });
+            area = areas.get(workspaceId);
+        }
+        if (!area || area.groupId !== groupId)
+            throw new Error('Open the family’s folders first, then try again.');
+        walkState.set(workspaceId, { groupId, workspaceId, done: 0, error: null });
+        publishWalks();
+        await area.client.open(userId);
+        const client = area.client;
+        const outcome = await walkToEnd({
+            walk: () =>
+                client.walkRotation(
+                    { nodeId: rotation.nodeId, targetEpoch: rotation.targetEpoch },
+                    (done) => {
+                        walkState.set(workspaceId, { groupId, workspaceId, done, error: null });
+                        publishWalks();
+                    },
+                    departing,
+                ),
+            running: async () => stillRunning((await groupsApi.spaces()).spaces, groupId, rotation),
+        });
+        // Counted only when this tab walked it to its end, never when another finished it.
+        if (outcome === 'walked') countFinishedRotation();
+    });
+    const tracked = run.then(
+        () => {
+            walkState.delete(workspaceId);
+        },
+        (error: unknown) => {
+            walkState.set(workspaceId, {
+                groupId,
+                workspaceId,
+                done: walkState.get(workspaceId)?.done ?? 0,
+                error: error instanceof Error ? error.message : 'Please try again.',
+            });
+            throw error;
+        },
+    );
+    const settled = tracked.finally(() => {
+        walking.delete(workspaceId);
+        publishWalks();
+    });
+    walking.set(workspaceId, settled);
+    return settled;
+}
+
+/*
+ * Every key change a sync found walking the family's folders, started in the
+ * background, by anyone in the family (the server lets any member walk, so a
+ * waiting upload does not depend on a manager's device). `onSettled` runs
+ * once each finishes, so the family is synced again and the folders see it.
+ */
+/*
+ * Runs walked (or tried) in this tab, by folder and run: the next walk of the
+ * same run waits longer each time (walks.ts backoffDelay), so a run that comes
+ * back right after a walk said it finished, or that keeps failing, does not
+ * spin walk, sync, walk.
+ */
+const walkBackoff = new Map<string, { attempts: number; until: number }>();
+export function walkPending(
+    userId: string,
+    groupId: string,
+    states: readonly AreaState[],
+    onSettled: () => void,
+) {
+    for (const state of states) {
+        const rotation = state.view.rotation;
+        // Only a roster rotation this device saw for itself (walks.ts): never a run on the
+        // server's word alone, since a walk re-signs every record it reaches as the walker.
+        if (!rotation || !ownReasonToWalk(state)) continue;
+        const key = `${state.workspaceId}:${rotation.id}`;
+        const backoff = walkBackoff.get(key);
+        if (backoff && Date.now() < backoff.until) continue;
+        const ended = () => {
+            const attempts = (walkBackoff.get(key)?.attempts ?? 0) + 1;
+            walkBackoff.set(key, { attempts, until: Date.now() + backoffDelay(attempts) });
+        };
+        void walkArea(userId, groupId, {
+            workspaceId: state.workspaceId,
+            rotationId: rotation.id,
+            nodeId: rotation.nodeId,
+            targetEpoch: rotation.targetEpoch,
+            // A walk that stopped is tried again at a later sync, never straight away, and the same
+            // run back again waits longer each time: one that always fails must not spin.
+        }).then(() => {
+            ended();
+            onSettled();
+        }, ended);
+    }
+}
+
+function unlockedUser() {
+    const userId = authClient.store.getState().unlockedUserId;
+    if (!userId) throw new Error('Unlock your account first.');
+    return userId;
+}
+
+/*
+ * What the families data layer builds a roster call's rotations from, and how
+ * it finishes a walk a call met (409 rotating): this module's folder clients.
+ * Provided once this module loads, with the family pages.
+ */
+provideRotations({
+    ...createRotationSource({
+        areaRoot: (groupId, workspaceId) => groupsApi.areaRoot(groupId, workspaceId),
+        allocateEpochs: (workspaceId, count) => driveApi.allocateEpochs(workspaceId, count),
+        document: (workspaceId, kind) => driveApi.document(workspaceId, kind),
+        writers: (groupId) => writersFor(unlockedUser(), groupId),
+        walk: (groupId, rotation, departing) =>
+            walkArea(unlockedUser(), groupId, rotation, departing),
+    }),
+    opened: (groupId, states) => {
+        const userId = authClient.store.getState().unlockedUserId;
+        if (!userId) return;
+        for (const state of states) areaClient(userId, groupId, state);
+    },
 });
 
 /*

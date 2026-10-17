@@ -58,6 +58,11 @@ export type UploadItem = {
     parentId: string;
     parentName: string;
     status: UploadStatus;
+    /*
+     * While preparing: why it waits before anything is made (a family folder's
+     * key change has not reached the folder yet). It carries on by itself.
+     */
+    waitingFor?: string | null;
     error: string | null;
     /* The server's reason when it refused, so the app can offer a way out (over-quota). */
     errorCode: DriveErrorCode | 'unavailable' | null;
@@ -138,6 +143,15 @@ export type TransferManagerOptions = {
      * upload with that sentence; nothing retries it on its own.
      */
     refuseWrite?: (target: DriveNode) => string | null;
+    /*
+     * Whether a refusal of `target` is only a key change still walking its
+     * family folder (docs/groups-server.md 8, decision D9): then the upload
+     * waits, looking the folder up again every `keyChangeRecheckMs`, and goes
+     * once the walk has re-keyed it (its key epoch at the walk's target) or
+     * the walk is over. Any other refusal fails the upload as before.
+     */
+    waitsForKeyChange?: (target: DriveNode) => boolean;
+    keyChangeRecheckMs?: number;
     /* Called once a version is published; the app invalidates its folder listing. */
     onPublished?: (node: NodeView, parentId: string) => void;
     /*
@@ -256,6 +270,9 @@ export function backoffDelay(attempt: number, random = Math.random) {
     const ceiling = Math.min(MAX_BACKOFF_MS, MIN_BACKOFF_MS * 2 ** Math.max(0, attempt - 1));
     return Math.floor(random() * ceiling);
 }
+
+/* How often an upload waiting for a family folder's key change looks the folder up again. */
+const KEY_CHANGE_RECHECK_MS = 5_000;
 
 /* The server's answer when the node moved on under an upload: attach, do not retry. */
 /*
@@ -376,9 +393,10 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     function isActive(u: Internal) {
         return (
-            u.item.status === 'preparing' ||
-            u.item.status === 'uploading' ||
-            u.item.status === 'completing'
+            // An upload waiting for a key change holds no slot: others go meanwhile.
+            ((u.item.status === 'preparing' || u.item.status === 'completing') &&
+                !u.item.waitingFor) ||
+            u.item.status === 'uploading'
         );
     }
     function tick() {
@@ -600,6 +618,45 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.preparing = false;
         }
     }
+    /*
+     * `target` once nothing refuses it: a refusal that is only a family folder's
+     * key change still on its way waits (looked up again every recheck), any
+     * other refusal throws. Null when the upload was cancelled or restarted
+     * meanwhile. While it waits the upload says why and holds no slot.
+     */
+    async function untilWritable(
+        u: Internal,
+        generation: number,
+        target: { parent: DriveNode; replaces?: DriveNode },
+        lookup: () => Promise<{ parent: DriveNode; replaces?: DriveNode }>,
+    ): Promise<{ parent: DriveNode; replaces?: DriveNode } | null> {
+        let { parent, replaces } = target;
+        let refused = refusalOf(parent, replaces);
+        while (refused && waitsOf(parent, replaces)) {
+            set(u, { waitingFor: refused });
+            void schedule();
+            await new Promise((resolve) =>
+                setTimeout(resolve, options.keyChangeRecheckMs ?? KEY_CHANGE_RECHECK_MS),
+            );
+            if (u.generation !== generation || u.item.status === 'cancelled') return null;
+            const fresh = await lookup().catch(() => null);
+            if (u.generation !== generation) return null;
+            if (fresh) {
+                parent = fresh.parent;
+                if (replaces && fresh.replaces) replaces = fresh.replaces;
+            }
+            refused = refusalOf(parent, replaces);
+        }
+        if (u.item.waitingFor) set(u, { waitingFor: null });
+        if (refused) throw new Error(refused);
+        return { parent, replaces };
+    }
+    function waitsOf(parent: DriveNode, replaces: DriveNode | undefined) {
+        const waits = options.waitsForKeyChange;
+        if (!waits) return false;
+        if (options.refuseWrite?.(parent)) return waits(parent);
+        return replaces ? waits(replaces) : false;
+    }
     function refusalOf(parent: DriveNode, replaces: DriveNode | undefined) {
         return (
             options.refuseWrite?.(parent) ??
@@ -623,6 +680,18 @@ export function createTransferManager(options: TransferManagerOptions) {
             parent = u.parent = fresh.parent;
             if (u.replaces && fresh.replaces) u.replaces = fresh.replaces;
             refused = refusalOf(parent, u.replaces);
+        }
+        // A key change still walking the folder: wait for it, then look again, rather than fail.
+        const queued = u.queued;
+        const lookup = options.openNodes;
+        if (refused && queued && lookup) {
+            const ready = await untilWritable(u, generation, { parent, replaces: u.replaces }, () =>
+                lookup(queued),
+            );
+            if (!ready) return;
+            parent = u.parent = ready.parent;
+            if (u.replaces && ready.replaces) u.replaces = ready.replaces;
+            refused = null;
         }
         if (refused) throw new Error(refused);
         const seeds = u.seeds!;
@@ -919,8 +988,14 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (!u.uploadId || !entry || !options.openNodes)
             throw new Error('This file changed while it was uploading. Upload it again.');
         const workspaceId = workspaceOf(u);
-        const { parent, replaces } = await options.openNodes(entry);
+        const lookup = options.openNodes;
+        const looked = await lookup(entry);
         if (u.generation !== generation) throw new Error('Cancelled.');
+        // Attaching writes under the folder (a sibling) or the file's own key (the same node):
+        // either may be waiting for a family folder's key change, exactly as a new upload does.
+        const ready = await untilWritable(u, generation, looked, () => lookup(entry));
+        if (!ready) throw new Error('Cancelled.');
+        const { parent, replaces } = ready;
         u.parent = parent;
         if (!u.prepared) {
             const reopened = await rpc('driveUploadReopen', reopenInput(entry));

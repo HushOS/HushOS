@@ -529,6 +529,13 @@ type BaseRequests = {
             metadata: NodeMetadata;
         };
         versionId: string;
+        /*
+         * In a family folder: the source's records are checked as the family's
+         * member list says (groupVerify, over the committed chain), never by
+         * personal pins alone, and a former member's or a key conflict's record
+         * is copied re-sealed. Required there; refused anywhere else.
+         */
+        group?: GroupRotationTrust | null;
     };
     /*
      * A thumbnail is the trailer of its version's object. Fetch opens the version
@@ -906,7 +913,12 @@ export function createCryptoSession() {
      * stand in for a key of the person's own tree, where it would wrap every new
      * child and upload under a key the server chose.
      */
-    type NodeKeys = Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number }>;
+    /*
+     * `own`: a previous key this device opened itself as the node's current key
+     * (before it was re-keyed), not one a served previous envelope gave it. Only
+     * an own key outranks, or repairs, what the server serves (groupPreviousRoot).
+     */
+    type NodeKeys = Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number; own?: boolean }>;
     const ownNodeKeys: NodeKeys = new Map();
     const guestNodeKeys: NodeKeys = new Map();
     /* Previous node keys while a rotation runs: what children not yet rotated are still wrapped under. */
@@ -1395,10 +1407,11 @@ export function createCryptoSession() {
         nodeId: string,
         key: Uint8Array<ArrayBuffer>,
         epoch: number,
+        own = false,
     ) {
         const pool = prevNodeKeysOf(workspaceId);
         pool.get(slot(workspaceId, nodeId))?.key.fill(0);
-        pool.set(slot(workspaceId, nodeId), { key, epoch });
+        pool.set(slot(workspaceId, nodeId), { key, epoch, own });
     }
     /* How a rotation re-signs each record, from the record as served: personal trust, or a group's. */
     function personalJudge(trusted: Map<string, TrustedSigner>): RecordJudge {
@@ -1725,6 +1738,11 @@ export function createCryptoSession() {
         dropWorkspace,
         currentKeyOf,
         rekeyNode,
+        previousNodeKey(workspaceId, nodeId, epoch) {
+            // Only the key this device opened as the node's own: never one a served envelope gave.
+            const held = prevNodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
+            return held && held.own && held.epoch === epoch ? held.key.slice() : undefined;
+        },
     });
 
     function clearState() {
@@ -2531,7 +2549,7 @@ export function createCryptoSession() {
                         zeroPending(pending);
                         continue;
                     }
-                    rememberPrevNodeKey(workspaceId, nodeId, pending.old, pending.oldEpoch);
+                    rememberPrevNodeKey(workspaceId, nodeId, pending.old, pending.oldEpoch, true);
                     rememberNodeKey(workspaceId, nodeId, pending.fresh, pending.epoch);
                 }
                 return message.operation === 'driveRotateDrop'
@@ -2610,19 +2628,37 @@ export function createCryptoSession() {
                             (!areaRoot || rootOpenedUnder.get(at) === node.parentKeyEpoch)
                                 ? cached.key
                                 : undefined;
+                        // An area root re-keyed since this device opened it: the key it held is
+                        // the root's previous one, kept if the served previous envelope does not
+                        // open (a holder repairs that envelope with it: groupPreviousRoot).
+                        let heldPrevious: Uint8Array<ArrayBuffer> | null =
+                            areaRoot &&
+                            !key &&
+                            cached &&
+                            node.prevKeyEpoch !== null &&
+                            node.prevKeyEpoch !== undefined &&
+                            cached.epoch === node.prevKeyEpoch &&
+                            cached.epoch !== node.keyEpoch
+                                ? cached.key.slice()
+                                : null;
                         if (!key) {
-                            const parentKey = parentKeyFor(
-                                workspaceId,
-                                node.parentId,
-                                node.parentKeyEpoch,
-                            );
-                            key = (await openNodeKey(decode(node.keyEnvelope, 72), parentKey, {
-                                workspaceId,
-                                nodeId: node.id,
-                                parentId: node.parentId,
-                                parentKeyEpoch: node.parentKeyEpoch,
-                                keyEpoch: node.keyEpoch,
-                            })) as Uint8Array<ArrayBuffer>;
+                            try {
+                                const parentKey = parentKeyFor(
+                                    workspaceId,
+                                    node.parentId,
+                                    node.parentKeyEpoch,
+                                );
+                                key = (await openNodeKey(decode(node.keyEnvelope, 72), parentKey, {
+                                    workspaceId,
+                                    nodeId: node.id,
+                                    parentId: node.parentId,
+                                    parentKeyEpoch: node.parentKeyEpoch,
+                                    keyEpoch: node.keyEpoch,
+                                })) as Uint8Array<ArrayBuffer>;
+                            } catch (error) {
+                                heldPrevious?.fill(0);
+                                throw error;
+                            }
                             rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
                             if (areaRoot) rootOpenedUnder.set(at, node.parentKeyEpoch);
                         }
@@ -2633,7 +2669,8 @@ export function createCryptoSession() {
                         // Mid-rotation: the same key under the previous parent key opens
                         // children the rotation has not reached; failure to open it is
                         // not failure to open the node.
-                        if (node.prevKeyEnvelope && node.prevParentKeyEpoch && node.prevKeyEpoch)
+                        if (node.prevKeyEnvelope && node.prevParentKeyEpoch && node.prevKeyEpoch) {
+                            let previous: Uint8Array<ArrayBuffer> | null = null;
                             try {
                                 const previousParent = parentKeyFor(
                                     workspaceId,
@@ -2650,7 +2687,7 @@ export function createCryptoSession() {
                                 const envelope = decode(node.prevKeyEnvelope, 72);
                                 // An area root's previous key under the new area key is option A's,
                                 // under its own label; one a Drive batch kept is a plain node key.
-                                const previous = (
+                                previous = (
                                     areaRoot
                                         ? await openPreviousRootKey(
                                               envelope,
@@ -2659,15 +2696,38 @@ export function createCryptoSession() {
                                           ).catch(() => openNodeKey(envelope, previousParent, ctx))
                                         : await openNodeKey(envelope, previousParent, ctx)
                                 ) as Uint8Array<ArrayBuffer>;
+                            } catch {
+                                /* The previous parent key is not held here; only rotated nodes open. */
+                            }
+                            // An area root's old key this device opened itself, held now or kept
+                            // from an earlier open, outranks whatever the served envelope opens to:
+                            // a previous envelope holding another key would otherwise replace it and
+                            // shut the unrotated part for everyone (groupPreviousRoot repairs it).
+                            const kept = prevNodeKeysOf(workspaceId).get(at);
+                            const own =
+                                heldPrevious ??
+                                (areaRoot && kept?.own && kept.epoch === node.prevKeyEpoch
+                                    ? kept.key.slice()
+                                    : null);
+                            heldPrevious = null;
+                            if (own) {
+                                previous?.fill(0);
+                                rememberPrevNodeKey(
+                                    workspaceId,
+                                    node.id,
+                                    own,
+                                    node.prevKeyEpoch,
+                                    true,
+                                );
+                            } else if (previous)
                                 rememberPrevNodeKey(
                                     workspaceId,
                                     node.id,
                                     previous,
                                     node.prevKeyEpoch,
                                 );
-                            } catch {
-                                /* The previous parent key is not held here; only rotated nodes open. */
-                            }
+                        }
+                        heldPrevious?.fill(0);
                         const metadata = await openMetadata(decode(node.metadataEnvelope), key, {
                             workspaceId,
                             nodeId: node.id,
@@ -2951,11 +3011,15 @@ export function createCryptoSession() {
             }
             case 'driveCopyFile': {
                 const { workspaceId, source, node, versionId } = message.input;
-                // A copy re-signs its source as checked by personal pins alone: in a family folder
-                // that could sign a former member's record as this person's own. Not until a copy
-                // takes the family's trust (1c step 7).
-                if (groups.isArea(workspaceId))
-                    throw new CryptoError('Files in a family folder can’t be copied yet.');
+                // A copy re-signs its source: in a family folder only as the family's member list
+                // judges it, so a former member's record is never signed as this person's own.
+                const group = message.input.group ?? null;
+                if (groups.isArea(workspaceId) && !group)
+                    throw new CryptoError(
+                        'A family folder’s files are copied only with the family’s trust.',
+                    );
+                if (group && group.staged !== null)
+                    throw new CryptoError('A copy is judged by the family as it stands.');
                 requireWritable(workspaceId);
                 const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');
@@ -2963,43 +3027,51 @@ export function createCryptoSession() {
                 // The source as a reading would check it: only what verified is vouched for again,
                 // and a copy of something saved from a link stays saved.
                 const trusted = trustSet(message.input.signers);
-                const metadataForm = copyForm(
-                    await checkRecord(
-                        trusted,
-                        async () =>
-                            metadataStatements(
-                                {
-                                    workspaceId,
-                                    nodeId: source.nodeId,
-                                    kind: 'file',
-                                    metadataVersion: source.metadataVersion,
-                                },
-                                decode(source.metadataEnvelope),
-                            ),
-                        source.metadataSigner,
-                        source.metadataSignature,
-                    ),
-                    false,
-                );
-                const versionForm = copyForm(
-                    await checkRecord(
-                        trusted,
-                        async () =>
-                            versionStatements(
-                                {
-                                    workspaceId,
-                                    nodeId: source.nodeId,
-                                    versionId: source.id,
-                                    objectId: source.objectId,
-                                    contentSuite: source.contentSuite,
-                                },
-                                decode(source.contentKeyEnvelope),
-                            ),
-                        source.signer,
-                        source.signature,
-                    ),
-                    false,
-                );
+                const metadataRecord = {
+                    statements: async () =>
+                        metadataStatements(
+                            {
+                                workspaceId,
+                                nodeId: source.nodeId,
+                                kind: 'file',
+                                metadataVersion: source.metadataVersion,
+                            },
+                            decode(source.metadataEnvelope),
+                        ),
+                    signer: source.metadataSigner,
+                    signature: source.metadataSignature,
+                };
+                const versionRecord = {
+                    statements: async () =>
+                        versionStatements(
+                            {
+                                workspaceId,
+                                nodeId: source.nodeId,
+                                versionId: source.id,
+                                objectId: source.objectId,
+                                contentSuite: source.contentSuite,
+                            },
+                            decode(source.contentKeyEnvelope),
+                        ),
+                    signer: source.signer,
+                    signature: source.signature,
+                };
+                // In a family folder the family's judge (it refuses another group's or a
+                // personal workspace); elsewhere this person's own pins.
+                const judge = group
+                    ? await groups.rotationJudge(workspaceId, group, trusted)
+                    : async (record: typeof metadataRecord) =>
+                          copyForm(
+                              await checkRecord(
+                                  trusted,
+                                  record.statements,
+                                  record.signer,
+                                  record.signature,
+                              ),
+                              false,
+                          );
+                const metadataForm = await judge(metadataRecord);
+                const versionForm = await judge(versionRecord);
                 const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
                     sourceKey.key,

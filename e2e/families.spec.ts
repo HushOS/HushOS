@@ -1,7 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
-import { newContext, PASSWORD, registerAccount, verificationLink } from './helpers';
+import {
+    newContext,
+    PASSWORD,
+    registerAccount,
+    rotationsDone,
+    verificationLink,
+    waitForRotation,
+} from './helpers';
 
 /*
  * Families on the web (groups milestone 1c), driven as the people in them: a
@@ -26,7 +33,16 @@ import { newContext, PASSWORD, registerAccount, verificationLink } from './helpe
  *    over the new member list, and the code shown is the stored one's; the
  *    newcomer compares against the other person's code first, which doesn't
  *    match and keeps nothing; and an invitation that was used up.
- * 3. Families off: hidden from the sidebar, and the page says so.
+ * 3. Removal, leaving and key changes, with three people: a copy inside a
+ *    family folder; Replace keys, with an upload into a folder the walk has
+ *    not reached waiting for it and then landing; a removal (hold, finish,
+ *    remove) whose walk is held on the wire while the remover sees the
+ *    removed person's file as a former member's and the remaining member, on
+ *    a fresh device holding only the new key, opens everything; the walk then
+ *    ends; the removed person's family is gone from their device; the
+ *    remaining member leaves, and the manager's device marks them left
+ *    quietly, with every folder's keys replaced.
+ * 4. Families off: hidden from the sidebar, and the page says so.
  *
  * Whether families are on is this run's GROUPS_ENABLED (from the environment
  * or .env, as the dev server reads it). The server must agree: one that says
@@ -142,8 +158,13 @@ async function acceptOpened(newcomer: Person, family: string) {
 }
 
 /* A second device of an existing account, signed in with the password. */
-async function signIn(browser: Browser, who: Person): Promise<Person> {
+async function signIn(
+    browser: Browser,
+    who: Person,
+    setup?: (page: Page) => Promise<unknown>,
+): Promise<Person> {
     const page = await (await newContext(browser)).newPage();
+    await setup?.(page);
     await page.goto('/login', { waitUntil: 'networkidle' });
     await page.getByRole('textbox', { name: /email/i }).fill(who.email);
     const field = page.locator('input[autocomplete=current-password]');
@@ -397,7 +418,7 @@ test.describe('two people', () => {
         await sam.page.keyboard.press('i');
     });
 
-    test('in a family folder: no sharing, copying or reporting; downloads byte for byte; versions read-only where the keys changed; and My files never lists it', async () => {
+    test('in a family folder: copying but no sharing or reporting; downloads byte for byte; versions read-only where the keys changed; and My files never lists it', async () => {
         test.setTimeout(300_000);
         await openFamilyFolder(sam, family, 'Family');
         // The row's menu: what a family folder offers, and what it doesn't yet.
@@ -406,9 +427,17 @@ test.describe('two people', () => {
         // An item's name, with its shortcut after it when it has one ("Download D").
         const item = (name: string) =>
             menu.getByRole('menuitem', { name: new RegExp(`^${name}(?: \\S+)?$`) });
-        for (const offered of ['Download', 'Rename', 'Move', 'Versions', 'Info', 'Move to Trash'])
+        for (const offered of [
+            'Download',
+            'Rename',
+            'Move',
+            'Copy',
+            'Versions',
+            'Info',
+            'Move to Trash',
+        ])
             await expect(item(offered)).toBeVisible();
-        for (const absent of ['Share', 'Copy', 'Tags', 'Report', 'Save a copy to my files'])
+        for (const absent of ['Share', 'Tags', 'Report', 'Save a copy to my files'])
             await expect(item(absent)).toHaveCount(0);
         // Download, the bytes Maya uploaded.
         const [download] = await Promise.all([
@@ -504,6 +533,326 @@ test.describe('two people', () => {
         await upload(sam, 'beach.txt', 'Sand\n');
         await sam.page.getByRole('link', { name: family, exact: true }).last().click();
         await expect(sam.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
+    });
+});
+
+/* A folder inside a family folder, opened from its row. */
+async function openSubfolder(who: Person, name: string) {
+    await fileRow(who.page, name).getByRole('link', { name }).click();
+    await expect(
+        who.page
+            .getByRole('navigation', { name: 'Folder path' })
+            .getByRole('heading', { level: 1 }),
+    ).toHaveText(name, { timeout: 60_000 });
+}
+
+/* The family's own page (`/app/families/<id>`), where its members and Technical details are. */
+async function openFamilyPage(who: Person, path: string, family: string) {
+    await who.page.goto(path);
+    await expect(who.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+        timeout: 90_000,
+    });
+}
+
+/*
+ * Holds a person's key-change walk on the wire (every page of their browser):
+ * every batch it sends waits until `release` is called. The walk is what
+ * re-keys the rest of a folder after its top folder got new keys with the
+ * member list, and every member's device walks, so a test that wants to see
+ * the walk not done yet holds everyone's.
+ */
+async function holdWalk(page: Page) {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let sent = 0;
+    const pattern = '**/api/drive/nodes/*/rotation/nodes';
+    await page.context().route(pattern, async (route) => {
+        sent++;
+        await released;
+        await route.continue();
+    });
+    return {
+        batches: () => sent,
+        // Released, the handler lets every batch through (held ones included); it stays installed,
+        // since unrouting would leave a held request with no handler to continue it.
+        release: async () => {
+            release();
+        },
+    };
+}
+
+test.describe('removal, leaving and key changes', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let maya: Person;
+    let sam: Person;
+    let ana: Person;
+    let groupPath = '';
+    const family = 'Holm family';
+
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(400_000);
+        maya = await person(browser, 'Maya Holm');
+        sam = await person(browser, 'Sam Holm');
+        ana = await person(browser, 'Ana Holm');
+    });
+    test.afterAll(async () => {
+        for (const who of [maya, sam, ana]) await who?.page.context().close();
+    });
+
+    test('three people join, each adds a file, and a copy inside a family folder is the copier’s', async () => {
+        test.setTimeout(480_000);
+        await createFamily(maya, family);
+        groupPath = new URL(maya.page.url()).pathname;
+        for (const newcomer of [sam, ana]) {
+            await invite(maya, newcomer.email);
+            await accept(newcomer, family);
+            const first = newcomer.name.split(' ')[0]!;
+            const dialog = await checkWords(maya, newcomer);
+            const code = await letIn(dialog, first, family);
+            await typeHidden(newcomer, await newcomerCode(newcomer, code), code);
+            await expect(
+                newcomer.page.getByRole('heading', { level: 1, name: family }),
+            ).toBeVisible({ timeout: 90_000 });
+            await dialog.getByRole('button', { name: 'Done' }).click();
+        }
+        await openFamilyFolder(sam, family, 'Family');
+        await upload(sam, 'from-sam.txt', 'Written by Sam\n');
+        await openFamilyFolder(maya, family, 'Family');
+        // A folder inside the family folder, which a walk reaches only after the top folder.
+        await maya.page.getByRole('button', { name: 'Add', exact: true }).click();
+        await maya.page.getByRole('menuitem', { name: /new folder/i }).click();
+        const create = maya.page.getByRole('dialog', { name: 'New folder' });
+        await create.getByLabel('Name').fill('Trips');
+        await create.getByRole('button', { name: /^Create/ }).click();
+        await expect(fileRow(maya.page, 'Trips')).toBeVisible({ timeout: 60_000 });
+
+        // A copy inside the family folder: judged by the family, so Sam's file, which Maya
+        // checked, is copied as hers, with no mark.
+        await expect(fileRow(maya.page, 'from-sam.txt')).toBeVisible({ timeout: 60_000 });
+        await maya.page.getByRole('button', { name: 'More for from-sam.txt' }).click();
+        await maya.page.getByRole('menuitem', { name: /^Copy(?: \S+)?$/ }).click();
+        const copy = maya.page.locator('[data-slot=dialog-content]');
+        await copy.getByRole('button', { name: 'Copy here' }).click();
+        await expect(copy).toHaveCount(0, { timeout: 60_000 });
+        await expect(fileRow(maya.page, 'from-sam (copy).txt')).toBeVisible({ timeout: 60_000 });
+        await expect(mark(maya.page, 'from-sam (copy).txt')).toHaveCount(0);
+        // Ana never checked anyone's words: the copy reads verified by the family.
+        await openFamilyFolder(ana, family, 'Family');
+        await expect(fileRow(ana.page, 'from-sam (copy).txt')).toBeVisible({ timeout: 60_000 });
+        const copied = await info(ana, 'from-sam (copy).txt');
+        await expect(copied.locator('[data-verified-by]')).toHaveText(`Verified by ${family}`);
+        await ana.page.keyboard.press('i');
+        const [download] = await Promise.all([
+            ana.page.waitForEvent('download'),
+            (async () => {
+                await ana.page
+                    .getByRole('button', { name: 'More for from-sam (copy).txt' })
+                    .click();
+                await ana.page.getByRole('menuitem', { name: /^Download(?: \S+)?$/ }).click();
+            })(),
+        ]);
+        expect(readFileSync((await download.path())!, 'utf8')).toBe('Written by Sam\n');
+    });
+
+    test('Replace keys: an upload into a folder the walk has not reached waits for it, then lands', async () => {
+        test.setTimeout(360_000);
+        await openFamilyPage(maya, groupPath, family);
+        const walk = await holdWalk(maya.page);
+        const others = [await holdWalk(ana.page), await holdWalk(sam.page)];
+        const before = await rotationsDone(maya.page);
+        await maya.page.getByText('Technical details').click();
+        const keys = maya.page.locator('[data-folder-keys="Family"]');
+        await expect(keys).toContainText('Key version 1', { timeout: 60_000 });
+        await keys.getByRole('button', { name: 'Replace keys' }).click();
+        await expect(maya.page.getByText('Replacing the keys of “Family”')).toBeVisible({
+            timeout: 90_000,
+        });
+        await expect(keys).toContainText('Key version 2', { timeout: 60_000 });
+        // The walk has started and is held: the family page says keys are being replaced.
+        await expect.poll(walk.batches, { timeout: 90_000 }).toBeGreaterThan(0);
+        await expect(maya.page.locator('[data-key-change="walking"]')).toBeVisible({
+            timeout: 60_000,
+        });
+        await maya.page.screenshot({ path: test.info().outputPath('replace-keys.png') });
+
+        // Ana's device sees the key change: Trips is not re-keyed yet, so her upload waits.
+        await openFamilyFolder(ana, family, 'Family');
+        await openSubfolder(ana, 'Trips');
+        await expect(ana.page.locator('[data-area-state="key-change"]')).toBeVisible({
+            timeout: 90_000,
+        });
+        // A new folder would be wrapped under Trips' old key: not offered while it waits.
+        await ana.page.getByRole('button', { name: 'Add', exact: true }).click();
+        await expect(ana.page.getByRole('menuitem', { name: /new folder/i })).toBeDisabled();
+        await ana.page.keyboard.press('Escape');
+        await ana.page
+            .locator('input[type=file]')
+            .first()
+            .setInputFiles([
+                { name: 'trip.txt', mimeType: 'text/plain', buffer: Buffer.from('Norway\n') },
+            ]);
+        // Its row in Transfers says why it waits; it is not failed, and nothing was made yet.
+        const row = ana.page
+            .locator('section[aria-label=Transfers]')
+            .getByRole('listitem')
+            .filter({ hasText: 'trip.txt' })
+            .last();
+        await expect(row).toContainText('Finishing a key change…', { timeout: 60_000 });
+        await ana.page.screenshot({ path: test.info().outputPath('upload-waiting.png') });
+        // Past a recheck it still waits: the walk has not reached Trips.
+        await ana.page.waitForTimeout(6_000);
+        await expect(row).toContainText('Finishing a key change…');
+        await expect(fileRow(ana.page, 'trip.txt')).toHaveCount(0);
+
+        // The walk goes on: it ends, and the waiting upload lands by itself.
+        await walk.release();
+        await waitForRotation(maya.page, before);
+        for (const other of others) await other.release();
+        await expect(fileRow(ana.page, 'trip.txt')).toBeVisible({ timeout: 90_000 });
+        const [download] = await Promise.all([
+            ana.page.waitForEvent('download'),
+            (async () => {
+                await ana.page.getByRole('button', { name: 'More for trip.txt' }).click();
+                await ana.page.getByRole('menuitem', { name: /^Download(?: \S+)?$/ }).click();
+            })(),
+        ]);
+        expect(readFileSync((await download.path())!, 'utf8')).toBe('Norway\n');
+        await expect(maya.page.locator('[data-key-change="walking"]')).toHaveCount(0, {
+            timeout: 60_000,
+        });
+    });
+
+    test('removing someone: hold, finish, remove; their files read as a former member’s until the walk passes; the rest open on a fresh device; their family is gone', async ({
+        browser,
+    }) => {
+        test.setTimeout(480_000);
+        // Replace keys re-signed every record as Maya's (decision D4): Sam adds one now, after it.
+        await openFamilyFolder(sam, family, 'Family');
+        await upload(sam, 'sam-notes.txt', 'Notes by Sam\n');
+        await openFamilyPage(maya, groupPath, family);
+        const walk = await holdWalk(maya.page);
+        const others = [await holdWalk(ana.page)];
+        const before = await rotationsDone(maya.page);
+        await maya.page.getByRole('button', { name: 'More for Sam Holm' }).click();
+        await maya.page.getByRole('menuitem', { name: 'Remove from family' }).click();
+        const confirm = maya.page.getByRole('alertdialog', { name: `Remove Sam from ${family}?` });
+        await expect(
+            confirm.getByText(
+                'Sam loses the family folders straight away. HushOS replaces their keys, which can take a few minutes.',
+            ),
+        ).toBeVisible();
+        await confirm.getByRole('button', { name: 'Remove from family' }).click();
+        const sheet = maya.page.getByRole('dialog', { name: 'Remove Sam' });
+        await expect(sheet.locator('[data-outcome="removed"]')).toBeVisible({ timeout: 120_000 });
+        for (const step of ['hold', 'finish', 'remove'])
+            await expect(sheet.locator(`[data-step="${step}"]`)).toHaveAttribute(
+                'data-state',
+                'done',
+            );
+        await maya.page.screenshot({ path: test.info().outputPath('removal-progress.png') });
+        await sheet.getByRole('button', { name: 'Done' }).click();
+        await expect(maya.page.locator(`[data-member="${sam.email}"]`)).toHaveCount(0, {
+            timeout: 60_000,
+        });
+        await expect.poll(walk.batches, { timeout: 90_000 }).toBeGreaterThan(0);
+        await expect(maya.page.locator('[data-key-change="walking"]')).toBeVisible({
+            timeout: 60_000,
+        });
+
+        // While the walk is held, Sam's file is still his record: a former member's.
+        await openFamilyFolder(maya, family, 'Family');
+        const former = mark(maya.page, 'sam-notes.txt');
+        await expect(former).toHaveAttribute('data-integrity', 'former-member', {
+            timeout: 90_000,
+        });
+        await expect(former).toHaveAttribute(
+            'aria-label',
+            new RegExp(`Written by Sam, who has left ${family}\\.`),
+        );
+        await former.click();
+        await maya.page.screenshot({ path: test.info().outputPath('former-member.png') });
+        await maya.page.keyboard.press('Escape');
+
+        // Ana, on a fresh device that holds only the new key, opens the part the walk has not
+        // reached through the top folder's previous key (option A), byte for byte.
+        const fresh = await signIn(browser, ana, async (page) => others.push(await holdWalk(page)));
+        await openFamilyFolder(fresh, family, 'Family');
+        for (const [name, text] of [
+            ['sam-notes.txt', 'Notes by Sam\n'],
+            ['from-sam.txt', 'Written by Sam\n'],
+            ['from-sam (copy).txt', 'Written by Sam\n'],
+        ] as const) {
+            await expect(fileRow(fresh.page, name)).toBeVisible({ timeout: 60_000 });
+            const [download] = await Promise.all([
+                fresh.page.waitForEvent('download'),
+                (async () => {
+                    await fresh.page.getByRole('button', { name: `More for ${name}` }).click();
+                    await fresh.page.getByRole('menuitem', { name: /^Download(?: \S+)?$/ }).click();
+                })(),
+            ]);
+            expect(readFileSync((await download.path())!, 'utf8')).toBe(text);
+        }
+        await openSubfolder(fresh, 'Trips');
+        await expect(fileRow(fresh.page, 'trip.txt')).toBeVisible({ timeout: 60_000 });
+
+        // The walk ends. It re-sealed Sam's records as Maya's: after it, his file reads as
+        // re-locked by her (decision D4), never as verified.
+        await walk.release();
+        await waitForRotation(maya.page, before);
+        for (const other of others) await other.release();
+        await maya.page.reload();
+        await expect(mark(maya.page, 'sam-notes.txt')).toHaveAttribute(
+            'data-integrity',
+            'resealed',
+            { timeout: 90_000 },
+        );
+        await fresh.page.goto(groupPath.replace('/families/', '/s/'));
+        await expect(fresh.page.locator('[data-area="Family"]')).toHaveAttribute(
+            'data-area-write',
+            'writable',
+            { timeout: 90_000 },
+        );
+        await fresh.page.context().close();
+
+        // Sam's family is gone from his device: no row under My files, and the space says so.
+        await sam.page.goto('/app/drive');
+        await expect(sam.page.getByRole('link', { name: family, exact: true })).toHaveCount(0, {
+            timeout: 60_000,
+        });
+        await sam.page.goto(groupPath.replace('/families/', '/s/'));
+        await expect(sam.page.getByText('You’re not in this family')).toBeVisible({
+            timeout: 60_000,
+        });
+    });
+
+    test('leaving: the member goes, and the manager’s device marks them left with every folder’s keys replaced', async () => {
+        test.setTimeout(360_000);
+        await openFamilyPage(ana, groupPath, family);
+        await ana.page.getByRole('button', { name: 'Leave family' }).click();
+        const dialog = ana.page.getByRole('alertdialog', { name: `Leave ${family}?` });
+        await expect(
+            dialog.getByText('You’ll lose the family folders. Your own files stay yours.'),
+        ).toBeVisible();
+        await ana.page.screenshot({ path: test.info().outputPath('leave.png') });
+        await dialog.getByRole('button', { name: 'Leave family' }).click();
+        await expect(ana.page).toHaveURL(/\/app\/drive/, { timeout: 60_000 });
+        await expect(ana.page.getByRole('link', { name: family, exact: true })).toHaveCount(0, {
+            timeout: 60_000,
+        });
+
+        // Maya's family page: Ana marked left on the member list by her device, quietly.
+        const before = await rotationsDone(maya.page);
+        await maya.page.goto(groupPath);
+        await expect(maya.page.locator(`[data-member="${ana.email}"]`)).toHaveCount(0, {
+            timeout: 90_000,
+        });
+        await expect(maya.page.locator('[data-left-due]')).toHaveCount(0, { timeout: 90_000 });
+        await waitForRotation(maya.page, before);
+        await maya.page.getByText('Technical details').click();
+        await expect(maya.page.locator('[data-folder-keys="Family"]')).toContainText(
+            'Key version 4',
+            { timeout: 60_000 },
+        );
     });
 });
 

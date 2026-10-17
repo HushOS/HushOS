@@ -1,5 +1,5 @@
 import type { GroupRole } from '@hushos/crypto';
-import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
+import { queryOptions, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
@@ -103,15 +103,30 @@ export type FamiliesSync = {
  * (components/drive/drive-shell.tsx, under the same query key); the Families
  * page reads the same query.
  */
-export async function syncFamilies(userId: string): Promise<FamiliesSync> {
+export async function syncFamilies(
+    userId: string,
+    options: { onChanged?: () => void } = {},
+): Promise<FamiliesSync> {
     const ctx = familyContext(userId);
     const resumed = await resumeOutbox(ctx);
-    const results = await syncAll(ctx);
+    const { groups } = await ctx.api.listGroups();
+    const results = await syncAll(ctx, groups);
     const notices = [...resumed.notices];
     for (const [groupId, result] of results) {
         if ('notices' in result) notices.push(...result.notices);
         // Family folders' clients follow it, and a family gone from this device takes them along.
         familySynced(groupId, result);
+        // What is due, and the walks, in the background, wherever Drive is open: a departure is
+        // marked left and a walk finished without anyone opening the family's pages, and members
+        // walk too, so a waiting upload does not hang on a manager's device.
+        const summary = groups.find((group) => group.id === groupId);
+        if (result.status === 'accepted' && summary?.state === 'active')
+            void import('@/lib/family-work').then(({ startFamilyWork }) =>
+                startFamilyWork(userId, groupId, result, {
+                    manager: canManage(summary.roles),
+                    onChanged: options.onChanged ?? (() => {}),
+                }),
+            );
     }
     return { results, notices };
 }
@@ -161,6 +176,8 @@ export function useFamilySync(
     options: { pollWhileWalking?: number } = {},
 ) {
     const unlocked = useUnlocked(userId);
+    const queryClient = useQueryClient();
+    const walkPolls = useRef(0);
     const signature = summary ? `${summary.state}:${summary.rosterVersion}` : null;
     return useQuery({
         queryKey: familyKeys.familySync(userId, groupId, signature ?? ''),
@@ -170,6 +187,14 @@ export function useFamilySync(
             const resumed = await resumeOutbox(ctx);
             const result = await syncGroup(ctx, groupId, { state: summary?.state });
             familySynced(groupId, result);
+            // What is due, and the walks, in the background (lib/family-work.ts, family pages only).
+            if (result.status === 'accepted' && summary?.state === 'active')
+                void import('@/lib/family-work').then(({ startFamilyWork }) =>
+                    startFamilyWork(userId, groupId, result, {
+                        manager: canManage(summary.roles),
+                        onChanged: () => void afterFamilyChange(queryClient, userId),
+                    }),
+                );
             const notices = [
                 ...dropped,
                 ...resumed.notices.filter(
@@ -187,7 +212,13 @@ export function useFamilySync(
             const walking =
                 result?.status === 'accepted' &&
                 result.areas.some((area) => area.view.rotation !== null);
-            return walking ? (options.pollWhileWalking ?? false) : false;
+            if (!walking || !options.pollWhileWalking) {
+                walkPolls.current = 0;
+                return false;
+            }
+            // From `pollWhileWalking`, twice as long each poll that still finds it, up to 10 min.
+            walkPolls.current++;
+            return Math.min(10 * 60_000, options.pollWhileWalking * 2 ** (walkPolls.current - 1));
         },
         retry: false,
     });

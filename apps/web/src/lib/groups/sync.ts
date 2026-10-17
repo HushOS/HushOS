@@ -64,21 +64,45 @@ export type AreaWrite = 'writable' | 'read-only' | 'keys-changed';
  * worker refuses a write the member list does not allow whatever this says
  * (F9), and a folder a running key change has not reached yet (its key epoch
  * below the walk's target) takes nothing until it has (docs/groups-server.md
- * 8, decision D9). Nothing waits on its own: the person tries again after.
+ * 8, decision D9). Uploads wait for that one (`waitsForKeyChange`) and go on
+ * their own once the walk has re-keyed the folder or ended.
  */
 export function writeRefusal(
     state: Pick<AreaState, 'write' | 'view'> | undefined,
-    folder: { keyEpoch: number },
+    folder: KeyedNode,
 ) {
     if (!state) return 'Open the family again, then try again.';
     if (state.write === 'read-only')
         return 'HushOS couldn’t check this folder’s keys on this device, so nothing can be added to it.';
     if (state.write === 'keys-changed')
         return 'This folder’s keys changed. Use Check again on the folder, then try again.';
-    const rotation = state.view.rotation;
-    if (rotation && folder.keyEpoch < rotation.targetEpoch)
-        return 'Finishing a key change. You can add to this folder once it’s done; try again then.';
+    if (waitsForKeyChange(state, folder))
+        return 'Finishing a key change. Uploads to this folder wait for it; anything else can be added once it’s done.';
     return null;
+}
+/* A node as the walk's rule reads it: its key epoch and the parent epoch its envelope is under. */
+export type KeyedNode = { keyEpoch: number; parentKeyEpoch?: number; parentId?: string | null };
+/*
+ * Whether a running key change has yet to reach `folder`, by the walk's own
+ * rule (listRotationWork): its key epoch below the target, or its envelope
+ * still under a parent epoch below it. A top folder's envelope is under its
+ * area's key version, which is no node epoch, so only its key epoch counts.
+ */
+export function keyChangeAhead(rotation: { targetEpoch: number } | null, folder: KeyedNode) {
+    if (!rotation) return false;
+    if (folder.keyEpoch < rotation.targetEpoch) return true;
+    return (
+        folder.parentId !== null &&
+        folder.parentId !== undefined &&
+        folder.parentKeyEpoch !== undefined &&
+        folder.parentKeyEpoch < rotation.targetEpoch
+    );
+}
+export function waitsForKeyChange(
+    state: Pick<AreaState, 'write' | 'view'> | undefined,
+    folder: KeyedNode,
+) {
+    return Boolean(state?.write === 'writable' && keyChangeAhead(state.view.rotation, folder));
 }
 export function areaWrite(state: Pick<AreaState, 'opened' | 'rootListed' | 'view'>): AreaWrite {
     const reason = state.opened?.reason;
@@ -340,6 +364,7 @@ export async function afterAccept(
     notices: GroupNotice[] = [],
 ): Promise<Extract<SyncResult, { status: 'accepted' }> | Fork> {
     const areas = accepted.record ? await openAreas(ctx, groupId, accepted.view) : [];
+    if (accepted.record) ctx.rotations?.opened?.(groupId, areas);
     const opened = areas.flatMap((area) => (area.opened ? [area.opened.pinArea] : []));
     let view = accepted.view;
     const settled = await settlePin(ctx, groupId, accepted, {
@@ -428,8 +453,11 @@ export function syncGroup(ctx: GroupContext, groupId: string, options: { state?:
 }
 
 /* Route 2, then every family synced; one family's failure is its own. */
-export async function syncAll(ctx: GroupContext) {
-    const { groups } = await ctx.api.listGroups();
+export async function syncAll(
+    ctx: GroupContext,
+    listed?: Awaited<ReturnType<GroupContext['api']['listGroups']>>['groups'],
+) {
+    const groups = listed ?? (await ctx.api.listGroups()).groups;
     const out = new Map<string, SyncResult | { status: 'failed'; error: string }>();
     for (const group of groups)
         out.set(

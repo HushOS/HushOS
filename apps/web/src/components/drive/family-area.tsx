@@ -32,8 +32,8 @@ export type FamilyArea = {
     name: string;
     write: AreaWrite;
     /*
-     * A Drive key change walking the folder (route 25's rotation): items not
-     * yet under its target epoch wait for it before anything is added to them.
+     * A Drive key change walking the folder (route 25's rotation): uploads
+     * into items not yet under its target epoch wait for it in the queue.
      */
     rotation: { targetEpoch: number } | null;
     /* Members as the server names them, by user id: a name always goes with its email. */
@@ -49,9 +49,19 @@ export function useFamilyArea() {
     return useContext(FamilyAreaContext);
 }
 
-/* Whether a key change still has to reach `folder` before anything goes into it. */
-export function waitsForKeyChange(area: FamilyArea | null, folder: Pick<DriveNode, 'keyEpoch'>) {
-    return Boolean(area?.rotation && folder.keyEpoch < area.rotation.targetEpoch);
+/*
+ * Whether a key change still has to reach `folder` before anything goes into
+ * it: by the walk's rule, its key epoch or (below the top folder) the parent
+ * epoch its envelope is under is below the target (keyChangeAhead in
+ * lib/groups/sync.ts, kept free of that layer here).
+ */
+export function waitsForKeyChange(
+    area: FamilyArea | null,
+    folder: Pick<DriveNode, 'keyEpoch' | 'parentKeyEpoch' | 'parentId'>,
+) {
+    const target = area?.rotation?.targetEpoch;
+    if (target === undefined) return false;
+    return folder.keyEpoch < target || (folder.parentId !== null && folder.parentKeyEpoch < target);
 }
 
 export { FINISHING_KEY_CHANGE } from '@/lib/drive';
