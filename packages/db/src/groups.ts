@@ -2198,16 +2198,32 @@ export async function listRotationsDue(groupId: string) {
     ).map((row) => row.id);
 }
 
-/* The stored chain cache, if it is at the group's current revision; null means rebuild. */
+/*
+ * The stored chain cache, if it is at the group's current revision (null means
+ * rebuild), with the head read in the same statement: a record at the right
+ * revision can still name another head (one a bug stored short), which the
+ * caller checks before trusting it.
+ */
 export async function getChainCache(groupId: string) {
     const [row] = await db
-        .select({ revision: groups.chainRevision, cached: groupChainCaches })
+        .select({
+            revision: groups.chainRevision,
+            rosterVersion: groups.rosterVersion,
+            rosterDigest: groups.rosterDigest,
+            groupKeyVersion: groups.groupKeyVersion,
+            cached: groupChainCaches,
+        })
         .from(groups)
         .leftJoin(groupChainCaches, eq(groupChainCaches.groupId, groups.id))
         .where(eq(groups.id, groupId));
     if (!row) return null;
     return {
         revision: row.revision,
+        head: {
+            rosterVersion: row.rosterVersion,
+            rosterDigest: row.rosterDigest,
+            groupKeyVersion: row.groupKeyVersion,
+        },
         cache: row.cached?.chainRevision === row.revision ? row.cached.cache : null,
     };
 }

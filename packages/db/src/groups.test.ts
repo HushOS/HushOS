@@ -2768,6 +2768,129 @@ describe('departures', () => {
             ];
         }
 
+        /* The SQLSTATE of a database error, through the driver's wrapping. */
+        function codeOf(error: unknown): string | undefined {
+            for (let at = error as { code?: string; cause?: unknown } | undefined; at;) {
+                if (typeof at.code === 'string') return at.code;
+                at = at.cause as typeof at;
+            }
+            return undefined;
+        }
+
+        /*
+         * Transaction A: takes the area's row as a departure does (lockAreas, for no key update)
+         * and, holding it, removes `userId`; it commits on `commit()`. Before handing back it
+         * shows the lock is held: a share lock on the row, as a Drive write's check takes,
+         * times out instead of being granted.
+         */
+        async function removalHoldingArea(group: Family, userId: string) {
+            let release!: () => void;
+            const released = new Promise<void>((resolve) => (release = resolve));
+            let held!: () => void;
+            const holding = new Promise<void>((resolve) => (held = resolve));
+            const done = db.transaction(async (tx) => {
+                await tx.execute(
+                    sql`select id from workspaces where id = ${group.areaId} for no key update`,
+                );
+                await tx
+                    .update(groupMemberships)
+                    .set({ state: 'removed', leftAt: new Date() })
+                    .where(
+                        and(
+                            eq(groupMemberships.groupId, group.groupId),
+                            eq(groupMemberships.userId, userId),
+                        ),
+                    );
+                held();
+                await released;
+            });
+            await holding;
+            const probe = await db
+                .transaction(async (tx) => {
+                    await tx.execute(sql`set local lock_timeout = '100ms'`);
+                    await tx.execute(
+                        sql`select id from workspaces where id = ${group.areaId} for share`,
+                    );
+                })
+                .then(
+                    () => 'granted',
+                    (error: unknown) => codeOf(error),
+                );
+            expect(probe).toBe('55P03');
+            return async () => {
+                release();
+                await done;
+            };
+        }
+
+        /* Until another backend of this database waits on a lock (the write queued behind A). */
+        async function someoneWaits() {
+            for (let tries = 0; tries < 100; tries++) {
+                const { rows } = await db.execute<{ waiting: number }>(
+                    sql`select count(*)::int as waiting from pg_stat_activity
+                        where datname = current_database() and wait_event_type = 'Lock'`,
+                );
+                if (rows[0]!.waiting > 0) return true;
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+            return false;
+        }
+        const settled = (promise: Promise<unknown>) =>
+            Promise.race([
+                promise.then(() => true),
+                new Promise((resolve) => setTimeout(() => resolve(false), 50)),
+            ]);
+
+        test('a removal holding the area’s row: the removed member’s empty trash waits for it, then is refused', async () => {
+            const { creator, stayer, group, trips } = await familyFolder();
+            const old = await file(group, creator.userId, trips);
+            await drive.trashNode({
+                workspaceId: group.areaId,
+                nodeId: old.node.id,
+                writer: creator.userId,
+            });
+            const commit = await removalHoldingArea(group, stayer.userId);
+            let emptying: Promise<unknown> | null = null;
+            try {
+                emptying = drive.emptyTrash(group.areaId, 100, stayer.userId).then(
+                    (result) => result,
+                    (error: unknown) => error,
+                );
+                // Queued behind A on the area's row, so it cannot decide on what A has not committed.
+                expect(await someoneWaits()).toBe(true);
+                expect(await settled(emptying)).toBe(false);
+            } finally {
+                await commit();
+            }
+            expect(await emptying).toBeInstanceOf(drive.AccessEndedError);
+            expect((await nodeRow(old.node.id)).purgedAt).toBeNull();
+        });
+
+        test('a removal holding the area’s row: the removed member’s upload completion waits for it, then is refused', async () => {
+            const { stayer, group, trips } = await familyFolder();
+            const theirs = await begin(group, stayer.userId, { parent: trips });
+            // Step one landed before the removal; the store finished; step three races it.
+            expect(
+                (await drive.startCompleting(group.areaId, theirs.uploadId, stayer.userId)).status,
+            ).toBe('ok');
+            const commit = await removalHoldingArea(group, stayer.userId);
+            let finishing: Promise<unknown> | null = null;
+            try {
+                finishing = drive
+                    .finishCompleting(group.areaId, theirs.uploadId, 1024n, stayer.userId)
+                    .then(
+                        (result) => result,
+                        (error: unknown) => error,
+                    );
+                expect(await someoneWaits()).toBe(true);
+                expect(await settled(finishing)).toBe(false);
+            } finally {
+                await commit();
+            }
+            expect(await finishing).toBeInstanceOf(drive.AccessEndedError);
+            expect((await nodeRow(theirs.nodeId)).currentVersionId).toBeNull();
+        });
+
         test('emptying the trash mid-walk: refused to the removed member; a member’s purge drops out of the walk, which still finishes', async () => {
             const family = await familyFolder();
             const { creator, stayer, group, root, trips, photo } = family;
@@ -3238,19 +3361,29 @@ describe('the chain cache', () => {
         const group = await family(creator);
         expect(await groups.getChainCache(group.groupId)).toEqual({
             revision: 1,
+            head: {
+                rosterVersion: 1,
+                rosterDigest: digestOf(group.input.roster.statement),
+                groupKeyVersion: 1,
+            },
             cache: { through: 1 },
         });
         await db.execute(sql`delete from group_chain_caches where group_id = ${group.groupId}`);
-        expect(await groups.getChainCache(group.groupId)).toEqual({ revision: 1, cache: null });
-        await okHead(
-            await groups.appendChain({
-                ...rosterWrite(group, group.head, creator.userId, 'two'),
-                cache: { through: 2 },
-            }),
-        );
+        expect(await groups.getChainCache(group.groupId)).toMatchObject({
+            revision: 1,
+            cache: null,
+        });
+        const two = rosterWrite(group, group.head, creator.userId, 'two');
+        await okHead(await groups.appendChain({ ...two, cache: { through: 2 } }));
         expect(await groups.putChainCache(group.groupId, 1, { through: 1 })).toBe(false);
+        // The head comes with the record, read together: version 2 and its digest.
         expect(await groups.getChainCache(group.groupId)).toEqual({
             revision: 2,
+            head: {
+                rosterVersion: 2,
+                rosterDigest: digestOf(two.roster.statement),
+                groupKeyVersion: 1,
+            },
             cache: { through: 2 },
         });
         expect(await groups.putChainCache(group.groupId, 2, { rebuilt: true })).toBe(true);
