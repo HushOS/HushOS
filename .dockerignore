@@ -19,3 +19,11 @@ backups
 **/*.log
 
 .scratch
+
+# Fuzzing: build output, corpora and findings (gitignored too).
+crates/hushos-core/fuzz/target
+crates/hushos-core/fuzz/corpus
+crates/hushos-core/fuzz/artifacts
+packages/crypto/fuzz/.build
+packages/crypto/fuzz/corpus
+packages/crypto/fuzz/artifacts

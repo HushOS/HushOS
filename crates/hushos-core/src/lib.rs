@@ -49,5 +49,24 @@ pub use reports::*;
 pub use shares::*;
 pub use signatures::*;
 
+/// The statement grammar's parser and encoder, for the fuzz targets in
+/// `fuzz/` only: what every group statement is checked against, which the
+/// apps never call directly.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing {
+    use serde_json::Value;
+
+    /// The parts a statement's bytes hold, or none when the grammar refuses them.
+    pub fn parse_statement(bytes: &[u8]) -> Option<Vec<Value>> {
+        crate::canonical::parse_statement(bytes, "statement").ok()
+    }
+
+    /// The bytes of a statement made of `parts`, or none when the grammar refuses them.
+    pub fn encode_statement(parts: &[Value]) -> Option<Vec<u8>> {
+        crate::canonical::encode_statement(parts).ok()
+    }
+}
+
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();

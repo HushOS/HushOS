@@ -1,0 +1,213 @@
+name: Fuzz
+
+# The crypto twins under coverage-guided fuzzing (cargo-fuzz for crates/hushos-core,
+# Jazzer.js for packages/crypto) and the differential test that holds them to each other.
+# See CONTRIBUTING.md (Fuzzing). The fast-check property tests run with the rest of
+# `bun run test` in CI.
+on:
+    pull_request:
+        paths:
+            - packages/crypto/**
+            - crates/hushos-core/**
+            - .github/workflows/fuzz.yml
+    schedule:
+        # Nightly, at an hour nothing else runs.
+        - cron: '17 3 * * *'
+    workflow_dispatch:
+        inputs:
+            seconds:
+                description: Seconds per target and engine
+                default: '600'
+
+permissions:
+    contents: read
+
+env:
+    TURBO_TELEMETRY_DISABLED: 1
+    CARGO_TERM_COLOR: always
+    CARGO_BUILD_JOBS: 8
+    CARGO_FUZZ_VERSION: 0.13.2
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+    # On a pull request: every target for 30 s per engine, one job per engine (about ten
+    # minutes each, side by side).
+    smoke:
+        name: Fuzz smoke (${{ matrix.engine }})
+        if: github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                engine: [rust, js]
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+            - run: bun install --frozen-lockfile
+            - uses: Swatinem/rust-cache@v2
+              if: matrix.engine == 'rust'
+              with:
+                  workspaces: crates/hushos-core/fuzz -> target
+            # The nightly pinned in crates/hushos-core/fuzz/rust-toolchain.toml, a pinned
+            # cargo-fuzz (kept by the cache above), and the fuzz crate's lockfile as committed.
+            - name: Pinned nightly, cargo-fuzz and dependencies
+              if: matrix.engine == 'rust'
+              working-directory: crates/hushos-core/fuzz
+              run: |
+                  rustup toolchain install
+                  cargo install cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }} --locked
+                  cargo fetch --locked
+            # Jazzer.js instruments only on Node (under Bun it would fuzz blind).
+            - uses: actions/setup-node@v5
+              if: matrix.engine == 'js'
+              with:
+                  node-version: 24
+            - name: Fuzz every target for 30 s
+              run: bun run fuzz ${{ matrix.engine }} all --time 30
+            - name: Keep crash inputs
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: fuzz-crashes-${{ matrix.engine }}-${{ github.run_attempt }}
+                  path: |
+                      crates/hushos-core/fuzz/artifacts
+                      packages/crypto/fuzz/artifacts
+                  retention-days: 14
+
+    # The twins on the same inputs: seeds, fast-check edits, and (nightly) the corpora the
+    # fuzzers grew, replayed in the other twin.
+    differential:
+        name: Differential (TypeScript vs Rust)
+        if: github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+            - run: bun install --frozen-lockfile
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: 24
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: crates/hushos-core/fuzz -> target
+            - run: bun run fuzz:diff
+              env:
+                  FUZZ_DIFF_RUNS: 300
+            - name: Keep diverging inputs
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: fuzz-divergences-${{ github.run_attempt }}
+                  path: packages/crypto/fuzz/artifacts
+                  retention-days: 14
+
+    # Nightly: each target for ten minutes per engine, one job per target, each growing the
+    # corpus the last night left (cached), replaying it in the other twin, then minimising it.
+    nightly:
+        name: Fuzz nightly (${{ matrix.target }})
+        if: github.event_name != 'pull_request'
+        runs-on: ubuntu-latest
+        timeout-minutes: 90
+        strategy:
+            fail-fast: false
+            matrix:
+                target:
+                    - canonical
+                    - roster
+                    - group_succession
+                    - roster_build
+                    - statements
+                    - identity
+                    - succession
+                    - share_open
+                    - key_seal_open
+                    - area_grant_open
+                    - key_seal_context
+                    - pins
+                    - accept
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+            - run: bun install --frozen-lockfile
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: crates/hushos-core/fuzz -> target
+            - name: Pinned nightly, cargo-fuzz and dependencies
+              working-directory: crates/hushos-core/fuzz
+              run: |
+                  rustup toolchain install
+                  cargo install cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }} --locked
+                  cargo fetch --locked
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: 24
+            # A dispatch's seconds, read as a number and held to 60..1200 (the job's timeout fits two).
+            - name: Seconds per target and engine
+              env:
+                  REQUESTED: ${{ inputs.seconds }}
+              run: |
+                  seconds="${REQUESTED:-600}"
+                  case "$seconds" in ''|*[!0-9]*) seconds=600 ;; esac
+                  seconds=$((10#$seconds))
+                  [ "$seconds" -lt 60 ] && seconds=60
+                  [ "$seconds" -gt 1200 ] && seconds=1200
+                  echo "SECONDS_PER_TARGET=$seconds" >> "$GITHUB_ENV"
+            - name: Restore the corpora
+              uses: actions/cache/restore@v4
+              with:
+                  path: |
+                      crates/hushos-core/fuzz/corpus/${{ matrix.target }}
+                      packages/crypto/fuzz/corpus/${{ matrix.target }}
+                  key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+                  restore-keys: fuzz-corpus-${{ matrix.target }}-
+            - name: Fuzz (Rust)
+              id: rust
+              continue-on-error: true
+              run: bun run fuzz rust ${{ matrix.target }} --time "$SECONDS_PER_TARGET"
+            - name: Fuzz (TypeScript)
+              id: js
+              continue-on-error: true
+              run: bun run fuzz js ${{ matrix.target }} --time "$SECONDS_PER_TARGET"
+            - name: Replay both corpora in the other twin
+              id: differential
+              continue-on-error: true
+              # Anchored, so roster does not also run roster_build.
+              run: bun run fuzz:diff -t "twins agree > ${{ matrix.target }} > on "
+              env:
+                  FUZZ_DIFF_RUNS: 2000
+                  FUZZ_DIFF_CORPUS: 5000
+            # Only the inputs that add coverage are kept, so the cache does not grow every night.
+            - name: Minimise the corpora
+              if: always()
+              run: bun run fuzz all ${{ matrix.target }} --merge
+            - name: Save the corpora
+              if: always()
+              uses: actions/cache/save@v4
+              with:
+                  path: |
+                      crates/hushos-core/fuzz/corpus/${{ matrix.target }}
+                      packages/crypto/fuzz/corpus/${{ matrix.target }}
+                  key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+            - name: Keep crash and diverging inputs
+              if: steps.rust.outcome == 'failure' || steps.js.outcome == 'failure' || steps.differential.outcome == 'failure'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: fuzz-findings-${{ matrix.target }}-${{ github.run_attempt }}
+                  path: |
+                      crates/hushos-core/fuzz/artifacts
+                      packages/crypto/fuzz/artifacts
+                  retention-days: 30
+            - name: Fail on a finding
+              if: steps.rust.outcome == 'failure' || steps.js.outcome == 'failure' || steps.differential.outcome == 'failure'
+              run: exit 1

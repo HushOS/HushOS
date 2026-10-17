@@ -28,7 +28,10 @@
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "fixtures:core": "bun scripts/core-fixtures.ts",
-        "fixtures:groups": "bun scripts/group-fixtures.ts"
+        "fixtures:groups": "bun scripts/group-fixtures.ts",
+        "fuzz": "bun fuzz/run.ts",
+        "fuzz:seeds": "bun fuzz/seeds.ts",
+        "fuzz:diff": "cargo build -q --locked --release --manifest-path ../../crates/hushos-core/fuzz/Cargo.toml --example verdicts && vitest run --config fuzz/vitest.config.ts"
     },
     "dependencies": {
         "@noble/post-quantum": "0.7.1",
@@ -39,7 +42,10 @@
     },
     "devDependencies": {
         "@hushos/config": "workspace:*",
+        "@jazzer.js/core": "4.0.0",
         "@types/bun": "1.4.2",
+        "esbuild": "0.28.2",
+        "fast-check": "4.10.2",
         "typescript": "7.0.2",
         "vitest": "^5.0.0"
     }
