@@ -2610,6 +2610,18 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         params.workspaceId,
                     ),
             )
+            // Deleting a family folder: its tombstone on the next roster (groups design 2.10).
+            .post(
+                '/groups/:id/areas/:workspaceId/delete',
+                { params: areaParams, body: t.Object(rosterCallFields) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.deleteArea(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.workspaceId,
+                        body,
+                    ),
+            )
             .post(
                 '/groups/:id/areas/:workspaceId/rotations',
                 {

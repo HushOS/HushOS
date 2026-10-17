@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, UploadPartResult } from '@hushos/crypto';
+import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
 import { DriveApiError, type DriveApi, type NodeView } from './api';
 import type { DriveNode, Rpc } from './client';
 import { scopedId } from '../../db/src/ids';
@@ -102,6 +103,8 @@ function harness(
         keyChangePause?: TransferManagerOptions['keyChangePause'];
         keyChangeGiveUpMs?: number;
         onEvent?: TransferManagerOptions['onEvent'];
+        /* The worker refuses a node under this parent epoch: a key change has not reached it. */
+        keyChangePendingAt?: (parentKeyEpoch: number) => boolean;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -122,6 +125,9 @@ function harness(
         calls.push(operation);
         switch (operation) {
             case 'driveCreateNodes':
+                for (const n of (input as CryptoRequests['driveCreateNodes']).nodes)
+                    if (options.keyChangePendingAt?.(n.parentKeyEpoch))
+                        throw new Error(KEY_CHANGE_PENDING);
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes) {
                     givenEpochs.push(n.keyEpoch);
                     wrappedUnder.push(n.parentKeyEpoch);
@@ -992,6 +998,43 @@ describe('journal and restore', () => {
         await settle(3_000);
         expect(h.item(id!).status).toBe('done');
         expect(h.item(id!).errorCode).toBeNull();
+    });
+});
+
+describe('a key change the server says nothing of (design 2.10, F14)', () => {
+    test('the worker refusing the folder’s old key is waited out like a 409, and the upload lands under the new key', async () => {
+        // The server serves the folder under its old key and refuses nothing; only the worker,
+        // whose member list says the folder's key changed, will not seal under it.
+        const folder = { epoch: 1 };
+        const pauses: number[] = [];
+        const h = harness({
+            openNodes: async () => ({
+                parent: { ...node('trips', 'root'), keyEpoch: folder.epoch },
+            }),
+            keyChangePause: async (_target, attempt) => {
+                pauses.push(attempt);
+                await new Promise((resolve) => setTimeout(resolve, 1_000));
+            },
+            keyChangePendingAt: (parentKeyEpoch) => parentKeyEpoch < 5,
+        });
+        const [id] = h.manager.enqueue([
+            { file: fakeFile(CHUNK), parent: { ...node('trips', 'root'), keyEpoch: 1 } },
+        ]);
+        await settle(3_000);
+        // Waiting, never failed, and nothing begun under the old key.
+        expect(h.item(id!)).toMatchObject({ status: 'preparing', error: null });
+        expect(h.item(id!).waitingFor).toBe(KEY_CHANGE_PENDING);
+        expect(h.server.begins).toHaveLength(0);
+        // The walk re-keys the folder: the next look finds the new key, and it lands under it.
+        folder.epoch = 5;
+        await settle(5_000);
+        expect(h.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(h.server.begins).toHaveLength(1);
+        expect(h.server.begins[0]!.node).toMatchObject({
+            parentKeyEpoch: 5,
+            keyEnvelope: 'ke-under-5',
+        });
+        expect(pauses.length).toBeGreaterThan(0);
     });
 });
 

@@ -246,7 +246,9 @@ export type RotateOutcome =
     | 'parent-not-ready'
     | 'already'
     | 'bad-signature'
-    | 'unsupported';
+    | 'unsupported'
+    /* A group area's top folder, which only its roster re-keys (docs/groups-design.md 2.10). */
+    | 'forbidden';
 
 export type Listing = {
     folder: NodeView;

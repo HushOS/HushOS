@@ -481,3 +481,28 @@ describe('what a rotation is read from', () => {
         expect(read!.documents.map((document) => document.kind)).toEqual(['tags']);
     });
 });
+
+describe('a device’s own record', () => {
+    test('a chain cut before a removal, served with the settings from before it, is refused on a reload, and the record kept', async () => {
+        const { server, ctx, groupId } = await family({ carol: true });
+        const alice = server.people[ALICE];
+        // What the server held before the removal: its member list, and Alice's settings then.
+        const before = await server.api.rosters(groupId, 0);
+        const settingsBefore = { ...alice.stored };
+        expect(await removeMember(ctx, groupId, BOB, { family: 'Lindqvist' })).toEqual({
+            status: 'removed',
+        });
+        const synced = await syncGroup(ctx, groupId);
+        if (synced.status !== 'accepted') throw new Error(synced.status);
+        expect(synced.view.members.find((m) => m.userId === BOB)?.status).toBe('left');
+        const record = await ctx.store.chain(ALICE, groupId);
+        // A reload: a fresh worker over the same device store.
+        const reloaded = { ...(await server.device()), store: ctx.store };
+        // The server serves the list cut before the removal, and the settings document from then.
+        Object.assign(server.api, { rosters: async () => before });
+        Object.assign(alice.stored, settingsBefore);
+        const result = await syncGroup(reloaded, groupId).catch((error: unknown) => error);
+        expect(result).toBeInstanceOf(Error);
+        expect(await reloaded.store.chain(ALICE, groupId)).toEqual(record);
+    });
+});

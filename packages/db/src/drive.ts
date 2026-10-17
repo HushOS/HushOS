@@ -282,6 +282,27 @@ export async function mayStartRotation(userId: string, workspaceId: string) {
 }
 
 /*
+ * Whether `nodeId` is the root of a group area (a family folder's top folder):
+ * its key changes only with a roster rotation, which commits to it
+ * (docs/groups-design.md 2.10), never with a Drive rotation started there.
+ */
+export async function isGroupAreaRoot(workspaceId: string, nodeId: string) {
+    const [row] = await db
+        .select({ id: driveNodes.id })
+        .from(driveNodes)
+        .innerJoin(workspaces, eq(workspaces.id, driveNodes.workspaceId))
+        .where(
+            and(
+                eq(driveNodes.id, nodeId),
+                eq(driveNodes.workspaceId, workspaceId),
+                isNull(driveNodes.parentId),
+                eq(workspaces.ownerKind, 'group'),
+            ),
+        );
+    return row !== undefined;
+}
+
+/*
  * A write in a group area its writer may no longer make: their access ended after the
  * Drive domain checked it (`ended`), or a holder holds them ahead of a removal (`held`).
  */
@@ -1255,9 +1276,10 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
  * What a workspace may still take. A group area whose group has a storage
  * pool (billing wrote one, docs/groups-design.md 3.5) reads the pool instead
  * of its own allowance: the pool's quota against the used and reserved bytes
- * of every area of the group. The pool row is locked first, so reservations
- * in two areas of one group cannot both spend the same free bytes; each area
- * still counts its own bytes, so purges and releases are unchanged.
+ * of every area of the group, a deleted one included until its purge. The
+ * pool row is locked first, so reservations in two areas of one group cannot
+ * both spend the same free bytes; each area still counts its own bytes, so
+ * purges and releases are unchanged.
  */
 async function freeBytes(tx: Tx, workspaceId: string) {
     const [owner] = await tx
@@ -1291,6 +1313,9 @@ async function freeBytes(tx: Tx, workspaceId: string) {
             })
             .from(workspaceStorage)
             .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
+            // A deleted family folder still draws from the pool until the purge deletes its files
+            // (docs/groups-design.md 2.10): its bytes are still stored, and deleting a full folder
+            // must not free room to fill another while they are.
             .where(eq(workspaces.groupId, groupId));
         const used = BigInt(totals?.used ?? '0');
         const reserved = BigInt(totals?.reserved ?? '0');
@@ -1678,6 +1703,16 @@ export async function finishCompleting(
         if (upload.status !== 'completing' && upload.status !== 'conflicted')
             return { status: 'not-completing' as const, uploadStatus: upload.status };
         const row = upload as UploadRow;
+        // A deleted family folder takes nothing more (the expiry job reaches this without any
+        // route's check): the upload is released, its object retired, as for a purged node.
+        const [space] = await tx
+            .select({ deletedAt: workspaces.deletedAt })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId));
+        if (space?.deletedAt) {
+            await releaseUpload(tx, row, 'aborted');
+            return { status: 'purged' as const };
+        }
         if (
             storedSize === null ||
             row.ciphertextSize === null ||

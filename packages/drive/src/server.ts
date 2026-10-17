@@ -2520,6 +2520,11 @@ export async function startRotation(userId: string, workspaceId: string, nodeId:
     // A group's area keys move through its rosters: only a `members` holder starts a rotation there.
     if (!(await driveRepository.mayStartRotation(userId, workspaceId)))
         throw forbidden('Only someone who manages the group can rotate keys in its folders.');
+    // A family folder's top folder is re-keyed only with its area key, on the roster that commits
+    // to its new key (groups design 2.10): a Drive rotation there would leave the roster naming
+    // a key the folder no longer has.
+    if (await driveRepository.isGroupAreaRoot(workspaceId, nodeId))
+        throw forbidden('Replace this family folder’s keys from the family page instead.');
     const result = await rotationsRepository.startRotation({
         workspaceId,
         nodeId,

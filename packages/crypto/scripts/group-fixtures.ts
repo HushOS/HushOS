@@ -174,10 +174,10 @@ const inputJson = (input: AcceptInput) => ({
     joinMark: input.joinMark ?? null,
 });
 const cases = [];
-for (const { name, input, record, next, expected } of await groupCases()) {
+for (const { name, input, record, next, root, expected } of await groupCases()) {
     // The web's own verdict first: a case the web misjudges is not written. The full verdict
     // (history, cache, own entry, key digest, the record's and the rest) is what the core must match.
-    const verdict = await verdictOf(input, record, next);
+    const verdict = await verdictOf(input, record, next, root);
     if (!says(verdict, expected))
         throw new Error(`${name}: the web says ${JSON.stringify(verdict)}`);
     cases.push({
@@ -185,6 +185,7 @@ for (const { name, input, record, next, expected } of await groupCases()) {
         input: {
             ...inputJson(input),
             record: record ?? null,
+            root: root ?? null,
             next: next
                 ? {
                       roster: next.roster ? signed(next.roster) : null,

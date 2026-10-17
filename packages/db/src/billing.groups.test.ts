@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import type { GroupSubscriptionSnapshot } from './billing';
 
@@ -10,8 +10,8 @@ const { closeDatabase, createTestAccount, createTestFamily, resetDatabase } =
 const billing = await import('./billing');
 const { db } = await import('./client');
 const { getStorage } = await import('./drive');
-const { deletionBlockers } = await import('./groups');
-const { groupBillingCustomers, groups, workspaceStorage } = await import('./schema');
+const { deletionBlockers, purgeDeletedAreas } = await import('./groups');
+const { groupBillingCustomers, groups, workspaceStorage, workspaces } = await import('./schema');
 
 /*
  * A family's plan as billing writes it, and the pool Drive reads from it: the
@@ -109,6 +109,32 @@ describe('the pool', () => {
                 reserved: 30n,
                 free: 10n,
             });
+    });
+
+    test('a deleted family folder draws from the pool until its purge deletes its files', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: userId,
+            areas: 2,
+            pooled: true,
+        });
+        await apply(groupId, [plan({ quotaBytes: 100n })]);
+        await setBytes(areaIds[0]!, 60n, 30n);
+        // Deleted, not yet purged: its files are still stored, so deleting a full folder frees
+        // no room to fill another.
+        await db
+            .update(workspaces)
+            .set({ deletedAt: sql`now() - make_interval(days => 31)` })
+            .where(eq(workspaces.id, areaIds[0]!));
+        expect(await getStorage(areaIds[1]!)).toMatchObject({
+            allowance: 100n,
+            used: 60n,
+            reserved: 30n,
+            free: 10n,
+        });
+        // Purged: its bytes leave the pool with its files.
+        expect(await purgeDeletedAreas(30)).toBe(1);
+        expect(await getStorage(areaIds[1]!)).toMatchObject({ used: 0n, reserved: 0n, free: 100n });
     });
 
     test('an area’s own base allowance is not added to the pool', async () => {

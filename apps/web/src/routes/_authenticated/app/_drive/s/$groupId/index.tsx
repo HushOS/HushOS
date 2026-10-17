@@ -1,14 +1,21 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { ChevronRightIcon, FolderPlusIcon } from 'lucide-react';
+import { ChevronRightIcon, EllipsisIcon, FolderPlusIcon } from 'lucide-react';
 import { useState } from 'react';
-import { EmptyState } from '@/components/drive/file-list';
+import { EmptyState, RowMenuButton } from '@/components/drive/file-list';
 import { FINISHING_KEY_CHANGE } from '@/components/drive/family-area';
 import { useFamilyPlanGate } from '@/components/families/family-billing';
+import { DeleteFamilyFolderDialog } from '@/components/families/delete-folder-dialog';
 import { NewFamilyFolderDialog } from '@/components/families/new-folder-dialog';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { FolderMark } from '@/components/folder-mark';
 import { PageHeader } from '@/components/page-header';
 import { Button, buttonVariants } from '@/components/ui/button';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { AreaState } from '@/lib/groups/sync';
 import { useFamilySpace } from '@/lib/spaces';
 
@@ -27,14 +34,17 @@ function areaLine(area: AreaState) {
 
 /*
  * The family's folders, as folder rows: each opens as its own Drive. Those
- * who manage the family make new ones; who is in it is on the family's page.
+ * who manage the family make new ones and delete them (each row's menu); who
+ * is in it is on the family's page.
  */
 function FamilySpacePage() {
     const space = useFamilySpace();
     const [creating, setCreating] = useState(false);
-    // Where plans are sold, a family folder waits for one: the pool is empty until it is paid.
+    // Where plans are sold, a new family folder waits for one: the pool is empty until it is paid.
+    // Deleting adds no storage, so it never waits: a family whose plan lapsed frees space with it.
     const plan = useFamilyPlanGate(space.userId, space.groupId);
     const canCreate = space.manager && !plan.waiting;
+    const [deleting, setDeleting] = useState<{ workspaceId: string; name: string } | null>(null);
     // A folder whose root did not open has no name to show; it is listed by what it is.
     const rows = [...space.areas].sort((a, b) =>
         (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true }),
@@ -99,12 +109,13 @@ function FamilySpacePage() {
                                 key={area.workspaceId}
                                 data-area={name}
                                 data-area-write={area.write}
+                                className="flex items-center border-b border-rule hover:bg-muted"
                             >
                                 {root && area.opened ? (
                                     <Link
                                         to="/app/s/$groupId/f/$folderId"
                                         params={{ groupId: space.groupId, folderId: root.id }}
-                                        className="flex h-14 items-center gap-3 border-b border-rule pr-4 pl-5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-6 sm:pl-8"
+                                        className="flex h-14 min-w-0 flex-1 items-center gap-3 pr-4 pl-5 outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-6 sm:pl-8"
                                     >
                                         {body}
                                         <ChevronRightIcon
@@ -113,8 +124,39 @@ function FamilySpacePage() {
                                         />
                                     </Link>
                                 ) : (
-                                    <div className="flex h-14 items-center gap-3 border-b border-rule pr-4 pl-5 sm:pr-6 sm:pl-8">
+                                    <div className="flex h-14 min-w-0 flex-1 items-center gap-3 pr-4 pl-5 sm:pr-6 sm:pl-8">
                                         {body}
+                                    </div>
+                                )}
+                                {space.manager && (
+                                    <div className="shrink-0 pr-3 sm:pr-5">
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger
+                                                render={
+                                                    <RowMenuButton
+                                                        aria-label={`More for ${name}`}
+                                                    />
+                                                }
+                                            >
+                                                <EllipsisIcon
+                                                    className="size-5"
+                                                    aria-hidden="true"
+                                                />
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent align="end" className="w-56">
+                                                <DropdownMenuItem
+                                                    variant="destructive"
+                                                    onClick={() =>
+                                                        setDeleting({
+                                                            workspaceId: area.workspaceId,
+                                                            name,
+                                                        })
+                                                    }
+                                                >
+                                                    Delete family folder
+                                                </DropdownMenuItem>
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
                                     </div>
                                 )}
                             </li>
@@ -130,6 +172,16 @@ function FamilySpacePage() {
                     family={space.family}
                     open={creating}
                     onOpenChange={setCreating}
+                />
+            )}
+            {space.manager && (
+                <DeleteFamilyFolderDialog
+                    userId={space.userId}
+                    groupId={space.groupId}
+                    family={space.family}
+                    folder={deleting}
+                    onOpenChange={(open) => !open && setDeleting(null)}
+                    onDeleted={space.recheck}
                 />
             )}
         </div>

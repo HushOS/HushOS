@@ -1,8 +1,9 @@
-import { areaKeyCommitment } from './area-keys';
+import { areaKeyCommitment, areaRootCommitment } from './area-keys';
 import sodium from 'libsodium-wrappers';
 import { parseStatement } from './canonical';
 import { fingerprint } from './fingerprint';
 import {
+    checkAreaRoot,
     groupKeyDigest,
     groupKeyPair,
     groupSuccessionStatement,
@@ -23,6 +24,7 @@ import {
     type GroupRole,
     type Roster,
     type RosterArea,
+    type RosterFormat,
     type RosterMember,
     type SignedGroupStatement,
 } from './groups';
@@ -93,14 +95,36 @@ export function areaKeyAt(workspaceId: string, version: number) {
     return pattern(32, workspaceId === AREA ? AREA_KEY_SEED + version - 1 : 100 + version);
 }
 
-export async function standardAreas(): Promise<RosterArea[]> {
-    return [
-        {
-            workspaceId: AREA,
-            workspaceKeyVersion: 1,
-            commitment: await areaKeyCommitment(pattern(32, AREA_KEY_SEED)),
-        },
-    ];
+export async function standardAreas(format: RosterFormat = 1): Promise<RosterArea[]> {
+    return format === 2
+        ? [await keyRowAt(AREA, 1)]
+        : [
+              {
+                  workspaceId: AREA,
+                  workspaceKeyVersion: 1,
+                  commitment: await areaKeyCommitment(pattern(32, AREA_KEY_SEED)),
+              },
+          ];
+}
+
+/* The node key the testkit gives an area's root at an area version (design 2.10). */
+export function rootKeyAt(workspaceId: string, version: number) {
+    return pattern(32, (workspaceId === AREA ? 150 : 170) + version);
+}
+
+/* A format 2 key row: the testkit's area key and root key at `version`. */
+export async function keyRowAt(workspaceId: string, version: number): Promise<RosterArea> {
+    return {
+        workspaceId,
+        workspaceKeyVersion: version,
+        commitment: await areaKeyCommitment(areaKeyAt(workspaceId, version)),
+        rootCommitment: await areaRootCommitment(rootKeyAt(workspaceId, version)),
+    };
+}
+
+/* A format 2 tombstone at `version`. */
+export function tombstoneAt(workspaceId: string, version: number): RosterArea {
+    return { workspaceId, workspaceKeyVersion: version, commitment: '', retired: true };
 }
 
 export function pattern(length: number, seed: number) {
@@ -346,16 +370,31 @@ export async function groupIdFor(creatorUserId: string, idSeed: string) {
  */
 export async function history(
     kind: 'family' | 'org' = 'family',
-    options: { groupId?: string; areas?: RosterArea[] } = {},
+    options: {
+        groupId?: string;
+        areas?: RosterArea[];
+        format?: RosterFormat;
+        /*
+         * The keys default rotations give an area (areaKeyAt, rootKeyAt by default): a server
+         * test that stores several groups passes its own, so no two groups share a key.
+         */
+        areaKey?: (workspaceId: string, version: number) => Uint8Array;
+        rootKey?: (workspaceId: string, version: number) => Uint8Array;
+    } = {},
 ) {
+    const keyOf = options.areaKey ?? areaKeyAt;
+    const rootOf = options.rootKey ?? rootKeyAt;
     const groupId = options.groupId ?? GROUP;
     const rosters: SignedGroupStatement[] = [];
     const successions: SignedGroupStatement[] = [];
     const statements: Roster[] = [];
     const keys: GroupKeyPair[] = [await groupKeyAt(1)];
-    /* Each area's latest key version on the history so far. */
+    /* Each area's latest key version on the history so far, and the areas it retired. */
     const areaVersions = new Map<string, number>();
+    const retired = new Set<string>();
     return {
+        /* The format the next roster is signed in (design 2.10); a case may switch it. */
+        format: options.format ?? (1 as RosterFormat),
         groupId,
         rosters,
         successions,
@@ -384,25 +423,37 @@ export async function history(
                         previous.members.find((m) => m.userId === member.userId)?.status ===
                             'active',
                 );
+            const format = this.format;
             const rows =
                 areas ??
                 (!previous
-                    ? (options.areas ?? (await standardAreas()))
+                    ? (options.areas ?? (await standardAreas(format)))
                     : kind === 'family' && leaving
                       ? await Promise.all(
-                            [...areaVersions.keys()].sort().map(async (workspaceId) => {
-                                const next = areaVersions.get(workspaceId)! + 1;
-                                return {
-                                    workspaceId,
-                                    workspaceKeyVersion: next,
-                                    commitment: await areaKeyCommitment(
-                                        areaKeyAt(workspaceId, next),
-                                    ),
-                                };
-                            }),
+                            [...areaVersions.keys()]
+                                .filter((workspaceId) => !retired.has(workspaceId))
+                                .sort()
+                                .map(async (workspaceId) => {
+                                    const next = areaVersions.get(workspaceId)! + 1;
+                                    const row: RosterArea = {
+                                        workspaceId,
+                                        workspaceKeyVersion: next,
+                                        commitment: await areaKeyCommitment(
+                                            keyOf(workspaceId, next),
+                                        ),
+                                    };
+                                    if (format === 2)
+                                        row.rootCommitment = await areaRootCommitment(
+                                            rootOf(workspaceId, next),
+                                        );
+                                    return row;
+                                }),
                         )
                       : []);
-            for (const row of rows) areaVersions.set(row.workspaceId, row.workspaceKeyVersion);
+            for (const row of rows) {
+                areaVersions.set(row.workspaceId, row.workspaceKeyVersion);
+                if (row.retired) retired.add(row.workspaceId);
+            }
             const roster: Roster = {
                 groupId,
                 kind,
@@ -426,6 +477,7 @@ export async function history(
                     }),
                 ),
                 areas: rows,
+                ...(format === 2 ? { format } : {}),
             };
             const signed = await signRoster(roster, keys[keyVersion - 1]!, signer.signer);
             rosters.push(signed);
@@ -581,6 +633,30 @@ export async function recordVerdict(chain: AcceptedRosters, probe: RecordProbe) 
     );
 }
 
+/*
+ * An area root's key a reader opened, asked against the accepted chain
+ * (checkAreaRoot, design 2.10): 'current' when the chain committed to it,
+ * 'uncommitted' when a format 1 roster listed that version, 'refused'
+ * otherwise.
+ */
+export type RootProbe = { workspaceId: string; workspaceKeyVersion: number; rootKey: string };
+
+export async function rootVerdict(chain: AcceptedRosters, probe: RootProbe) {
+    try {
+        return (await checkAreaRoot(
+            chain,
+            probe.workspaceId,
+            probe.workspaceKeyVersion,
+            decode(probe.rootKey),
+        ))
+            ? 'current'
+            : 'uncommitted';
+    } catch (error) {
+        if (error instanceof Error && error.name === 'CryptoError') return 'refused';
+        throw error;
+    }
+}
+
 /* What a holder or the server checks next on the accepted chain: one roster or one succession. */
 export type NextProbe = {
     roster: SignedGroupStatement | null;
@@ -614,6 +690,7 @@ export type CaseVerdict =
           rosterVersion: number;
           record?: { integrity: string; via: string | null };
           next?: 'accepted' | 'refused';
+          root?: 'current' | 'uncommitted' | 'refused';
           deadBranches?: { version: number; signerUserId: string }[];
           ownEntryBehindAt?: number[];
       }
@@ -626,6 +703,8 @@ export type GroupCase = {
     record?: RecordProbe;
     /* When given, the next roster or succession checked on the accepted chain. */
     next?: NextProbe;
+    /* When given, an area root's key checked against the accepted chain (design 2.10). */
+    root?: RootProbe;
     expected: CaseVerdict;
 };
 
@@ -2847,6 +2926,200 @@ export async function groupCases(): Promise<GroupCase[]> {
             expected: reads('verified', GROUP, 1),
         });
     }
+    // Roster format 2 (design 2.10): each area version commits to its root's key under its own
+    // label, and an area is retired by a tombstone at its next version. Old format 1 chains still
+    // verify; a chain switches up at a roster boundary and never back.
+    {
+        const members = [owner, adult.entry(['members'])];
+        const root = (
+            workspaceId: string,
+            version: number,
+            key = rootKeyAt(workspaceId, version),
+        ) => ({
+            workspaceId,
+            workspaceKeyVersion: version,
+            rootKey: encode(key),
+        });
+        const accepting = (
+            rosterVersion: number,
+            rootIs?: 'current' | 'uncommitted' | 'refused',
+        ) => ({
+            ...accepted(rosterVersion),
+            ...(rootIs ? { root: rootIs } : {}),
+        });
+        const v2 = await history('family', { format: 2 });
+        await v2.roster(organizer, members);
+        cases.push({
+            name: 'v2-first-roster',
+            input: fromOne(v2),
+            root: root(AREA, 1),
+            expected: accepting(1, 'current'),
+        });
+        cases.push({
+            name: 'v2-root-mismatch',
+            input: fromOne(v2),
+            root: root(AREA, 1, rootKeyAt(AREA, 2)),
+            expected: accepting(1, 'refused'),
+        });
+        cases.push({
+            name: 'v2-root-unlisted-version',
+            input: fromOne(v2),
+            root: root(AREA, 2),
+            expected: accepting(1, 'refused'),
+        });
+        const v1 = await history();
+        await v1.roster(organizer, members);
+        cases.push({
+            name: 'v1-root-uncommitted',
+            input: fromOne(v1),
+            root: root(AREA, 1),
+            expected: accepting(1, 'uncommitted'),
+        });
+        // Up from format 1 at a roster boundary: the rotation's root is committed, the earlier
+        // version's is not.
+        v1.format = 2;
+        await v1.roster(organizer, members, 1, [await keyRowAt(AREA, 2)]);
+        cases.push({
+            name: 'v2-switch',
+            input: fromOne(v1),
+            root: root(AREA, 2),
+            expected: accepting(2, 'current'),
+        });
+        cases.push({
+            name: 'v2-switch-earlier-uncommitted',
+            input: fromOne(v1),
+            root: root(AREA, 1),
+            expected: accepting(2, 'uncommitted'),
+        });
+        // Never back down: a format 1 roster after a format 2 one.
+        const down = await history('family', { format: 2 });
+        await down.roster(organizer, members);
+        down.format = 1;
+        await down.roster(organizer, [owner, adult.entry(['billing', 'members'])]);
+        cases.push({ name: 'v2-downgrade', input: fromOne(down), expected: refused });
+        // A rotation that keeps the root's key (a fresh area key, the old root commitment).
+        const hollow = await history('family', { format: 2 });
+        await hollow.roster(organizer, members);
+        await hollow.roster(organizer, members, 1, [
+            {
+                ...(await keyRowAt(AREA, 2)),
+                rootCommitment: (await keyRowAt(AREA, 1)).rootCommitment,
+            },
+        ]);
+        cases.push({ name: 'v2-root-reused', input: fromOne(hollow), expected: refused });
+        // Tombstones: two areas, the second retired at its next version.
+        const two = async () => {
+            const h = await history('family', { format: 2 });
+            await h.roster(organizer, [owner, adult.entry([])], 1, [
+                await keyRowAt(AREA, 1),
+                await keyRowAt(SECOND_AREA, 1),
+            ]);
+            return h;
+        };
+        const retire = await two();
+        await retire.roster(organizer, [owner, adult.entry([])], 1, [tombstoneAt(SECOND_AREA, 2)]);
+        cases.push({
+            name: 'retire-area',
+            input: fromOne(retire),
+            root: root(SECOND_AREA, 1),
+            expected: accepting(2, 'refused'),
+        });
+        const after = async (name: string, rows: RosterArea[]) => {
+            const h = await two();
+            await h.roster(organizer, [owner, adult.entry([])], 1, rows);
+            cases.push({ name, input: fromOne(h), expected: refused });
+        };
+        await after('retire-unknown-area', [tombstoneAt(THIRD_AREA, 1)]);
+        await after('retire-wrong-version', [tombstoneAt(SECOND_AREA, 3)]);
+        const retiredThen = async (name: string, rows: RosterArea[]) => {
+            const h = await two();
+            await h.roster(organizer, [owner, adult.entry([])], 1, [tombstoneAt(SECOND_AREA, 2)]);
+            await h.roster(organizer, [owner, adult.entry([])], 1, rows);
+            cases.push({ name, input: fromOne(h), expected: refused });
+        };
+        await retiredThen('retire-twice', [tombstoneAt(SECOND_AREA, 3)]);
+        await retiredThen('retired-area-revived', [await keyRowAt(SECOND_AREA, 3)]);
+        // At the tombstone's own version too: the area's key list never grew, so only the
+        // retirement itself refuses these.
+        await retiredThen('retire-twice-at-its-version', [tombstoneAt(SECOND_AREA, 2)]);
+        await retiredThen('retired-area-revived-at-its-version', [await keyRowAt(SECOND_AREA, 2)]);
+        // A removal after the retirement rotates only the live area (the history's default skips
+        // the retired one); rotating the retired one too is refused; retiring an area in the
+        // removal's own roster counts as handling it.
+        const skips = await two();
+        await skips.roster(organizer, [owner, adult.entry([])], 1, [tombstoneAt(SECOND_AREA, 2)]);
+        await skips.roster(organizer, [owner, adult.entry([], 1, 'left')]);
+        cases.push({
+            name: 'removal-skips-retired-area',
+            input: fromOne(skips),
+            expected: accepted(3),
+        });
+        await retiredThen('removal-rotates-retired-area', [
+            await keyRowAt(AREA, 2),
+            await keyRowAt(SECOND_AREA, 3),
+        ]);
+        const both = await two();
+        await both.roster(organizer, [owner, adult.entry([], 1, 'left')], 1, [
+            await keyRowAt(AREA, 2),
+            tombstoneAt(SECOND_AREA, 2),
+        ]);
+        cases.push({
+            name: 'removal-retires-instead',
+            input: fromOne(both),
+            expected: accepted(2),
+        });
+        // The cache through a tombstone continues; one that forgot the retirement, or changed the
+        // last root commitment, is refused; one from before format 2 (no roots, no retired
+        // areas) is read as what it described.
+        const cached = await acceptedTo(skips, 2, everyone);
+        cases.push({
+            name: 'cache-through-retirement',
+            input: { ...fromOne(skips), cache: cached.cache, rosters: skips.rosters.slice(2) },
+            expected: accepted(3),
+        });
+        // Nothing served after it: only the cache's own check can refuse it.
+        cases.push({
+            name: 'cache-retirement-dropped',
+            input: { ...fromOne(skips), cache: { ...cached.cache, retiredAreas: [] }, rosters: [] },
+            expected: refused,
+        });
+        const first = await acceptedTo(v2, 1, everyone);
+        cases.push({
+            name: 'cache-area-roots-tampered',
+            input: {
+                ...fromOne(v2),
+                cache: { ...first.cache, areaRoots: { [AREA]: [junk] } },
+                rosters: [],
+            },
+            expected: refused,
+        });
+        const old = await history();
+        await old.roster(organizer, members);
+        await old.roster(organizer, [owner, adult.entry(['billing', 'members'])]);
+        const {
+            areaRoots: _roots,
+            retiredAreas: _retired,
+            cacheVersion: _version,
+            ...before
+        } = (await acceptedTo(old, 1, everyone)).cache;
+        cases.push({
+            name: 'cache-before-format-2',
+            input: { ...fromOne(old), cache: before, rosters: old.rosters.slice(1) },
+            expected: accepted(2),
+        });
+        // A version 2 cache whose root commitments were emptied is no cache from before format
+        // 2: its own version says it carries them, so it is refused, not read as uncommitted.
+        // Through a roster that lists no area, so only the cache's version can refuse it.
+        const quiet = await history('family', { format: 2 });
+        await quiet.roster(organizer, members);
+        await quiet.roster(organizer, [owner, adult.entry(['billing', 'members'])]);
+        const quietCache = (await acceptedTo(quiet, 2, everyone)).cache;
+        cases.push({
+            name: 'cache-v2-roots-emptied',
+            input: { ...fromOne(quiet), cache: { ...quietCache, areaRoots: {} }, rosters: [] },
+            expected: refused,
+        });
+    }
     return cases;
 }
 
@@ -3009,6 +3282,7 @@ export async function verdictOf(
     input: AcceptInput,
     record?: RecordProbe,
     next?: NextProbe,
+    root?: RootProbe,
 ): Promise<Record<string, unknown>> {
     try {
         const chain = await acceptRosters(input);
@@ -3027,6 +3301,7 @@ export async function verdictOf(
             cache: chain.cache,
             ...(record ? { record: await recordVerdict(chain, record) } : {}),
             ...(next ? { next: await nextVerdict(chain, next, input.mlDsaKeys) } : {}),
+            ...(root ? { root: await rootVerdict(chain, root) } : {}),
         };
     } catch (error) {
         if (error instanceof Error && error.name === 'CryptoError') return { status: 'refused' };
@@ -3926,6 +4201,15 @@ export async function sealerCases(): Promise<SealerCase[]> {
         g.entry(['billing', 'guardian', 'members']),
         { ...o.entry(['members']), mlDsaPublicKeyDigest: outsider.mlDsaDigest },
     ]);
+    // Format 2: the area listed, then retired.
+    const retired = await history('family', { format: 2 });
+    await retired.roster(o, [o.entry(['billing', 'guardian', 'members']), g.entry(['members'])]);
+    await retired.roster(
+        o,
+        [o.entry(['billing', 'guardian', 'members']), g.entry(['members'])],
+        1,
+        [tombstoneAt(AREA, 2)],
+    );
     // Two rosters, the sealer a holder in both.
     const two = await history();
     await two.roster(o, [o.entry(['billing', 'guardian', 'members']), g.entry(['members'])]);
@@ -4019,6 +4303,15 @@ export async function sealerCases(): Promise<SealerCase[]> {
             sealer: { n: 1, keyVersion: 1 },
             grant: true,
             grantKeyVersion: 2,
+            expected: 'refused',
+        },
+        // Design 2.10: a retired area is granted no more, even its listed key.
+        {
+            ...base,
+            name: 'granter-retired-area',
+            sealer: { n: 1, keyVersion: 1 },
+            rosters: [...retired.rosters],
+            grant: true,
             expected: 'refused',
         },
     ];

@@ -147,9 +147,22 @@ pub fn roster(value: &Value) -> Option<Roster> {
                     workspace_id: text(a, "workspaceId")?,
                     workspace_key_version: number(a, "workspaceKeyVersion")?,
                     commitment: text(a, "commitment")?,
+                    // Format 2 (design 2.10): a root commitment on a key row, or a tombstone.
+                    root_commitment: match a.get("rootCommitment") {
+                        None | Some(Value::Null) => None,
+                        Some(root) => Some(root.as_str()?.to_string()),
+                    },
+                    retired: match a.get("retired") {
+                        None | Some(Value::Null) => false,
+                        Some(retired) => retired.as_bool()?,
+                    },
                 })
             })
             .collect::<Option<Vec<_>>>()?,
+    };
+    let format = match value.get("format") {
+        None | Some(Value::Null) => 1,
+        Some(format) => u8::try_from(format.as_u64()?).ok()?,
     };
     Some(Roster {
         group_id: text(value, "groupId")?,
@@ -160,11 +173,12 @@ pub fn roster(value: &Value) -> Option<Roster> {
         signer_user_id: text(value, "signerUserId")?,
         members,
         areas,
+        format,
     })
 }
 
 pub fn roster_json(roster: &Roster) -> Value {
-    json!({
+    let mut value = json!({
         "groupId": roster.group_id,
         "kind": kind_name(roster.kind),
         "rosterVersion": roster.roster_version,
@@ -182,12 +196,26 @@ pub fn roster_json(roster: &Roster) -> Value {
             "roles": m.roles.iter().map(|r| role_name(*r)).collect::<Vec<_>>(),
             "sinceVersion": m.since_version,
         })).collect::<Vec<_>>(),
-        "areas": roster.areas.iter().map(|a| json!({
-            "workspaceId": a.workspace_id,
-            "workspaceKeyVersion": a.workspace_key_version,
-            "commitment": a.commitment,
-        })).collect::<Vec<_>>(),
-    })
+        "areas": roster.areas.iter().map(|a| {
+            let mut row = json!({
+                "workspaceId": a.workspace_id,
+                "workspaceKeyVersion": a.workspace_key_version,
+                "commitment": a.commitment,
+            });
+            if let Some(root) = &a.root_commitment {
+                row["rootCommitment"] = json!(root);
+            }
+            if a.retired {
+                row["retired"] = json!(true);
+            }
+            row
+        }).collect::<Vec<_>>(),
+    });
+    // A format 1 roster's shape is what it always was (the web leaves the field out).
+    if roster.format != 1 {
+        value["format"] = json!(roster.format);
+    }
+    value
 }
 
 pub fn succession_json(s: &GroupKeySuccession) -> Value {

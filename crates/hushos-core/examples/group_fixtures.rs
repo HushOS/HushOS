@@ -43,6 +43,7 @@ fn main() {
             signer_user_id: organizer.user_id.clone(),
             members,
             areas,
+            format: 1,
         };
         let signed =
             roster_sign(roster.clone(), group_seed(key_version as u8), organizer.keys.clone()).unwrap();

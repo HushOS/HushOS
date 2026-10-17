@@ -206,6 +206,7 @@ const groupActions: [RegExp, string][] = (
             `groups/${UUID}/areas/${UUID}/previous-root`,
         ],
         ['groups/:id/areas/:workspaceId/rotations', `groups/${UUID}/areas/${UUID}/rotations`],
+        ['groups/:id/areas/:workspaceId/delete', `groups/${UUID}/areas/${UUID}/delete`],
         ['groups/:id/areas/:workspaceId/root', `groups/${UUID}/areas/${UUID}/root`],
         ['invitations/open', 'invitations/open'],
         ['invitations/accept', 'invitations/accept'],

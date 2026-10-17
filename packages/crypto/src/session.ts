@@ -131,6 +131,8 @@ import { encode, decode, wrappingKey, checkProfile } from './keys';
 import {
     accountKeyContext,
     ENVELOPE_VERSION,
+    KEY_CHANGE_PENDING,
+    NOT_CARRIED,
     KEY_STRETCHING,
     OPAQUE_IDENTIFIERS,
     type AccountKeyEnvelope,
@@ -968,6 +970,7 @@ export function createCryptoSession() {
                 }
         for (const at of rootOpenedUnder.keys())
             if (at.startsWith(`${workspaceId}/`)) rootOpenedUnder.delete(at);
+        for (const at of lineage.keys()) if (at.startsWith(`${workspaceId}/`)) lineage.delete(at);
         for (const [at, pending] of pendingNodeKeys)
             if (at.startsWith(`${workspaceId}/`)) {
                 zeroPending(pending);
@@ -990,6 +993,18 @@ export function createCryptoSession() {
     type NodeKeys = Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number; own?: boolean }>;
     const ownNodeKeys: NodeKeys = new Map();
     const guestNodeKeys: NodeKeys = new Map();
+    /*
+     * In a group area, the area key version each held node key's path is
+     * rooted at: the root opened under the area key at that version, then
+     * each child opened under its parent's current key (design 2.10, F14).
+     * Null (or absent) for a key reached through any previous key on the way
+     * (option A's previous-root envelope, a parent's previous key, a walk's
+     * old key): such a key is the one a removed member may hold, so it reads
+     * and never writes. A write in a group area needs a parent whose path is
+     * rooted at the area's write version, so keys cached under an earlier
+     * root take nothing new after a rotation either.
+     */
+    const lineage = new Map<string, number | null>();
     /* Previous node keys while a rotation runs: what children not yet rotated are still wrapped under. */
     const ownPrevNodeKeys: NodeKeys = new Map();
     const guestPrevNodeKeys: NodeKeys = new Map();
@@ -1005,6 +1020,8 @@ export function createCryptoSession() {
         epoch: number;
         old: Uint8Array<ArrayBuffer>;
         oldEpoch: number;
+        /* What the parent key the fresh one is wrapped under is rooted at (`lineage`). */
+        rootedAt: number | null;
     };
     const pendingNodeKeys = new Map<string, PendingKey>();
     /* The area key version each cached group area root key was opened under (driveOpenNodes). */
@@ -1356,6 +1373,7 @@ export function createCryptoSession() {
         for (const pending of pendingNodeKeys.values()) zeroPending(pending);
         pendingNodeKeys.clear();
         rootOpenedUnder.clear();
+        lineage.clear();
         for (const objectId of uploads.keys()) forgetUpload(objectId);
         for (const objectId of downloads.keys()) closeDownload(objectId);
         workspaceKeys.clear();
@@ -1367,23 +1385,65 @@ export function createCryptoSession() {
      * rotation batch made and the server has not confirmed yet.
      */
     function parentKeyFor(workspaceId: string, parentId: string, parentKeyEpoch: number) {
+        return parentKeyAndRoot(workspaceId, parentId, parentKeyEpoch).key;
+    }
+    /*
+     * The same, with the area key version the key's path is rooted at (null
+     * through any previous key: see `lineage`): what a node opened under it
+     * is rooted at too.
+     */
+    function parentKeyAndRoot(
+        workspaceId: string,
+        parentId: string,
+        parentKeyEpoch: number,
+    ): { key: Uint8Array<ArrayBuffer>; rootedAt: number | null } {
         if (parentId === workspaceId) {
             const workspace = workspaceKeys.get(workspaceId);
             if (!workspace) throw new CryptoError('Open Drive again to continue.');
             const key = workspace.keys.get(parentKeyEpoch);
             if (!key)
                 throw new CryptoError('This folder was wrapped under an older workspace key.');
-            return key;
+            return { key, rootedAt: parentKeyEpoch };
         }
         const pending = pendingNodeKeys.get(slot(workspaceId, parentId));
-        if (pending?.epoch === parentKeyEpoch) return pending.fresh;
-        if (pending?.oldEpoch === parentKeyEpoch) return pending.old;
+        if (pending?.epoch === parentKeyEpoch)
+            return { key: pending.fresh, rootedAt: pending.rootedAt };
+        if (pending?.oldEpoch === parentKeyEpoch) return { key: pending.old, rootedAt: null };
         const parent = nodeKey(workspaceId, parentId);
         if (!parent) throw new CryptoError('Open the containing folder first.');
-        if (parent.epoch === parentKeyEpoch) return parent.key;
+        if (parent.epoch === parentKeyEpoch)
+            return { key: parent.key, rootedAt: lineage.get(slot(workspaceId, parentId)) ?? null };
         const previous = prevNodeKeysOf(workspaceId).get(slot(workspaceId, parentId));
-        if (previous && previous.epoch === parentKeyEpoch) return previous.key;
+        if (previous && previous.epoch === parentKeyEpoch)
+            return { key: previous.key, rootedAt: null };
         throw new CryptoError('This item was wrapped under an older folder key.');
+    }
+    /*
+     * What a node made under `parentId` at `parentKeyEpoch` is rooted at: what
+     * that parent key is rooted at, a walk's pending key included (as for
+     * driveOpenNodes), or the version for a root.
+     */
+    function rootOf(workspaceId: string, parentId: string, parentKeyEpoch: number) {
+        return parentKeyAndRoot(workspaceId, parentId, parentKeyEpoch).rootedAt;
+    }
+    /*
+     * A node's key for a write that puts something under it (its metadata, a
+     * version, a share, a re-wrap): in a group area only one whose path is
+     * rooted at the area's write version (`lineage`), never one reached
+     * through a previous key a removed member may hold.
+     */
+    function writableNodeKey(workspaceId: string, nodeId: string) {
+        const node = nodeKey(workspaceId, nodeId);
+        if (node && groups.isArea(workspaceId) && !rootedAtWriteVersion(workspaceId, nodeId))
+            throw new CryptoError(KEY_CHANGE_PENDING);
+        return node;
+    }
+    function rootedAtWriteVersion(workspaceId: string, nodeId: string) {
+        return rootedNow(workspaceId, lineage.get(slot(workspaceId, nodeId)) ?? null);
+    }
+    /* Whether a key rooted at `rootedAt` is rooted at the area's write version now. */
+    function rootedNow(workspaceId: string, rootedAt: number | null) {
+        return rootedAt !== null && rootedAt === groups.writeVersion(workspaceId);
     }
     /*
      * The workspace key version new things are wrapped under: a group area's
@@ -1455,10 +1515,19 @@ export function createCryptoSession() {
             return key;
         }
         if (!groups.isArea(workspaceId)) return parentKeyFor(workspaceId, parentId, parentKeyEpoch);
+        // A write needs a parent whose key path is rooted at the area's write version (F14): never
+        // one opened through a previous key, or cached under a root a rotation has replaced, nor
+        // a walk's pending key made before the area's next roster landed. A walk is held to it
+        // too, its re-wraps included.
         const pending = pendingNodeKeys.get(slot(workspaceId, parentId));
-        if (pending?.epoch === parentKeyEpoch) return pending.fresh;
+        if (pending?.epoch === parentKeyEpoch) {
+            if (!rootedNow(workspaceId, pending.rootedAt))
+                throw new CryptoError(KEY_CHANGE_PENDING);
+            return pending.fresh;
+        }
         const parent = nodeKey(workspaceId, parentId);
         if (!parent) throw new CryptoError('Open the containing folder first.');
+        if (!rootedAtWriteVersion(workspaceId, parentId)) throw new CryptoError(KEY_CHANGE_PENDING);
         if (parent.epoch === parentKeyEpoch && pending?.oldEpoch !== parentKeyEpoch)
             return parent.key;
         throw new CryptoError(KEYS_CHANGED);
@@ -1475,10 +1544,12 @@ export function createCryptoSession() {
         nodeId: string,
         key: Uint8Array<ArrayBuffer>,
         epoch: number,
+        rootedAt: number | null = null,
     ) {
         const pool = nodeKeysOf(workspaceId);
         pool.get(slot(workspaceId, nodeId))?.key.fill(0);
         pool.set(slot(workspaceId, nodeId), { key, epoch });
+        lineage.set(slot(workspaceId, nodeId), rootedAt);
         // Whatever opened it before, this key was not opened from a root row here.
         rootOpenedUnder.delete(slot(workspaceId, nodeId));
     }
@@ -1909,6 +1980,20 @@ export function createCryptoSession() {
         // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
         if (node.keyEpoch >= targetEpoch) {
             try {
+                // What the key is rooted at: this device's own copy, or the envelope's path.
+                const rootedAt =
+                    cached && cached.epoch === node.keyEpoch
+                        ? (lineage.get(slot(workspaceId, nodeId)) ?? null)
+                        : parentKeyAndRoot(workspaceId, node.parentId, node.wrappedParentKeyEpoch)
+                              .rootedAt;
+                // In a group area, a key reached through one the rotation replaces is anyone's who
+                // held that key: a removed member and the server can plant a node under a folder's
+                // old key already at the target, and re-wrapping it would carry their key into the
+                // new tree. Only a key rooted at the write version is carried. An honest walk never
+                // needs more: the target is above every epoch a node carries, and the server
+                // refuses nodes made or moved under a folder the walk has not reached.
+                if (groups.isArea(workspaceId) && !rootedNow(workspaceId, rootedAt))
+                    throw new CryptoError(NOT_CARRIED);
                 const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const keyEnvelope = await wrapNodeKey(old, parentKey, {
                     workspaceId,
@@ -1917,7 +2002,8 @@ export function createCryptoSession() {
                     parentKeyEpoch: node.parentKeyEpoch,
                     keyEpoch: node.keyEpoch,
                 });
-                if (!cached) rememberNodeKey(workspaceId, nodeId, old, node.keyEpoch);
+                // The same key, still, rooted where it was: never vouched for by this re-wrap.
+                if (!cached) rememberNodeKey(workspaceId, nodeId, old, node.keyEpoch, rootedAt);
                 else old.fill(0);
                 return {
                     id: nodeId,
@@ -1936,6 +2022,11 @@ export function createCryptoSession() {
         }
         const fresh = generateKey();
         try {
+            // A fresh key is a write like any other (F14): its parent is pending in this walk or
+            // rooted at the write version, never a key reached through a previous one, which a
+            // removed member may hold and would then hold the fresh key under.
+            const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
+            const { rootedAt } = parentKeyAndRoot(workspaceId, node.parentId, node.parentKeyEpoch);
             const rotated = await rekeyNode({
                 workspaceId,
                 targetEpoch,
@@ -1944,14 +2035,20 @@ export function createCryptoSession() {
                 judge,
                 old,
                 fresh,
-                parentKey: wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch),
+                parentKey,
             });
             // Pending until the server confirms the batch (driveRotateCommit): children in this walk
             // wrap under the fresh key meanwhile, and nothing else takes it as the node's.
             const at = slot(workspaceId, nodeId);
             const before = pendingNodeKeys.get(at);
             if (before) zeroPending(before);
-            pendingNodeKeys.set(at, { fresh, epoch: targetEpoch, old, oldEpoch: node.keyEpoch });
+            pendingNodeKeys.set(at, {
+                fresh,
+                epoch: targetEpoch,
+                old,
+                oldEpoch: node.keyEpoch,
+                rootedAt,
+            });
             return rotated;
         } catch (error) {
             fresh.fill(0);
@@ -2493,7 +2590,7 @@ export function createCryptoSession() {
                 requireWritable(workspaceId);
                 if (!identityKey || identityKey.userId !== granterUserId)
                     throw new CryptoError('Open your identity first.');
-                const node = nodeKey(workspaceId, nodeId);
+                const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -2557,7 +2654,7 @@ export function createCryptoSession() {
             case 'driveSealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
                 requireWritable(workspaceId);
-                const node = nodeKey(workspaceId, nodeId);
+                const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -2676,7 +2773,7 @@ export function createCryptoSession() {
             case 'driveResealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
                 requireWritable(workspaceId);
-                const node = nodeKey(workspaceId, nodeId);
+                const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -2820,7 +2917,14 @@ export function createCryptoSession() {
                         continue;
                     }
                     rememberPrevNodeKey(workspaceId, nodeId, pending.old, pending.oldEpoch, true);
-                    rememberNodeKey(workspaceId, nodeId, pending.fresh, pending.epoch);
+                    // A fresh key: rooted where the parent it was wrapped under was (rotateOne).
+                    rememberNodeKey(
+                        workspaceId,
+                        nodeId,
+                        pending.fresh,
+                        pending.epoch,
+                        pending.rootedAt,
+                    );
                 }
                 return message.operation === 'driveRotateDrop'
                     ? { dropped: count }
@@ -2869,8 +2973,15 @@ export function createCryptoSession() {
                             ),
                         });
                         created.push({ id: node.id, key, epoch: node.keyEpoch });
-                        // Later nodes in the batch may be children of this one.
-                        rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
+                        // Later nodes in the batch may be children of this one. Rooted where its
+                        // parent is (wrapKeyFor saw to it).
+                        rememberNodeKey(
+                            workspaceId,
+                            node.id,
+                            key,
+                            node.keyEpoch,
+                            rootOf(workspaceId, node.parentId, node.parentKeyEpoch),
+                        );
                     }
                 } catch (error) {
                     for (const node of created) {
@@ -2912,13 +3023,15 @@ export function createCryptoSession() {
                                 ? cached.key.slice()
                                 : null;
                         if (!key) {
+                            let rootedAt: number | null;
                             try {
-                                const parentKey = parentKeyFor(
+                                const parent = parentKeyAndRoot(
                                     workspaceId,
                                     node.parentId,
                                     node.parentKeyEpoch,
                                 );
-                                key = (await openNodeKey(decode(node.keyEnvelope, 72), parentKey, {
+                                rootedAt = parent.rootedAt;
+                                key = (await openNodeKey(decode(node.keyEnvelope, 72), parent.key, {
                                     workspaceId,
                                     nodeId: node.id,
                                     parentId: node.parentId,
@@ -2929,13 +3042,27 @@ export function createCryptoSession() {
                                 heldPrevious?.fill(0);
                                 throw error;
                             }
-                            rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
+                            rememberNodeKey(workspaceId, node.id, key, node.keyEpoch, rootedAt);
                             if (areaRoot) rootOpenedUnder.set(at, node.parentKeyEpoch);
                         }
                         // A group area's root decides whether the area may be written: only one
                         // whose envelope opened under the area's write version (a withheld root
-                        // rotation's does not, nor does option A's previous-root envelope).
-                        if (areaRoot) groups.rootSeen(workspaceId, node.parentKeyEpoch);
+                        // rotation's does not, nor does option A's previous-root envelope), and
+                        // whose key is the one the roster committed to at that version (design
+                        // 2.10: a root rolled back under the same area key is not current).
+                        if (
+                            areaRoot &&
+                            !(await groups.rootSeen(workspaceId, node.parentKeyEpoch, key))
+                        ) {
+                            const pool = nodeKeysOf(workspaceId);
+                            pool.get(at)?.key.fill(0);
+                            pool.delete(at);
+                            rootOpenedUnder.delete(at);
+                            heldPrevious?.fill(0);
+                            throw new CryptoError(
+                                'This folder’s key is not the one the family’s member list names.',
+                            );
+                        }
                         // Mid-rotation: the same key under the previous parent key opens
                         // children the rotation has not reached; failure to open it is
                         // not failure to open the node.
@@ -3038,7 +3165,7 @@ export function createCryptoSession() {
             case 'driveSealMetadata': {
                 const { workspaceId, nodeId, kind, metadataVersion } = message.input;
                 requireWritable(workspaceId);
-                const entry = nodeKey(workspaceId, nodeId);
+                const entry = writableNodeKey(workspaceId, nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
                 const metadataEnvelope = await sealMetadata(message.input.metadata, entry.key, {
@@ -3169,7 +3296,7 @@ export function createCryptoSession() {
             case 'driveRewrapNode': {
                 const { workspaceId, nodeId, parentId, parentKeyEpoch, keyEpoch } = message.input;
                 requireWritable(workspaceId);
-                const entry = nodeKey(workspaceId, nodeId);
+                const entry = writableNodeKey(workspaceId, nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
                 if (entry.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -3188,7 +3315,7 @@ export function createCryptoSession() {
             case 'driveUploadPrepare': {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
                 requireWritable(workspaceId);
-                const node = nodeKey(workspaceId, nodeId);
+                const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
                 forgetUpload(objectId);
@@ -3317,7 +3444,7 @@ export function createCryptoSession() {
                 requireWritable(workspaceId);
                 const upload = uploads.get(objectId);
                 if (!upload) throw new CryptoError('This upload is not open here.');
-                const node = nodeKey(workspaceId, nodeId);
+                const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the destination folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
                 const envelope = await sealVersion(
@@ -3513,7 +3640,13 @@ export function createCryptoSession() {
                             versionForm,
                         ),
                     };
-                    rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
+                    rememberNodeKey(
+                        workspaceId,
+                        node.id,
+                        key,
+                        node.keyEpoch,
+                        rootOf(workspaceId, node.parentId, node.parentKeyEpoch),
+                    );
                     return {
                         keyEnvelope: encode(keyEnvelope),
                         metadataEnvelope: encode(metadataEnvelope),
@@ -3530,6 +3663,8 @@ export function createCryptoSession() {
             case 'driveUploadReopen': {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
                 requireWritable(workspaceId);
+                // Only opens the version's content key (a read): the write that follows goes
+                // through driveUploadRewrap or driveCreateNodes, which ask the key's root.
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (message.input.contentSuite !== CONTENT_SUITE)

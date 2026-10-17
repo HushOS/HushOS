@@ -1,4 +1,4 @@
-import { driveRepository, reportsRepository } from '@hushos/db';
+import { driveRepository, groupsRepository, reportsRepository } from '@hushos/db';
 import { TOMBSTONE_DAYS, TRASH_RETENTION_DAYS } from './protocol';
 import type { ObjectStore } from './storage';
 
@@ -100,8 +100,9 @@ export async function replicateObjects({ primary, replica }: Stores, limit = 100
 
 /*
  * The purge sweep: trash roots past retention, then the fan-out under every
- * purged node until it is exhausted, superseded versions past retention, and
- * tombstones past their window. Each part is bounded per pass.
+ * purged node until it is exhausted, superseded versions past retention,
+ * tombstones past their window, and family folders deleted longer ago than
+ * the trash keeps things. Each part is bounded per pass.
  */
 export async function purgeDue(options: { passes?: number } = {}) {
     const passes = options.passes ?? 20;
@@ -119,7 +120,9 @@ export async function purgeDue(options: { passes?: number } = {}) {
         tombstones += deleted;
         if (!deleted) break;
     }
-    return { trash, descendants, versions, tombstones };
+    // Deleted family folders go whole after the same retention as the trash (groups design 2.10).
+    const areas = await groupsRepository.purgeDeletedAreas(TRASH_RETENTION_DAYS);
+    return { trash, descendants, versions, tombstones, areas };
 }
 
 /* Accounting drift, for the log. */

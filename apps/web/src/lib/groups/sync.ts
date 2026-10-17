@@ -205,13 +205,18 @@ type Fork = Extract<CryptoResults['groupAccept'], { status: 'fork' }>;
  * again from version 1, where the record is one more mark (design 2.4, step
  * 3). The record is written only from a committed acceptance.
  *
- * Two recoveries, both on the worker's own word:
+ * Three recoveries, all on the worker's own word:
  * - staged calls whose roster the accepted chain holds (another tab landed
  *   them, or a resend this tab never heard back from) come back as `dropped`;
  *   their outbox rows go only once the record is written, and never the row
  *   of `owner` (a creation, whose seed stays until the settings pin is);
  * - a record that does not open (`record-unreadable`, after a master-key
- *   rotation) is deleted, and the caller starts over without it.
+ *   rotation) is deleted, and the caller starts over without it;
+ * - a record the worker refuses even from version 1 has its cache left out
+ *   (`withoutCache`): the chain is accepted from version 1 against the
+ *   settings pin and the record's own pin, so nothing below the record's
+ *   version and digest is ever taken, whatever settings the server serves;
+ *   the record is overwritten only by that acceptance.
  */
 export async function acceptServed(
     ctx: GroupContext,
@@ -220,7 +225,7 @@ export async function acceptServed(
 ): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
     await ctx.settings.read();
     const row = await ctx.store.chain(ctx.userId, groupId);
-    const accept = async (after: number) => {
+    const accept = async (after: number, withoutCache = false) => {
         const { served } = await fetchServed(ctx, groupId, after);
         return ctx.rpc('groupAccept', {
             userId: ctx.userId,
@@ -229,6 +234,7 @@ export async function acceptServed(
             record: row?.envelope ?? null,
             checkedAt: ctx.now().toISOString(),
             creating: options.creating ? { stagedEnvelope: options.creating } : null,
+            ...(withoutCache ? { withoutCache } : {}),
         });
     };
     let result: CryptoResults['groupAccept'];
@@ -236,8 +242,19 @@ export async function acceptServed(
         result = await accept(row?.rosterVersion ?? 0);
     } catch (error) {
         // The route's answer is the route's: only the worker's refusal is retried from version 1.
-        if (error instanceof GroupApiError || !row || row.rosterVersion === 0) throw error;
-        result = await accept(0);
+        if (error instanceof GroupApiError || !row) throw error;
+        try {
+            if (row.rosterVersion === 0) throw error;
+            result = await accept(0);
+        } catch (again) {
+            if (again instanceof GroupApiError) throw again;
+            // Refused with the record as a mark too: its cache may be what the worker refuses (one
+            // a newer release wrote, or a damaged one), and retrying with it would refuse the
+            // family on this device for good. Accepted from version 1 without the cache, but with
+            // the record's pin as a mark: never below the record's version and digest, so a
+            // server that gets the cache refused and serves older settings rolls nothing back.
+            result = await accept(0, true);
+        }
     }
     if (result.status === 'record-unreadable') {
         await ctx.store.deleteChain(ctx.userId, groupId);

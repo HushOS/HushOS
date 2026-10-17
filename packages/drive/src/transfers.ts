@@ -6,6 +6,7 @@ import type {
     UploadPartResult,
 } from '@hushos/crypto';
 import { CONTENT_SUITE, chunkCount, ciphertextSize, contentLength } from '@hushos/crypto/drive';
+import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
 import { newId as mintScopedId, type IdKind } from '@hushos/crypto/ids';
 import type { DriveApi, NodeView, PartUrl } from './api';
 import type { DriveErrorCode } from './protocol';
@@ -313,6 +314,15 @@ export const KEY_CHANGE_GAVE_UP =
 function isRotating(error: unknown) {
     return error instanceof DriveApiError && error.code === 'rotating';
 }
+/*
+ * The crypto worker refused to write under a family folder key a key change
+ * has not reached yet (design 2.10): a wait, like the server's 409 `rotating`,
+ * even when the server says nothing of one.
+ */
+function isKeyChangePending(error: unknown) {
+    return error instanceof Error && error.message === KEY_CHANGE_PENDING;
+}
+const pendingKeyChange = () => new DriveApiError(KEY_CHANGE_PENDING, 'rotating', 409);
 /* The server refused envelopes under a key epoch that is no longer the node's (or its parent's). */
 function isStale(error: unknown) {
     return error instanceof DriveApiError && error.code === 'stale';
@@ -855,69 +865,79 @@ export function createTransferManager(options: TransferManagerOptions) {
             if (refused) throw new Error(refused);
             let node: Parameters<DriveApi['beginUpload']>[1]['node'];
             let nodeEnvelopes: JournalEntry['node'] = null;
-            if (u.replaces) {
-                node = {
-                    existing: true,
-                    id: u.replaces.id,
-                    keyEpoch: u.replaces.keyEpoch,
-                    expectedVersionId: u.replaces.currentVersion?.id ?? null,
-                };
-                u.keyEpoch = u.replaces.keyEpoch;
-            } else {
-                const from = await takeEpoch(workspaceId);
-                const { nodes } = await rpc('driveCreateNodes', {
+            let prepared: CryptoResults['driveUploadPrepare'];
+            try {
+                if (u.replaces) {
+                    node = {
+                        existing: true,
+                        id: u.replaces.id,
+                        keyEpoch: u.replaces.keyEpoch,
+                        expectedVersionId: u.replaces.currentVersion?.id ?? null,
+                    };
+                    u.keyEpoch = u.replaces.keyEpoch;
+                } else {
+                    const from = await takeEpoch(workspaceId);
+                    const { nodes } = await rpc('driveCreateNodes', {
+                        workspaceId,
+                        nodes: [
+                            {
+                                id: u.nodeId,
+                                kind: 'file',
+                                parentId: parent.id,
+                                parentKeyEpoch: parent.keyEpoch,
+                                keyEpoch: from,
+                                metadata,
+                                // A saved copy is signed by where it came from: saved from a link,
+                                // re-locked when the original did not verify, ordinary when it did.
+                                signAs: u.signAs.metadata,
+                            },
+                        ],
+                    });
+                    u.keyEpoch = from;
+                    nodeEnvelopes = {
+                        keyEnvelope: nodes[0]!.keyEnvelope,
+                        metadataEnvelope: nodes[0]!.metadataEnvelope,
+                        metadataVersion: 1,
+                    };
+                    node = {
+                        existing: false,
+                        id: u.nodeId,
+                        idSeed: seeds.node!,
+                        parentId: parent.id,
+                        parentKeyEpoch: parent.keyEpoch,
+                        keyEpoch: from,
+                        keyEnvelope: nodeEnvelopes.keyEnvelope,
+                        metadataEnvelope: nodeEnvelopes.metadataEnvelope,
+                        metadataSignature: nodes[0]!.metadataSignature,
+                    };
+                }
+                if (u.generation !== generation) return;
+                // The thumbnail is sealed as the object's trailer at prepare, so its render
+                // is waited for here: after this, nothing about the object changes.
+                const thumbnail = u.thumbnail ? await u.thumbnail : null;
+                if (u.generation !== generation) return;
+                // A fresh content key, under the node key just made (or the replaced file's key as
+                // just looked up): the worker forgets any it held for this object first.
+                prepared = await rpc('driveUploadPrepare', {
                     workspaceId,
-                    nodes: [
-                        {
-                            id: u.nodeId,
-                            kind: 'file',
-                            parentId: parent.id,
-                            parentKeyEpoch: parent.keyEpoch,
-                            keyEpoch: from,
-                            metadata,
-                            // A saved copy is signed by where it came from: saved from a link,
-                            // re-locked when the original did not verify, ordinary when it did.
-                            signAs: u.signAs.metadata,
-                        },
-                    ],
+                    nodeId: u.nodeId,
+                    versionId: u.versionId,
+                    objectId: u.objectId,
+                    plaintextSize: u.item.size,
+                    thumbnail:
+                        thumbnail && thumbnail.size
+                            ? new Uint8Array(await thumbnail.arrayBuffer())
+                            : null,
+                    signAs: u.signAs.version,
                 });
-                u.keyEpoch = from;
-                nodeEnvelopes = {
-                    keyEnvelope: nodes[0]!.keyEnvelope,
-                    metadataEnvelope: nodes[0]!.metadataEnvelope,
-                    metadataVersion: 1,
-                };
-                node = {
-                    existing: false,
-                    id: u.nodeId,
-                    idSeed: seeds.node!,
-                    parentId: parent.id,
-                    parentKeyEpoch: parent.keyEpoch,
-                    keyEpoch: from,
-                    keyEnvelope: nodeEnvelopes.keyEnvelope,
-                    metadataEnvelope: nodeEnvelopes.metadataEnvelope,
-                    metadataSignature: nodes[0]!.metadataSignature,
-                };
+            } catch (error) {
+                // The worker will not seal under a folder key a key change has not reached:
+                // waited out like the server's 409 rotating, then sealed again from a fresh look.
+                if (!isKeyChangePending(error) || !options.openNodes || !u.queued) throw error;
+                if (u.generation !== generation) return;
+                if (!(await keyChangeRefused(u, generation, pendingKeyChange(), parent))) return;
+                continue;
             }
-            if (u.generation !== generation) return;
-            // The thumbnail is sealed as the object's trailer at prepare, so its render
-            // is waited for here: after this, nothing about the object changes.
-            const thumbnail = u.thumbnail ? await u.thumbnail : null;
-            if (u.generation !== generation) return;
-            // A fresh content key, under the node key just made (or the replaced file's key as
-            // just looked up): the worker forgets any it held for this object first.
-            const prepared = await rpc('driveUploadPrepare', {
-                workspaceId,
-                nodeId: u.nodeId,
-                versionId: u.versionId,
-                objectId: u.objectId,
-                plaintextSize: u.item.size,
-                thumbnail:
-                    thumbnail && thumbnail.size
-                        ? new Uint8Array(await thumbnail.arrayBuffer())
-                        : null,
-                signAs: u.signAs.version,
-            });
             u.prepared = true;
             if (u.generation !== generation) return;
             // Padded: the object has the chunks of its bucket, which may be more than the file needs.
@@ -1169,11 +1189,15 @@ export function createTransferManager(options: TransferManagerOptions) {
             } catch (error) {
                 if (u.generation !== generation) throw error;
                 // A late `stale` after a pause is the walk reaching the folder or the file between
-                // the look and the attach, as for a begin.
-                if (!isRotating(error) && !(isStale(error) && u.keyChangePauses > 0)) throw error;
+                // the look and the attach, as for a begin; the worker refusing a key the change
+                // has not reached yet is the same wait.
+                const pending = isKeyChangePending(error);
+                if (!pending && !isRotating(error) && !(isStale(error) && u.keyChangePauses > 0))
+                    throw error;
                 const target = u.parent ?? u.replaces;
                 if (!target) throw error;
-                if (!(await keyChangeRefused(u, generation, error as DriveApiError, target)))
+                const reason = pending ? pendingKeyChange() : (error as DriveApiError);
+                if (!(await keyChangeRefused(u, generation, reason, target)))
                     throw new Error('Cancelled.');
             }
         }

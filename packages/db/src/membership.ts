@@ -1,4 +1,4 @@
-import { and, eq, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { db } from './client';
 import type { Tx } from './drive';
@@ -8,7 +8,7 @@ import { groupMemberships, workspaceKeys, workspaces } from './schema';
  * Who counts as a member of a workspace, in one place (docs/groups-server.md
  * 3). A member holds the workspace's key (a `workspace_keys` row) and may use
  * it: the workspace is their own, or it is an area of a group they are an
- * active member of. A key the server still holds for someone who left opens
+ * active member of and the area is not deleted. A key the server still holds for someone who left opens
  * nothing through it. isMember and Drive's authorization walk both ask this.
  */
 export async function holdsWorkspace(tx: Tx | typeof db, userId: string, workspaceId: string) {
@@ -28,6 +28,8 @@ export async function holdsWorkspace(tx: Tx | typeof db, userId: string, workspa
                 eq(workspaceKeys.workspaceId, workspaceId),
                 eq(workspaceKeys.userId, userId),
                 or(eq(workspaces.ownerKind, 'personal'), eq(groupMemberships.state, 'active')),
+                // A deleted family folder is no one's (docs/groups-design.md 2.10).
+                isNull(workspaces.deletedAt),
             ),
         );
     return row !== undefined;

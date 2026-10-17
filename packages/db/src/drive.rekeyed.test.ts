@@ -626,6 +626,9 @@ describe('a rotation that re-keys', () => {
         expect(
             await signed.rotateNodes({
                 ...run,
+                // A family folder's root is re-keyed only by its roster (applyRotation); this
+                // stands in for it.
+                byRoster: true,
                 nodes: [
                     {
                         id: rootId,

@@ -82,11 +82,19 @@ export function rosterDocument(data: Buffer) {
         ),
         sinceVersion: version(p),
     }));
-    const areas = Array.from({ length: p.consumeIntegralInRange(0, 3) }, () => ({
-        workspaceId: plausible(p, USERS),
-        workspaceKeyVersion: version(p),
-        commitment: plausible(p, KEYS),
-    }));
+    // Format 1 rows, format 2 key rows with a root commitment, and tombstones (design 2.10).
+    const areas = Array.from({ length: p.consumeIntegralInRange(0, 3) }, () => {
+        const row: Record<string, unknown> = {
+            workspaceId: plausible(p, USERS),
+            workspaceKeyVersion: version(p),
+            commitment: p.consumeIntegralInRange(0, 3) === 0 ? '' : plausible(p, KEYS),
+        };
+        const form = p.consumeIntegralInRange(0, 2);
+        if (form === 1) row.rootCommitment = plausible(p, KEYS);
+        if (form === 2) row.retired = p.consumeIntegralInRange(0, 3) !== 0;
+        return row;
+    });
+    const format = p.consumeIntegralInRange(0, 3);
     const rosterVersion = version(p);
     const roster = {
         groupId: plausible(p, USERS),
@@ -97,6 +105,7 @@ export function rosterDocument(data: Buffer) {
         signerUserId: plausible(p, USERS),
         members,
         areas,
+        format,
     };
     return new TextEncoder().encode(JSON.stringify(roster));
 }

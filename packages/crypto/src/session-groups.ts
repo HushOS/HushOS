@@ -43,6 +43,7 @@ import {
     GROUP_KEY_SEAL_BYTES,
     activeWith,
     areaWriteVersion,
+    checkAreaRoot,
     areasToRotate,
     groupKeyPair,
     groupWords,
@@ -326,7 +327,9 @@ export type GroupStageOp =
           history?: IdentityEnvelope[];
       }
     | { kind: 'area'; name: string }
-    | { kind: 'rotate'; rotation: AreaRotationInput };
+    | { kind: 'rotate'; rotation: AreaRotationInput }
+    /* Deleting a family folder: its tombstone on the next roster (docs/groups-design.md 2.10). */
+    | { kind: 'retire'; workspaceId: string };
 
 /* A plain view of a committed chain: what the main thread may know of it. */
 export type GroupView = {
@@ -405,6 +408,13 @@ export type GroupRequests = {
         checkedAt: string;
         joining?: { joinMark: JoinMark } | null;
         creating?: { stagedEnvelope: string } | null;
+        /*
+         * The record's device pin is a mark, its cache is left out: for a
+         * record whose cache this release refuses (one a newer release wrote,
+         * or a damaged one). The pin still refuses any chain below it, so a
+         * server cannot roll the device back by getting its cache refused.
+         */
+        withoutCache?: boolean;
     };
     /*
      * The join code a newcomer compares with the admin's screen (design 2.4,
@@ -1059,8 +1069,11 @@ function viewOf(chain: AcceptedRosters): GroupView {
         groupKeyVersion: chain.groupKeyVersion,
         creatorUserId: chain.creatorUserId,
         members: chain.roster.members.map((member) => ({ ...member, roles: [...member.roles] })),
+        // A retired area (a deleted family folder, design 2.10) is no folder of the family's now.
         areas: Object.fromEntries(
-            Object.entries(chain.areaKeys).map(([workspaceId, list]) => [workspaceId, list.length]),
+            Object.entries(chain.areaKeys)
+                .filter(([workspaceId]) => !chain.retiredAreas.includes(workspaceId))
+                .map(([workspaceId, list]) => [workspaceId, list.length]),
         ),
         successionDue: chain.successionDue,
         ownEntryWrongAt: [...chain.ownEntryWrongAt],
@@ -1132,6 +1145,16 @@ async function openOrReplace(
 const NO_CHAIN = 'Check the family’s member list first.';
 const NO_SEED = 'Open the family’s key first.';
 const NOT_OPENED = 'Open every family folder first.';
+/*
+ * The roster format this worker writes (docs/groups-design.md 2.10): format
+ * 2, from a family's first roster and on an older family's next one. Every
+ * client that reads family rosters reads it: the web served by this same
+ * server (a tab still running the previous release refuses it until it
+ * reloads, which the release notice offers) and the server itself; the iOS
+ * and Android apps have no families and parse no roster. A chain never goes
+ * back to format 1.
+ */
+const ROSTER_FORMAT = 2;
 const KEYS_CHANGED = 'This folder’s keys changed. Reload to continue.';
 const NOT_CHECKED_KEYS = 'Couldn’t check this folder’s keys. Reload to continue.';
 
@@ -1303,11 +1326,26 @@ export function createGroupSession(host: GroupHost) {
     /*
      * An area root a listing has just opened, its envelope opened under the
      * area key at `parentKeyEpoch` (never a cached key the row only claims):
-     * the area is writable only while that is its write version.
+     * the area is writable only while that is its write version, and only
+     * when the committed chain committed to this root key at that version
+     * (design 2.10, F14; a version a format 1 roster listed keeps the
+     * envelope rule). False when the key is not the committed one: the caller
+     * drops it, and the root reads as couldn't-check.
      */
-    function rootSeen(workspaceId: string, parentKeyEpoch: number) {
-        if (!isArea(workspaceId)) return;
+    async function rootSeen(workspaceId: string, parentKeyEpoch: number, rootKey: Uint8Array) {
+        if (!isArea(workspaceId)) return true;
+        const chain = [...chains.values()].find((at) => Object.hasOwn(at.areaKeys, workspaceId));
+        // Without a committed chain nothing says which root is current: no write until one.
+        if (!chain) return true;
+        try {
+            await checkAreaRoot(chain, workspaceId, parentKeyEpoch, rootKey);
+        } catch (error) {
+            if (!(error instanceof CryptoError)) throw error;
+            if (rootSeenAt.get(workspaceId) === parentKeyEpoch) rootSeenAt.delete(workspaceId);
+            return false;
+        }
         rootSeenAt.set(workspaceId, parentKeyEpoch);
+        return true;
     }
     /*
      * Within one unlock, settings that opened never give way to none (or to a
@@ -1337,9 +1375,15 @@ export function createGroupSession(host: GroupHost) {
     function commit(chain: AcceptedRosters) {
         chains.set(chain.groupId, chain);
         forked.delete(chain.groupId);
-        // A new write version needs its root seen again (rootSeenAt no longer matches it).
-        for (const workspaceId of Object.keys(chain.areaKeys))
-            areaWrite.set(workspaceId, areaWriteVersion(chain, workspaceId)!);
+        // A new write version needs its root seen again (rootSeenAt no longer matches it). A
+        // retired area (a deleted family folder, design 2.10) is written no more.
+        for (const workspaceId of Object.keys(chain.areaKeys)) {
+            const version = areaWriteVersion(chain, workspaceId);
+            if (version === null) {
+                areaWrite.delete(workspaceId);
+                rootSeenAt.delete(workspaceId);
+            } else areaWrite.set(workspaceId, version);
+        }
         // Seeds of keys the group has replaced sign nothing any more.
         for (const [at, seed] of seeds) {
             const [groupId, version] = at.split(':');
@@ -1931,7 +1975,8 @@ export function createGroupSession(host: GroupHost) {
             });
             const roster = await firstRoster(group.id, entry, {
                 kind: 'family',
-                areaKeys: [{ workspaceId: area.id, workspaceKey: areaKey }],
+                format: ROSTER_FORMAT,
+                areaKeys: [{ workspaceId: area.id, workspaceKey: areaKey, rootKey }],
             });
             const signer = host.hybridKeys();
             const signed = await signRoster(roster, pair, signer);
@@ -2039,7 +2084,12 @@ export function createGroupSession(host: GroupHost) {
      * this session holds, a committed chain or a fork. `null`: the record did
      * not open (sealed under an earlier account root).
      */
-    async function marksOf(input: { userId: string; groupId: string; record: string | null }) {
+    async function marksOf(input: {
+        userId: string;
+        groupId: string;
+        record: string | null;
+        withoutCache?: boolean;
+    }) {
         const groupId = uuid(input.groupId, 'group id');
         const { userId, root } = host.unlocked();
         try {
@@ -2061,7 +2111,10 @@ export function createGroupSession(host: GroupHost) {
                     throw error;
                 }
                 if (value?.v !== 1) return null;
-                record = { cache: value.cache ?? null, pin: value.pin ?? null };
+                record = {
+                    cache: input.withoutCache ? null : (value.cache ?? null),
+                    pin: value.pin ?? null,
+                };
             }
             if (!settingsPins || settingsPins.userId !== userId)
                 throw new CryptoError('Open your settings first.');
@@ -2550,6 +2603,10 @@ export function createGroupSession(host: GroupHost) {
             case 'rotate':
                 rotations = [op.rotation];
                 break;
+            case 'retire':
+                if (areaWriteVersion(chain, op.workspaceId) === null)
+                    throw new CryptoError('This folder is not on the family’s member list.');
+                break;
         }
         // A family's removal rotates every area, and only what is named is rotated.
         const toRotate =
@@ -2582,12 +2639,16 @@ export function createGroupSession(host: GroupHost) {
                 secrets.areaSeeds.set(newArea.workspaceId, newArea.idSeed);
                 secrets.rootKeys.set(newArea.workspaceId, generateKey());
             }
+            // Format 2 (docs/groups-design.md 2.10): each new key commits to its root's key too.
             const roster = await nextRoster(chain, members, {
                 signerUserId: me.userId,
+                format: ROSTER_FORMAT,
                 areaKeys: [...secrets.areaKeys].map(([workspaceId, workspaceKey]) => ({
                     workspaceId,
                     workspaceKey,
+                    rootKey: secrets.rootKeys.get(workspaceId)!,
                 })),
+                ...(op.kind === 'retire' ? { retireAreas: [op.workspaceId] } : {}),
             });
             signer = await signerFor(chain, roster, op);
             pair = await groupKeyPair(seed);

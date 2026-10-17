@@ -415,7 +415,9 @@ export type RotateOutcome =
     | 'parent-not-ready'
     | 'already'
     | 'bad-signature'
-    | 'unsupported';
+    | 'unsupported'
+    /* A group area's top folder, which only its roster re-keys (docs/groups-design.md 2.10). */
+    | 'forbidden';
 
 /* A record as the row holds it now: its envelope's signer and signature, and any origin kept. */
 type StoredRecord = {
@@ -583,6 +585,12 @@ export async function rotateNodes(input: {
     /* The account rotating: every re-sealed envelope must carry its signature. */
     userId: string;
     nodes: RotatedNodeInput[];
+    /*
+     * The roster's own re-key of a group area's root (applyRotation does it in the roster's
+     * transaction; tests stand in for it here). The Drive routes never set it, so no batch
+     * re-keys or re-wraps a family folder's top folder.
+     */
+    byRoster?: boolean;
 }) {
     const results: { id: string; status: RotateOutcome }[] = [];
     for (const item of input.nodes) {
@@ -639,9 +647,13 @@ export async function rotateNodeIn(
         if (!parent || parent.keyEpoch < input.targetEpoch) return 'parent-not-ready';
         if (parent.keyEpoch !== item.parentKeyEpoch) return 'stale';
     } else if (!node.parentId) {
-        // A group area's root is wrapped under the area's key at its current version: only a
-        // roster moves that version (applyRotation bumps it first), so nobody re-keys the
-        // root under any other version outside a roster.
+        // A group area's root is re-keyed or re-wrapped only by the roster that commits to its
+        // key (applyRotation, docs/groups-design.md 2.10), never by a Drive batch, even during
+        // the walk that roster started: its epoch and its area version are different counters,
+        // so no "already" check below can tell a re-wrap of it apart.
+        if (group && !input.byRoster) return 'forbidden';
+        // Wrapped under the area's key at its current version: only a roster moves that version
+        // (applyRotation bumps it first).
         if (group && item.parentKeyEpoch !== workspace.version) return 'stale';
     } else if (node.parentId) {
         const [parent] = await tx

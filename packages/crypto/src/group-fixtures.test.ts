@@ -54,6 +54,7 @@ import {
     type SealerCase,
     type Person,
     type RecordProbe,
+    type RootProbe,
 } from './group-testkit';
 import type { SuccessionLink } from './identity';
 import type { GroupPin } from './pins';
@@ -288,6 +289,7 @@ describe('group records made by the Rust core', () => {
                 cache: GroupChainCache | null;
                 firstKeysChecked: boolean;
                 record: RecordProbe | null;
+                root?: RootProbe | null;
                 joinMark?: JoinMark | null;
                 next: {
                     roster: Served | null;
@@ -318,6 +320,7 @@ describe('group records made by the Rust core', () => {
                           identities: input.next.identities,
                       }
                     : undefined,
+                input.root ?? undefined,
             );
             expect(verdict, name).toEqual(expected);
         }

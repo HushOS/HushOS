@@ -10,7 +10,7 @@ import {
     sameKeyDigest,
 } from '../src/fingerprint';
 import type { GroupChainCache, ServedIdentity } from '../src/group-trust';
-import { GROUP, verdictOf, type RecordProbe } from '../src/group-testkit';
+import { GROUP, verdictOf, type RecordProbe, type RootProbe } from '../src/group-testkit';
 import {
     areaGrantStatement,
     groupFingerprint,
@@ -28,6 +28,7 @@ import {
     type GroupKeySealContext,
     type GroupPublicKey,
     type Roster,
+    type RosterFormat,
 } from '../src/groups';
 import {
     publicIdentity,
@@ -209,18 +210,42 @@ function rosterOf(value: unknown): Roster | undefined {
     let areas: unknown[] = [];
     if (value.areas !== undefined && value.areas !== null) {
         if (!Array.isArray(value.areas)) return undefined;
-        areas = value.areas.map((a: unknown) =>
-            isObject(a)
-                ? all({
-                      workspaceId: text(a, 'workspaceId'),
-                      workspaceKeyVersion: number(a, 'workspaceKeyVersion'),
-                      commitment: text(a, 'commitment'),
-                  })
-                : undefined,
-        );
+        areas = value.areas.map((a: unknown) => {
+            if (!isObject(a)) return undefined;
+            const row = all({
+                workspaceId: text(a, 'workspaceId'),
+                workspaceKeyVersion: number(a, 'workspaceKeyVersion'),
+                commitment: text(a, 'commitment'),
+            });
+            // Format 2 (design 2.10): a root commitment on a key row, or a tombstone. Left out
+            // when absent (or false), as parseRoster leaves them out; anything else is no input.
+            if (!row) return undefined;
+            const extra: { rootCommitment?: string; retired?: true } = {};
+            if (a.rootCommitment !== undefined && a.rootCommitment !== null) {
+                if (typeof a.rootCommitment !== 'string') return undefined;
+                extra.rootCommitment = a.rootCommitment;
+            }
+            if (a.retired !== undefined && a.retired !== null) {
+                if (typeof a.retired !== 'boolean') return undefined;
+                if (a.retired) extra.retired = true;
+            }
+            return { ...row, ...extra };
+        });
     }
     if (members.includes(undefined) || areas.includes(undefined)) return undefined;
-    return all({
+    // The format: absent or 1 is format 1 (left out, as parseRoster leaves it out); any other
+    // byte is passed on for the encoder to judge.
+    let format: number | undefined;
+    if (value.format !== undefined && value.format !== null) {
+        if (
+            !Number.isInteger(value.format) ||
+            (value.format as number) < 0 ||
+            (value.format as number) > 255
+        )
+            return undefined;
+        if (value.format !== 1) format = value.format as number;
+    }
+    const roster = all({
         groupId: text(value, 'groupId'),
         kind: text(value, 'kind') as Roster['kind'],
         rosterVersion: number(value, 'rosterVersion'),
@@ -230,6 +255,9 @@ function rosterOf(value: unknown): Roster | undefined {
         members: members as Roster['members'],
         areas: areas as NonNullable<Roster['areas']>,
     });
+    return (
+        roster && (format === undefined ? roster : { ...roster, format: format as RosterFormat })
+    );
 }
 
 const shareContextOf = (value: unknown): ShareContext | undefined =>
@@ -903,6 +931,23 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
     }
 }
 
+/* A case's area root probe (design 2.10), when it is one the Rust core can hold too. */
+function rootProbeOf(value: unknown): RootProbe | undefined {
+    if (!isObject(value)) return undefined;
+    const probe = all({
+        workspaceId: text(value, 'workspaceId'),
+        workspaceKeyVersion: number(value, 'workspaceKeyVersion'),
+        rootKey: text(value, 'rootKey'),
+    });
+    if (!probe) return undefined;
+    try {
+        decode(probe.rootKey);
+    } catch {
+        return undefined;
+    }
+    return probe;
+}
+
 /*
  * A served history, as a shared case's `input` carries it (group-fixtures.test.ts
  * reads cases the same way): the full verdict of acceptance, and of the
@@ -930,6 +975,7 @@ async function accept(input: Json): Promise<Verdict> {
                   identities: input.next.identities as Record<string, ServedIdentity[]> | null,
               }
             : undefined,
+        rootProbeOf(input.root),
     );
     if (verdict.status === 'accepted') {
         const cache = verdict.cache as { statement: string };

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GROUP } from '../src/group-testkit';
+import { parseRoster } from '../src/groups';
 import { core, groups, repository, web, webGroups, type Json } from './fixtures';
 import { TARGETS, type Target } from './verdicts';
 
@@ -34,6 +35,10 @@ function unique(list: Uint8Array[]) {
     });
 }
 
+/* A roster statement in format 2 (design 2.10): root commitments and tombstones. */
+const isFormat2 = (statement: Uint8Array) =>
+    new TextDecoder().decode(statement).startsWith('["hushos/group/roster",2,');
+
 function statementsOf(served: Json[]) {
     return served.map((s: Json) => bytes(s.statement));
 }
@@ -60,7 +65,9 @@ export function documents(target: Target): Uint8Array[] {
                 bytes(w.deviceSession.statement),
             ]);
         case 'roster':
+            // Format 2 rosters (design 2.10) first, so the cut keeps them.
             return unique([
+                ...caseRosters.filter(isFormat2),
                 ...statementsOf(g.rosters),
                 ...statementsOf(wg.rosters),
                 ...caseRosters,
@@ -72,7 +79,14 @@ export function documents(target: Target): Uint8Array[] {
                 ...caseSuccessions,
             ]);
         case 'roster_build':
-            return g.rosters.map((r: Json) => json(r.roster));
+            return [
+                ...g.rosters.map((r: Json) => json(r.roster)),
+                // Format 2 rosters (design 2.10), key rows and tombstones, as parseRoster reads them.
+                ...caseRosters
+                    .filter(isFormat2)
+                    .slice(0, 8)
+                    .map((statement: Uint8Array) => json(parseRoster(statement))),
+            ];
         case 'statements': {
             const link = c.succession.link;
             const consentLinks = g.chainCases.flatMap((k: Json) =>

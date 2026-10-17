@@ -660,6 +660,19 @@ export function heldObjectCondition(objectIdColumn: { getSQL(): unknown }) {
     )`;
 }
 
+/*
+ * Workspaces no open or held report names: a deleted family folder's purge
+ * leaves the others where they are, with everything in them (nodes, records,
+ * origin drops), until the report lets go.
+ */
+export function unheldWorkspaceCondition(workspaceIdColumn: { getSQL(): unknown }) {
+    return sql`not exists (
+        select 1 from ${driveReports} r
+        where r.workspace_id = ${workspaceIdColumn}
+          and (r.status = 'open' or r.held_at is not null)
+    )`;
+}
+
 export async function isObjectHeld(objectId: string) {
     const [row] = await db
         .select({ id: driveReportItems.reportId })

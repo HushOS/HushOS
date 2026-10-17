@@ -441,6 +441,16 @@ export function createFamilyFolder(userId: string, groupId: string, name: string
     return stageChange(familyContext(userId), groupId, { kind: 'area', name });
 }
 
+/*
+ * Deletes a family folder, for those who manage the family (groups design
+ * 2.10): its tombstone on the member list, as its own change, kept and sent.
+ * The server stops serving it to everyone and keeps its files 30 days, as
+ * the trash does, before they go for good. Nothing brings it back.
+ */
+export function deleteFamilyFolder(userId: string, groupId: string, workspaceId: string) {
+    return stageChange(familyContext(userId), groupId, { kind: 'retire', workspaceId });
+}
+
 /* What the family space pages share: the family, its folders as synced, and who is in it. */
 export type FamilySpace = {
     userId: string;

@@ -42,7 +42,10 @@ import {
  *    ends; the removed person's family is gone from their device; the
  *    remaining member leaves, and the manager's device marks them left
  *    quietly, with every folder's keys replaced.
- * 4. Families off: hidden from the sidebar, and the page says so.
+ * 4. Deleting a family folder: a manager deletes a second folder from its
+ *    row's menu, it is gone for the other member too, and the removal that
+ *    follows rotates only the folder that is left.
+ * 5. Families off: hidden from the sidebar, and the page says so.
  *
  * Whether families are on is this run's GROUPS_ENABLED (from the environment
  * or .env, as the dev server reads it). The server must agree: one that says
@@ -1146,6 +1149,18 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await maya.page.goto(path);
     }
 
+    /* The folder row's menu still offers Delete family folder; nothing is deleted here. */
+    async function canStillDelete() {
+        await maya.page
+            .getByRole('button', { name: /^More for / })
+            .first()
+            .click({ timeout: 60_000 });
+        await expect(
+            maya.page.getByRole('menuitem', { name: 'Delete family folder' }),
+        ).toBeVisible();
+        await maya.page.keyboard.press('Escape');
+    }
+
     test('before a plan: Choose a plan comes first, priced monthly and yearly, and nobody can be invited or a folder made', async () => {
         await show(none);
         const choose = maya.page.locator('[data-choose-plan]');
@@ -1170,6 +1185,8 @@ test.describe('family plans, with the billing summary stubbed', () => {
             timeout: 60_000,
         });
         await expect(maya.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
+        // Deleting adds no storage: a folder can still be deleted without a plan.
+        await canStillDelete();
     });
 
     test('a live plan the person pays for: the facts, places quoted as Polar charges them, and every control', async () => {
@@ -1235,6 +1252,22 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(lapsed).toContainText('Nothing has been deleted.');
         await expect(maya.page.getByRole('heading', { name: 'Choose a plan' })).toBeVisible();
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
+        // And a family whose plan ended can delete a folder to free space.
+        await show(
+            {
+                ...none,
+                payer: { userId: 'payer', you: true },
+                lastPlan: {
+                    productName: 'Family (monthly)',
+                    endedAt: new Date(Date.now() - 3 * DAY).toISOString(),
+                },
+            },
+            `/app/s/${groupId}`,
+        );
+        await expect(maya.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await canStillDelete();
 
         // A member who doesn't hold billing: the plan's name and the storage, no money, no controls.
         // The real member payload: the plan's name, the pool and whether a plan is live; nothing else.
@@ -1253,6 +1286,122 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(
             maya.page.getByRole('button', { name: 'Manage payment and invoices' }),
         ).toHaveCount(0);
+    });
+});
+
+test.describe('deleting a family folder', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let ida: Person;
+    let leo: Person;
+    const family = 'Berg family';
+
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(300_000);
+        ida = await person(browser, 'Ida Berg');
+        leo = await person(browser, 'Leo Berg');
+    });
+    test.afterAll(async () => {
+        for (const who of [ida, leo]) await who?.page.context().close();
+    });
+
+    test('a manager deletes a folder: it is gone for everyone, and a later removal does not rotate it', async () => {
+        test.setTimeout(600_000);
+        await createFamily(ida, family);
+        const groupPath = new URL(ida.page.url()).pathname;
+        await invite(ida, leo.email);
+        await accept(leo, family);
+        const dialog = await checkWords(ida, leo);
+        const code = await letIn(dialog, 'Leo', family);
+        await typeHidden(leo, await newcomerCode(leo, code), code);
+        await expect(leo.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 90_000,
+        });
+        await dialog.getByRole('button', { name: 'Done' }).click();
+
+        // A second folder, which Leo opens and adds to.
+        await ida.page.getByRole('link', { name: family, exact: true }).first().click();
+        await expect(ida.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+        const spacePath = new URL(ida.page.url()).pathname;
+        await ida.page.getByRole('button', { name: 'New family folder' }).click();
+        const create = ida.page.getByRole('dialog', { name: 'New family folder' });
+        await create.getByLabel('Name').fill('Photos');
+        await create.getByRole('button', { name: 'Create folder' }).click();
+        await expect(create).toHaveCount(0, { timeout: 90_000 });
+        await openFamilyFolder(leo, family, 'Photos');
+        await upload(leo, 'beach.txt', 'Sand\n');
+
+        // Leo doesn't manage the family: his rows have no menu.
+        await leo.page.goto(spacePath);
+        await expect(leo.page.locator('[data-area="Photos"]')).toBeVisible({ timeout: 90_000 });
+        await expect(leo.page.getByRole('button', { name: 'More for Photos' })).toHaveCount(0);
+
+        // Ida deletes it from its row's menu, and the dialog says what happens to its files.
+        await ida.page.goto(spacePath);
+        await expect(ida.page.locator('[data-area="Photos"]')).toHaveAttribute(
+            'data-area-write',
+            'writable',
+            { timeout: 90_000 },
+        );
+        await ida.page.getByRole('button', { name: 'More for Photos' }).click();
+        await ida.page.getByRole('menuitem', { name: 'Delete family folder' }).click();
+        const confirm = ida.page.getByRole('alertdialog', { name: 'Delete “Photos”?' });
+        await expect(confirm).toContainText(
+            'deleted from the server, normally after 30 days, and their space is freed when they are',
+        );
+        await expect(confirm).toContainText('Anyone who kept copies or keys keeps them');
+        const deleted = ida.page.waitForResponse(
+            (response) =>
+                response.request().method() === 'POST' &&
+                /\/api\/groups\/[0-9a-f-]+\/areas\/[0-9a-f-]+\/delete$/.test(
+                    new URL(response.url()).pathname,
+                ),
+            { timeout: 90_000 },
+        );
+        await confirm.getByRole('button', { name: 'Delete', exact: true }).click();
+        expect((await deleted).status()).toBe(200);
+        await expect(confirm).toHaveCount(0, { timeout: 60_000 });
+        await expect(ida.page.locator('[data-area="Photos"]')).toHaveCount(0, { timeout: 60_000 });
+        await expect(ida.page.locator('[data-area="Family"]')).toBeVisible();
+
+        // Gone for Leo too: on a fresh load the server lists only "Family".
+        const spaces = leo.page.waitForResponse(
+            (response) => new URL(response.url()).pathname === '/api/drive/spaces',
+            { timeout: 90_000 },
+        );
+        await leo.page.goto(spacePath);
+        const listed = (await (await spaces).json()) as {
+            spaces: { space: { kind: string }; areas: unknown[] }[];
+        };
+        expect(listed.spaces.find((at) => at.space.kind === 'group')?.areas).toHaveLength(1);
+        await expect(leo.page.locator('[data-area="Family"]')).toBeVisible({ timeout: 90_000 });
+        await expect(leo.page.locator('[data-area="Photos"]')).toHaveCount(0);
+
+        // Leo's removal rotates the family's one live folder; the deleted one is not in the call.
+        await openFamilyPage(ida, groupPath, family);
+        const removal = ida.page.waitForRequest(
+            (request) =>
+                request.method() === 'POST' &&
+                /\/api\/groups\/[0-9a-f-]+\/members\/[0-9a-f-]+\/remove$/.test(
+                    new URL(request.url()).pathname,
+                ),
+            { timeout: 120_000 },
+        );
+        await ida.page.getByRole('button', { name: 'More for Leo Berg' }).click();
+        await ida.page.getByRole('menuitem', { name: 'Remove from family' }).click();
+        await ida.page
+            .getByRole('alertdialog', { name: `Remove Leo from ${family}?` })
+            .getByRole('button', { name: 'Remove from family' })
+            .click();
+        const sheet = ida.page.getByRole('dialog', { name: 'Remove Leo' });
+        const body = (await removal).postDataJSON() as {
+            rotations?: { workspaceId: string }[];
+        };
+        expect(body.rotations).toHaveLength(1);
+        await expect(sheet.locator('[data-outcome="removed"]')).toBeVisible({ timeout: 120_000 });
+        await sheet.getByRole('button', { name: 'Done' }).click();
+        await expect(ida.page.locator(`[data-member="${leo.email}"]`)).toHaveCount(0, {
+            timeout: 60_000,
+        });
     });
 });
 
