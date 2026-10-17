@@ -18,8 +18,58 @@ concurrency:
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+    # What a pull request touches, so the jobs it cannot affect stay skipped (and `CI ok` still
+    # passes). Anything unlisted, or a diff that cannot be read, runs everything. A push to main
+    # always runs everything: its diff is only against the previous push, so a docs-only commit
+    # after a failed or cancelled one would otherwise deploy code no suite passed.
+    changes:
+        name: Changed paths
+        runs-on: ubuntu-latest
+        outputs:
+            browser: ${{ steps.paths.outputs.browser }}
+            rust: ${{ steps.paths.outputs.rust }}
+        steps:
+            # A pull request checks out its merge commit: the first parent is the base.
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 2
+            - name: Classify the changed files
+              id: paths
+              env:
+                  EVENT: ${{ github.event_name }}
+              run: |
+                  files=''
+                  if [ "$EVENT" = pull_request ]; then
+                      files=$(git diff --name-only HEAD^1 HEAD)
+                  fi
+                  if [ -z "$files" ]; then
+                      echo "Not a pull request, or no diff to read: running everything."
+                      echo "browser=true" >> "$GITHUB_OUTPUT"
+                      echo "rust=true" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  browser=false
+                  rust=false
+                  while IFS= read -r file; do
+                      case "$file" in
+                          # Served at /design.md, and the suite's own fixtures. In a case
+                          # pattern `*` crosses `/`, so these come before the prose patterns.
+                          DESIGN.md | e2e/*) browser=true ;;
+                          # Prose only. The pages' MDX renders in the app, so it is not here.
+                          docs/* | *.md) ;;
+                          *) browser=true ;;
+                      esac
+                      # The core, its bindings, and the TypeScript twin its fixtures are checked against.
+                      case "$file" in
+                          crates/* | Cargo.toml | Cargo.lock | rust-toolchain* | packages/crypto/* | .github/workflows/ci.yml) rust=true ;;
+                      esac
+                  done <<< "$files"
+                  echo "browser=$browser" >> "$GITHUB_OUTPUT"
+                  echo "rust=$rust" >> "$GITHUB_OUTPUT"
+                  echo "browser suites: $browser, Rust core tests: $rust"
+
     check:
-        name: Check, migrate, test, and build
+        name: Check, migrate, and test
         runs-on: ubuntu-latest
         services:
             postgres:
@@ -62,19 +112,45 @@ jobs:
                     echo "Rendered emails are stale: run bun run email:render and commit." >&2
                     exit 1
                   fi
+            # Not cached through Turborepo across runs: a package's test hash leaves out the
+            # workspace packages it imports, so a cached pass would survive a change to them.
             - name: Test
               run: bun run test
+
+    # The production build every browser job tests, built once. Its own job rather than a step
+    # of the one above, so the browser jobs wait for a minute of build, not four of unit tests.
+    build:
+        name: Build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+            - run: bun install --frozen-lockfile
             - name: Build
               run: bun run build
             # The Start plugin regenerates the route tree during the build; a commit
             # whose checked-in tree is stale fails here with the missing lines.
             - name: The committed route tree matches the built one
               run: git diff --exit-code -- apps/web/src/routeTree.gen.ts
+            # One tar, not thousands of files (pdf.js's maps and fonts), and `.output` is a
+            # hidden directory, which upload-artifact leaves out by default.
+            - name: Pack the server output
+              run: tar -cf web-output.tar -C apps/web .output
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: web-output
+                  path: web-output.tar
+                  retention-days: 1
 
     # The Rust core's own tests (units, doc examples, both fixture directions): nothing else in
-    # CI runs cargo. Stable, with the build cached, so a warm run is a minute or two.
+    # CI runs cargo. Stable, with the build cached, so a warm run is a minute or two. Only when
+    # the core, its bindings, or the TypeScript twin its fixtures come from changed.
     rust:
         name: Rust core tests
+        needs: changes
+        if: needs.changes.outputs.rust == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 20
         steps:
@@ -82,12 +158,19 @@ jobs:
             - uses: Swatinem/rust-cache@v2
             - run: cargo test -p hushos-core --locked
 
-    # Chromium and the phone-sized Chromium for mobile.spec.ts; WebKit has its own job below.
-    # Each browser's suite is split across runners that run side by side: a public repository's
-    # standard runners cost nothing, and the plan does not offer larger ones. The setup takes
-    # about two minutes on every shard, so more shards stop paying off past a few.
+    # Chromium on Linux, against the production build from the job above, run by `bun run
+    # start` (web and jobs worker) as `bun run dev` was before: no first-visit compile, and the
+    # production Content Security Policy, the one hushos.com serves. Cookies are Secure only for
+    # an https APP_ORIGIN, so http://localhost works as it did; in CI the server sends one
+    # request per connection (server/plugins/request-context.ts), as the dev server did.
+    # Families off, as hushos.com runs until billing charges for family folders: this suite
+    # covers the off path (families.spec.ts checks they stay hidden), with the phone-sized
+    # project for mobile.spec.ts. Files are split by measured time (scripts/e2e-shard.sh).
+    # A public repository's standard runners cost nothing, and the plan offers no larger ones.
     e2e:
         name: Browser tests (chromium ${{ matrix.shard }}/3)
+        needs: [changes, build]
+        if: needs.changes.outputs.browser == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
         strategy:
@@ -100,9 +183,11 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
-            # Families off, as hushos.com runs until billing charges for family folders: this
-            # suite covers the off path (families.spec.ts checks they stay hidden), and the
-            # e2e-families job below covers the self-hosting default, families on.
+            - uses: actions/download-artifact@v4
+              with:
+                  name: web-output
+            - name: Unpack the server output
+              run: tar -xf web-output.tar -C apps/web
             - name: Local infrastructure (Postgres, Mailpit, Garage) and environment, families off
               run: |
                   bun run setup
@@ -110,40 +195,37 @@ jobs:
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
+            - name: Playwright version
+              id: playwright
+              run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+            - name: Cache Chromium
+              uses: actions/cache@v4
+              with:
+                  path: ~/.cache/ms-playwright
+                  key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
+            # The system libraries every time; the browser download only on a cache miss.
             - name: Install Chromium for Playwright
               run: bunx playwright install --with-deps chromium
-            # Streamed, not grouped: Turborepo holds a task's output until it ends on
-            # this runner, and a dev server never ends, so its log stayed empty.
-            # Started here rather than by Playwright: on this runner Vite now and then
-            # never listens and prints nothing, and Playwright's single 180 s wait fails
-            # the job. A server that has not answered in two minutes is killed and
-            # started again; the suite reuses whichever one answers.
-            - name: Start the dev server, again if it never listens
+            # Streamed, not grouped: Turborepo holds a task's output until it ends, and a
+            # server never ends. Playwright reuses whatever answers on 5173.
+            - name: Start the production server and the jobs worker
               run: |
                   mkdir -p scratchpad
-                  for attempt in 1 2 3; do
-                      setsid bash -c 'exec bun run dev >> scratchpad/e2e-server.log 2>&1' &
-                      pid=$!
-                      for i in $(seq 1 40); do
-                          if curl -sf -o /dev/null http://localhost:5173; then echo "listening on attempt $attempt"; exit 0; fi
-                          sleep 3
-                      done
-                      echo "attempt $attempt: no answer in 120 s, starting again"
-                      kill -- -"$pid" 2>/dev/null || true
-                      pkill -f 'vite --strictPort' || true
-                      sleep 3
+                  setsid bash -c 'exec bun run start >> scratchpad/e2e-server.log 2>&1' &
+                  for i in $(seq 1 30); do
+                      if curl -sf -o /dev/null http://localhost:5173/api/ready; then echo "ready after $((i * 2)) s"; exit 0; fi
+                      sleep 2
                   done
-                  echo "the dev server never listened"
+                  echo "the server never answered"
+                  tail -n 60 scratchpad/e2e-server.log
                   exit 1
               env:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
-            - name: Run the browser suite against the dev server
-              run: bun run e2e -- --project=chromium --project=mobile --shard=${{ matrix.shard }}/3
-              env:
-                  TURBO_LOG_ORDER: stream
+            - name: Run the browser suite against the production build
+              run: bun run e2e -- --project=chromium --project=mobile $(scripts/e2e-shard.sh chromium ${{ matrix.shard }} 3)
             # The whole log is in the artifact below; its end is enough to see a server
-            # that never came up.
+            # that fell over.
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true
@@ -159,12 +241,19 @@ jobs:
                       scratchpad/e2e-server.log
                   retention-days: 7
 
-    # Families on, the self-hosting default: the suite above runs with them off, as hushos.com
-    # does, where families.spec.ts checks they stay hidden. One runner, one spec file. The switch
-    # is written out rather than left to the default, so a change of default cannot quietly turn
-    # this job into a second run of the off path.
+    # Families on, the self-hosting default, in one job: each block of families.spec.ts is serial
+    # and makes its own people, so the blocks run side by side on the two workers. The longest
+    # block (removal, about three minutes) sets the time, so a second shard would gain nothing. The switch is written
+    # out rather than left to the default, so a change of default cannot quietly turn this
+    # job into a second run of the off path.
+    # Still on the dev server, not the production build: leaving a page while it restores the
+    # saved unlock wipes the saved unlock (reproduced on both servers, 50 ms into a load on
+    # the build, 400 ms on dev), and "removing someone" leaves /app/drive inside that window
+    # only on the faster build. Move this job to the build once that product bug is fixed.
     e2e-families:
         name: Browser tests (families)
+        needs: changes
+        if: needs.changes.outputs.browser == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
         steps:
@@ -180,8 +269,19 @@ jobs:
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
+            - name: Playwright version
+              id: playwright
+              run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+            - name: Cache Chromium
+              uses: actions/cache@v4
+              with:
+                  path: ~/.cache/ms-playwright
+                  key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
             - name: Install Chromium for Playwright
               run: bunx playwright install --with-deps chromium
+            # Started here rather than by Playwright: on this runner Vite now and then never
+            # listens and prints nothing, and Playwright's single 180 s wait fails the job. A
+            # server that has not answered in two minutes is killed and started again.
             - name: Start the dev server, again if it never listens
               run: |
                   mkdir -p scratchpad
@@ -206,8 +306,6 @@ jobs:
             # families are off fails the run instead of skipping it.
             - name: Run the families suite against the dev server
               run: bun run e2e -- --project=chromium e2e/families.spec.ts
-              env:
-                  TURBO_LOG_ORDER: stream
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true
@@ -223,13 +321,14 @@ jobs:
 
     # WebKit on macOS, the build Safari ships. Linux has only WebKitGTK, which crashed
     # pages mid sign-up and differs in drag and drop, so its results said little about
-    # Safari. macOS runners have no Docker: the infrastructure runs natively. It does
-    # not gate deploys until it has proved steady here.
+    # Safari. macOS runners have no Docker: the infrastructure runs natively. It does not
+    # gate deploys; a failure on main opens or updates an issue (webkit-report below).
     # On pull requests only with the `full-ci` label: four macOS shards are the most
     # expensive part of a run, and every push to main still runs them.
     e2e-webkit:
         name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
-        if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
+        needs: [changes, build]
+        if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
         runs-on: macos-15
         timeout-minutes: 40
         strategy:
@@ -242,6 +341,11 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: web-output
+            - name: Unpack the server output
+              run: tar -xf web-output.tar -C apps/web
             # Families off, as in the chromium suite; the families flows run on chromium only.
             - name: Local infrastructure (Postgres, Mailpit, Garage) without Docker, and environment, families off
               run: |
@@ -254,31 +358,32 @@ jobs:
                   HOMEBREW_NO_ENV_HINTS: 1
             - name: Apply migrations
               run: bun run db:migrate
+            - name: Playwright version
+              id: playwright
+              run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+            - name: Cache WebKit
+              uses: actions/cache@v4
+              with:
+                  path: ~/Library/Caches/ms-playwright
+                  key: playwright-${{ runner.os }}-webkit-${{ steps.playwright.outputs.version }}
             - name: Install WebKit for Playwright
               run: bunx playwright install webkit
-            - name: Start the dev server, again if it never listens
+            - name: Start the production server and the jobs worker
               run: |
                   mkdir -p scratchpad
-                  for attempt in 1 2 3; do
-                      nohup bun run dev >> scratchpad/e2e-server.log 2>&1 &
-                      for i in $(seq 1 40); do
-                          if curl -sf -o /dev/null http://localhost:5173; then echo "listening on attempt $attempt"; exit 0; fi
-                          sleep 3
-                      done
-                      echo "attempt $attempt: no answer in 120 s, starting again"
-                      pkill -f 'vite --strictPort' || true
-                      pkill -f 'bun run dev' || true
-                      sleep 3
+                  nohup bun run start >> scratchpad/e2e-server.log 2>&1 &
+                  for i in $(seq 1 30); do
+                      if curl -sf -o /dev/null http://localhost:5173/api/ready; then echo "ready after $((i * 2)) s"; exit 0; fi
+                      sleep 2
                   done
-                  echo "the dev server never listened"
+                  echo "the server never answered"
+                  tail -n 60 scratchpad/e2e-server.log
                   exit 1
               env:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
-            - name: Run the browser suite against the dev server
-              run: bun run e2e -- --project=webkit --shard=${{ matrix.shard }}/4
-              env:
-                  TURBO_LOG_ORDER: stream
+            - name: Run the browser suite against the production build
+              run: bun run e2e -- --project=webkit $(scripts/e2e-shard.sh webkit ${{ matrix.shard }} 4)
             - name: Show the end of the server and infrastructure logs
               if: failure()
               run: |
@@ -296,6 +401,33 @@ jobs:
                       scratchpad/e2e-server.log
                       ${{ runner.temp }}/hushos-infra/*.log
                   retention-days: 7
+
+    # WebKit does not hold up a deploy, so a failure on main must not go unseen: one open
+    # issue collects them, retitled to the latest commit, with a comment per failed run.
+    webkit-report:
+        name: Report a WebKit failure on main
+        needs: e2e-webkit
+        if: always() && needs.e2e-webkit.result == 'failure' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        permissions:
+            issues: write
+        steps:
+            - name: Open or update the issue
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              run: |
+                  title="WebKit failed on main ${GITHUB_SHA::7}"
+                  body="The WebKit suite failed on $GITHUB_SHA: $RUN_URL (traces are in the run's artifacts). Deploys do not wait for WebKit, so this commit may already be live."
+                  number=$(gh issue list --state open --author app/github-actions --search 'in:title "WebKit failed on main"' --json number,title \
+                      --jq '[.[] | select(.title | startswith("WebKit failed on main"))][0].number // empty')
+                  if [ -n "$number" ]; then
+                      gh issue edit "$number" --title "$title"
+                      gh issue comment "$number" --body "$body"
+                  else
+                      gh issue create --title "$title" --body "$body"
+                  fi
 
     # Built on pull requests only with the `full-ci` label (a Dockerfile change wants it);
     # every push to main builds and publishes them.
@@ -337,6 +469,8 @@ jobs:
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
             # Pull requests build the images without publishing, so a broken Dockerfile cannot merge.
+            # Layers come from the Actions cache (saved by main only), so an unchanged lockfile
+            # skips each image's `bun install`.
             - name: Build (and publish on main)
               uses: docker/build-push-action@v7
               with:
@@ -346,6 +480,8 @@ jobs:
                   build-args: RELEASE_SHA=${{ github.sha }}
                   platforms: linux/amd64
                   push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+                  cache-from: type=gha,scope=image-${{ matrix.image }}
+                  cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=image-{0}', matrix.image) || '' }}
                   tags: |
                       ${{ steps.image.outputs.name }}:latest
                       ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
@@ -354,11 +490,21 @@ jobs:
                       org.opencontainers.image.revision=${{ github.sha }}
                       org.opencontainers.image.licenses=AGPL-3.0-only
 
+    # Never ship a build the Linux suites refused. WebKit is left out on purpose (see
+    # webkit-report). A job skipped by its own condition (Rust or browser suites a change
+    # cannot affect) does not hold the deploy; one skipped because a job it needs failed
+    # cannot happen here, since changes and build must both have passed.
     deploy:
         name: Deploy production
-        # Never ship a build the browser suite refused.
-        needs: [images, e2e]
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+        needs: [changes, check, build, rust, e2e, e2e-families, images]
+        if: >-
+            !cancelled() &&
+            github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' &&
+            needs.changes.result == 'success' && needs.check.result == 'success' &&
+            needs.build.result == 'success' && needs.images.result == 'success' &&
+            (needs.rust.result == 'success' || needs.rust.result == 'skipped') &&
+            (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') &&
+            (needs.e2e-families.result == 'success' || needs.e2e-families.result == 'skipped')
         runs-on: ubuntu-latest
         timeout-minutes: 15
         environment:
@@ -389,3 +535,22 @@ jobs:
                   done
                   echo "Timed out waiting for the published release." >&2
                   exit 1
+
+    # The one check branch protection needs: it fails when any job above failed or was
+    # cancelled, and passes when the rest passed or were skipped by their own conditions
+    # (docs-only changes, Rust untouched, WebKit and images without `full-ci`). A job skipped
+    # because one it needs failed always comes with that failure here.
+    ci-ok:
+        name: CI ok
+        if: always()
+        needs: [changes, check, build, rust, e2e, e2e-families, e2e-webkit, images]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Every job that ran passed
+              env:
+                  RESULTS: ${{ join(needs.*.result, ' ') }}
+              run: |
+                  echo "results: $RESULTS"
+                  case " $RESULTS " in
+                      *" failure "* | *" cancelled "*) exit 1 ;;
+                  esac
