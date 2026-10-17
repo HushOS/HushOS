@@ -1,0 +1,35 @@
+DESIGN.md
+  s_c56e31c87cddde::t_3cbe079f92fc2d 396
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_c56e31c87cddde::t_51ff220eca4377 23-24,67,94-96
+docs/groups-design.md
+  s_c56e31c87cddde::t_a3ddafb2e4dccb 201,309
+docs/groups-server.md
+  s_c56e31c87cddde::t_9245971bb5deb9 281
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_da34235999aaad 1112
+packages/crypto/src/protocol.ts
+  s_c56e31c87cddde::t_4e085f0ffab719 68-74
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_e68f121c673e0a 25-26
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_86b0f11f290253 135
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_03de76f1d8fbc2 16,1504-1505,1593-1596,1654-1659
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c576a2ee492ea4ffd8f7802a2fd84d38bffcc0b1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
