@@ -1,0 +1,29 @@
+packages/crypto/src/twin-parity.test.ts
+  s_c56e31c87cddde::t_94ad42b4bf3a56 1-53
+crates/hushos-core/src/devices.rs
+  s_c56e31c87cddde::t_d3ee5acc4b571e 191-199
+crates/hushos-core/src/shares.rs
+  s_c56e31c87cddde::t_8ce9f8658c767b 21-23,68-70,377-390
+packages/crypto/src/device-identity.ts
+  s_c56e31c87cddde::t_4b358f6cbc6852 1,41-44,50-51
+packages/crypto/src/identity.ts
+  s_c56e31c87cddde::t_aa6052ab092eb0 693-698,700-706
+packages/crypto/src/keys.ts
+  s_c56e31c87cddde::t_551162ba6f55e3 11-16,18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60161c9483af9cbd22199345d207f7bb15216639",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
