@@ -1,0 +1,33 @@
+apps/web/src/lib/family-billing.ts
+  s_c56e31c87cddde::t_5a843e425d86b6 104,310-311
+apps/web/src/lib/plans.test.ts
+  s_c56e31c87cddde::t_9676d0082ea30e 1,3,79-156
+apps/web/src/lib/plans.ts
+  s_c56e31c87cddde::t_a637dd8a2d51d9 1-3,56-126
+apps/web/src/routes/pricing/route.tsx
+  s_c56e31c87cddde::t_ccf1db0718d2a9 26,36-45,98,175-179,181,200-236,310-312,439,574,641,704-755
+packages/billing/src/api.ts
+  s_c56e31c87cddde::t_49066513cec806 22-32
+packages/billing/src/groups-gate.test.ts
+  s_c56e31c87cddde::t_72bbd528e41765 6-7,17-62,72-78,99-107
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_efb01a79bd8bd1 582-594
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_b9eff53351dca5 5,16,53-58,65-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c1080472e2dc73d6043752a7b39aeb7d6b333c5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
