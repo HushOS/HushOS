@@ -14,11 +14,14 @@ process.env.POLAR_ACCESS_TOKEN = 'polar_oat_test';
 const SECRET_BYTES = Buffer.from('0123456789abcdef0123456789abcdef');
 process.env.POLAR_WEBHOOK_SECRET = `whsec_${SECRET_BYTES.toString('base64')}`;
 process.env.BILLING_GRACE_DAYS = '3';
+process.env.GROUPS_ENABLED = 'true';
 
 const GIB = 1_073_741_824n;
 const DAY = 24 * 60 * 60 * 1000;
 const PRO = '11111111-aaaa-4aaa-8aaa-111111111111';
 const MAX = '22222222-aaaa-4aaa-8aaa-222222222222';
+const FAMILY = '55555555-aaaa-4aaa-8aaa-555555555555';
+const FAMILY_POOL = 2048n * GIB;
 
 type FakeSubscription = {
     id: string;
@@ -27,9 +30,22 @@ type FakeSubscription = {
     recurring_interval: 'month' | 'year';
     amount: number;
     currency: string;
+    current_period_start?: string;
     current_period_end: string;
     cancel_at_period_end: boolean;
     ended_at?: string | null;
+    units?: number | null;
+    pending_update?: { units: number; applies_at: string } | null;
+};
+
+/* A customer at the fake Polar; a team one has members (external ids), its owner first. */
+type FakeCustomer = {
+    id: string;
+    subscriptions: FakeSubscription[];
+    type?: 'individual' | 'team';
+    members?: string[];
+    metadata?: Record<string, string>;
+    name?: string | null;
 };
 
 /* The state of the fake Polar organisation, mutated by tests. */
@@ -56,13 +72,119 @@ const polar = {
             { eur: 900 },
             100n * GIB,
         ),
+        // Family plans: unit amounts come back as decimal strings (spike E2).
+        familyProduct(FAMILY, 'Family (monthly)', {
+            usd: { base: 1500, perMember: '200' },
+            eur: { base: 1500, perMember: '200.000000000000' },
+        }),
+        // EUR includes five while USD includes six: a smaller family sold in EUR (spike E2).
+        familyProduct('66666666-aaaa-4aaa-8aaa-666666666666', 'Family mismatch (monthly)', {
+            usd: { base: 1500, perMember: '200' },
+            eur: { base: 1500, perMember: '200', bound: 5 },
+        }),
+        // Six included by its metadata and its minimum, but the free tier ends at five.
+        familyProduct('77777777-aaaa-4aaa-8aaa-777777777777', 'Family five (monthly)', {
+            usd: { base: 1500, perMember: '200', bound: 5, minimum: 6 },
+        }),
+        // The free tier ends at six, but the minimum lets a checkout buy five.
+        familyProduct('88888888-aaaa-4aaa-8aaa-888888888888', 'Family low minimum (monthly)', {
+            usd: { base: 1500, perMember: '200', minimum: 5 },
+        }),
+        // A fraction of a cent cannot be quoted or charged in whole minor units.
+        familyProduct('99999999-aaaa-4aaa-8aaa-999999999999', 'Family fraction (monthly)', {
+            usd: { base: 1500, perMember: '200.5' },
+        }),
+        // The Business shape: a pool that grows per member is not a family plan.
+        familyProduct(
+            'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            'Family per member (monthly)',
+            { usd: { base: 1500, perMember: '200' } },
+            { quota_bytes_per_member: String(100n * GIB) },
+        ),
     ],
-    customers: new Map<string, { id: string; subscriptions: FakeSubscription[] }>(),
+    customers: new Map<string, FakeCustomer>(),
     subscriptions: new Map<string, FakeSubscription>(),
     discounts: [] as ({ code: string; duration: string } & Record<string, unknown>)[],
     checkouts: [] as Record<string, unknown>[],
+    sessions: [] as Record<string, unknown>[],
+    /* The body of the 402 the next raise gets, as Polar answers a refused off-session charge. */
+    raiseRefusal: null as { error: string; detail: string } | null,
+    /*
+     * The case the sandbox never showed (spike 8): a raise Polar keeps, with its
+     * order left waiting for the bank, whether it answered 402 or 200.
+     */
+    raiseLeavesOrder: false,
+    /* How many scheduled cuts (next_period) fail before Polar takes one again. */
+    cutFailures: 0,
+    /* Runs once as Polar takes the next cut: an admission landing mid-flight. */
+    beforeCut: null as (() => Promise<void>) | null,
+    /* Orders cannot be read (a token without orders:read, an outage). */
+    ordersFail: false,
+    orders: [] as {
+        id: string;
+        subscription_id: string;
+        status: string;
+        due_amount: number;
+        created_at: string;
+    }[],
     calls: [] as string[],
 };
+
+function familyProduct(
+    id: string,
+    name: string,
+    prices: Record<string, { base: number; perMember: string; bound?: number; minimum?: number }>,
+    extra: Record<string, string> = {},
+) {
+    return {
+        id,
+        name,
+        description: null,
+        is_recurring: true,
+        is_archived: false,
+        recurring_interval: 'month' as const,
+        metadata: {
+            hushos_plan: 'family',
+            hushos_group_kind: 'family',
+            quota_bytes: FAMILY_POOL.toString(),
+            included_members: '6',
+            ...extra,
+        },
+        prices: Object.entries(prices).flatMap(([currency, price]) => [
+            {
+                amount_type: 'fixed',
+                price_amount: price.base,
+                price_currency: currency,
+                is_archived: false,
+            },
+            {
+                amount_type: 'unit_based',
+                price_currency: currency,
+                is_archived: false,
+                tiers: {
+                    type: 'graduated',
+                    tiers: [
+                        { bound: price.bound ?? 6, unit_amount: '0' },
+                        { bound: null, unit_amount: price.perMember },
+                    ],
+                },
+                minimum_units: price.minimum ?? price.bound ?? 6,
+                unit_label: null,
+                maximum_units: null,
+            },
+        ]),
+    };
+}
+
+/* The unit price's minimum in the subscription's currency, which Polar enforces on cuts. */
+function minimumUnits(subscription: FakeSubscription) {
+    const found = polar.products.find((candidate) => candidate.id === subscription.product_id);
+    const unit = (found?.prices as Record<string, unknown>[] | undefined)?.find(
+        (price) =>
+            price.amount_type === 'unit_based' && price.price_currency === subscription.currency,
+    );
+    return (unit?.minimum_units as number | undefined) ?? 1;
+}
 
 function product(
     id: string,
@@ -123,6 +245,56 @@ const fakeClient = {
             polar.calls.push(`customers.deleteExternal:${externalId}`);
             polar.customers.delete(externalId);
         },
+        // External ids are unique per organisation, as at Polar.
+        async create(body: {
+            type: 'team';
+            external_id: string;
+            name?: string;
+            owner: { email: string; external_id: string };
+            metadata: Record<string, string>;
+        }) {
+            polar.calls.push(`customers.create:${body.external_id}`);
+            if (polar.customers.has(body.external_id))
+                throw new PolarClientError(422, { error: 'HTTPValidationError' });
+            const customer: FakeCustomer = {
+                id: `cus_${polar.customers.size + 1}`,
+                type: body.type,
+                name: body.name ?? null,
+                members: [body.owner.external_id],
+                metadata: body.metadata,
+                subscriptions: [],
+            };
+            polar.customers.set(body.external_id, customer);
+            return { id: customer.id, type: body.type, metadata: body.metadata };
+        },
+        async getExternal(externalId: string) {
+            polar.calls.push(`customers.getExternal:${externalId}`);
+            const customer = polar.customers.get(externalId);
+            if (!customer) throw notFound();
+            return { id: customer.id, type: customer.type, metadata: customer.metadata ?? {} };
+        },
+    },
+    // As the sandbox answered (spike E1): a team customer's session needs one of its members.
+    customerSessions: {
+        async create(body: { external_customer_id: string; external_member_id?: string | null }) {
+            polar.calls.push(`customerSessions.create:${body.external_customer_id}`);
+            polar.sessions.push(body);
+            const customer = polar.customers.get(body.external_customer_id);
+            if (!customer) throw notFound();
+            if (customer.type === 'team') {
+                if (!body.external_member_id)
+                    throw new PolarClientError(422, {
+                        detail: 'member_id is required for team customers.',
+                    });
+                if (!customer.members?.includes(body.external_member_id))
+                    throw new PolarClientError(422, {
+                        detail: 'Member does not exist for this customer.',
+                    });
+            }
+            return {
+                customer_portal_url: `https://polar.test/portal/${customer.id}/${body.external_member_id ?? 'self'}`,
+            };
+        },
     },
     discounts: {
         async create(body: { code: string; basis_points: number; duration: string }) {
@@ -170,6 +342,20 @@ const fakeClient = {
             };
         },
     },
+    orders: {
+        async list(query: { subscription_id?: string; status?: string }) {
+            polar.calls.push(`orders.list:${query.subscription_id}`);
+            if (polar.ordersFail) throw new PolarClientError(403, { error: 'NotPermitted' });
+            return {
+                items: polar.orders.filter(
+                    (order) =>
+                        order.subscription_id === query.subscription_id &&
+                        (!query.status || order.status === query.status),
+                ),
+                pagination: { total_count: 0, max_page: 1 },
+            };
+        },
+    },
     checkouts: {
         async create(body: Record<string, unknown>) {
             polar.calls.push('checkouts.create');
@@ -183,6 +369,61 @@ const fakeClient = {
             const subscription = polar.subscriptions.get(id);
             if (!subscription) throw notFound();
             return subscription;
+        },
+        /*
+         * Polar's quantity rules as the sandbox showed them (spike E3, E8): a cut
+         * waits for the period's end and never goes below the minimum; a raise is
+         * charged at once and deletes a pending cut; a refused charge (402)
+         * leaves everything as it was; a plan set to cancel refuses both (403).
+         */
+        async update(id: string, body: Record<string, unknown>) {
+            polar.calls.push(`subscriptions.update:${id}:${JSON.stringify(body)}`);
+            const subscription = polar.subscriptions.get(id);
+            if (!subscription) throw notFound();
+            if ('pending_update' in body && body.pending_update === null) {
+                subscription.pending_update = null;
+                return structuredClone(subscription);
+            }
+            if (typeof body.units === 'number') {
+                if (subscription.cancel_at_period_end)
+                    throw new PolarClientError(403, { error: 'AlreadyCanceledSubscription' });
+                if (body.units < minimumUnits(subscription))
+                    throw new PolarClientError(422, { error: 'BelowMinimumUnits' });
+                if (body.proration_behavior === 'next_period') {
+                    if (polar.cutFailures > 0) {
+                        polar.cutFailures -= 1;
+                        throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+                    }
+                    const hook = polar.beforeCut;
+                    polar.beforeCut = null;
+                    await hook?.();
+                    subscription.pending_update = {
+                        units: body.units,
+                        applies_at: subscription.current_period_end,
+                    };
+                    return structuredClone(subscription);
+                }
+                const raise = body.units > (subscription.units ?? 0);
+                if (raise && polar.raiseLeavesOrder) {
+                    subscription.units = body.units;
+                    subscription.pending_update = null;
+                    polar.orders.push({
+                        id: `order_${polar.orders.length + 1}`,
+                        subscription_id: id,
+                        status: 'pending',
+                        due_amount: 235,
+                        created_at: new Date().toISOString(),
+                    });
+                }
+                if (raise && polar.raiseRefusal)
+                    throw new PolarClientError(402, polar.raiseRefusal);
+                subscription.units = body.units;
+                subscription.pending_update = null;
+                return structuredClone(subscription);
+            }
+            if (typeof body.cancel_at_period_end === 'boolean')
+                subscription.cancel_at_period_end = body.cancel_at_period_end;
+            return structuredClone(subscription);
         },
         async revoke(id: string) {
             polar.calls.push(`subscriptions.revoke:${id}`);
@@ -201,8 +442,17 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     return { ...real, createPolar: () => fakeClient };
 });
 
-const { closeDatabase, createTestAccount, resetDatabase } = await import('../../db/test/helpers');
-const { billingRepository, authRepository, growthRepository } = await import('@hushos/db');
+const {
+    closeDatabase,
+    createTestAccount,
+    createTestFamily,
+    deleteTestAccount,
+    resetDatabase,
+    setTestMember,
+} = await import('../../db/test/helpers');
+const { billingRepository, authRepository, driveRepository, groupsRepository, growthRepository } =
+    await import('@hushos/db');
+
 const billing = await import('./server');
 const growth = await import('./growth');
 
@@ -264,6 +514,14 @@ beforeEach(async () => {
     polar.subscriptions.clear();
     polar.discounts = [];
     polar.checkouts = [];
+    polar.sessions = [];
+    polar.raiseRefusal = null;
+    polar.raiseLeavesOrder = false;
+    polar.cutFailures = 0;
+    polar.beforeCut = null;
+    polar.ordersFail = false;
+    polar.orders = [];
+    billing.setCutRetryQueue(undefined);
     polar.calls = [];
 });
 afterAll(closeDatabase);
@@ -750,5 +1008,759 @@ describe('referrals', () => {
         expect((await authRepository.getStorageAllowance(nobody.userId))?.quotaBytes).toBe(
             GIB.toString(),
         );
+    });
+});
+
+/* ------------------------------------------------------------------------- */
+/* Families                                                                   */
+/* ------------------------------------------------------------------------- */
+
+const userOf = (account: { userId: string; email: string }, name = 'Test') => ({
+    id: account.userId,
+    name,
+    email: account.email,
+});
+
+/* The subscription Polar puts on the family's team customer once its checkout completes. */
+function familySubscription(groupId: string, subscription: Partial<FakeSubscription> = {}) {
+    const customer = polar.customers.get(`group:${groupId}`);
+    if (!customer) throw new Error('No team customer for this family.');
+    const full: FakeSubscription = {
+        id: `sub_${groupId.slice(0, 8)}`,
+        status: 'active',
+        product_id: FAMILY,
+        recurring_interval: 'month',
+        amount: 1500,
+        currency: 'usd',
+        current_period_start: new Date(Date.now() - DAY).toISOString(),
+        current_period_end: new Date(Date.now() + 29 * DAY).toISOString(),
+        cancel_at_period_end: false,
+        ended_at: null,
+        units: 6,
+        pending_update: null,
+        ...subscription,
+    };
+    customer.subscriptions = customer.subscriptions.filter((s) => s.id !== full.id).concat(full);
+    polar.subscriptions.set(full.id, full);
+    return full;
+}
+
+/*
+ * A family on a plan, the way it gets there: the organizer (who holds
+ * `billing`) checks out, Polar completes it on the team customer, and a
+ * delivery for that customer is reconciled. `members` more people are active.
+ */
+async function familyOnPlan(options: { units?: number; members?: number } = {}) {
+    const organizer = await createTestAccount();
+    const others = [];
+    for (let index = 0; index < (options.members ?? 0); index++)
+        others.push(await createTestAccount());
+    const { groupId, areaIds } = await createTestFamily({
+        organizerId: organizer.userId,
+        members: others.map((other) => ({ userId: other.userId, roles: ['members'] })),
+        pooled: true,
+    });
+    const payer = userOf(organizer, 'Payer');
+    await billing.startGroupCheckout(payer, groupId, { productId: FAMILY });
+    const subscription = familySubscription(groupId, { units: options.units ?? 6 });
+    const delivery = await signedWebhook({
+        type: 'customer.state_changed',
+        data: { id: 'cus_team', external_id: `group:${groupId}`, type: 'team' },
+    });
+    expect((await billing.handleWebhook(delivery)).status).toBe(200);
+    polar.calls = [];
+    return { payer, groupId, areaIds, subscription, others };
+}
+
+const raises = () => polar.calls.filter((call) => call.includes('"proration_behavior":"invoice"'));
+
+/*
+ * An operator edits the family product so the catalogue drops it (no
+ * `included_members`), past the catalogue's one-minute cache. Afterwards the
+ * product is put back and the cache refreshed at a later clock, so the tests
+ * after see the real catalogue again.
+ */
+let catalogueClock = 0;
+async function withFamilyProductEdited(run: () => Promise<void>) {
+    const family = polar.products.find((candidate) => candidate.id === FAMILY)!;
+    const metadata = { ...family.metadata };
+    const clock = vi.spyOn(Date, 'now');
+    // Each edit runs later than the last refresh, so the cache always expires for it.
+    catalogueClock += 10 * 60_000;
+    try {
+        delete (family.metadata as Record<string, string>).included_members;
+        clock.mockReturnValue(new Date().getTime() + catalogueClock);
+        await run();
+    } finally {
+        family.metadata = metadata;
+        clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+        await billing.listCatalogue();
+        clock.mockRestore();
+    }
+}
+const seatLimit = async (groupId: string) =>
+    (await groupsRepository.getGroupRow(groupId))?.seatLimit ?? null;
+
+describe('family catalogue', () => {
+    test('family plans are read from decimal strings and never offered as personal plans', async () => {
+        expect((await billing.listCatalogue()).plans.map((plan) => plan.name)).toEqual([
+            'Pro (monthly)',
+            'Max (yearly)',
+        ]);
+        const { payer, groupId } = await familyOnPlan();
+        const summary = await billing.getGroupBilling(payer, groupId);
+        // The mismatched, off-bound, low-minimum, fractional and per-member products are dropped whole.
+        expect(summary.plans).toEqual([
+            {
+                id: FAMILY,
+                name: 'Family (monthly)',
+                description: null,
+                interval: 'month',
+                prices: {
+                    usd: { base: 1500, perMember: 200 },
+                    eur: { base: 1500, perMember: 200 },
+                },
+                includedMembers: 6,
+                maxMembers: 20,
+                quotaBytes: FAMILY_POOL.toString(),
+            },
+        ]);
+    });
+
+    test('a unit amount parses only as whole minor units', () => {
+        expect(billing.parseMinorUnits('200')).toBe(200);
+        expect(billing.parseMinorUnits('200.000000000000')).toBe(200);
+        expect(billing.parseMinorUnits('0')).toBe(0);
+        expect(billing.parseMinorUnits('200.5')).toBeNull();
+        expect(billing.parseMinorUnits('-200')).toBeNull();
+        expect(billing.parseMinorUnits('2e2')).toBeNull();
+        expect(billing.parseMinorUnits('')).toBeNull();
+    });
+});
+
+describe('family quotes', () => {
+    const start = new Date('2026-10-17T04:32:15Z');
+    const month = new Date('2026-11-17T04:32:15Z');
+    const year = new Date('2027-10-17T04:32:15Z');
+
+    test('a raise is prorated by the second and truncated, as Polar charged it', () => {
+        // Spike E3 with 4242: 200 a member, 0.99994 of the month left, charged 199.
+        const monthLeft = 0.99994 * (month.getTime() - start.getTime());
+        expect(
+            billing.quoteUnitsChange({
+                perMember: 200,
+                includedMembers: 6,
+                fromUnits: 6,
+                toUnits: 7,
+                periodStart: start,
+                periodEnd: month,
+                now: new Date(month.getTime() - monthLeft),
+            }),
+        ).toBe(199);
+        // Spike E4: 2000 a member a year, 0.999994 of it left, charged 1999.
+        const yearLeft = 0.999994 * (year.getTime() - start.getTime());
+        expect(
+            billing.quoteUnitsChange({
+                perMember: 2000,
+                includedMembers: 6,
+                fromUnits: 6,
+                toUnits: 7,
+                periodStart: start,
+                periodEnd: year,
+                now: new Date(year.getTime() - yearLeft),
+            }),
+        ).toBe(1999);
+    });
+
+    test('included places are free, a cut costs nothing now, and the period bounds the charge', () => {
+        const quote = (fromUnits: number, toUnits: number, now: Date) =>
+            billing.quoteUnitsChange({
+                perMember: 200,
+                includedMembers: 6,
+                fromUnits,
+                toUnits,
+                periodStart: start,
+                periodEnd: month,
+                now,
+            });
+        expect(quote(4, 6, start)).toBe(0);
+        // From five to eight: only the two places past the included six are charged.
+        expect(quote(5, 8, start)).toBe(400);
+        expect(quote(8, 7, start)).toBe(0);
+        expect(quote(6, 7, month)).toBe(0);
+        expect(quote(6, 7, new Date(start.getTime() - DAY))).toBe(200);
+        // Half the period left: 300 of 600, and a third: 66.66 floors to 66.
+        expect(quote(6, 9, new Date((start.getTime() + month.getTime()) / 2))).toBe(300);
+        expect(
+            quote(6, 7, new Date(month.getTime() - (month.getTime() - start.getTime()) / 3)),
+        ).toBe(66);
+    });
+});
+
+describe('family checkout and webhooks', () => {
+    test('checkout makes one team customer owned by the payer, and the plan reaches the family through a delivery', async () => {
+        const organizer = await createTestAccount();
+        const member = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: organizer.userId,
+            members: [{ userId: member.userId, roles: ['members'] }],
+            pooled: true,
+        });
+        // A manager without `billing` cannot buy for the family.
+        await expect(
+            billing.startGroupCheckout(userOf(member), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 403 });
+        // Past the family maximum: refused before anything is made at Polar.
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, {
+                productId: FAMILY,
+                units: 21,
+            }),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(polar.calls.filter((call) => call.startsWith('customers.create'))).toEqual([]);
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        const customer = polar.customers.get(`group:${groupId}`);
+        expect(customer).toMatchObject({ type: 'team', members: [organizer.userId] });
+        // Polar learns nothing of the family but that it is one: not its name.
+        expect(customer?.name).toBe('HushOS family');
+        expect(polar.checkouts.at(-1)).toMatchObject({
+            products: [FAMILY],
+            customer_id: customer?.id,
+            units: 6,
+            min_units: 6,
+            max_units: 20,
+            metadata: { hushos_group_id: groupId },
+        });
+        expect(polar.checkouts.at(-1)).not.toHaveProperty('customer_email');
+        // A family whose customer names another payer: its billing holder is refused.
+        const rival = await createTestAccount();
+        const { groupId: other } = await createTestFamily({ organizerId: rival.userId });
+        await billingRepository.recordGroupCustomer({
+            groupId: other,
+            provider: 'polar',
+            providerCustomerId: 'cus_rival',
+            payerUserId: organizer.userId,
+        });
+        await expect(
+            billing.startGroupCheckout(userOf(rival), other, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 409 });
+        // Before the plan: the organizer alone, and an empty pool.
+        expect(await seatLimit(groupId)).toBeNull();
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
+        familySubscription(groupId, { units: 7 });
+        const delivery = await signedWebhook({
+            type: 'customer.state_changed',
+            data: { id: customer?.id, external_id: `group:${groupId}`, type: 'team' },
+        });
+        expect((await billing.handleWebhook(delivery)).status).toBe(200);
+        expect(polar.calls).toContain(`customers.getStateExternal:group:${groupId}`);
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(FAMILY_POOL);
+        // The family already has a plan: no second checkout.
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 409 });
+    });
+
+    test('a plan Polar ended is read on its own and leaves the family with no seats or pool', async () => {
+        const { groupId, areaIds, subscription } = await familyOnPlan({ units: 8 });
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(polar.calls).toContain(`subscriptions.get:${subscription.id}`);
+        expect(await seatLimit(groupId)).toBeNull();
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
+    });
+
+    test('a delivery for a group HushOS never billed changes nothing', async () => {
+        const organizer = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({ organizerId: organizer.userId });
+        await billing.handleWebhook(
+            await signedWebhook({
+                type: 'customer.state_changed',
+                data: { id: 'cus_x', external_id: `group:${groupId}`, type: 'team' },
+            }),
+        );
+        // No pool appears, so the area keeps its own allowance.
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(10n * GIB);
+    });
+});
+
+describe('family places', () => {
+    test('a raise is capped by HushOS, since Polar caps nothing', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 18 });
+        await expect(billing.setGroupUnits(payer, groupId, 21)).rejects.toMatchObject({
+            status: 400,
+        });
+        const small = await familyOnPlan({ units: 6 });
+        // Six more at once is past the step; five is not.
+        await expect(billing.setGroupUnits(small.payer, small.groupId, 12)).rejects.toMatchObject({
+            status: 400,
+        });
+        expect(raises()).toEqual([]);
+        expect(subscription.units).toBe(18);
+        await billing.setGroupUnits(small.payer, small.groupId, 11);
+        expect(small.subscription.units).toBe(11);
+        expect(await seatLimit(small.groupId)).toBe(11);
+        // An admission at the family maximum asks Polar for nothing either.
+        await billing.setGroupUnits(payer, groupId, 20);
+        for (let used = await groupsRepository.seatsUsed(groupId); used < 20; used++)
+            await setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
+        polar.calls = [];
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
+            status: 'cap',
+            max: 20,
+        });
+        expect(raises()).toEqual([]);
+    });
+
+    test('an explicit raise replaces a scheduled cut: no places paid for and blocked', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        await billing.setGroupUnits(payer, groupId, 6);
+        expect(subscription).toMatchObject({ units: 8, pending_update: { units: 6 } });
+        // The cut blocks admissions at once.
+        expect(await seatLimit(groupId)).toBe(6);
+        await billing.setGroupUnits(payer, groupId, 9);
+        expect(subscription).toMatchObject({ units: 9, pending_update: null });
+        expect(await seatLimit(groupId)).toBe(9);
+        const summary = await billing.getGroupBilling(payer, groupId);
+        expect(summary.subscription).toMatchObject({ units: 9, pendingUnits: null });
+        expect(
+            (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
+        ).toBeNull();
+        // Nothing puts the cut back later either.
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
+        // Below the members admitted, or the plan's six, a cut is refused before Polar.
+        polar.calls = [];
+        await expect(billing.setGroupUnits(payer, groupId, 5)).rejects.toMatchObject({
+            status: 400,
+        });
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+    });
+
+    test('a scheduled cut that blocks the payer’s admission moves up, free', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 9, members: 5 });
+        await billing.setGroupUnits(payer, groupId, 6);
+        const seventh = await createTestAccount();
+        await setTestMember({ groupId, userId: seventh.userId, state: 'accepted' });
+        polar.calls = [];
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'ok' });
+        expect(raises()).toEqual([]);
+        expect(subscription).toMatchObject({ units: 9, pending_update: { units: 7 } });
+        expect(await seatLimit(groupId)).toBe(7);
+    });
+
+    test('an admission that lands while a cut is scheduled moves the cut up to the members', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8, members: 5 });
+        // The payer counts six members and cuts to six; a seventh is admitted before the cut lands.
+        polar.beforeCut = async () =>
+            setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
+        await billing.setGroupUnits(payer, groupId, 6);
+        expect(subscription).toMatchObject({ units: 8, pending_update: { units: 7 } });
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits).toBe(7);
+    });
+
+    test('a declined raise says the bank declined it and changes nothing; a confirmation goes to the portal', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        // As the India card was refused above the RBI limit (spike E8).
+        polar.raiseRefusal = {
+            error: 'PaymentFailed',
+            detail: 'Payment failed with reason: card_error.',
+        };
+        await expect(billing.setGroupUnits(payer, groupId, 7)).rejects.toMatchObject({
+            status: 402,
+            message: expect.stringMatching(/bank declined/),
+        });
+        expect(subscription.units).toBe(6);
+        expect(await seatLimit(groupId)).toBe(6);
+        // Nothing waits in the portal for a decline: no session is opened.
+        expect(polar.sessions).toEqual([]);
+        // The bank wants the payer to confirm (3-D Secure, an Indian e-mandate): the portal.
+        polar.raiseRefusal = {
+            error: 'PaymentActionRequired',
+            detail: 'The payment requires an action.',
+        };
+        const confirm = await billing.setGroupUnits(payer, groupId, 7);
+        expect(confirm).toMatchObject({
+            confirmPayment: true,
+            url: `https://polar.test/portal/${polar.customers.get(`group:${groupId}`)?.id}/${payer.id}`,
+        });
+        expect(subscription.units).toBe(6);
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+
+    test('an admission gets a place only from the payer, and only on a 200', async () => {
+        const { payer, groupId, subscription, others } = await familyOnPlan({
+            units: 6,
+            members: 5,
+        });
+        const manager = others[0]!;
+        // Full at six. A manager who does not pay cannot buy the seventh place.
+        expect(await billing.ensureGroupSeat(groupId, manager.userId)).toEqual({
+            status: 'payer',
+        });
+        expect(raises()).toEqual([]);
+        polar.raiseRefusal = { error: 'PaymentFailed', detail: 'card_error' };
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'declined' });
+        expect(subscription.units).toBe(6);
+        expect(await seatLimit(groupId)).toBe(6);
+        polar.raiseRefusal = { error: 'PaymentActionRequired', detail: 'action' };
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({
+            status: 'confirm',
+            url: expect.stringContaining(payer.id),
+        });
+        expect(await seatLimit(groupId)).toBe(6);
+        polar.raiseRefusal = null;
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'ok' });
+        expect(subscription.units).toBe(7);
+        expect(await seatLimit(groupId)).toBe(7);
+        // A plan set to end refuses quantity changes at Polar: said so, nothing charged.
+        subscription.cancel_at_period_end = true;
+        await setTestMember({
+            groupId,
+            userId: (await createTestAccount()).userId,
+            state: 'active',
+        });
+        polar.calls = [];
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'canceling' });
+        expect(raises()).toEqual([]);
+    });
+
+    test('without a plan nobody is admitted, and nothing is asked of Polar', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        expect(await billing.ensureGroupSeat(groupId, organizer.userId)).toEqual({
+            status: 'no-plan',
+        });
+        expect(polar.calls).toEqual([]);
+    });
+});
+
+describe('family portal', () => {
+    test('the portal opens for the payer as the team’s member, and for nobody else', async () => {
+        const { payer, groupId, others } = await familyOnPlan({ members: 1 });
+        const portal = await billing.createGroupPortalSession(payer, groupId);
+        const customer = polar.customers.get(`group:${groupId}`);
+        expect(portal.url).toBe(`https://polar.test/portal/${customer?.id}/${payer.id}`);
+        expect(polar.sessions.at(-1)).toMatchObject({
+            external_customer_id: `group:${groupId}`,
+            external_member_id: payer.id,
+        });
+        // A member who manages the family but does not pay holds no `billing`: refused here.
+        polar.sessions = [];
+        const member = others[0]!;
+        await expect(
+            billing.createGroupPortalSession(userOf(member), groupId),
+        ).rejects.toMatchObject({ status: 403 });
+        // A second `billing` holder is still not the payer.
+        await setTestMember({
+            groupId,
+            userId: member.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        await expect(
+            billing.createGroupPortalSession(userOf(member), groupId),
+        ).rejects.toMatchObject({ status: 403 });
+        expect(polar.sessions).toEqual([]);
+    });
+
+    test('a family without a billing account has no portal', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId });
+        await expect(
+            billing.createGroupPortalSession(userOf(organizer), groupId),
+        ).rejects.toMatchObject({ status: 404 });
+        expect(polar.calls).toEqual([]);
+    });
+});
+
+describe('a family’s payer', () => {
+    test('cannot delete their account while the plan is live, and nothing is revoked meanwhile', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan();
+        subscribe(payer.id, { id: 'sub_personal' });
+        await billing.reconcileCustomer(payer.id);
+        await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({ status: 409 });
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.revoke'))).toEqual([]);
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        await billing.revokeForDeletion(payer.id);
+        expect(polar.calls).toContain('subscriptions.revoke:sub_personal');
+    });
+});
+
+describe('unpaid places', () => {
+    test('a raise waiting for the bank opens no place on sync; its order.paid opens it', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.raiseRefusal = { error: 'PaymentActionRequired', detail: 'Confirm the payment.' };
+        polar.raiseLeavesOrder = true;
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
+            status: 'confirm',
+        });
+        // Polar kept the seventh place, unpaid: a sync must not open it.
+        expect(subscription.units).toBe(7);
+        await billing.reconcileGroup(groupId);
+        expect(await seatLimit(groupId)).toBe(6);
+        expect((await billing.getGroupBilling(payer, groupId)).subscription).toMatchObject({
+            units: 7,
+            paidUnits: 6,
+        });
+        // Asking again charges nothing more and still lets nobody in.
+        polar.raiseRefusal = null;
+        polar.raiseLeavesOrder = false;
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
+            status: 'confirm',
+        });
+        expect(raises()).toHaveLength(1);
+        // The payer confirms in the portal; Polar reports the order paid.
+        polar.orders[0]!.status = 'paid';
+        const paid = await signedWebhook({
+            type: 'order.paid',
+            data: {
+                id: polar.orders[0]!.id,
+                billing_reason: 'subscription_update',
+                customer: { id: 'cus_team', external_id: `group:${groupId}` },
+            },
+        });
+        expect((await billing.handleWebhook(paid)).status).toBe(200);
+        expect(await seatLimit(groupId)).toBe(7);
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'ok' });
+        expect(raises()).toHaveLength(1);
+    });
+
+    test('a raise answered 200 whose order still waits opens nothing either', async () => {
+        const { payer, groupId } = await familyOnPlan({ units: 6, members: 5 });
+        polar.raiseLeavesOrder = true;
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
+            status: 'confirm',
+        });
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+});
+
+describe('cuts Polar lost', () => {
+    test('a recorded cut Polar lost is re-issued by reconcile; a refusal is queued and the retry puts it back', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        const queued: string[] = [];
+        billing.setCutRetryQueue(async (id) => {
+            queued.push(id);
+        });
+        await billing.setGroupUnits(payer, groupId, 6);
+        // Polar drops the cut on its own, and refuses it back once.
+        subscription.pending_update = null;
+        polar.cutFailures = 1;
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
+        expect(queued).toEqual([groupId]);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits).toBe(6);
+        // The job's first run meets Polar failing again and throws, so pg-boss retries it.
+        polar.cutFailures = 1;
+        await expect(billing.reissueCut(groupId)).rejects.toBeInstanceOf(PolarClientError);
+        expect(subscription.pending_update).toBeNull();
+        await billing.reissueCut(groupId);
+        expect(subscription).toMatchObject({ units: 8, pending_update: { units: 6 } });
+        expect(await seatLimit(groupId)).toBe(6);
+        // Run again (a duplicate job), it asks Polar for nothing.
+        polar.calls = [];
+        await billing.reissueCut(groupId);
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+    });
+
+    test('the daily reconcile re-issues a recorded cut, never below the members, and forgets it once it applied', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 9, members: 5 });
+        await billing.setGroupUnits(payer, groupId, 6);
+        subscription.pending_update = null;
+        // A seventh member arrived since, and arrives again while the cut is re-issued.
+        await setTestMember({
+            groupId,
+            userId: (await createTestAccount()).userId,
+            state: 'active',
+        });
+        polar.beforeCut = async () =>
+            setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
+        await billing.reconcileGroup(groupId);
+        expect(subscription).toMatchObject({ units: 9, pending_update: { units: 8 } });
+        // The period renews at eight: nothing is due any more.
+        subscription.units = 8;
+        subscription.pending_update = null;
+        await billing.reconcileGroup(groupId);
+        expect(
+            (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
+        ).toBeNull();
+        expect(subscription.pending_update).toBeNull();
+    });
+});
+
+describe('review fixes', () => {
+    test('a raise whose orders cannot be read opens no place', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.ordersFail = true;
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
+            status: 'confirm',
+        });
+        expect(subscription.units).toBe(7);
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+
+    test('a raise left unconfirmed past seven days is cut back to the places paid for', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.raiseRefusal = { error: 'PaymentActionRequired', detail: 'Confirm the payment.' };
+        polar.raiseLeavesOrder = true;
+        await billing.ensureGroupSeat(groupId, payer.id);
+        expect(subscription.units).toBe(7);
+        // Six days: the payer may still answer their bank.
+        polar.orders[0]!.created_at = new Date(Date.now() - 6 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
+        polar.orders[0]!.created_at = new Date(Date.now() - 8 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(subscription).toMatchObject({ units: 7, pending_update: { units: 6 } });
+        expect(await seatLimit(groupId)).toBe(6);
+        // Day nine: the payer answers their bank and the order is paid. The cut is withdrawn,
+        // and nothing re-issues it.
+        polar.orders[0]!.status = 'paid';
+        polar.calls = [];
+        await billing.reconcileGroup(groupId);
+        expect(subscription).toMatchObject({ units: 7, pending_update: null });
+        expect(await seatLimit(groupId)).toBe(7);
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toMatchObject({
+            paidUnits: 7,
+            intendedUnits: null,
+            intendedStale: false,
+        });
+        expect(polar.calls.filter((call) => call.includes('next_period'))).toEqual([]);
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
+    });
+
+    test('a payer’s own cut is not withdrawn when a raise is paid', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 9, members: 5 });
+        await billing.setGroupUnits(payer, groupId, 7);
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toEqual(expect.objectContaining({ units: 7 }));
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.intendedStale).toBe(
+            false,
+        );
+    });
+
+    test('a plan whose product an operator edited out of the catalogue is never swept as ended', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        await withFamilyProductEdited(async () => {
+            await billing.reconcileGroup(groupId);
+        });
+        const live = await billingRepository.getLiveGroupSubscription(groupId);
+        expect(live).toMatchObject({ id: subscription.id, status: 'active', endedAt: null });
+        expect(await seatLimit(groupId)).toBe(8);
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([groupId]);
+        await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({ status: 409 });
+    });
+
+    test('a cut on a plan HushOS cannot read is refused, and Polar is not asked', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        await withFamilyProductEdited(async () => {
+            polar.calls = [];
+            await expect(billing.setGroupUnits(payer, groupId, 6)).rejects.toMatchObject({
+                status: 503,
+            });
+        });
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+        expect(subscription.pending_update).toBeNull();
+    });
+
+    test('a former payer can still open the portal and pay for less, but not for more', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        await setTestMember({ groupId, userId: payer.id, state: 'left' });
+        expect((await billing.createGroupPortalSession(payer, groupId)).url).toContain(payer.id);
+        await billing.setGroupUnits(payer, groupId, 6);
+        expect(subscription.pending_update).toEqual(expect.objectContaining({ units: 6 }));
+        await expect(billing.setGroupUnits(payer, groupId, 9)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(subscription.units).toBe(8);
+    });
+
+    test('a checkout is refused while Polar holds a plan HushOS has not seen yet', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        familySubscription(groupId, { units: 7 });
+        polar.checkouts = [];
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 409 });
+        expect(polar.checkouts).toEqual([]);
+        // The plan it found reached the family.
+        expect(await seatLimit(groupId)).toBe(7);
+    });
+
+    test('a family’s sync is rate-limited per person', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        for (let index = 0; index < 10; index++) await billing.syncGroup(payer, groupId);
+        await expect(billing.syncGroup(payer, groupId)).rejects.toMatchObject({ status: 429 });
+    });
+});
+
+describe('cancelling and payers', () => {
+    test('a cancelled plan frees its payer; the family keeps its places and pool until it ends', async () => {
+        const { payer, groupId, areaIds, subscription } = await familyOnPlan({ units: 7 });
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([groupId]);
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(groupId);
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([]);
+        await expect(billing.revokeForDeletion(payer.id)).resolves.toBeUndefined();
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(FAMILY_POOL);
+    });
+
+    test('a live plan whose payer’s account is gone is revoked at once; one set to end runs out', async () => {
+        const { payer, groupId, areaIds, subscription } = await familyOnPlan({ units: 7 });
+        await deleteTestAccount(payer.id);
+        const delivery = await signedWebhook({
+            type: 'customer.state_changed',
+            data: { id: 'cus_team', external_id: `group:${groupId}`, type: 'team' },
+        });
+        expect((await billing.handleWebhook(delivery)).status).toBe(200);
+        expect(polar.calls).toContain(`subscriptions.revoke:${subscription.id}`);
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        expect(await seatLimit(groupId)).toBeNull();
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
+
+        const ending = await familyOnPlan({ units: 7 });
+        ending.subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(ending.groupId);
+        await deleteTestAccount(ending.payer.id);
+        polar.calls = [];
+        await billing.reconcileGroup(ending.groupId);
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.revoke'))).toEqual([]);
+        expect(await seatLimit(ending.groupId)).toBe(7);
+    });
+
+    test('a former payer sees the plan only while it is live', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 7 });
+        await setTestMember({ groupId, userId: payer.id, state: 'left' });
+        await expect(billing.getGroupBilling(payer, groupId)).resolves.toMatchObject({
+            enabled: true,
+        });
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        await expect(billing.getGroupBilling(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
     });
 });

@@ -1,10 +1,14 @@
-import { and, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     accountIntents,
     billingCustomers,
     billingSubscriptions,
     billingWebhookEvents,
+    groupBillingCustomers,
+    groupBillingSubscriptions,
+    groupStorage,
+    groups,
     personalWorkspaces,
     storageEntitlements,
 } from './schema';
@@ -248,4 +252,317 @@ export async function consumeIntent(userId: string) {
         .update(accountIntents)
         .set({ consumedAt: new Date() })
         .where(and(eq(accountIntents.userId, userId), isNull(accountIntents.consumedAt)));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Groups (docs/groups-design.md 3.5)                                         */
+/* ------------------------------------------------------------------------- */
+
+export type GroupSubscriptionSnapshot = {
+    id: string;
+    productId: string;
+    productName: string;
+    status: string;
+    recurringInterval: string;
+    amount: number | null;
+    currency: string | null;
+    /* The member capacity bought, and a cut scheduled for the period's end. */
+    units: number;
+    /*
+     * The places paid for: `units` once no order of the subscription waits for
+     * payment, or null when one does (or that could not be read), which keeps
+     * the count last paid, never above `units`.
+     */
+    paidUnits: number | null;
+    pendingUnits: number | null;
+    includedMembers: number;
+    /* The pool the plan gives the group; a family's is fixed. */
+    quotaBytes: bigint;
+    currentPeriodStart: Date;
+    currentPeriodEnd: Date;
+    cancelAtPeriodEnd: boolean;
+    endedAt: Date | null;
+};
+
+export async function getGroupCustomer(groupId: string) {
+    const [row] = await db
+        .select()
+        .from(groupBillingCustomers)
+        .where(eq(groupBillingCustomers.groupId, groupId));
+    return row ?? null;
+}
+
+/*
+ * Records the provider customer made for a group and who pays. A row already
+ * there wins (two checkouts at once made one customer at the provider, whose
+ * external id is unique): the caller compares the payer it gets back.
+ */
+export async function recordGroupCustomer(input: {
+    groupId: string;
+    provider: string;
+    providerCustomerId: string;
+    payerUserId: string;
+}) {
+    await db.insert(groupBillingCustomers).values(input).onConflictDoNothing();
+    return getGroupCustomer(input.groupId);
+}
+
+export async function listGroupCustomerIds(provider: string) {
+    const rows = await db
+        .select({ groupId: groupBillingCustomers.groupId })
+        .from(groupBillingCustomers)
+        .where(eq(groupBillingCustomers.provider, provider));
+    return rows.map((row) => row.groupId);
+}
+
+export async function listLiveGroupSubscriptionIds(groupId: string) {
+    const rows = await db
+        .select({ id: groupBillingSubscriptions.id })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groupBillingSubscriptions.endedAt),
+            ),
+        );
+    return rows.map((row) => row.id);
+}
+
+const liveGroupSubscription = (groupId: string) =>
+    and(
+        eq(groupBillingSubscriptions.groupId, groupId),
+        isNull(groupBillingSubscriptions.endedAt),
+        inArray(groupBillingSubscriptions.status, [...LIVE_STATUSES]),
+    );
+
+/* The group's plan: its live subscription, the one running longest if there were ever two. */
+export async function getLiveGroupSubscription(groupId: string) {
+    const [row] = await db
+        .select()
+        .from(groupBillingSubscriptions)
+        .where(liveGroupSubscription(groupId))
+        .orderBy(desc(groupBillingSubscriptions.currentPeriodEnd))
+        .limit(1);
+    return row ?? null;
+}
+
+/*
+ * Groups whose live plan this person pays for: their account cannot be
+ * deleted, nor they leave or be removed, meanwhile. A plan set to cancel at
+ * the period's end is not live here: its payer has stopped paying, and the
+ * family keeps it until it ends.
+ */
+export async function listGroupsPaidBy(userId: string) {
+    const rows = await db
+        .selectDistinct({ groupId: groupBillingCustomers.groupId })
+        .from(groupBillingCustomers)
+        .innerJoin(
+            groupBillingSubscriptions,
+            eq(groupBillingSubscriptions.groupId, groupBillingCustomers.groupId),
+        )
+        .where(
+            and(
+                eq(groupBillingCustomers.payerUserId, userId),
+                isNull(groupBillingSubscriptions.endedAt),
+                inArray(groupBillingSubscriptions.status, [...LIVE_STATUSES]),
+                eq(groupBillingSubscriptions.cancelAtPeriodEnd, false),
+            ),
+        );
+    return rows.map((row) => row.groupId);
+}
+
+/*
+ * The seats a plan allows: what was bought, or a scheduled cut if lower, since
+ * a cut blocks new admissions from the moment it is made and never removes
+ * anyone (docs/groups-design.md 3.5).
+ */
+export function seatLimitOf(subscription: {
+    units: number;
+    paidUnits: number;
+    pendingUnits: number | null;
+}) {
+    const limit = Math.min(
+        subscription.units,
+        subscription.paidUnits,
+        subscription.pendingUnits ?? subscription.units,
+    );
+    return Math.max(1, limit);
+}
+
+/*
+ * The next-period count HushOS asked Polar for, or null once nothing is due
+ * (the cut applied, was cleared, or is no longer below the count).
+ */
+export async function setIntendedUnits(
+    subscriptionId: string,
+    units: number | null,
+    stale = false,
+) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            intendedUnits: units,
+            intendedStale: units !== null && stale,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Live group subscriptions with a cut HushOS still means to have at Polar. */
+export async function listIntendedCuts() {
+    return db
+        .select({
+            groupId: groupBillingSubscriptions.groupId,
+            subscriptionId: groupBillingSubscriptions.id,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                isNull(groupBillingSubscriptions.endedAt),
+                sql`${groupBillingSubscriptions.intendedUnits} is not null`,
+            ),
+        );
+}
+
+/*
+ * Replaces what is known about a group's subscriptions with the provider's
+ * answer, and projects the live plan onto the group in the same transaction:
+ * `groups.seat_limit` (null without a plan: the instance default) and the
+ * group's storage pool (empty without a plan; the period end plus the grace
+ * days with one). The group row is locked before the pool, the order Drive's
+ * free-space check takes them in.
+ */
+export async function applyGroupState(input: {
+    groupId: string;
+    provider: string;
+    customerId: string | null;
+    subscriptions: GroupSubscriptionSnapshot[];
+    graceMs: number;
+    /*
+     * Whether `subscriptions` is everything the provider has (a reconcile: any
+     * other live row has ended), or one subscription as a change returned it.
+     */
+    complete?: boolean;
+    /*
+     * Subscriptions the caller could not read into a snapshot (their product is
+     * not a plan it knows): left exactly as they are, never swept as ended.
+     */
+    keepIds?: string[];
+}) {
+    return db.transaction(async (tx) => {
+        const [group] = await tx
+            .select({ id: groups.id })
+            .from(groups)
+            .where(eq(groups.id, input.groupId))
+            .for('no key update');
+        if (!group) return false;
+        const now = new Date();
+        if (input.customerId)
+            await tx
+                .insert(groupBillingCustomers)
+                .values({
+                    groupId: input.groupId,
+                    provider: input.provider,
+                    providerCustomerId: input.customerId,
+                })
+                .onConflictDoUpdate({
+                    target: groupBillingCustomers.groupId,
+                    set: { providerCustomerId: input.customerId, updatedAt: now },
+                });
+        for (const subscription of input.subscriptions) {
+            const paid = subscription.paidUnits;
+            const values = {
+                productId: subscription.productId,
+                productName: subscription.productName,
+                status: subscription.status,
+                recurringInterval: subscription.recurringInterval,
+                amount: subscription.amount,
+                currency: subscription.currency,
+                units: subscription.units,
+                pendingUnits: subscription.pendingUnits,
+                includedMembers: subscription.includedMembers,
+                quotaBytes: subscription.quotaBytes,
+                currentPeriodStart: subscription.currentPeriodStart,
+                currentPeriodEnd: subscription.currentPeriodEnd,
+                cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+                endedAt: subscription.endedAt,
+            };
+            await tx
+                .insert(groupBillingSubscriptions)
+                .values({
+                    id: subscription.id,
+                    groupId: input.groupId,
+                    provider: input.provider,
+                    ...values,
+                    // A subscription first seen with an order unpaid has paid for nothing yet.
+                    paidUnits: paid === null ? 0 : Math.min(paid, subscription.units),
+                })
+                .onConflictDoUpdate({
+                    target: groupBillingSubscriptions.id,
+                    set: {
+                        ...values,
+                        paidUnits:
+                            paid === null
+                                ? sql`least(${groupBillingSubscriptions.paidUnits}, ${subscription.units})`
+                                : Math.min(paid, subscription.units),
+                        updatedAt: now,
+                    },
+                });
+        }
+        const liveIds = input.subscriptions
+            .filter(
+                (subscription) => !subscription.endedAt && LIVE_STATUSES.has(subscription.status),
+            )
+            .map((subscription) => subscription.id)
+            .concat(input.keepIds ?? []);
+        if (input.complete !== false)
+            await tx
+                .update(groupBillingSubscriptions)
+                .set({
+                    status: sql`case when ${groupBillingSubscriptions.status} in ('active', 'trialing', 'past_due') then 'canceled' else ${groupBillingSubscriptions.status} end`,
+                    endedAt: sql`coalesce(${groupBillingSubscriptions.endedAt}, now())`,
+                    updatedAt: now,
+                })
+                .where(
+                    and(
+                        eq(groupBillingSubscriptions.groupId, input.groupId),
+                        eq(groupBillingSubscriptions.provider, input.provider),
+                        isNull(groupBillingSubscriptions.endedAt),
+                        liveIds.length
+                            ? notInArray(groupBillingSubscriptions.id, liveIds)
+                            : undefined,
+                    ),
+                );
+        const [plan] = await tx
+            .select()
+            .from(groupBillingSubscriptions)
+            .where(liveGroupSubscription(input.groupId))
+            .orderBy(desc(groupBillingSubscriptions.currentPeriodEnd))
+            .limit(1);
+        await tx
+            .update(groups)
+            .set({ seatLimit: plan ? seatLimitOf(plan) : null, updatedAt: now })
+            .where(eq(groups.id, input.groupId));
+        const pool = {
+            quotaBytes: plan ? plan.quotaBytes : 0n,
+            expiresAt: plan ? new Date(plan.currentPeriodEnd.getTime() + input.graceMs) : null,
+        };
+        await tx
+            .insert(groupStorage)
+            .values({ groupId: input.groupId, ...pool })
+            .onConflictDoUpdate({
+                target: groupStorage.groupId,
+                set: { ...pool, updatedAt: now },
+            });
+        return true;
+    });
+}
+
+/* The group's pool as stored, for the billing summary. */
+export async function getGroupPool(groupId: string) {
+    const [row] = await db
+        .select({ quotaBytes: groupStorage.quotaBytes, expiresAt: groupStorage.expiresAt })
+        .from(groupStorage)
+        .where(eq(groupStorage.groupId, groupId));
+    return row ?? null;
 }

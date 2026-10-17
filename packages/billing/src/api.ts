@@ -21,6 +21,52 @@ export type Plan = {
 
 export type Catalogue = { enabled: boolean; freeQuotaBytes: string; plans: Plan[] };
 
+/* A family plan: a fixed base and a per-member price beyond those included, per currency. */
+export type FamilyPlan = {
+    id: string;
+    name: string;
+    description: string | null;
+    interval: 'month' | 'year';
+    /* Minor units by lowercase ISO code; every plan has the provider's default currency. */
+    prices: Record<string, { base: number; perMember: number }>;
+    includedMembers: number;
+    maxMembers: number;
+    /* The family's whole pool, whatever the member count. */
+    quotaBytes: string;
+};
+
+/* What a family's billing page shows its managers and its payer. */
+export type GroupBillingSummary = {
+    enabled: boolean;
+    plans: FamilyPlan[];
+    /* Who pays: the only person who can add or remove places, or open the portal. */
+    payer: { userId: string; you: boolean } | null;
+    subscription: {
+        id: string;
+        productId: string;
+        productName: string;
+        status: string;
+        recurringInterval: string;
+        amount: number | null;
+        currency: string | null;
+        units: number;
+        /* Places paid for; fewer than `units` while a raise waits for the bank's confirmation. */
+        paidUnits: number;
+        /* A cut to this many places at the period's end; it already blocks new admissions. */
+        pendingUnits: number | null;
+        includedMembers: number;
+        quotaBytes: string;
+        currentPeriodEnd: string;
+        cancelAtPeriodEnd: boolean;
+    } | null;
+    seats: { used: number; limit: number };
+    /*
+     * What one more place costs now, before tax: the rest of this period at
+     * the per-member price, truncated to the minor unit as Polar charges it.
+     */
+    nextPlace: { amount: number; currency: string } | null;
+};
+
 export type BillingSubscription = {
     id: string;
     productId: string;

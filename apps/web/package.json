@@ -30,6 +30,7 @@
         "@hushos/drive": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/groups": "workspace:*",
+        "@hushos/jobs": "workspace:*",
         "@hushos/logging": "workspace:*",
         "@hushos/shared": "workspace:*",
         "@hushos/tokens": "workspace:*",

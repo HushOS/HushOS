@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { Client } from 'pg';
 
 import type { TestProject } from 'vitest/node';
@@ -28,6 +28,28 @@ function testDatabaseFor(url: string, suffix: string) {
     return parsed.toString();
 }
 
+/* Whether the test database's ledger names a migration that is not on disk here. */
+async function foreignMigrations(url: string) {
+    const onDisk = new Set(
+        readdirSync(new URL('packages/db/drizzle/', root)).filter((entry) =>
+            /^\d{14}_/.test(entry),
+        ),
+    );
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    try {
+        const ledger = await client.query<{ name: string }>(
+            'select name from drizzle.__drizzle_migrations',
+        );
+        return ledger.rows.some((row) => !onDisk.has(row.name));
+    } catch {
+        // No ledger yet: nothing has migrated this database.
+        return false;
+    } finally {
+        await client.end();
+    }
+}
+
 /*
  * Each package gets its own database, named after the configured one plus the
  * package, because Turbo runs package test suites in parallel and they all
@@ -48,6 +70,12 @@ export function databaseSetup(suffix: string) {
         if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`Refusing to create database "${name}".`);
         const exists = await admin.query('select 1 from pg_database where datname = $1', [name]);
         if (exists.rowCount === 0) await admin.query(`create database "${name}"`);
+        // Migrated by another branch: its ledger names migrations this checkout does not have,
+        // and drizzle-kit would fail on them. The database is a throwaway, so start it again.
+        else if (/_test_[a-z0-9]+$/.test(name) && (await foreignMigrations(testUrl))) {
+            await admin.query(`drop database "${name}" with (force)`);
+            await admin.query(`create database "${name}"`);
+        }
         await admin.end();
 
         const migrate = spawnSync('bun', ['x', 'drizzle-kit', 'migrate'], {

@@ -16,6 +16,7 @@ import {
 } from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
+import { enqueue, queues } from '@hushos/jobs/client';
 import { authRepository, driveRepository, growthRepository } from '@hushos/db';
 import {
     CLIENT_HEADER,
@@ -606,6 +607,12 @@ const groupParams = t.Object({ id: uuidSchema });
 const memberParams = t.Object({ id: uuidSchema, userId: uuidSchema });
 const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
 
+/*
+ * A family's scheduled cut that Polar lost to a raise and could not be put back
+ * at once goes to the worker's retry queue (pg-boss, with backoff).
+ */
+billing.setCutRetryQueue((groupId) => enqueue(queues.billingReissueCut, { groupId }));
+
 /* The routes' own GROUPS_ENABLED check, behind the edge's. */
 function groupsGate() {
     if (!groups.groupsEnabled())
@@ -789,11 +796,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/auth/delete/finish',
         { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
         async ({ sessionToken, body, set }) => {
-            const result = await auth.finishAccountDeletion(
-                sessionToken,
-                body,
-                billing.revokeForDeletion,
-            );
+            const result = await auth.finishAccountDeletion(sessionToken, body, async (userId) => {
+                try {
+                    await billing.revokeForDeletion(userId);
+                } catch (error) {
+                    // A family's payer is refused with a sentence that says what to do; the
+                    // auth routes answer only AuthError with its message.
+                    if (error instanceof billing.BillingError && error.status === 409)
+                        throw new auth.AuthError(error.message, 409, { cause: error });
+                    throw error;
+                }
+            });
             set.headers['set-cookie'] = [
                 authCookie('session', null),
                 authCookie('enrollment', null),
@@ -1155,6 +1168,62 @@ export const apiApp = new Elysia({ prefix: '/api' })
     )
     .post('/billing/resume', { body: t.Object({}) }, async ({ request, sessionToken }) =>
         billing.resume(await billingMutation(request, sessionToken)),
+    )
+    // A family's plan (docs/groups-design.md 3.5): only with GROUPS_ENABLED and billing on,
+    // which the billing functions check; managers see it, the payer changes it.
+    .get(
+        '/billing/groups/:id',
+        { params: t.Object({ id: uuidSchema }) },
+        async ({ sessionToken, params, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return billing.getGroupBilling(await billingUser(sessionToken), params.id);
+        },
+    )
+    .post(
+        '/billing/groups/:id/checkout',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({
+                productId: t.String({ minLength: 1, maxLength: 100 }),
+                currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
+                units: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
+            }),
+        },
+        async ({ request, sessionToken, params, body }) =>
+            billing.startGroupCheckout(await billingMutation(request, sessionToken), params.id, {
+                productId: body.productId,
+                units: body.units,
+                address: requestAddress(request),
+                currency: chargeableCurrency(body.currency, requestCountry(request)) ?? undefined,
+            }),
+    )
+    .post(
+        '/billing/groups/:id/units',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ units: t.Integer({ minimum: 1, maximum: 10_000 }) }),
+        },
+        async ({ request, sessionToken, params, body }) =>
+            billing.setGroupUnits(
+                await billingMutation(request, sessionToken),
+                params.id,
+                body.units,
+            ),
+    )
+    .post(
+        '/billing/groups/:id/portal',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+        async ({ request, sessionToken, params }) =>
+            billing.createGroupPortalSession(
+                await billingMutation(request, sessionToken),
+                params.id,
+            ),
+    )
+    .post(
+        '/billing/groups/:id/sync',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+        async ({ request, sessionToken, params }) =>
+            billing.syncGroup(await billingMutation(request, sessionToken), params.id),
     )
     .get('/drive/capabilities', ({ request, set }) => {
         requireClient(request);

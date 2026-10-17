@@ -10,6 +10,7 @@ import { PgBoss } from 'pg-boss';
 export const queues = {
     cleanupExpired: 'auth.cleanup-expired',
     reconcileBilling: 'billing.reconcile',
+    billingReissueCut: 'billing.reissue-cut',
     driveExpireUploads: 'drive.expire-uploads',
     driveDeleteObjects: 'drive.delete-objects',
     driveReplicate: 'drive.replicate',
@@ -28,6 +29,7 @@ export type QueueName = (typeof queues)[keyof typeof queues];
 export type JobPayloads = {
     [queues.cleanupExpired]: { batchSize?: number };
     [queues.reconcileBilling]: Record<string, never>;
+    [queues.billingReissueCut]: { groupId: string };
     [queues.driveExpireUploads]: Record<string, never>;
     [queues.driveDeleteObjects]: Record<string, never>;
     [queues.driveReplicate]: Record<string, never>;
@@ -77,6 +79,18 @@ export async function ensureQueues(boss: PgBoss) {
         expireInSeconds: 30 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
     });
+    /*
+     * A family's scheduled cut Polar lost to a raise and HushOS could not put back
+     * at once. Re-issuing sets an absolute count, so a retry or a duplicate is
+     * harmless; backoff from a minute up to a few hours, then the daily reconcile.
+     */
+    await boss.createQueue(queues.billingReissueCut, {
+        retryLimit: 8,
+        retryDelay: 60,
+        retryBackoff: true,
+        expireInSeconds: 5 * 60,
+        retentionSeconds: 7 * 24 * 60 * 60,
+    });
     // Drive's sweeps are idempotent and bounded; one of each at a time is enough.
     for (const queue of [
         queues.driveExpireUploads,
@@ -102,8 +116,9 @@ export async function ensureQueues(boss: PgBoss) {
 }
 
 /*
- * For the API side: a lazily started, send-only client. Nothing sends yet; Drive's
- * upload commit will be the first caller, ideally inside its own transaction.
+ * For the API side: a lazily started, send-only client (billing's cut retries
+ * are its first caller). A start that fails is forgotten, so the next send
+ * tries again instead of failing for the life of the process.
  */
 let client: Promise<PgBoss> | undefined;
 export function getJobClient() {
@@ -112,7 +127,10 @@ export function getJobClient() {
         boss.on('error', (error) => log.error(error));
         await boss.start();
         return boss;
-    })();
+    })().catch((error: unknown) => {
+        client = undefined;
+        throw error;
+    });
     return client;
 }
 

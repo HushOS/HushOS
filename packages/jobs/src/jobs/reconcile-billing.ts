@@ -1,12 +1,13 @@
-import { reconcileCustomer } from '@hushos/billing/server';
+import { reconcileCustomer, reconcileGroup, reissueCut } from '@hushos/billing/server';
 import { billingRepository } from '@hushos/db';
 import { createLogger, sanitizeFailure } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 import type { JobPayloads, queues } from '../client';
 
 /*
- * Re-reads every billing customer from the provider, so a delivery that never
- * arrived cannot leave an allowance behind past its grace period. One wide event.
+ * Re-reads every billing customer from the provider, people and families, so a
+ * delivery that never arrived cannot leave an allowance, a family's pool or its
+ * seats behind past the grace period. One wide event.
  */
 export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconcileBilling]>) {
     const event = createLogger({ job: { id: job.id, queue: job.name } });
@@ -24,11 +25,38 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
                 if (error instanceof Error) event.error(error);
             }
         }
+        for (const groupId of await billingRepository.listGroupCustomerIds('polar')) {
+            if (job.signal?.aborted) break;
+            try {
+                await reconcileGroup(groupId);
+                reconciled += 1;
+            } catch (error) {
+                failed += 1;
+                if (error instanceof Error) event.error(error);
+            }
+        }
         event.set({ reconciled, failed, durationMs: Math.round(performance.now() - started) });
         if (failed) throw new Error('Some customers could not be reconciled.');
     } catch (error) {
         // Listing the customers can fail too; that run must not read as a quiet success.
         if (error instanceof Error) event.error(error);
+        event.set({ failure: sanitizeFailure(error) });
+        throw error;
+    } finally {
+        event.emit();
+    }
+}
+
+/*
+ * One family's recorded cut, asked of Polar again. A failure throws, so
+ * pg-boss retries the job with backoff; a cut already in place is done.
+ */
+export async function reissueGroupCut(job: Job<JobPayloads[typeof queues.billingReissueCut]>) {
+    const event = createLogger({ job: { id: job.id, queue: job.name } });
+    try {
+        await reissueCut(job.data.groupId);
+        event.set({ outcome: 'reissued' });
+    } catch (error) {
         event.set({ failure: sanitizeFailure(error) });
         throw error;
     } finally {

@@ -1,6 +1,8 @@
 import { createPolar, type models } from '@polar-sh/sdk/2026-10';
 import {
     DEFAULT_CURRENCY,
+    GROUP_KIND_METADATA_KEY,
+    INCLUDED_MEMBERS_METADATA_KEY,
     PLAN_METADATA_KEY,
     QUOTA_METADATA_KEY,
     RECOMMENDED_METADATA_KEY,
@@ -137,5 +139,142 @@ for (const tier of tiers) {
         }
         await polar.products.update(current.id, { description, metadata, prices });
         console.log(`  updated  ${name}${samePrices ? '' : `  ${describe(amounts)}`}`);
+    }
+}
+
+/*
+ * Family plans (docs/groups-design.md 3.5; the shape is the spike's E2
+ * product, docs/polar-group-billing-spike.md 8): per currency, a fixed base and
+ * a graduated unit price, free up to the included members, then a per-member
+ * rate, with `minimum_units` at the included count and the same bound in every
+ * currency (the catalogue drops a product whose currencies disagree).
+ * `quota_bytes` is the whole family's pool.
+ *
+ * PLACEHOLDER PRICES, NEEDING THE OWNER. Bases are the spike's sandbox figures:
+ * 15 USD, 15 EUR, 12 GBP, 599 INR a month. The per-member rate is 2.00 USD, EUR
+ * and GBP beyond six members; INR is 79 a member, scaled from USD by the bases
+ * (599 / 15, so about 40 rupees to the dollar, the spike's purchasing-power
+ * ratio, not the exchange rate). A year is ten months. Until the owner sets
+ * every figure and FAMILY_PRICES_CONFIRMED, the seed creates family products in
+ * a sandbox organisation only.
+ */
+const FAMILY_PRICES_CONFIRMED = false;
+const family = {
+    name: 'Family',
+    quota: 2n * 1024n * GIB,
+    included: 6,
+    base: { usd: 1500, eur: 1500, gbp: 1200, inr: 59900 } as Amounts,
+    perMember: { usd: 200, eur: 200, gbp: 200, inr: 7900 } as Amounts,
+};
+const unitLabel = { en: { '=1': 'member', other: 'members' } };
+
+function familyPrices(interval: 'month' | 'year') {
+    const factor = interval === 'month' ? 1 : 10;
+    return Object.entries(family.base).flatMap(([currency, base]) => {
+        const perMember = family.perMember[currency as Currency];
+        if (perMember === undefined) throw new Error(`Family has no per-member ${currency} price.`);
+        return [
+            {
+                amount_type: 'fixed',
+                price_currency: currency as Currency,
+                price_amount: base * factor,
+            } satisfies models.ProductPriceFixedCreate,
+            {
+                amount_type: 'unit_based',
+                price_currency: currency as Currency,
+                tiers: {
+                    type: 'graduated',
+                    tiers: [
+                        { bound: family.included, unit_amount: 0 },
+                        { bound: null, unit_amount: perMember * factor },
+                    ],
+                },
+                minimum_units: family.included,
+                unit_label: unitLabel,
+            } satisfies models.ProductPriceUnitBasedCreate,
+        ];
+    });
+}
+
+/* A live unit price that already says what `create` says: kept by id, as fixed prices are. */
+function sameUnitPrice(
+    row: models.ProductPriceUnitBased,
+    create: models.ProductPriceUnitBasedCreate,
+) {
+    const tiers = row.tiers.tiers.map((tier) => [tier.bound ?? null, Number(tier.unit_amount)]);
+    const wanted = create.tiers.tiers.map((tier) => [tier.bound ?? null, Number(tier.unit_amount)]);
+    return (
+        row.tiers.type === create.tiers.type &&
+        JSON.stringify(tiers) === JSON.stringify(wanted) &&
+        row.minimum_units === (create.minimum_units ?? null)
+    );
+}
+
+if (environment === 'production' && !FAMILY_PRICES_CONFIRMED) {
+    console.log(
+        '  skipped  Family plans: their prices are placeholders until the owner confirms them',
+    );
+} else {
+    const storage = `${family.quota / (1024n * GIB)} TB`;
+    for (const interval of ['month', 'year'] as const) {
+        const name = `${family.name} (${interval === 'month' ? 'monthly' : 'yearly'})`;
+        const description = `${storage} of end-to-end encrypted storage for the whole family, ${family.included} members included.`;
+        const metadata = {
+            [PLAN_METADATA_KEY]: 'family',
+            [GROUP_KIND_METADATA_KEY]: 'family',
+            [QUOTA_METADATA_KEY]: family.quota.toString(),
+            [INCLUDED_MEMBERS_METADATA_KEY]: String(family.included),
+        };
+        const creates = familyPrices(interval);
+        const current = existing.get(name);
+        if (!current) {
+            const product = await polar.products.create({
+                name,
+                description,
+                recurring_interval: interval,
+                prices: creates,
+                metadata,
+            });
+            console.log(`  created  ${name}  ${product.id}  (placeholder prices)`);
+            continue;
+        }
+        if (!update) {
+            console.log(`  exists   ${name}`);
+            continue;
+        }
+        // Both kinds of price are matched per currency; a price left out would be archived.
+        const live = current.prices.filter(
+            (price): price is models.ProductPriceFixed | models.ProductPriceUnitBased =>
+                'amount_type' in price &&
+                !price.is_archived &&
+                (price.amount_type === 'fixed' || price.amount_type === 'unit_based'),
+        );
+        const prices = creates.map((create) => {
+            const row = live.find(
+                (price) =>
+                    price.amount_type === create.amount_type &&
+                    price.price_currency === create.price_currency,
+            );
+            if (!row) return create;
+            const same =
+                row.amount_type === 'fixed' && create.amount_type === 'fixed'
+                    ? row.price_amount === create.price_amount
+                    : row.amount_type === 'unit_based' && create.amount_type === 'unit_based'
+                      ? sameUnitPrice(row, create)
+                      : false;
+            return same ? { id: row.id } : create;
+        });
+        const samePrices = prices.every((price) => 'id' in price) && live.length === creates.length;
+        const sameRest =
+            current.description === description &&
+            Object.entries(metadata).every(
+                ([key, value]) => String(current.metadata[key]) === value,
+            );
+        if (samePrices && sameRest) {
+            console.log(`  current  ${name}`);
+            continue;
+        }
+        await polar.products.update(current.id, { description, metadata, prices });
+        console.log(`  updated  ${name}  (placeholder prices)`);
     }
 }

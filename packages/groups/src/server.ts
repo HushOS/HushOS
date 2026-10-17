@@ -24,6 +24,13 @@ import {
     type SignedGroupStatement,
 } from '@hushos/crypto/groups';
 import { verifyHybrid } from '@hushos/crypto/signatures';
+import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
+import {
+    billingEnabled,
+    ensureGroupSeat,
+    paysForGroup,
+    type SeatResult,
+} from '@hushos/billing/server';
 import { authRepository, groupsRepository, madeFor } from '@hushos/db';
 import {
     nodeEnvelopesInput,
@@ -830,6 +837,11 @@ async function writeChain(
     options: {
         newArea?: { workspaceId: string };
         admitIdentity?: string;
+        /*
+         * Runs once every check has passed and before anything is written: an
+         * admission's paid place. It throws to stop the write.
+         */
+        beforeAppend?: () => Promise<void>;
     } = {},
 ) {
     const found = await membershipOf(groupId, uploader, 'members');
@@ -925,6 +937,7 @@ async function writeChain(
         grants,
         route.kind === 'admit' ? route.userId : null,
     );
+    await options.beforeAppend?.();
     const result = await groupsRepository.appendChain({
         groupId,
         uploaderUserId: uploader,
@@ -1272,6 +1285,7 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
         cache: storedRecord(chain),
         ownedLimit: groupsEnv.GROUP_OWNED_LIMIT,
         creationDigest,
+        pooled: billingEnabled(),
     });
     switch (result.status) {
         case 'group-limit':
@@ -1304,7 +1318,8 @@ function areaInput(area: AreaWire, limit?: number): groupsRepository.AreaInput {
         limit,
         workspaceId: area.workspaceId,
         idSeed: area.idSeed,
-        quotaBytes: groupsEnv.GROUP_AREA_QUOTA_BYTES,
+        // With billing on the group's pool is the allowance (group_storage): an area has none of its own.
+        quotaBytes: billingEnabled() ? 0n : groupsEnv.GROUP_AREA_QUOTA_BYTES,
         selfGrant: selfGrantInput(area.selfGrant, area.workspaceId),
         root: {
             id: area.root.id,
@@ -1359,7 +1374,7 @@ export async function getGroup(userId: string, groupId: string) {
     const members = await groupsRepository.listMembers(groupId);
     const seats = {
         used: await groupsRepository.seatsUsed(groupId),
-        limit: group.seatLimit ?? groupsEnv.GROUP_SEAT_LIMIT_DEFAULT,
+        limit: group.seatLimit ?? seatLimitDefault(),
     };
     let due: GroupDue | undefined;
     if (found.membership.state === 'active')
@@ -1785,7 +1800,40 @@ export async function listPending(userId: string, groupId: string) {
     };
 }
 
-/* Route 17: the admitting roster, the newcomer's grants and, with `members`, their seal. */
+/*
+ * The seats a group has when billing has written none: the instance default,
+ * or with billing on, the organizer alone until a plan pays for more.
+ */
+function seatLimitDefault() {
+    return billingEnabled() ? UNPAID_GROUP_SEATS : groupsEnv.GROUP_SEAT_LIMIT_DEFAULT;
+}
+
+/* An admission that billing could not give a place to: 402 `seats`, with why. */
+function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
+    if (result.status === 'unavailable') return unavailable();
+    const messages: Record<Exclude<SeatResult['status'], 'ok' | 'unavailable'>, string> = {
+        'no-plan': 'Choose a family plan before letting anyone in.',
+        payer: 'The family is full. Ask the person who pays for it to add a place.',
+        cap: 'The family has as many members as its plan allows.',
+        canceling: 'The family plan is set to end. Resume it before letting anyone in.',
+        declined:
+            'Your bank declined the charge for another place. Nothing was charged and nobody was let in.',
+        confirm:
+            'Your bank wants you to confirm the charge for another place. Confirm it in the billing portal, then let them in again.',
+        payment: 'The payment for another place did not go through. Nobody was let in.',
+    };
+    return new GroupError('seats', messages[result.status], 402, {
+        reason: result.status,
+        ...(result.status === 'confirm' ? { url: result.url } : {}),
+        ...(result.status === 'cap' ? { limit: result.max } : {}),
+    });
+}
+
+/*
+ * Route 17: the admitting roster, the newcomer's grants and, with `members`,
+ * their seal. With billing on, the place is paid for after every check and
+ * before the write: Polar's 200 or no admission (a 402 there changed nothing).
+ */
 export async function admit(
     userId: string,
     groupId: string,
@@ -1796,8 +1844,16 @@ export async function admit(
         groupId,
         userId,
         { ...call, seals: call.keySeal ? [call.keySeal, ...(call.seals ?? [])] : call.seals },
-        { kind: 'admit', userId: targetId, seatLimitDefault: groupsEnv.GROUP_SEAT_LIMIT_DEFAULT },
-        { admitIdentity: targetId },
+        { kind: 'admit', userId: targetId, seatLimitDefault: seatLimitDefault() },
+        {
+            admitIdentity: targetId,
+            beforeAppend: billingEnabled()
+                ? async () => {
+                      const seat = await ensureGroupSeat(groupId, userId);
+                      if (seat.status !== 'ok') throw seatRefusal(seat);
+                  }
+                : undefined,
+        },
     );
 }
 
@@ -1827,11 +1883,31 @@ export async function removeMember(
     targetId: string,
     call: RosterCall,
 ) {
+    // The payer of a live plan stays until they cancel it: their card would go on being charged.
+    if (await paysForGroup(groupId, targetId))
+        throw new GroupError(
+            'payer',
+            'They pay for this family’s plan. They can cancel it in Plan and storage; then you can remove them.',
+            409,
+        );
     return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
 }
 
-/* Route 20: leaving at once. */
+const youPay = () =>
+    new GroupError(
+        'payer',
+        'You pay for this family’s plan. Cancel it in Plan and storage before you leave; the family keeps it until the end of the period.',
+        409,
+    );
+
+/*
+ * Route 20: leaving at once. The payer of the family's live plan is refused,
+ * even when someone else holds `billing` and even as its last member, which
+ * would dissolve it: their card would go on being charged for a family they
+ * are not in. They hand billing over or cancel the plan first.
+ */
 export async function leave(userId: string, groupId: string) {
+    if (await paysForGroup(groupId, userId)) throw youPay();
     const result = await groupsRepository.leaveGroup(groupId, userId);
     switch (result.status) {
         case 'left':
@@ -1846,6 +1922,9 @@ export async function leave(userId: string, groupId: string) {
                 'Hand the group’s billing to another member before you leave.',
                 409,
             );
+        // The last member of a family whose plan is still paid for: leaving would dissolve it.
+        case 'billed':
+            throw youPay();
         case 'last-holder':
             throw new GroupError(
                 'last-holder',

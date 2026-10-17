@@ -7,15 +7,19 @@ import {
     randomUUID,
     sign,
 } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../src/client';
 import {
     accountIdentities,
+    groupMemberships,
+    groupStorage,
+    groups,
     personalWorkspaces,
     users,
     workspaceStorage,
     workspaces,
 } from '../src/schema';
+import type { GroupRole } from '../src/schema';
 
 /* Empties every application table between tests; migrations and pg-boss are left alone. */
 export async function resetDatabase() {
@@ -177,4 +181,94 @@ export async function storeTestIdentity(
         encryptedMlDsaSeed: randomBytes(48),
         keysSignature: b(served.keysSignature),
     });
+}
+
+/*
+ * A family's rows as the group domain leaves them, written directly: the group
+ * (no rosters: nothing here reads them), its organizer and members as active
+ * memberships, and its areas with their own storage rows. For billing and
+ * quota tests, which never check a statement. `pooled` adds the empty pool a
+ * group created with billing on has.
+ */
+export async function createTestFamily(input: {
+    organizerId: string;
+    members?: { userId: string; roles?: GroupRole[] }[];
+    areas?: number;
+    pooled?: boolean;
+    areaQuotaBytes?: bigint;
+}) {
+    const id = randomUUID();
+    const seed = () => randomBytes(16).toString('base64url');
+    await db.insert(groups).values({
+        id,
+        idSeed: seed(),
+        kind: 'family',
+        name: 'The Family',
+        creatorUserId: input.organizerId,
+        firstEd25519PublicKey: randomBytes(32),
+        firstMlDsaPublicKey: randomBytes(1952),
+        rosterVersion: 1,
+        rosterDigest: randomBytes(32),
+        groupKeyVersion: 1,
+    });
+    const now = new Date();
+    await db.insert(groupMemberships).values([
+        {
+            groupId: id,
+            userId: input.organizerId,
+            state: 'active',
+            roles: ['billing', 'guardian', 'members'],
+            admittedAt: now,
+        },
+        ...(input.members ?? []).map((member) => ({
+            groupId: id,
+            userId: member.userId,
+            state: 'active' as const,
+            roles: member.roles ?? [],
+            admittedAt: now,
+        })),
+    ]);
+    const areaIds: string[] = [];
+    for (let index = 0; index < (input.areas ?? 1); index++) {
+        const [area] = await db
+            .insert(workspaces)
+            .values({ ownerKind: 'group', groupId: id, areaKind: 'shared', idSeed: seed() })
+            .returning({ id: workspaces.id });
+        await db.insert(workspaceStorage).values({
+            workspaceId: area!.id,
+            baseQuotaBytes: input.areaQuotaBytes ?? (input.pooled ? 0n : 10n * 1_073_741_824n),
+        });
+        areaIds.push(area!.id);
+    }
+    if (input.pooled) await db.insert(groupStorage).values({ groupId: id, quotaBytes: 0n });
+    return { groupId: id, areaIds };
+}
+
+/* Someone in a test family: accepted (waiting to be let in), active or left, with roles. */
+export async function setTestMember(input: {
+    groupId: string;
+    userId: string;
+    state: 'accepted' | 'active' | 'left';
+    roles?: GroupRole[];
+}) {
+    const now = new Date();
+    const values = {
+        state: input.state,
+        roles: input.roles ?? [],
+        acceptedAt: now,
+        admittedAt: input.state === 'accepted' ? null : now,
+        leftAt: input.state === 'left' ? now : null,
+    };
+    await db
+        .insert(groupMemberships)
+        .values({ groupId: input.groupId, userId: input.userId, ...values })
+        .onConflictDoUpdate({
+            target: [groupMemberships.groupId, groupMemberships.userId],
+            set: values,
+        });
+}
+
+/* An account deleted outright, as deleteAccount leaves the rows that point at it. */
+export async function deleteTestAccount(userId: string) {
+    await db.delete(users).where(eq(users.id, userId));
 }
