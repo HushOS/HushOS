@@ -103,13 +103,39 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         ...capabilitiesQueryOptions,
         enabled: workspaceId !== undefined,
     });
+    /* Polls in a row that still found a key change walking: each waits longer. */
+    const walkPolls = useRef(0);
     useQuery({
         // The Families page reads the same query.
         queryKey: familiesSyncAllKey(user.id),
-        queryFn: async () => (await import('@/lib/families')).syncFamilies(user.id),
+        // Each pass also does what is due in each family, and walks key changes, in the background.
+        queryFn: async () =>
+            (await import('@/lib/families')).syncFamilies(user.id, {
+                onChanged: () =>
+                    void queryClient.invalidateQueries({ queryKey: ['families', user.id] }),
+            }),
         enabled: unlocked && workspaceId !== undefined && capabilities.data?.groups === true,
         staleTime: 60_000,
         refetchOnWindowFocus: true,
+        // While a key change walks a family folder, checked again every so often: a walk that
+        // stopped resumes, and pages see it end.
+        refetchInterval: (query) => {
+            const results = query.state.data?.results;
+            const walking =
+                results !== undefined &&
+                [...results.values()].some(
+                    (result) =>
+                        'areas' in result &&
+                        result.areas.some((area) => area.view.rotation !== null),
+                );
+            if (!walking) {
+                walkPolls.current = 0;
+                return false;
+            }
+            // Twice as long each time a run is still there, up to ten minutes.
+            walkPolls.current++;
+            return Math.min(10 * 60_000, 30_000 * 2 ** (walkPolls.current - 1));
+        },
         retry: false,
     });
     return null;

@@ -6,6 +6,7 @@ import type {
     DriveSignedVersion,
     DriveSigners,
     DriveVersionEnvelope,
+    GroupRotationTrust,
     NodeMetadata,
 } from '@hushos/crypto';
 import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
@@ -232,6 +233,14 @@ export type DriveClientOptions = {
      * refuses to run without it.
      */
     signers?: () => Promise<DriveSigners>;
+    /*
+     * A family folder's trust (groups 1c step 7): every record a rotation or a
+     * copy re-signs is judged as the family's member list says, over the
+     * committed chain, so a former member's record is re-sealed and never
+     * signed as this person's own. The worker refuses either in a family
+     * folder without it. It must throw rather than answer with less.
+     */
+    rotationTrust?: () => Promise<GroupRotationTrust>;
     /*
      * Opens this account's identity in the worker: every write is signed with
      * it. Called by `open` before anything else.
@@ -946,6 +955,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 },
             },
             versionId,
+            ...(options.rotationTrust ? { group: await options.rotationTrust() } : {}),
         });
         const result = await api.copy(ws, node.id, {
             sourceVersionId: version.id,
@@ -1403,6 +1413,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         kind: 'folder' | 'file',
         rootParentId: string | null,
         onProgress?: (done: number) => void,
+        departing: readonly string[] = [],
     ) {
         // The root's own chain must be open: its parent key is what the new root key wraps under.
         if (kind === 'folder') await listFolder(rootId);
@@ -1412,6 +1423,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // Who this person trusts: every record is checked before it is signed again, and
         // without the trust set the rotation stops here and is retried, never run unchecked.
         const signers = await trustedSigners();
+        // A family folder's records are judged as its member list says (the worker requires it).
+        const group = options.rotationTrust
+            ? { ...(await options.rotationTrust()), departing: [...departing] }
+            : null;
         let done = 0;
         let cursor: string | null = null;
         let idle = 0;
@@ -1438,6 +1453,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 targetEpoch,
                 granterUserId: currentUserId,
                 signers,
+                ...(group ? { group } : {}),
                 nodes: await Promise.all(
                     work.nodes.map(async (n) => ({
                         id: n.id,
@@ -1585,6 +1601,22 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function resumeRotation(onProgress?: (done: number) => void) {
         const pending = workspace?.rotation;
         if (!pending || !workspace) return null;
+        const result = await walkRotation(pending, onProgress);
+        workspace = { ...workspace, rotation: null };
+        return result;
+    }
+    /*
+     * Walks a rotation running in this workspace to its end, from what the
+     * server names (a family folder's, from route 25 or a 409 rotating): the
+     * same walk as `rotate`, from wherever it got to.
+     */
+    async function walkRotation(
+        pending: { nodeId: string; targetEpoch: number },
+        onProgress?: (done: number) => void,
+        /* In a family folder: members on their way out, whose records the walk re-seals (never re-signs). */
+        departing: readonly string[] = [],
+    ) {
+        if (!workspace) throw new Error('Open Drive first.');
         const root = await api
             .children(workspace.workspaceId, pending.nodeId)
             .then((listing) => listing.folder)
@@ -1597,16 +1629,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             parentId =
                 trash?.items.find((item) => item.node.id === pending.nodeId)?.node.parentId ?? null;
         }
-        const result = await runRotation(
+        return runRotation(
             workspace.workspaceId,
             pending.nodeId,
             pending.targetEpoch,
             kind,
             parentId,
             onProgress,
+            departing,
         );
-        workspace = { ...workspace, rotation: null };
-        return result;
     }
 
     /* What this person shares out, nodes named, for managing in one place. */
@@ -1874,6 +1905,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         resealReport,
         rotate,
         resumeRotation,
+        walkRotation,
         pendingRotation,
         changesSince,
         shareChangesSince,

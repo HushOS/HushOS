@@ -17,7 +17,8 @@ export function AddMenu({
     onNewFolder,
 }: {
     picker: RefObject<UploadPicker | null>;
-    onNewFolder: () => void;
+    /* Null while New folder can't be used here (a family folder a key change has not reached). */
+    onNewFolder: (() => void) | null;
 }) {
     return (
         <DropdownMenu>
@@ -26,7 +27,7 @@ export function AddMenu({
                 <span className="max-sm:sr-only">Add</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" sideOffset={6} className="w-56">
-                <DropdownMenuItem onClick={onNewFolder}>
+                <DropdownMenuItem disabled={!onNewFolder} onClick={() => onNewFolder?.()}>
                     <FolderPlusIcon aria-hidden="true" />
                     New folder
                     <DropdownMenuShortcut>{keyLabel('Shift')}N</DropdownMenuShortcut>

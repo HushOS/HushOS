@@ -529,6 +529,9 @@ export async function createFolders(
             return { nodes: result.nodes.map(nodeView), changeSeq: result.changeSeq };
         case 'not-found':
             throw notFound();
+        case 'rotating':
+            // A family folder's key change has not reached the folder yet: the client waits.
+            throw rotating();
         case 'parent-trashed':
             throw parentTrashed();
         case 'too-deep':
@@ -657,6 +660,9 @@ export async function restoreNode(
                 'The folder this was in is still in the trash. Restore it to the top folder instead.',
                 409,
             );
+        case 'rotating':
+            // Back to a family folder's top folder that a key change has not re-keyed yet.
+            throw rotating();
         case 'too-deep':
             throw tooDeep();
         case 'stale':
@@ -767,6 +773,9 @@ export async function copyNode(
             throw notFound();
         case 'trashed':
             throw trashed();
+        case 'rotating':
+            // A family folder's key change has not reached the folder yet: the client waits.
+            throw rotating();
         case 'parent-trashed':
             throw parentTrashed();
         case 'too-deep':
@@ -1258,6 +1267,9 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
                 throw notFound();
             case 'trashed':
                 throw trashed();
+            case 'rotating':
+                // A family folder's key change has not reached the folder yet: the client waits.
+                throw rotating();
             case 'parent-trashed':
                 throw parentTrashed();
             case 'too-deep':
@@ -1461,6 +1473,9 @@ export async function attachUpload(
                 'The folder this was going to no longer exists.',
                 404,
             );
+        case 'rotating':
+            // A family folder's key change has not reached the folder yet: the client waits.
+            throw rotating();
         case 'parent-trashed':
             throw parentTrashed();
         case 'too-deep':

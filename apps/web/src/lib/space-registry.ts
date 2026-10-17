@@ -12,7 +12,14 @@
  * on its own.
  */
 
-export type WriteTarget = { id: string; keyEpoch: number; workspaceId: string };
+export type WriteTarget = {
+    id: string;
+    keyEpoch: number;
+    workspaceId: string;
+    /* The parent epoch the node's envelope is under, and its parent: what a key change's walk reads. */
+    parentKeyEpoch?: number;
+    parentId?: string | null;
+};
 
 export const FOLDER_GONE = 'This family folder isn’t open here any more. Open the family again.';
 
@@ -21,6 +28,8 @@ type Entry<C> = {
     client: C;
     /* Why nothing may be added to `folder` now, or null. */
     refuseWrite: (folder: WriteTarget) => string | null;
+    /* Whether that refusal is only a key change that has not reached `folder` yet: adds wait. */
+    waitsForKeyChange?: (folder: WriteTarget) => boolean;
 };
 
 export function createSpaceRegistry<C extends { close(): void; knows(nodeId: string): boolean }>(
@@ -60,6 +69,10 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
         refuseWrite: (folder: WriteTarget) => {
             if (gone.has(folder.workspaceId)) return FOLDER_GONE;
             return entries.get(folder.workspaceId)?.refuseWrite(folder) ?? null;
+        },
+        waitsForKeyChange: (folder: WriteTarget) => {
+            if (gone.has(folder.workspaceId)) return false;
+            return entries.get(folder.workspaceId)?.waitsForKeyChange?.(folder) ?? false;
         },
         /* After a lock: every family client forgets what it opened. */
         closeAll: () => {

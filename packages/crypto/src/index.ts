@@ -33,6 +33,7 @@ export type {
     GroupView,
     GroupWriter,
     RosterCallBody,
+    RotatedDocumentWire,
     RotationWire,
     ServedChain,
 } from './session-groups';

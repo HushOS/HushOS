@@ -285,6 +285,12 @@ The organizer's client derives the group id, makes the group key, signs roster v
 
 `GET /api/drive/spaces` lists the account's personal space and every group it is active in, each with the areas it can open and their grants. Clients switch between spaces (web: a switcher at the top of the sidebar and the space in the URL, `/app/s/<space>/…`; iOS: one Files location per space, each tied to its owner as the 13 October Files fix does; Android: one provider root per space). Leaving a space wipes its local state on every device.
 
+#### Shares inside family folders (proposed, not in 1c)
+
+The web hides Share and links in family folders in milestone 1c. A Drive walk re-seals a node's shares and links under its new key only when the walker can tell that each was made by someone entitled to make it, to keys that person vouched for. In one's own Drive that is the owner's sealed sharing ledger; in a family folder the ledger is each member's own, so a manager's walk after a removal can re-seal only the shares the manager made, and every other member's share is closed silently. Re-sealing what the server lists instead would let the server add recipients.
+
+The proposal: **share records signed at family level.** A member who shares a node in a family folder signs a share record (`["hushos/group/share",1,groupId,workspaceId,nodeId,granteeUserId,granteeKeyDigest,role,granterUserId,granterKeyVersion]`, hybrid, under their identity) and stores it beside the share. A walker re-seals a share only when its record verifies under a granter who is active on the member list the walk is judged by (the staged one for a removal's rotation), to the grantee keys the record names (checked against the served identity), and drops it otherwise; a link carries the same kind of record over its link id. Revoking deletes the record with the share, so a revoked share cannot come back through a walk. Open: whether a member without `members` may see others' records (they name outsiders), and records for shares made before the change (none exist: Share is hidden until this lands).
+
 ### 3.5 Storage and the payer
 
 - A group plan's quota pools across the group's areas and, for families, the personal spaces of members who draw from it. `freeBytes` for any workspace in the pool reads the pool.

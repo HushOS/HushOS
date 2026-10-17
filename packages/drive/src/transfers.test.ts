@@ -95,6 +95,7 @@ function harness(
         /* What the fake worker hashes a chunk to; by name and index unless a test changes the bytes. */
         digest?: (file: File, index: number) => string;
         refuseWrite?: (target: DriveNode) => string | null;
+        waitsForKeyChange?: (target: DriveNode) => boolean;
         openNodes?: TransferManagerOptions['openNodes'];
     } = {},
 ) {
@@ -319,6 +320,8 @@ function harness(
         offline: options.offline,
         openNodes: options.openNodes ?? (async () => ({ parent: node('root', null) })),
         refuseWrite: options.refuseWrite,
+        waitsForKeyChange: options.waitsForKeyChange,
+        keyChangeRecheckMs: 1_000,
         onPublished: (n) => published.push(n.id),
         // Ids as the server derives them, minted without Web Crypto's real-time digest,
         // which fake timers would never let resolve.
@@ -423,6 +426,67 @@ describe('transfer manager', () => {
         expect(h.item(intoFolder!).status).toBe('done');
         expect(h.item(replacing!).status).toBe('done');
         expect(h.givenEpochs.length).toBe(1);
+    });
+
+    test('an upload into a folder a key change has not reached waits without a slot, and goes once the walk re-keyed it; any other refusal still fails', async () => {
+        let target: number | null = 5;
+        const epochs = new Map([
+            ['waiting', 1],
+            ['old', 1],
+        ]);
+        const at = (id: string, parentId: string | null = 'root') => ({
+            ...node(id, parentId),
+            keyEpoch: epochs.get(id) ?? 9,
+        });
+        const existing = { ...at('old'), kind: 'file' as const };
+        const h = harness({
+            refuseWrite: (t) =>
+                t.id === 'shut'
+                    ? 'You can open this folder but not add to it.'
+                    : target !== null && t.keyEpoch < target
+                      ? 'Finishing a key change.'
+                      : null,
+            waitsForKeyChange: (t) => t.id !== 'shut' && target !== null && t.keyEpoch < target,
+            openNodes: async (entry) => ({
+                parent: at(entry.parentId, null),
+                ...('replacesId' in entry && entry.replacesId
+                    ? { replaces: { ...at(entry.replacesId), kind: 'file' as const } }
+                    : {}),
+            }),
+        });
+        const [intoFolder, replacing, shut] = h.manager.enqueue([
+            { file: fakeFile(CHUNK), parent: at('waiting') },
+            { file: fakeFile(CHUNK), parent: at('root', null), replaces: existing },
+            { file: fakeFile(CHUNK), parent: at('shut') },
+        ]);
+        await settle(5_000);
+        // The two waiting say why and hold nothing made; the refused one failed as before.
+        for (const id of [intoFolder!, replacing!]) {
+            expect(h.item(id)).toMatchObject({
+                status: 'preparing',
+                waitingFor: 'Finishing a key change.',
+            });
+        }
+        expect(h.item(shut!)).toMatchObject({
+            status: 'failed',
+            error: 'You can open this folder but not add to it.',
+        });
+        for (const operation of ['driveCreateNodes', 'driveUploadPrepare', 'driveUploadSend'])
+            expect(h.calls).not.toContain(operation);
+        // Waiting holds no slot (two at a time here): an upload elsewhere goes meanwhile.
+        const [elsewhere] = h.manager.enqueue([
+            { file: fakeFile(CHUNK), parent: at('root', null) },
+        ]);
+        await settle(5_000);
+        expect(h.item(elsewhere!).status).toBe('done');
+        expect(h.item(intoFolder!).status).toBe('preparing');
+        // The walk re-keys the folder and the file: at the next look they go by themselves.
+        epochs.set('waiting', 5);
+        epochs.set('old', 5);
+        await settle(5_000);
+        expect(h.item(intoFolder!)).toMatchObject({ status: 'done', waitingFor: null });
+        expect(h.item(replacing!)).toMatchObject({ status: 'done', waitingFor: null });
+        target = null;
     });
 
     test('uploads through a bounded pool, journals digests before sends, completes once', async () => {
@@ -843,6 +907,56 @@ describe('journal and restore', () => {
         expect(h.calls.filter((call) => call === 'driveUploadSend')).toHaveLength(2);
         expect(h.server.aborted).toEqual([]);
         expect(h.journal.entries.size).toBe(0);
+    });
+
+    test('an attach after a conflict waits for a key change that landed meanwhile, then writes', async () => {
+        // The key change lands while the upload is in flight: its conflict copy would be wrapped
+        // under the folder's old key, so the attach waits like any upload.
+        let target: number | null = null;
+        const epochs = new Map([['waiting', 1]]);
+        const at = (id: string) => ({ ...node(id, 'root'), keyEpoch: epochs.get(id) ?? 9 });
+        const h = harness({
+            conflict: true,
+            refuseWrite: (t) =>
+                target !== null && t.keyEpoch < target ? 'Finishing a key change.' : null,
+            waitsForKeyChange: (t) => target !== null && t.keyEpoch < target,
+            openNodes: async (entry) => ({ parent: at(entry.parentId) }),
+        });
+        const api = h.api as unknown as DriveApi;
+        const complete = api.completeUpload.bind(api);
+        api.completeUpload = (async (...args: Parameters<typeof complete>) => {
+            target = 5;
+            return complete(...args);
+        }) as typeof complete;
+        const [id] = h.manager.enqueue([{ file: fakeFile(2 * CHUNK), parent: at('waiting') }]);
+        await settle(5_000);
+        expect(h.item(id!)).toMatchObject({ waitingFor: 'Finishing a key change.' });
+        expect(h.server.attached).toEqual([]);
+        // The walk reaches the folder: the conflict copy goes under its new key.
+        epochs.set('waiting', 5);
+        await settle(5_000);
+        expect(h.item(id!)).toMatchObject({ status: 'done', waitingFor: null });
+        expect(h.server.attached).toHaveLength(1);
+    });
+
+    test('a waiting upload can be cancelled, and nothing is made for it', async () => {
+        const h = harness({
+            refuseWrite: () => 'Finishing a key change.',
+            waitsForKeyChange: () => true,
+            openNodes: async (entry) => ({
+                parent: { ...node(entry.parentId, 'root'), keyEpoch: 1 },
+            }),
+        });
+        const [id] = h.manager.enqueue([
+            { file: fakeFile(CHUNK), parent: { ...node('waiting', 'root'), keyEpoch: 1 } },
+        ]);
+        await settle(3_000);
+        expect(h.item(id!).waitingFor).toBe('Finishing a key change.');
+        await h.manager.cancel(id!);
+        await settle(5_000);
+        expect(h.item(id!).status).toBe('cancelled');
+        for (const operation of ['driveCreateNodes', 'driveUploadPrepare'])
+            expect(h.calls).not.toContain(operation);
     });
 
     test('a refusal for lack of room fails the upload with the code the app needs to offer a way out', async () => {

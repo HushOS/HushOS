@@ -7,6 +7,7 @@ import {
     invalidateFolders,
     nextName,
     refuseWrite,
+    waitsForKeyChange,
 } from '@/lib/drive';
 import type { Dropped } from '@/lib/dropped-files';
 import { transfers } from '@/lib/transfers';
@@ -27,10 +28,12 @@ export async function enqueueDropped(
     knownChildren: DriveNode[],
 ) {
     const { files } = dropped;
-    // A family folder that may not be written now, or one a key change has not reached yet
-    // (uploads wait there: docs/groups-server.md 8), takes nothing.
-    const refused = refuseWrite(folder);
-    if (refused) throw new Error(refused);
+    // A family folder that may not be written now takes nothing. One a key change has not reached
+    // yet (docs/groups-server.md 8) takes files, which wait in the queue until it has; folders the
+    // drop makes there wait here first, since a new folder is wrapped under its parent's key.
+    const needsFolders = dropped.folders.length > 0 || files.some((entry) => entry.path.length);
+    if (needsFolders) folder = await untilWritable(queryClient, folder);
+    else refuseUnlessWaiting(folder);
     // What each destination already holds: the top folder's is known, a folder made by this
     // drop is empty, and any other folder is listed once when first needed.
     const listings = new Map<string, DriveNode[]>([[folder.id, knownChildren]]);
@@ -62,10 +65,11 @@ export async function enqueueDropped(
             (child) => child.kind === 'folder' && child.name === name,
         );
         if (same) {
-            // A folder already there may be one a key change has not reached yet.
-            const waits = refuseWrite(same);
-            if (waits) throw new Error(waits);
-            parents.set(key, same);
+            // A folder already there may be one a key change has not reached yet: its files wait
+            // in the queue, and folders made inside it wait here.
+            const deeper = ordered.some((other) => other.startsWith(`${key}/`));
+            parents.set(key, deeper ? await untilWritable(queryClient, same) : same);
+            if (!deeper) refuseUnlessWaiting(same);
             continue;
         }
         const [created] = await clientFor(parent.workspaceId).createFolderPath(parent, [name]);
@@ -131,9 +135,8 @@ export async function enqueueDropped(
         if (decision.action === 'skip') continue;
         if (decision.action === 'replace') {
             // A new version goes under the file's own key: one a key change has not reached
-            // waits too.
-            const waits = refuseWrite(replaces);
-            if (waits) throw new Error(waits);
+            // waits in the queue too.
+            refuseUnlessWaiting(replaces);
             ids.push(...transfers.enqueue([{ ...input, replaces }]));
             continue;
         }
@@ -143,4 +146,39 @@ export async function enqueueDropped(
         ids.push(...transfers.enqueue([{ ...input, name }]));
     }
     return ids;
+}
+
+/* A refusal that is not only a key change on its way (which the queue waits out) stops the drop. */
+function refuseUnlessWaiting(target: DriveNode) {
+    const refused = refuseWrite(target);
+    if (refused && !waitsForKeyChange(target)) throw new Error(refused);
+}
+
+const KEY_CHANGE_RECHECK_MS = 5_000;
+/* How long a drop's new folders wait for a key change before the drop gives up and says so. */
+const KEY_CHANGE_GIVE_UP_MS = 10 * 60_000;
+/*
+ * `folder` once a family folder's key change has reached it (its key epoch at
+ * the walk's target, read afresh) or the walk is over: what a new folder needs
+ * before it is wrapped under its key. Any other refusal stops at once.
+ */
+async function untilWritable(queryClient: QueryClient, folder: DriveNode) {
+    let current = folder;
+    const giveUpAt = Date.now() + KEY_CHANGE_GIVE_UP_MS;
+    for (;;) {
+        const refused = refuseWrite(current);
+        if (!refused) return current;
+        if (!waitsForKeyChange(current)) throw new Error(refused);
+        if (Date.now() > giveUpAt)
+            throw new Error(
+                'The family folder’s key change hasn’t reached this folder yet, so its folders weren’t made. Try again later.',
+            );
+        await new Promise((resolve) => setTimeout(resolve, KEY_CHANGE_RECHECK_MS));
+        // The parent's listing names the folder with its key epoch as it is now.
+        const fresh = await queryClient.fetchQuery({
+            ...folderQueryOptions(current.id, current.workspaceId),
+            staleTime: 0,
+        });
+        current = fresh.folder;
+    }
 }

@@ -26,8 +26,9 @@ import { areaClient, FamilySpaceProvider, pruneAreas, type FamilySpace } from '@
  * anything. While a space page is open, route 2 is read every so often, so a
  * change another manager made (a removal, which starts a key change) syncs
  * the family again; while a key change walks one of the folders the family
- * is synced again every so often too, so the pages see it end. Adding to a
- * folder the walk has not reached is refused meanwhile; nothing queues.
+ * is synced again every so often too, so the pages see it end (a manager's
+ * device walks it meanwhile: lib/family-work.ts). Uploads into a folder the
+ * walk has not reached wait in the queue and go once it has.
  */
 export const Route = createFileRoute('/_authenticated/app/_drive/s/$groupId')({
     head: () => ({ meta: [{ title: 'Family folders · HushOS' }] }),

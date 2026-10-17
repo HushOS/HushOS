@@ -4,6 +4,7 @@ import { cn } from 'cn';
 import {
     ChevronDownIcon,
     CircleCheckIcon,
+    ClockIcon,
     CloudOffIcon,
     FileUpIcon,
     PauseIcon,
@@ -28,7 +29,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { downloads, useDownloads } from '@/lib/downloads';
-import { formatBytes, isNetworkFailure, OFFLINE_WORDS } from '@/lib/drive';
+import { FINISHING_KEY_CHANGE, formatBytes, isNetworkFailure, OFFLINE_WORDS } from '@/lib/drive';
 import { transfers, useTransfers } from '@/lib/transfers';
 import { useBatchProgress } from '@/lib/batch-progress';
 import { formatTimeLeft } from '@/lib/progress';
@@ -77,7 +78,10 @@ function statusLine(item: UploadItem, offline: boolean) {
         case 'queued':
             return 'Waiting';
         case 'preparing':
-            return 'Preparing';
+            // Kept only by this tab: a reload asks for the file again, as for any upload.
+            return item.waitingFor
+                ? `${FINISHING_KEY_CHANGE} · Waiting while this tab is open`
+                : 'Preparing';
         case 'uploading':
             if (offline) return `${WAITING} · ${sent}`;
             return item.bytesPerSecond ? `${sent} · ${formatRate(item.bytesPerSecond)}` : sent;
@@ -385,6 +389,10 @@ export function TransfersPanel() {
         state.uploads.filter((item) => item.status === 'failed').length +
         down.downloads.filter((item) => item.status === 'failed').length;
     const active = state.active + down.active;
+    // Uploads waiting for a family folder's key change: not active, not finished either.
+    const waiting = state.uploads.filter(
+        (item) => !settled(item.status) && item.status !== 'failed' && item.waitingFor,
+    ).length;
     // The one headline every client uses.
     const title =
         active > 0 && offline
@@ -395,13 +403,15 @@ export function TransfersPanel() {
                 ? `Uploading ${plural(state.active, 'file')}`
                 : down.active
                   ? `Downloading ${plural(down.active, 'file')}`
-                  : paused
-                    ? `${paused} paused`
-                    : failed
-                      ? `${plural(failed, 'transfer')} didn’t finish`
-                      : doneDownloads === 0 && doneUploads > 0
-                        ? `${plural(doneUploads, 'file')} uploaded`
-                        : `${plural(doneUploads + doneDownloads, 'transfer')} finished`;
+                  : waiting
+                    ? `${plural(waiting, 'file')} waiting for a key change`
+                    : paused
+                      ? `${paused} paused`
+                      : failed
+                        ? `${plural(failed, 'transfer')} didn’t finish`
+                        : doneDownloads === 0 && doneUploads > 0
+                          ? `${plural(doneUploads, 'file')} uploaded`
+                          : `${plural(doneUploads + doneDownloads, 'transfer')} finished`;
     const rate = state.bytesPerSecond + down.bytesPerSecond;
     const counted = state.uploads.length + down.downloads.length;
     // Under the headline: files done of all, and the time left once the rate has settled.
@@ -482,6 +492,8 @@ export function TransfersPanel() {
                             value={batch.bytes.total ? batch.bytes.loaded / batch.bytes.total : 0}
                             size={22}
                         />
+                    ) : waiting > 0 ? (
+                        <ClockIcon className="size-5 text-muted-foreground" aria-hidden="true" />
                     ) : paused > 0 ? (
                         <PauseIcon className="size-5 text-muted-foreground" aria-hidden="true" />
                     ) : failed > 0 ? (

@@ -18,9 +18,11 @@ import {
     type IdentityEnvelope,
     type SuccessionLink,
 } from './identity';
+import { CONTENT_SUITE, wrapPreviousRootKey } from './drive';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
+import { openAreaSelfGrant } from './workspace';
 import {
     openDeviceRecord,
     sealDeviceRecord,
@@ -1717,7 +1719,7 @@ describe('group verdicts', () => {
                 },
                 versionId: LATER,
             }),
-        ).rejects.toThrow(/family folder can’t be copied/);
+        ).rejects.toThrow(/only with the family’s trust/);
         // Her own workspace is still checked as ever.
         await expect(
             f.alice.call('driveVerify', { workspaceId: OTHER_WS, signers: personal, nodes: [] }),
@@ -1779,6 +1781,67 @@ describe('group verdicts', () => {
         await expect(verify(writer({}, f.bob.served))).resolves.toMatchObject({
             metadata: 'unchecked',
         });
+    });
+
+    test('a removal’s finish walk re-seals the departing member’s records, though the committed chain still lists them', async () => {
+        const f = await family();
+        const bobs = await bobsFolder(f);
+        await f.alice.call('driveOpenNodes', { workspaceId: f.ws, nodes: [f.rootListing] });
+        const bobWriter = writer({}, f.bob.served);
+        const walk = (departing?: string[]) =>
+            f.alice.call('driveRotateNodes', {
+                workspaceId: f.ws,
+                targetEpoch: 7,
+                granterUserId: ALICE,
+                signers: {},
+                group: { groupId: f.groupId, staged: null, writers: [bobWriter], departing },
+                nodes: [
+                    {
+                        id: CHILD,
+                        kind: 'folder',
+                        parentId: f.area.root.id,
+                        parentKeyEpoch: 1,
+                        keyEpoch: 1,
+                        wrappedParentKeyEpoch: 1,
+                        keyEnvelope: bobs.keyEnvelope,
+                        metadataVersion: 1,
+                        metadataEnvelope: bobs.metadataEnvelope,
+                        metadataSigner: BOB,
+                        metadataSignature: bobs.metadataSignature,
+                        versions: [],
+                        shares: [],
+                        links: [],
+                    },
+                ],
+            });
+        const aliceKey = decode(f.alice.served.signingPublicKey, 32);
+        const ctx = {
+            workspaceId: f.ws,
+            nodeId: CHILD,
+            kind: 'folder' as const,
+            metadataVersion: 1,
+        };
+        const signedAs = async (result: CryptoResults['driveRotateNodes']) => {
+            const node = result.nodes[0]!;
+            if (node.error !== undefined) throw new Error(node.error);
+            const envelope = decode(node.metadataEnvelope);
+            const signature = decode(node.metadataSignature!);
+            if (await verifyStatement(await metadataStatement(ctx, envelope), signature, aliceKey))
+                return 'ordinary';
+            if (
+                await verifyStatement(
+                    await metadataResealedStatement(ctx, envelope),
+                    signature,
+                    aliceKey,
+                )
+            )
+                return 'resealed';
+            return 'neither';
+        };
+        // Bob is active on the committed chain: without a word, his record would become Alice's own.
+        expect(await signedAs(await walk())).toBe('ordinary');
+        // Named as departing, it is re-sealed instead.
+        expect(await signedAs(await walk([BOB]))).toBe('resealed');
     });
 
     test('a removal’s rotation re-seals the removed member’s records and never re-signs them as the remover’s', async () => {
@@ -2617,5 +2680,405 @@ describe('the device store and the lock', () => {
                 body: staged.body,
             }),
         ).resolves.toMatchObject({ outboxId: staged.outboxId });
+    });
+});
+
+describe('copying in a family folder (1c step 7)', () => {
+    const FILE = 'f1f1f1f1-0000-4000-8000-000000000011';
+    const COPY = 'f2f2f2f2-0000-4000-8000-000000000012';
+    const VERSION = 'f3f3f3f3-0000-4000-8000-000000000013';
+    const OBJECT = 'f4f4f4f4-0000-4000-8000-000000000014';
+    const COPY_VERSION = 'f5f5f5f5-0000-4000-8000-000000000015';
+
+    /* Bob's file under the family folder's top folder, opened on Alice's device too. */
+    async function bobsFile(f: Family) {
+        await f.bob.call('driveOpenNodes', { workspaceId: f.ws, nodes: [f.rootListing] });
+        const made = await f.bob.call('driveCreateNodes', {
+            workspaceId: f.ws,
+            nodes: [
+                {
+                    id: FILE,
+                    kind: 'file',
+                    parentId: f.area.root.id,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 3,
+                    metadata: { name: 'notes.txt', mime: 'text/plain', size: 100, modified: null },
+                },
+            ],
+        });
+        const node = made.nodes[0]!;
+        const prepared = await f.bob.call('driveUploadPrepare', {
+            workspaceId: f.ws,
+            nodeId: FILE,
+            versionId: VERSION,
+            objectId: OBJECT,
+            plaintextSize: 100,
+        });
+        await f.alice.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [
+                f.rootListing,
+                {
+                    id: FILE,
+                    parentId: f.area.root.id,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 3,
+                    keyEnvelope: node.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: node.metadataEnvelope,
+                },
+            ],
+        });
+        return {
+            nodeId: FILE,
+            id: VERSION,
+            objectId: OBJECT,
+            contentKeyEnvelope: prepared.contentKeyEnvelope,
+            contentSuite: CONTENT_SUITE,
+            plaintextSize: null,
+            metadataVersion: 1,
+            metadataEnvelope: node.metadataEnvelope,
+            metadataSigner: BOB,
+            metadataSignature: node.metadataSignature,
+            signer: BOB,
+            signature: prepared.versionSignature,
+        };
+    }
+    const copyCtx = (ws: string) => ({
+        workspaceId: ws,
+        nodeId: COPY,
+        kind: 'file' as const,
+        metadataVersion: 1,
+    });
+
+    test('a copy is judged by the family: a member’s file is vouched for, a former member’s only re-sealed', async () => {
+        const f = await family();
+        const { alice, bob, groupId, ws, area, server, marks } = f;
+        const source = await bobsFile(f);
+        const bobWriter: GroupWriter = {
+            userId: BOB,
+            pinned: null,
+            served: bob.served,
+            links: [],
+            personal: null,
+        };
+        const copy = (
+            group: CryptoRequests['driveCopyFile']['group'],
+            parent = { id: area.root.id, parentKeyEpoch: 1 },
+        ) =>
+            alice.call('driveCopyFile', {
+                workspaceId: ws,
+                signers: {},
+                source,
+                node: {
+                    id: COPY,
+                    parentId: parent.id,
+                    parentKeyEpoch: parent.parentKeyEpoch,
+                    keyEpoch: 4,
+                    metadata: folder('notes (copy).txt'),
+                },
+                versionId: COPY_VERSION,
+                group,
+            });
+        // Never personally, never on a staged member list, never by another group.
+        await expect(copy(null)).rejects.toThrow(/only with the family’s trust/);
+        await expect(copy({ groupId, staged: 'some-outbox-id', writers: [] })).rejects.toThrow(
+            /as it stands/,
+        );
+        await expect(
+            copy({ groupId: crypto.randomUUID(), staged: null, writers: [] }),
+        ).rejects.toThrow(/not one of this family’s/);
+        // Alice never compared Bob's words: the family's member list vouches, so the copy is hers.
+        const aliceKey = decode(alice.served.signingPublicKey, 32);
+        const vouched = await copy({ groupId, staged: null, writers: [bobWriter] });
+        const envelope = decode(vouched.metadataEnvelope);
+        expect(
+            await verifyStatement(
+                await metadataStatement(copyCtx(ws), envelope),
+                decode(vouched.metadataSignature),
+                aliceKey,
+            ),
+        ).toBe(true);
+
+        // Bob is removed. The same file copied now is a former member's: re-sealed, not hers.
+        const removal = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 2,
+            op: {
+                kind: 'remove',
+                userId: BOB,
+                rotations: [
+                    { workspaceId: ws, targetEpoch: 7, root: f.rootInput(), documents: [] },
+                ],
+            },
+            kems: {},
+            writers: [bobWriter],
+        });
+        if (removal.outboxId === null) throw new Error('nothing staged');
+        const [rotation] = removal.body.rotations!;
+        server.store(removal.body);
+        await alice.call('groupDrop', { outboxId: removal.outboxId });
+        await f.sync(alice, marks.alice);
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: rotation!.selfGrant,
+        });
+        await alice.call('driveOpenNodes', {
+            workspaceId: ws,
+            nodes: [
+                {
+                    id: area.root.id,
+                    parentId: ws,
+                    parentKeyEpoch: 2,
+                    keyEpoch: 7,
+                    keyEnvelope: rotation!.root.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: rotation!.root.rotated!.metadataEnvelope,
+                    prevKeyEnvelope: rotation!.previousRootKeyEnvelope,
+                    prevKeyEpoch: 1,
+                    prevParentKeyEpoch: 2,
+                },
+            ],
+        });
+        const resealed = await copy(
+            { groupId, staged: null, writers: [bobWriter] },
+            { id: area.root.id, parentKeyEpoch: 7 },
+        );
+        const after = decode(resealed.metadataEnvelope);
+        expect(
+            await verifyStatement(
+                await metadataStatement(copyCtx(ws), after),
+                decode(resealed.metadataSignature),
+                aliceKey,
+            ),
+        ).toBe(false);
+        expect(
+            await verifyStatement(
+                await metadataResealedStatement(copyCtx(ws), after),
+                decode(resealed.metadataSignature),
+                aliceKey,
+            ),
+        ).toBe(true);
+    });
+
+    test('a group’s trust on a personal workspace is refused', async () => {
+        const f = await family();
+        await expect(
+            f.alice.call('driveCopyFile', {
+                workspaceId: OTHER_WS,
+                signers: {},
+                source: {
+                    nodeId: CHILD,
+                    id: LATER,
+                    objectId: LATER,
+                    contentKeyEnvelope: 'AAAA',
+                    contentSuite: CONTENT_SUITE,
+                    plaintextSize: null,
+                    metadataVersion: 1,
+                    metadataEnvelope: 'AAAA',
+                    metadataSigner: null,
+                    metadataSignature: null,
+                    signer: null,
+                    signature: null,
+                },
+                node: {
+                    id: COPY,
+                    parentId: CHILD,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: folder('x'),
+                },
+                versionId: COPY_VERSION,
+                group: { groupId: f.groupId, staged: null, writers: [] },
+            }),
+        ).rejects.toThrow();
+    });
+});
+
+describe('repairing a family folder’s previous key (route 28)', () => {
+    test('a previous envelope that does not open is repaired by a member who held the old key, and then opens the unrotated part', async () => {
+        const f = await family();
+        // Bob lists the folder before the key change: his device holds the top folder's key.
+        await f.bob.call('driveOpenNodes', { workspaceId: f.ws, nodes: [f.rootListing] });
+        const r = await rotated(f);
+        const junk = encode(crypto.getRandomValues(new Uint8Array(72)));
+        const served = { ...r.rotatedRoot(), prevKeyEnvelope: junk };
+        const check = (
+            device: Device,
+            root: {
+                id: string;
+                parentKeyEpoch: number;
+                prevKeyEnvelope?: string;
+                prevKeyEpoch?: number;
+                prevParentKeyEpoch?: number;
+            },
+        ) =>
+            device.call('groupPreviousRoot', {
+                groupId: f.groupId,
+                workspaceId: f.ws,
+                root: {
+                    id: root.id,
+                    parentKeyEpoch: root.parentKeyEpoch,
+                    prevKeyEnvelope: root.prevKeyEnvelope ?? null,
+                    prevKeyEpoch: root.prevKeyEpoch ?? null,
+                    prevParentKeyEpoch: root.prevParentKeyEpoch ?? null,
+                },
+            });
+        const openV2 = async (device: Device) =>
+            device.call('groupOpenArea', {
+                groupId: f.groupId,
+                workspaceId: f.ws,
+                idSeed: f.area.idSeed,
+                servedVersion: 2,
+                grant: r.grantTo(BOB),
+                granterMlDsaPublicKey: f.alice.served.mlDsaPublicKey,
+                selfGrant: null,
+            });
+        await openV2(f.bob);
+        // The served previous envelope is junk: the unrotated folder does not open through it...
+        const listed = await f.bob.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [served],
+        });
+        expect(listed.nodes[0]!.metadata?.name).toBe('Family');
+        const repair = await check(f.bob, served);
+        if (repair.status !== 'repair') throw new Error(repair.status);
+
+        // A fresh device holding only the new area key cannot repair, and reads nothing unrotated.
+        const fresh = await f.bob.device();
+        await f.sync(fresh, f.marks.bob);
+        await openV2(fresh);
+        expect(await check(fresh, served)).toEqual({ status: 'cannot' });
+        const before = await fresh.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [served, r.childListing],
+        });
+        expect(before.nodes[1]!.error).toMatch(/older folder key/);
+        // With the repaired envelope served, it opens the unrotated child.
+        const repaired = { ...served, prevKeyEnvelope: repair.previousRootKeyEnvelope };
+        expect(await check(fresh, repaired)).toEqual({ status: 'opens' });
+        const after = await fresh.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [repaired, r.childListing],
+        });
+        expect(after.nodes.map((node) => node.metadata?.name)).toEqual(['Family', 'Inside']);
+        // The rotation's own envelope opens as it is, and nothing is offered in its place.
+        expect(await check(fresh, r.rotatedRoot())).toEqual({ status: 'opens' });
+        // A root with no previous envelope under the current key has nothing to check.
+        expect(await check(fresh, { ...served, prevParentKeyEpoch: 1 })).toEqual({
+            status: 'none',
+        });
+    });
+    test('a previous envelope that opens to another key loses to the key this device held, and is repaired', async () => {
+        const f = await family();
+        await f.bob.call('driveOpenNodes', { workspaceId: f.ws, nodes: [f.rootListing] });
+        const r = await rotated(f);
+        // A hostile manager's envelope: it opens under the new folder key, to a key nobody held.
+        const areaKey = await openAreaSelfGrant(
+            f.alice.root,
+            ALICE,
+            f.groupId,
+            r.staged.body.rotation!.selfGrant,
+        );
+        const wrong = encode(
+            await wrapPreviousRootKey(crypto.getRandomValues(new Uint8Array(32)), areaKey, {
+                workspaceId: f.ws,
+                nodeId: f.area.root.id,
+                parentId: f.ws,
+                parentKeyEpoch: 2,
+                keyEpoch: 1,
+            }),
+        );
+        const served = { ...r.rotatedRoot(), prevKeyEnvelope: wrong };
+        const check = (device: Device, prevKeyEnvelope: string) =>
+            device.call('groupPreviousRoot', {
+                groupId: f.groupId,
+                workspaceId: f.ws,
+                root: {
+                    id: f.area.root.id,
+                    parentKeyEpoch: 2,
+                    prevKeyEnvelope,
+                    prevKeyEpoch: 1,
+                    prevParentKeyEpoch: 2,
+                },
+            });
+        const openV2 = (device: Device) =>
+            device.call('groupOpenArea', {
+                groupId: f.groupId,
+                workspaceId: f.ws,
+                idSeed: f.area.idSeed,
+                servedVersion: 2,
+                grant: r.grantTo(BOB),
+                granterMlDsaPublicKey: f.alice.served.mlDsaPublicKey,
+                selfGrant: null,
+            });
+        await openV2(f.bob);
+        // Bob's device keeps the old key it opened itself: the unrotated child still opens.
+        const listed = await f.bob.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [served, r.childListing],
+        });
+        expect(listed.nodes.map((node) => node.metadata?.name)).toEqual(['Family', 'Inside']);
+        // And says the served envelope is wrong, with one that opens to the key it held.
+        const repair = await check(f.bob, wrong);
+        if (repair.status !== 'repair') throw new Error(repair.status);
+        // Served the right envelope afterwards, then the wrong one again: the kept key still wins.
+        await f.bob.call('driveOpenNodes', { workspaceId: f.ws, nodes: [r.rotatedRoot()] });
+        const again = await f.bob.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [served, r.childListing],
+        });
+        expect(again.nodes[1]!.metadata?.name).toBe('Inside');
+        // A fresh device can't tell the wrong envelope from a good one, and reads nothing unrotated
+        // through it; with the repair it reads the child.
+        const fresh = await f.bob.device();
+        await f.sync(fresh, f.marks.bob);
+        await openV2(fresh);
+        expect(await check(fresh, wrong)).toEqual({ status: 'opens' });
+        const before = await fresh.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [served, r.childListing],
+        });
+        expect(before.nodes[1]!.error).toBeDefined();
+        const after = await fresh.call('driveOpenNodes', {
+            workspaceId: f.ws,
+            nodes: [{ ...served, prevKeyEnvelope: repair.previousRootKeyEnvelope }, r.childListing],
+        });
+        expect(after.nodes[1]!.metadata?.name).toBe('Inside');
+    });
+
+    test('only a key this device opened as the root’s own repairs: one a served envelope gave it never does', async () => {
+        const f = await family();
+        const r = await rotated(f);
+        // Bob never listed the root before the key change: his previous key comes from the served
+        // envelope only. A later junk envelope finds nothing of his own to repair it with.
+        await f.bob.call('groupOpenArea', {
+            groupId: f.groupId,
+            workspaceId: f.ws,
+            idSeed: f.area.idSeed,
+            servedVersion: 2,
+            grant: r.grantTo(BOB),
+            granterMlDsaPublicKey: f.alice.served.mlDsaPublicKey,
+            selfGrant: null,
+        });
+        await f.bob.call('driveOpenNodes', { workspaceId: f.ws, nodes: [r.rotatedRoot()] });
+        const junk = encode(crypto.getRandomValues(new Uint8Array(72)));
+        expect(
+            await f.bob.call('groupPreviousRoot', {
+                groupId: f.groupId,
+                workspaceId: f.ws,
+                root: {
+                    id: f.area.root.id,
+                    parentKeyEpoch: 2,
+                    prevKeyEnvelope: junk,
+                    prevKeyEpoch: 1,
+                    prevParentKeyEpoch: 2,
+                },
+            }),
+        ).toEqual({ status: 'cannot' });
     });
 });

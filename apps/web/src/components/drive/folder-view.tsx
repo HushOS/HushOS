@@ -434,12 +434,12 @@ export function FolderView({ folderId }: { folderId: string }) {
         }
     }
 
-    useHotkey('Shift+N', () => canAdd && setCreating(true), { enabled });
+    useHotkey('Shift+N', () => canMakeFolder && setCreating(true), { enabled });
     useHotkey('F2', () => writable && selection.length === 1 && setRenaming(selection[0]!), {
         enabled,
     });
     useHotkey('M', () => writable && selection.length > 0 && setMoving(selection), { enabled });
-    useHotkey('C', () => !area && selection.length > 0 && setCopying(selection), { enabled });
+    useHotkey('C', () => writable && selection.length > 0 && setCopying(selection), { enabled });
     useHotkey('D', () => download(selection), { enabled });
     useHotkey('I', toggleInfo, { enabled });
     useHotkey('T', () => ownSelection && setTagging(selection), { enabled });
@@ -485,8 +485,14 @@ export function FolderView({ folderId }: { folderId: string }) {
             ? 'My files'
             : crumb.name;
     const shared = crumbs.length > 0 && crumbs[0]!.workspaceId !== workspaceId;
-    /* Whether things may be added here: one's own folder, or a family folder this device may write. */
-    const canAdd = !shared && writable && !waiting;
+    /*
+     * Whether things may be added here: one's own folder, or a family folder this device may
+     * write. While a key change has yet to reach it, uploads wait in the queue (D9); anything
+     * else added says so and waits for the person.
+     */
+    const canAdd = !shared && writable;
+    /* A new folder is wrapped under this one's key, so it waits for the key change too. */
+    const canMakeFolder = canAdd && !waiting;
     const title = folder ? crumbName(folder) : crumbs.length ? crumbName(crumbs.at(-1)!) : '';
     // Who can open what, from everything this person shares; a folder in the path that is
     // shared means everything here is open to the same people. A family folder is open to
@@ -515,11 +521,11 @@ export function FolderView({ folderId }: { folderId: string }) {
             selectAll: () => setSelected(new Set(rows.map((row) => row.id))),
             clearSelection: () => setSelected(new Set()),
             actions: {
-                newFolder: () => canAdd && setCreating(true),
+                newFolder: () => canMakeFolder && setCreating(true),
                 upload: () => canAdd && picker.current?.pickFiles(),
                 rename: () => writable && selection.length === 1 && setRenaming(selection[0]!),
                 move: () => writable && selection.length > 0 && setMoving(selection),
-                copy: () => !area && selection.length > 0 && setCopying(selection),
+                copy: () => writable && selection.length > 0 && setCopying(selection),
                 versions: () =>
                     selection.length === 1 &&
                     selection[0]!.kind === 'file' &&
@@ -532,13 +538,24 @@ export function FolderView({ folderId }: { folderId: string }) {
         });
         // `setSelected` is a state setter and never changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rows, folder, selection, ownSelection, view, workspaceId, canAdd, writable, area]);
+    }, [
+        rows,
+        folder,
+        selection,
+        ownSelection,
+        view,
+        workspaceId,
+        canAdd,
+        canMakeFolder,
+        writable,
+        area,
+    ]);
     useEffect(() => () => lendPaletteContext(null), []);
 
     /* Moves dragged rows into a folder row or a crumb further up; with Alt held, copies them. */
     async function moveTo(dragged: string[], destination: DriveNode, copy = false) {
         const nodes = rows.filter((row) => dragged.includes(row.id) && row.id !== destination.id);
-        if (!nodes.length || movingByDrag || !writable || (copy && area)) return;
+        if (!nodes.length || movingByDrag || !writable) return;
         const refused = refuseWrite(destination);
         if (refused) {
             toast.add({ type: 'error', title: 'Couldn’t move', description: refused });
@@ -806,8 +823,8 @@ export function FolderView({ folderId }: { folderId: string }) {
     };
     /*
      * A node's menu: its own actions, or the selection's when it is part of one. A family
-     * folder's items are not shared, tagged, copied or reported from here yet, and nothing
-     * in one is changed while this device may not write there.
+     * folder's items are copied within it (judged by the family) but not shared, tagged or
+     * reported from here, and nothing in one is changed while this device may not write there.
      */
     function entriesFor(node: DriveNode) {
         const own = !area && node.workspaceId === workspaceId;
@@ -818,7 +835,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             onShare: own ? actions.onShare : null,
             onSaveCopy: own || area ? null : actions.onSaveCopy,
             onReport: own || area ? null : actions.onReport,
-            onCopy: area ? null : actions.onCopy,
+            onCopy: writable ? actions.onCopy : null,
             onRename: writable ? actions.onRename : null,
             onMove: writable ? actions.onMove : null,
             onTrash: writable ? actions.onTrash : null,
@@ -903,7 +920,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                         ))}
                     </fieldset>
                     {folder && canAdd && (
-                        <AddMenu picker={picker} onNewFolder={() => setCreating(true)} />
+                        <AddMenu
+                            picker={picker}
+                            onNewFolder={canMakeFolder ? () => setCreating(true) : null}
+                        />
                     )}
                     {folder && <UploadInputs folder={folder} known={rows} handle={picker} />}
                 </div>
@@ -978,10 +998,15 @@ export function FolderView({ folderId }: { folderId: string }) {
                                             <FileUpIcon />
                                             Upload files
                                         </Button>
-                                        <Button variant="outline" onClick={() => setCreating(true)}>
-                                            <FolderPlusIcon />
-                                            New folder
-                                        </Button>
+                                        {canMakeFolder && (
+                                            <Button
+                                                variant="outline"
+                                                onClick={() => setCreating(true)}
+                                            >
+                                                <FolderPlusIcon />
+                                                New folder
+                                            </Button>
+                                        )}
                                     </>
                                 )}
                             </EmptyState>
@@ -1235,7 +1260,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                     <ContextMenuContent>
                         {canAdd && (
                             <>
-                                <ContextMenuItem onClick={() => setCreating(true)}>
+                                <ContextMenuItem
+                                    disabled={!canMakeFolder}
+                                    onClick={() => setCreating(true)}
+                                >
                                     <FolderPlusIcon aria-hidden="true" />
                                     New folder
                                     <ContextMenuShortcut>{keyLabel('Shift')}N</ContextMenuShortcut>
@@ -1286,7 +1314,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                     onShare={setSharing}
                     onDownload={() => download(selection)}
                     onMove={writable ? () => setMoving(selection) : null}
-                    onCopy={area ? null : () => setCopying(selection)}
+                    onCopy={writable ? () => setCopying(selection) : null}
                     onRename={writable ? setRenaming : null}
                     onTags={() => setTagging(selection)}
                     onTrash={writable ? () => void trash(selection) : null}

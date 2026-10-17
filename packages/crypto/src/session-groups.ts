@@ -259,6 +259,13 @@ export type GroupRotationTrust = {
     /* The roster call whose staged chain judges (a removal's rotation), or null for the committed chain. */
     staged: string | null;
     writers: GroupWriter[];
+    /*
+     * Members on their way out whose records must not come back as the
+     * walker's own: a removal's finish walk runs on the committed chain, where
+     * the person being removed is still active, so their verified records are
+     * re-sealed, never re-signed as ordinary (or saved) by the walker.
+     */
+    departing?: string[];
 };
 
 /*
@@ -493,6 +500,24 @@ export type GroupRequests = {
     groupForget: { groupId: string };
     groupStoreSeal: { userId: string; groupId: string; store: DeviceStore; value: unknown };
     groupStoreOpen: { userId: string; groupId: string; store: DeviceStore; envelope: string };
+    /*
+     * An area root's previous envelope during a roster rotation (option A),
+     * checked with the area's current key: whether it opens, and when it does
+     * not, the repair route 28 takes, from the root's old key this session
+     * held before the rotation (docs/groups-server.md 8, "Repair"). The root as
+     * route 25 serves it.
+     */
+    groupPreviousRoot: {
+        groupId: string;
+        workspaceId: string;
+        root: {
+            id: string;
+            parentKeyEpoch: number;
+            prevKeyEnvelope: string | null;
+            prevKeyEpoch: number | null;
+            prevParentKeyEpoch: number | null;
+        };
+    };
 };
 
 export type GroupStaged = {
@@ -579,6 +604,14 @@ export type GroupResults = {
     groupStoreSeal: { envelope: string };
     /* `unreadable`: sealed under another account root (a master-key rotation) or not this group's. */
     groupStoreOpen: { value: unknown } | { unreadable: true };
+    groupPreviousRoot:
+        /* No previous envelope under the current area key: nothing to check. */
+        | { status: 'none' }
+        | { status: 'opens' }
+        /* It does not open, and this device held the old key: route 28's body. */
+        | { status: 'repair'; previousRootKeyEnvelope: string }
+        /* It does not open, and this device never held the old key. */
+        | { status: 'cannot' };
 };
 
 /* Every group operation is listed in GROUP_OPERATIONS (protocol.ts), and nothing else is. */
@@ -624,6 +657,8 @@ export type GroupHost = {
     holdWorkspaceKey(workspaceId: string, version: number, key: Uint8Array<ArrayBuffer>): void;
     dropWorkspace(workspaceId: string): void;
     currentKeyOf(workspaceId: string, node: RotateNodeInput): Promise<Uint8Array<ArrayBuffer>>;
+    /* A copy of the previous key this session holds for a node at `epoch` (the caller zeroes it). */
+    previousNodeKey(workspaceId: string, nodeId: string, epoch: number): Uint8Array | undefined;
     rekeyNode(input: {
         workspaceId: string;
         targetEpoch: number;
@@ -1432,11 +1467,18 @@ export function createGroupSession(host: GroupHost) {
      * conflict's are re-sealed, as is anything else; an unchecked one is not
      * re-signed at all (resealForm refuses).
      */
-    function judgeWith(verdict: ReturnType<typeof verdicts>): RecordJudge {
+    function judgeWith(
+        verdict: ReturnType<typeof verdicts>,
+        departing: readonly string[] = [],
+    ): RecordJudge {
+        const leaving = new Set(departing.map((userId) => userId.toLowerCase()));
         return async (record) => {
             const { integrity } = await verdict(record.statements, record.signer, record.signature);
             if (integrity === 'key-conflict' || integrity === 'former-member') return 'resealed';
-            return resealForm(integrity as Integrity);
+            // Throws for an unchecked record, departing writer or not: nothing is signed unchecked.
+            const form = resealForm(integrity as Integrity);
+            if (record.signer && leaving.has(record.signer.toLowerCase())) return 'resealed';
+            return form;
         };
     }
     async function rotationJudge(
@@ -1459,7 +1501,10 @@ export function createGroupSession(host: GroupHost) {
             !areasOf(groupId).has(workspaceId)
         )
             throw new CryptoError('This folder is not one of this family’s.');
-        return judgeWith(verdicts(groupId, workspaceId, reading, group.writers, trusted));
+        return judgeWith(
+            verdicts(groupId, workspaceId, reading, group.writers, trusted),
+            group.departing ?? [],
+        );
     }
 
     /*
@@ -2940,6 +2985,57 @@ export function createGroupSession(host: GroupHost) {
         }
     }
 
+    async function previousRoot(
+        input: GroupRequests['groupPreviousRoot'],
+    ): Promise<GroupResults['groupPreviousRoot']> {
+        const chain = committed(input.groupId);
+        const workspaceId = uuid(input.workspaceId, 'workspace id');
+        const { root } = input;
+        const area = currentArea(chain, workspaceId);
+        if (
+            !root.prevKeyEnvelope ||
+            root.prevKeyEpoch === null ||
+            root.prevParentKeyEpoch !== area.version ||
+            root.parentKeyEpoch !== area.version
+        )
+            return { status: 'none' };
+        const context = {
+            workspaceId,
+            nodeId: root.id,
+            parentId: workspaceId,
+            parentKeyEpoch: area.version,
+            keyEpoch: root.prevKeyEpoch,
+        };
+        let served: Uint8Array | null = null;
+        try {
+            served = await openPreviousRootKey(decode(root.prevKeyEnvelope), area.key, context);
+        } catch {
+            // Not an envelope under this key: repaired below if this device can.
+        }
+        // The old key this device opened itself as the root's own, before the key change. An
+        // envelope that opens to anything else is no better than one that does not open.
+        const old = host.previousNodeKey(workspaceId, root.id, root.prevKeyEpoch);
+        if (served && (!old || sameBytes(served, old))) {
+            served.fill(0);
+            old?.fill(0);
+            return { status: 'opens' };
+        }
+        served?.fill(0);
+        if (!old) return { status: 'cannot' };
+        try {
+            const envelope = await wrapPreviousRootKey(old, area.key, context);
+            // As a rotation's own: refused unless the new key opens it to the key wrapped.
+            const back = await openPreviousRootKey(envelope, area.key, context);
+            const same = sameBytes(back, old);
+            back.fill(0);
+            if (!same)
+                throw new CryptoError('The folder’s earlier key didn’t open, so nothing was sent.');
+            return { status: 'repair', previousRootKeyEnvelope: encode(envelope) };
+        } finally {
+            old.fill(0);
+        }
+    }
+
     async function handle(message: GroupMessage): Promise<GroupResults[keyof GroupResults]> {
         switch (message.operation) {
             case 'groupCreate':
@@ -2984,6 +3080,8 @@ export function createGroupSession(host: GroupHost) {
                 return storeSeal(message.input);
             case 'groupStoreOpen':
                 return storeOpen(message.input);
+            case 'groupPreviousRoot':
+                return previousRoot(message.input);
         }
     }
 

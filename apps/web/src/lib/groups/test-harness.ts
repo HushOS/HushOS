@@ -110,6 +110,7 @@ export function harness(
         grants: [] as { workspaceId: string; grants: unknown[] }[],
         lockHeldAtSend: [] as boolean[],
         storedAtSend: [] as number[],
+        holds: [] as string[],
     };
     const worker: (Call & { output?: unknown })[] = [];
     const failNext = new Map<string, Error>();
@@ -154,6 +155,11 @@ export function harness(
         admit: (_groupId: string, _userId: string, call: unknown) => roster('admit', call),
         patchMember: (_groupId: string, _userId: string, call: unknown) => roster('member', call),
         removeMember: (_groupId: string, _userId: string, call: unknown) => roster('remove', call),
+        // A removal's hold, placed again before its rotations are read again.
+        hold: async (_groupId: string, userId: string) => {
+            server.holds.push(userId);
+            return { heldUntil: '2026-10-17T12:15:00.000Z' };
+        },
         createArea: (_groupId: string, call: unknown) => roster('areas', call),
         rotateArea: (_groupId: string, _workspaceId: string, call: unknown) =>
             roster('rotation', call),
