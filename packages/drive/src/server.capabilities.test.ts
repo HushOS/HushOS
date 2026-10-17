@@ -25,8 +25,10 @@ async function capabilitiesWith(value: string | undefined) {
     return (await import('./server')).capabilities();
 }
 
-test('capabilities report groups exactly when GROUPS_ENABLED is true, and off by default', async () => {
+test('capabilities report groups unless GROUPS_ENABLED is false, and on by default', async () => {
     expect((await capabilitiesWith('true')).groups).toBe(true);
     expect((await capabilitiesWith('false')).groups).toBe(false);
-    expect((await capabilitiesWith(undefined)).groups).toBe(false);
+    expect((await capabilitiesWith(undefined)).groups).toBe(true);
+    // Compose and .env files pass an unset value as empty: that is the default too.
+    expect((await capabilitiesWith('')).groups).toBe(true);
 });

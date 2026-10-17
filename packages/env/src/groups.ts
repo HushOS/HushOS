@@ -5,9 +5,10 @@ import { GROUP_AREA_LIMIT_MAX } from './group-limits';
 export { GROUP_AREA_LIMIT_MAX };
 
 /*
- * Groups (docs/groups-server.md). Off by default through milestone 1b: the
- * group routes answer as though they did not exist until GROUPS_ENABLED is
- * true. The 1c release turns it on, or removes it.
+ * Groups (docs/groups-server.md). Families are served by default; with
+ * GROUPS_ENABLED=false the group and invitation routes answer 501 and Drive
+ * lists no family spaces, while the data stays (docs/self-hosting.md, Groups).
+ * hushos.com sets it false until billing (1e) charges family folders to a plan.
  *
  * Until pooled storage (1e), each group area gets its own allowance and each
  * group its own seat count, both from here; a group's own seat limit, once
@@ -18,7 +19,7 @@ export const groupsEnv = createEnv({
     server: {
         GROUPS_ENABLED: z
             .enum(['true', 'false'])
-            .default('false')
+            .default('true')
             .transform((value) => value === 'true'),
         // Active members a group may have, the creator included (Apple and Google families are 6).
         GROUP_SEAT_LIMIT_DEFAULT: z

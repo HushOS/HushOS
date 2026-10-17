@@ -135,7 +135,7 @@ export interface AuthApi {
     succeedIdentity(input: {
         identity: IdentityEnvelope;
         signature: string;
-        /* The successor's consent (6746 bytes, base64url); optional until the 1c release. */
+        /* The successor's consent (6746 bytes, base64url); optional until iOS and Android send it. */
         consent?: string;
     }): Promise<{ keyVersion: number }>;
     /* A contact's successions from key version `from` to the current one, in order. */

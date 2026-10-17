@@ -11,8 +11,8 @@ import {
 
 /*
  * The edge of every group request (docs/groups-server.md 4), apart from the
- * server so it can be tested without one: dark unless GROUPS_ENABLED (501, as
- * for any route this server does not offer, which no client reads as
+ * server so it can be tested without one: off when GROUPS_ENABLED is false
+ * (501, as for any route this server does not offer, which no client reads as
  * "gone"); private and uncached; logged by pattern only; a named client and a
  * session first, then the per-account rate limits; and every body read as a
  * stream under its cap before anything parses it. A roster route's cap
