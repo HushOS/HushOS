@@ -579,6 +579,19 @@ describe('catalogue', () => {
         });
         expect(catalogue.plans[1]?.recommended).toBe(false);
     });
+
+    test('lists the valid family plans with families on', async () => {
+        const catalogue = await billing.listCatalogue();
+        // The mismatched, off-bound, low-minimum, fractional and per-member products are dropped.
+        expect(catalogue.families.map((family) => family.id)).toEqual([FAMILY]);
+        expect(catalogue.families[0]).toMatchObject({
+            prices: { usd: { base: 1500, perMember: 200 } },
+            includedMembers: 6,
+            maxMembers: 20,
+            quotaBytes: FAMILY_POOL.toString(),
+        });
+        expect(catalogue.families[0]).not.toHaveProperty('archived');
+    });
 });
 
 describe('reconcileCustomer', () => {

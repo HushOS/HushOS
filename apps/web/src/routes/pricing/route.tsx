@@ -23,6 +23,7 @@ import { billingApi } from '@/lib/billing-api';
 import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
+import { rememberReturn } from '@/lib/return-to';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -32,7 +33,16 @@ import {
 } from '@/lib/queries';
 import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
-import { currenciesOf, priceOf, tiersOf, type Tier } from '@/lib/plans';
+import {
+    currenciesOf,
+    familyOffer,
+    priceOf,
+    pricingLede,
+    TAX_LINE,
+    tiersOf,
+    type FamilyOffer,
+    type Tier,
+} from '@/lib/plans';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { cn } from 'cn';
@@ -85,6 +95,7 @@ export const Route = createFileRoute('/pricing')({
     head: ({ loaderData }) => {
         if (!loaderData) return {};
         const { origin, catalogue, currency } = loaderData;
+        const faq = faqFor(familyOffer(catalogue, 'month', currency));
         const description = `Start free with ${formatQuota(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
         return {
             meta: [
@@ -161,11 +172,13 @@ export const Route = createFileRoute('/pricing')({
     component: PricingPage,
 });
 
+const paidPlans = {
+    q: 'What do paid plans add?',
+    a: 'Storage, and nothing else. Every plan protects your files the same way: your password never leaves your device and your keys are made on it. Paying only buys more room.',
+};
+
 const faq = [
-    {
-        q: 'What do paid plans add?',
-        a: 'Storage, and nothing else. Every plan protects your files the same way: your password never leaves your device and your keys are made on it. Paying only buys more room.',
-    },
+    paidPlans,
     {
         q: 'Who bills me?',
         a: 'Polar, our merchant of record. Polar takes the payment, works out sales tax or VAT for your country at checkout, and sends the invoices. Your card details never reach HushOS.',
@@ -183,6 +196,43 @@ const faq = [
         a: 'Yes. HushOS is open source under the AGPL-3.0. Run your own copy with Docker Compose and give everyone as much space as you like. These plans are only for the service we run.',
     },
 ];
+
+/*
+ * The questions, with the family ones only where the page offers a family
+ * plan, so the FAQ markup in the head never answers for a section that is hidden.
+ */
+function faqFor(family: FamilyOffer | null) {
+    if (!family) return faq;
+    const { includedMembers, maxMembers, quotaBytes } = family.plan;
+    const pool = formatQuota(quotaBytes);
+    const familyFaq = [
+        {
+            q: 'What is a family plan?',
+            a: `One plan for up to ${includedMembers} people, or ${maxMembers} with extra places, sharing ${pool}. It gives the family folders everyone in the family can open, end-to-end encrypted, and everyone keeps their own private space. Family folders are on the web for now; the iPhone and Android apps add them soon.`,
+        },
+        {
+            q: 'Who pays for a family plan?',
+            a: 'The person who chooses the plan for the family pays for it, through Polar, and is the one who adds or removes places. Everyone else needs only a HushOS account, and Free is enough.',
+        },
+        {
+            q: 'What happens if someone leaves the family?',
+            a: 'They lose the family folders straight away, and HushOS replaces the folders’ keys, which can take a few minutes. Their own files stay theirs.',
+        },
+        {
+            q: 'What happens when a family plan is cancelled?',
+            a: 'The person who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for. After that, nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
+        },
+    ];
+    return [
+        {
+            ...paidPlans,
+            a: `${paidPlans.a} A family plan buys shared room: family folders for everyone in it.`,
+        },
+        ...faq.slice(1, -1),
+        ...familyFaq,
+        ...faq.slice(-1),
+    ];
+}
 
 /* The lowest monthly price in the page's currency, for the description tag. */
 function cheapest(plans: Plan[], currency: string) {
@@ -257,6 +307,9 @@ function PricingPage() {
     const [interval, setInterval] = useState<Interval>('year');
     const tiers = tiersOf(catalogue.plans);
     const free = formatQuota(catalogue.freeQuotaBytes);
+    // Only where the server serves families and sells plans: it lists none otherwise.
+    const family = familyOffer(catalogue, interval, currency);
+    const questions = faqFor(familyOffer(catalogue, 'month', currency));
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
     const live =
@@ -383,10 +436,7 @@ function PricingPage() {
                         <H1 className="lg:text-[56px]">
                             Start free. Pay for room, not for privacy.
                         </H1>
-                        <Lede>
-                            Every plan protects your files the same way. Paid plans add space, and
-                            nothing else.
-                        </Lede>
+                        <Lede>{pricingLede(family)}</Lede>
                     </div>
                 </section>
                 <section aria-label="Plans" className={container}>
@@ -521,6 +571,7 @@ function PricingPage() {
                                 {currency !== detected &&
                                     ' Checkout charges in the currency of the country you are in.'}
                             </p>
+                            {family && <FamilySection offer={family} hasSession={hasSession} />}
 
                             <div className="flex flex-col gap-4 rounded-xl bg-muted p-6">
                                 <h2 className="text-lg font-bold">Every plan, including Free</h2>
@@ -587,7 +638,7 @@ function PricingPage() {
                         )}
                     >
                         <H2 id="pricing-faq">Questions</H2>
-                        <Faq items={faq} />
+                        <Faq items={questions} />
                     </div>
                 </section>
             </main>
@@ -647,6 +698,58 @@ function Business() {
                 <TextLink to="/teams">More for teams</TextLink>
             </div>
         </div>
+    );
+}
+
+/*
+ * The family plan, shown only where the server serves families and sells plans.
+ * Choosing one happens on the family's own page, after it is made: signed in,
+ * the button opens Families; signed out, it signs up first and lands there.
+ */
+function FamilySection({ offer, hasSession }: { offer: FamilyOffer; hasSession: boolean }) {
+    return (
+        <section
+            aria-labelledby="family-plan"
+            data-family-plan
+            className="grid gap-6 rounded-xl border border-rule bg-card p-6 lg:grid-cols-[7fr_5fr] lg:gap-10 lg:p-7"
+        >
+            <div className="flex flex-col gap-3">
+                <h2 id="family-plan" className="text-[17px] font-bold">
+                    Family
+                </h2>
+                <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
+                    {offer.size}
+                </p>
+                <p className="max-w-[36em] text-base leading-relaxed">
+                    Family folders that everyone in the family can open, end-to-end encrypted.
+                    Everyone keeps their own private space too, with its own storage.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                    Family folders are on the web for now; the iPhone and Android apps add them
+                    soon.
+                </p>
+            </div>
+            <div className="flex flex-col gap-4 border-t border-rule pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10">
+                <div className="flex flex-col gap-1 tabular-nums">
+                    <span className="text-[22px] font-bold">{offer.price}</span>
+                    <span className="text-sm leading-snug text-muted-foreground">
+                        {offer.billed}
+                    </span>
+                    <span className="text-sm leading-snug text-muted-foreground">
+                        {offer.extra}
+                    </span>
+                    <span className="text-sm leading-snug text-muted-foreground">{TAX_LINE}</span>
+                </div>
+                <Link
+                    to={hasSession ? '/app/families' : '/register'}
+                    // Signed out: the new account lands on Families once it is set up.
+                    onClick={hasSession ? undefined : () => rememberReturn('/app/families')}
+                    className={buttonVariants({ size: 'lg', className: 'w-full' })}
+                >
+                    Create a family
+                </Link>
+            </div>
+        </section>
     );
 }
 

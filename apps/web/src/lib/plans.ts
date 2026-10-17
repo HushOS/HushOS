@@ -1,4 +1,6 @@
-import type { Plan } from '@hushos/billing/api';
+import type { Catalogue, FamilyPlan, Plan } from '@hushos/billing/api';
+import { DEFAULT_CURRENCY } from '@hushos/billing/protocol';
+import { formatMoney, formatQuota } from '@/lib/format';
 
 export type Tier = {
     key: string;
@@ -50,4 +52,75 @@ export function tiersOf(plans: Plan[]) {
         tiers.set(plan.quotaBytes, tier);
     }
     return [...tiers.values()];
+}
+
+/* Said beside every family price (lib/family-billing.ts explains why). */
+export const TAX_LINE = 'Plus tax where it applies; Polar adds it at checkout.';
+
+/* A family plan's prices in a currency, or in the default when it has none there. */
+export function familyPrice(plan: FamilyPlan, currency: string) {
+    const price = plan.prices[currency];
+    if (price) return { ...price, currency };
+    const fallback = plan.prices[DEFAULT_CURRENCY];
+    return fallback ? { ...fallback, currency: DEFAULT_CURRENCY } : null;
+}
+
+export type FamilyOffer = {
+    plan: FamilyPlan;
+    /* "$15 a month", or a yearly plan's month: "$12.50 a month". */
+    price: string;
+    /* "Billed monthly. $150 a year if you pay yearly." or "Billed $150 yearly." */
+    billed: string;
+    /* "For up to 6 people, sharing 2 TB." */
+    size: string;
+    /* "Then $2 a month for each person after that, up to 20." */
+    extra: string;
+};
+
+/*
+ * What the pricing page offers a family, or null when it offers none: with
+ * billing off, or where the server lists no family plan (it lists none
+ * without GROUPS_ENABLED). The plan is the one billed at `interval`, else the
+ * other one, priced in `currency` or the default; whole amounts drop the cents.
+ */
+export function familyOffer(
+    catalogue: Pick<Catalogue, 'enabled' | 'families'>,
+    interval: 'month' | 'year',
+    currency: string,
+): FamilyOffer | null {
+    if (!catalogue.enabled) return null;
+    const { families } = catalogue;
+    const plan =
+        families.find((candidate) => candidate.interval === interval) ??
+        families.find((candidate) => candidate.interval === 'month') ??
+        families[0];
+    const price = plan && familyPrice(plan, currency);
+    if (!plan || !price) return null;
+    const money = (minor: number) => formatMoney(minor, price.currency);
+    const yearly = families.find((candidate) => candidate.interval === 'year');
+    const yearlyPrice = yearly && familyPrice(yearly, price.currency);
+    const per = plan.interval === 'year' ? 'a year' : 'a month';
+    return {
+        plan,
+        price: `${money(plan.interval === 'year' ? Math.round(price.base / 12) : price.base)} a month`,
+        billed:
+            plan.interval === 'year'
+                ? `Billed ${money(price.base)} yearly.`
+                : yearlyPrice && yearlyPrice.currency === price.currency
+                  ? `Billed monthly. ${money(yearlyPrice.base)} a year if you pay yearly.`
+                  : 'Billed monthly.',
+        size: `For up to ${plan.includedMembers} people, sharing ${formatQuota(plan.quotaBytes)}.`,
+        extra: `Then ${money(price.perMember)} ${per} for each person after that, up to ${plan.maxMembers}.`,
+    };
+}
+
+/*
+ * The pricing page's lede. "Nothing else" holds only while no family plan is
+ * offered: a family plan adds family folders, so with one shown the lede says so.
+ */
+export function pricingLede(family: FamilyOffer | null) {
+    const same = 'Every plan protects your files the same way.';
+    return family
+        ? `${same} Paid plans add space; a family plan adds folders you share with up to ${family.plan.maxMembers} people.`
+        : `${same} Paid plans add space, and nothing else.`;
 }
