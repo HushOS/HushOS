@@ -1,0 +1,59 @@
+apps/web/src/lib/groups/copy.ts
+  s_c56e31c87cddde::t_99b0f3fbb893c4 100-101
+bun.lock
+  s_c56e31c87cddde::t_bf8e1d0b9fe252 275
+docs/self-hosting.md
+  s_c56e31c87cddde::t_c77a0651666fa9 195,544-547
+packages/billing/src/groups-gate.test.ts
+  s_c56e31c87cddde::t_f957906809434f 1-45
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_6315c53cdcfeb4 1-2,21-26,150-152,154,161-166,172,179-180,195-196,204-212,228-229,239-246,248-251,260,262-268,277-290,294-296,328-353,383,474-484,539,546-555,653-657,678,696,709,715-716,767-782,786-792,801-803,805
+packages/billing/src/protocol.ts
+  s_c56e31c87cddde::t_db31f7d5de4871 37-44
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_8dd807da84db9c 119-129,348,397-399,415,515-516,1290,1297-1298,1300-1306,1315,1325-1339,1522,1529-1530,1532-1533,1541,1549-1550,1552-1564,1566-1568,1577-1663
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_471e3fe628ea6b 33
+packages/db/src/billing.groups.test.ts
+  s_c56e31c87cddde::t_e863b1f5359b97 3-13,25,48
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_2f427a9567281a 432-436,502-503
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_5e066790fb71ea 1-54
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_9fcc73f4a0926f 2,1267-1268
+packages/db/test/global-setup.ts
+  s_c56e31c87cddde::t_8b0d4ad490b21a 2,31-52,73-78
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_b73059cb28015d 247,251,259-260
+packages/groups/src/protocol.ts
+  s_c56e31c87cddde::t_134cdfab0f1f40 19
+packages/groups/src/server.billing.test.ts
+  s_c56e31c87cddde::t_edbc324ef153f1 158,162,175,293-316
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_7d52f4bdc84236 28-33,1889-1894,1896-1901
+packages/jobs/package.json
+  s_c56e31c87cddde::t_57d98a69eb314b 11,27-28
+packages/jobs/src/client.test.ts
+  s_c56e31c87cddde::t_727b99f326490e 1-48
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_980753d0c0b35c 119-121,130-133
+packages/jobs/vitest.config.ts
+  s_c56e31c87cddde::t_665522a638e96e 1-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d9f703bd8e326dd30a7dc2fd4b2a45ae3ea11785",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
