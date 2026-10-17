@@ -1276,9 +1276,10 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
  * What a workspace may still take. A group area whose group has a storage
  * pool (billing wrote one, docs/groups-design.md 3.5) reads the pool instead
  * of its own allowance: the pool's quota against the used and reserved bytes
- * of every live area of the group (a deleted one counts no more). The pool row is locked first, so reservations
- * in two areas of one group cannot both spend the same free bytes; each area
- * still counts its own bytes, so purges and releases are unchanged.
+ * of every area of the group, a deleted one included until its purge. The
+ * pool row is locked first, so reservations in two areas of one group cannot
+ * both spend the same free bytes; each area still counts its own bytes, so
+ * purges and releases are unchanged.
  */
 async function freeBytes(tx: Tx, workspaceId: string) {
     const [owner] = await tx
@@ -1312,9 +1313,10 @@ async function freeBytes(tx: Tx, workspaceId: string) {
             })
             .from(workspaceStorage)
             .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
-            // A deleted family folder no longer draws from the pool (docs/groups-design.md 2.10):
-            // its bytes wait for the purge, and nothing can be written there meanwhile.
-            .where(and(eq(workspaces.groupId, groupId), isNull(workspaces.deletedAt)));
+            // A deleted family folder still draws from the pool until the purge deletes its files
+            // (docs/groups-design.md 2.10): its bytes are still stored, and deleting a full folder
+            // must not free room to fill another while they are.
+            .where(eq(workspaces.groupId, groupId));
         const used = BigInt(totals?.used ?? '0');
         const reserved = BigInt(totals?.reserved ?? '0');
         // Past the plan's period and grace, the pool is empty until billing writes it again.
@@ -1701,6 +1703,16 @@ export async function finishCompleting(
         if (upload.status !== 'completing' && upload.status !== 'conflicted')
             return { status: 'not-completing' as const, uploadStatus: upload.status };
         const row = upload as UploadRow;
+        // A deleted family folder takes nothing more (the expiry job reaches this without any
+        // route's check): the upload is released, its object retired, as for a purged node.
+        const [space] = await tx
+            .select({ deletedAt: workspaces.deletedAt })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId));
+        if (space?.deletedAt) {
+            await releaseUpload(tx, row, 'aborted');
+            return { status: 'purged' as const };
+        }
         if (
             storedSize === null ||
             row.ciphertextSize === null ||

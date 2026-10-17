@@ -919,6 +919,9 @@ export type SessionHooks = {
 export type WorkspaceSetup = { id: string; grant: WorkspaceKeyEnvelope };
 const KEYS_CHANGED = 'This folder’s keys changed. Reload to continue.';
 const AREA_ROOT = 'A family folder’s top level changes only with the family’s member list.';
+/* A walk handed a key it reached only through one the rotation replaces (design 2.10, F14). */
+export const NOT_CARRIED =
+    'This item was added under a key the key change replaces, so it is not carried over.';
 type Message = {
     [K in keyof CryptoRequests]: { id: number; operation: K; input: CryptoRequests[K] };
 }[keyof CryptoRequests];
@@ -1417,10 +1420,13 @@ export function createCryptoSession() {
             return { key: previous.key, rootedAt: null };
         throw new CryptoError('This item was wrapped under an older folder key.');
     }
-    /* What a node made under `parentId` is rooted at: its parent's root, or the version for a root. */
+    /*
+     * What a node made under `parentId` at `parentKeyEpoch` is rooted at: what
+     * that parent key is rooted at, a walk's pending key included (as for
+     * driveOpenNodes), or the version for a root.
+     */
     function rootOf(workspaceId: string, parentId: string, parentKeyEpoch: number) {
-        if (parentId === workspaceId) return parentKeyEpoch;
-        return lineage.get(slot(workspaceId, parentId)) ?? null;
+        return parentKeyAndRoot(workspaceId, parentId, parentKeyEpoch).rootedAt;
     }
     /*
      * A node's key for a write that puts something under it (its metadata, a
@@ -1435,12 +1441,11 @@ export function createCryptoSession() {
         return node;
     }
     function rootedAtWriteVersion(workspaceId: string, nodeId: string) {
-        const rootedAt = lineage.get(slot(workspaceId, nodeId));
-        return (
-            rootedAt !== null &&
-            rootedAt !== undefined &&
-            rootedAt === groups.writeVersion(workspaceId)
-        );
+        return rootedNow(workspaceId, lineage.get(slot(workspaceId, nodeId)) ?? null);
+    }
+    /* Whether a key rooted at `rootedAt` is rooted at the area's write version now. */
+    function rootedNow(workspaceId: string, rootedAt: number | null) {
+        return rootedAt !== null && rootedAt === groups.writeVersion(workspaceId);
     }
     /*
      * The workspace key version new things are wrapped under: a group area's
@@ -1502,12 +1507,7 @@ export function createCryptoSession() {
      * group area, never a parent's previous key either: that is the key the
      * rotation is taking away.
      */
-    function wrapKeyFor(
-        workspaceId: string,
-        parentId: string,
-        parentKeyEpoch: number,
-        options: { walk?: boolean } = {},
-    ) {
+    function wrapKeyFor(workspaceId: string, parentId: string, parentKeyEpoch: number) {
         if (parentId === workspaceId) {
             // A family folder has one root, made and re-keyed only with its roster (groupCreate,
             // groupStage): nothing in Drive wraps a key directly under its area key.
@@ -1517,15 +1517,19 @@ export function createCryptoSession() {
             return key;
         }
         if (!groups.isArea(workspaceId)) return parentKeyFor(workspaceId, parentId, parentKeyEpoch);
+        // A write needs a parent whose key path is rooted at the area's write version (F14): never
+        // one opened through a previous key, or cached under a root a rotation has replaced, nor
+        // a walk's pending key made before the area's next roster landed. A walk is held to it
+        // too, its re-wraps included.
         const pending = pendingNodeKeys.get(slot(workspaceId, parentId));
-        if (pending?.epoch === parentKeyEpoch) return pending.fresh;
+        if (pending?.epoch === parentKeyEpoch) {
+            if (!rootedNow(workspaceId, pending.rootedAt))
+                throw new CryptoError(KEY_CHANGE_PENDING);
+            return pending.fresh;
+        }
         const parent = nodeKey(workspaceId, parentId);
         if (!parent) throw new CryptoError('Open the containing folder first.');
-        // A write needs a parent whose key path is rooted at the area's write version (F14): never
-        // one opened through a previous key, or cached under a root a rotation has replaced. A
-        // walk re-wraps what is already there and is exempt (its residual: docs/groups-server.md).
-        if (!options.walk && !rootedAtWriteVersion(workspaceId, parentId))
-            throw new CryptoError(KEY_CHANGE_PENDING);
+        if (!rootedAtWriteVersion(workspaceId, parentId)) throw new CryptoError(KEY_CHANGE_PENDING);
         if (parent.epoch === parentKeyEpoch && pending?.oldEpoch !== parentKeyEpoch)
             return parent.key;
         throw new CryptoError(KEYS_CHANGED);
@@ -1978,9 +1982,21 @@ export function createCryptoSession() {
         // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
         if (node.keyEpoch >= targetEpoch) {
             try {
-                const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch, {
-                    walk: true,
-                });
+                // What the key is rooted at: this device's own copy, or the envelope's path.
+                const rootedAt =
+                    cached && cached.epoch === node.keyEpoch
+                        ? (lineage.get(slot(workspaceId, nodeId)) ?? null)
+                        : parentKeyAndRoot(workspaceId, node.parentId, node.wrappedParentKeyEpoch)
+                              .rootedAt;
+                // In a group area, a key reached through one the rotation replaces is anyone's who
+                // held that key: a removed member and the server can plant a node under a folder's
+                // old key already at the target, and re-wrapping it would carry their key into the
+                // new tree. Only a key rooted at the write version is carried. An honest walk never
+                // needs more: the target is above every epoch a node carries, and the server
+                // refuses nodes made or moved under a folder the walk has not reached.
+                if (groups.isArea(workspaceId) && !rootedNow(workspaceId, rootedAt))
+                    throw new CryptoError(NOT_CARRIED);
+                const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const keyEnvelope = await wrapNodeKey(old, parentKey, {
                     workspaceId,
                     nodeId,
@@ -1988,18 +2004,8 @@ export function createCryptoSession() {
                     parentKeyEpoch: node.parentKeyEpoch,
                     keyEpoch: node.keyEpoch,
                 });
-                // The same key, still: rooted wherever its old envelope was (a previous key's path
-                // stays tainted), never vouched for by this re-wrap. Only this branch is a walk's
-                // exemption (wrapKeyFor): it wraps a key that already exists, never a new one.
-                if (!cached)
-                    rememberNodeKey(
-                        workspaceId,
-                        nodeId,
-                        old,
-                        node.keyEpoch,
-                        parentKeyAndRoot(workspaceId, node.parentId, node.wrappedParentKeyEpoch)
-                            .rootedAt,
-                    );
+                // The same key, still, rooted where it was: never vouched for by this re-wrap.
+                if (!cached) rememberNodeKey(workspaceId, nodeId, old, node.keyEpoch, rootedAt);
                 else old.fill(0);
                 return {
                     id: nodeId,

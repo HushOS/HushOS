@@ -39,6 +39,7 @@ import {
     users,
     workspaceDocuments,
     workspaceKeys,
+    workspaceStorage,
     workspaces,
     type GroupRole,
 } from './schema';
@@ -3675,6 +3676,63 @@ describe('deleting a family folder (groups design 2.10)', () => {
                 },
             }),
         );
+    });
+
+    test('an upload left completing in it is released by the expiry, never published there', async () => {
+        const { creator, group, head, photos, root } = await withPhotos();
+        const objectId = randomUUID();
+        const nodeId = randomUUID();
+        const size = 1n << 20n;
+        const begun = await signed.beginUpload({
+            workspaceId: photos,
+            userId: creator.userId,
+            node: {
+                existing: false,
+                id: nodeId,
+                parentId: root.id,
+                envelopes: {
+                    keyEpoch: (await drive.allocateKeyEpochs(photos, 1))!.from,
+                    parentKeyEpoch: root.keyEpoch,
+                    keyEnvelope: randomBytes(72),
+                    metadataEnvelope: randomBytes(100),
+                },
+            },
+            version: { id: randomUUID(), contentKeyEnvelope: randomBytes(84) },
+            object: {
+                id: objectId,
+                objectKey: `ws/${photos}/${objectId}`,
+                contentSuite: 2,
+                chunkSize: Number(size),
+                chunkCount: 1,
+                contentNonce: randomBytes(16),
+                ciphertextSize: size,
+            },
+            multipartId: `mp-${objectId}`,
+            expiresAt: new Date(Date.now() + 3600_000),
+        });
+        if (begun.status !== 'ok') throw new Error(begun.status);
+        expect((await drive.startCompleting(photos, begun.uploadId)).status).toBe('ok');
+        await okHead(await retire(group, head, creator.userId, photos));
+        // The expiry job finds the object stored at its size and finishes the upload: refused.
+        expect(await drive.finishCompleting(photos, begun.uploadId, size)).toEqual({
+            status: 'purged',
+        });
+        // The never-published node goes, and its upload row with it.
+        expect(
+            await db.select().from(driveUploads).where(eq(driveUploads.id, begun.uploadId)),
+        ).toEqual([]);
+        const [storage] = await db
+            .select()
+            .from(workspaceStorage)
+            .where(eq(workspaceStorage.workspaceId, photos));
+        expect(storage).toMatchObject({ usedBytes: 0n, reservedBytes: 0n });
+        expect(await db.select().from(driveNodes).where(eq(driveNodes.id, nodeId))).toEqual([]);
+        // Its object goes from the store through the outbox.
+        const [queued] = await db
+            .select()
+            .from(driveObjectDeletions)
+            .where(eq(driveObjectDeletions.objectId, objectId));
+        expect(queued).toMatchObject({ objectKey: `ws/${photos}/${objectId}` });
     });
 
     test('the purge takes it with everything in it after 30 days, never before', async () => {

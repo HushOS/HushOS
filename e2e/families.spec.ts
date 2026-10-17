@@ -1315,7 +1315,9 @@ test.describe('deleting a family folder', () => {
         await ida.page.getByRole('button', { name: 'More for Photos' }).click();
         await ida.page.getByRole('menuitem', { name: 'Delete family folder' }).click();
         const confirm = ida.page.getByRole('alertdialog', { name: 'Delete “Photos”?' });
-        await expect(confirm).toContainText('deleted from the server after 30 days');
+        await expect(confirm).toContainText(
+            'deleted from the server after 30 days, and their space is freed then',
+        );
         await expect(confirm).toContainText('Anyone who kept copies or keys keeps them');
         const deleted = ida.page.waitForResponse(
             (response) =>

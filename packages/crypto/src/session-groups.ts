@@ -408,6 +408,13 @@ export type GroupRequests = {
         checkedAt: string;
         joining?: { joinMark: JoinMark } | null;
         creating?: { stagedEnvelope: string } | null;
+        /*
+         * The record's device pin is a mark, its cache is left out: for a
+         * record whose cache this release refuses (one a newer release wrote,
+         * or a damaged one). The pin still refuses any chain below it, so a
+         * server cannot roll the device back by getting its cache refused.
+         */
+        withoutCache?: boolean;
     };
     /*
      * The join code a newcomer compares with the admin's screen (design 2.4,
@@ -2077,7 +2084,12 @@ export function createGroupSession(host: GroupHost) {
      * this session holds, a committed chain or a fork. `null`: the record did
      * not open (sealed under an earlier account root).
      */
-    async function marksOf(input: { userId: string; groupId: string; record: string | null }) {
+    async function marksOf(input: {
+        userId: string;
+        groupId: string;
+        record: string | null;
+        withoutCache?: boolean;
+    }) {
         const groupId = uuid(input.groupId, 'group id');
         const { userId, root } = host.unlocked();
         try {
@@ -2099,7 +2111,10 @@ export function createGroupSession(host: GroupHost) {
                     throw error;
                 }
                 if (value?.v !== 1) return null;
-                record = { cache: value.cache ?? null, pin: value.pin ?? null };
+                record = {
+                    cache: input.withoutCache ? null : (value.cache ?? null),
+                    pin: value.pin ?? null,
+                };
             }
             if (!settingsPins || settingsPins.userId !== userId)
                 throw new CryptoError('Open your settings first.');

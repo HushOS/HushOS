@@ -215,40 +215,36 @@ describe('syncing a family', () => {
         expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
     });
 
-    test('a record the worker refuses from version 1 too is left out, and replaced only by what is then accepted', async () => {
+    test('a record whose cache the worker refuses from version 1 too is accepted without its cache, its pin still a mark', async () => {
         const h = harness({ head: 6 });
         await knownFamily(h);
         const asked = routeRosters(h);
         const accept = h.results.groupAccept!;
-        // A record a newer release wrote: every acceptance it is a mark of is refused.
+        // A record a newer release wrote: every acceptance its cache is a mark of is refused.
         h.results.groupAccept = (input) => {
-            if (input.record) throw new Error('Invalid group chain cache.');
+            if (input.record && !input.withoutCache) throw new Error('Invalid member list cache.');
             return accept(input);
         };
         expect((await syncGroup(h.ctx, GROUP)).status).toBe('accepted');
         expect(asked).toEqual([5, 0, 0]);
+        // The record goes to the worker every time: only its cache is left out, never its pin.
         expect(h.calls('groupAccept')).toMatchObject([
             { record: 'record-5' },
             { record: 'record-5' },
-            { record: null },
+            { record: 'record-5', withoutCache: true },
         ]);
+        expect(h.calls('groupAccept')[1]).not.toHaveProperty('withoutCache');
         expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
-        // The settings pin was the mark, and stays.
-        expect(h.settings.doc.groups?.[GROUP]).toBeTruthy();
     });
 
-    test('a chain refused on its own merits, record or not, keeps the record', async () => {
+    test('a chain refused on its own merits keeps the record', async () => {
         const h = harness({ head: 6 });
         await knownFamily(h);
         h.results.groupAccept = () => {
             throw new Error('Invalid roster.');
         };
         await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow('Invalid roster.');
-        expect(h.calls('groupAccept')).toMatchObject([
-            { record: 'record-5' },
-            { record: 'record-5' },
-            { record: null },
-        ]);
+        expect(h.calls('groupAccept')).toHaveLength(3);
         expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-5');
     });
 

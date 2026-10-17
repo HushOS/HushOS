@@ -23,7 +23,12 @@ import { sealLinkSecret } from './links';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
 import { KEY_CHANGE_PENDING } from './protocol';
-import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
+import {
+    createCryptoSession,
+    NOT_CARRIED,
+    type CryptoRequests,
+    type CryptoResults,
+} from './session';
 import { openAreaSelfGrant } from './workspace';
 import {
     openDeviceRecord,
@@ -57,6 +62,7 @@ const CAROL = 'c3c3c3c3-0000-4000-8000-000000000003';
 const CHILD = 'c4c4c4c4-0000-4000-8000-000000000004';
 const LATER = 'c5c5c5c5-0000-4000-8000-000000000005';
 const GRAND = 'c6c6c6c6-0000-4000-8000-000000000006';
+const PLANTED = 'cdcdcdcd-0000-4000-8000-00000000000d';
 const OTHER_WS = 'd6d6d6d6-0000-4000-8000-000000000006';
 const CHECKED = '2026-10-16T00:00:00.000Z';
 // The worker's answer to a write under keys the device no longer has as current (session.ts).
@@ -1848,6 +1854,233 @@ describe('the write version (F9)', () => {
         await expect(below(bob, 5, OTHER_WS.replace('d6d6d6d6', 'c7c7c7c7'))).resolves.toBeTruthy();
     });
 
+    test('design 2.10 (F14): a key a walk made before the folder’s next roster landed takes no write', async () => {
+        const f = await family();
+        const r = await rotated(f);
+        const { alice, bob, groupId, ws, area, server, marks, sync } = f;
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: r.rotation.selfGrant,
+        });
+        await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        // The walk re-keys CHILD; the batch is not confirmed yet.
+        const walked = await alice.call('driveRotateNodes', {
+            workspaceId: ws,
+            targetEpoch: 5,
+            granterUserId: ALICE,
+            signers: {},
+            group: { groupId, staged: null, writers: [] },
+            nodes: [
+                {
+                    id: CHILD,
+                    kind: 'folder',
+                    parentId: area.root.id,
+                    parentKeyEpoch: 5,
+                    keyEpoch: 1,
+                    wrappedParentKeyEpoch: 1,
+                    keyEnvelope: r.child.nodes[0]!.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: r.child.nodes[0]!.metadataEnvelope,
+                    metadataSigner: ALICE,
+                    metadataSignature: r.child.nodes[0]!.metadataSignature,
+                    versions: [],
+                    shares: [],
+                    links: [],
+                },
+            ],
+        });
+        expect(walked.nodes[0]!.error).toBeUndefined();
+        // Until then, what is made under the pending key is rooted as that key is, and takes writes.
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, CHILD, 5, LATER)),
+        ).resolves.toBeTruthy();
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, LATER, 9, GRAND.replace('c6', 'cf'))),
+        ).resolves.toBeTruthy();
+        // Meanwhile the folder's next roster lands: its keys move to version 3.
+        const rotatedRoot = r.rotation.root.rotated!;
+        const second = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 3,
+            op: {
+                kind: 'rotate',
+                rotation: {
+                    workspaceId: ws,
+                    targetEpoch: 7,
+                    root: f.rootInput({
+                        parentKeyEpoch: 3,
+                        keyEpoch: 5,
+                        wrappedParentKeyEpoch: 2,
+                        keyEnvelope: r.rotation.root.keyEnvelope,
+                        metadataEnvelope: rotatedRoot.metadataEnvelope,
+                        metadataSignature: rotatedRoot.metadataSignature ?? null,
+                        metadataRekey: rotatedRoot.metadataRekey
+                            ? {
+                                  origin: {
+                                      envelope: area.root.metadataEnvelope,
+                                      signerId: ALICE,
+                                      signature: area.root.metadataSignature!,
+                                      keyEnvelope: rotatedRoot.metadataRekey.originKeyEnvelope,
+                                  },
+                                  signature: rotatedRoot.metadataRekey.signature,
+                              }
+                            : null,
+                        changeSeq: 2,
+                    }),
+                    documents: [],
+                },
+            },
+            kems: { [BOB]: bob.served.kemPublicKey },
+            writers: [],
+        });
+        if (second.outboxId === null) throw new Error('nothing staged');
+        await alice.call('groupDrop', { outboxId: second.outboxId });
+        server.store(second.body);
+        await sync(alice, marks.alice);
+        const third = second.body.rotation!;
+        await expect(
+            alice.call('groupOpenArea', {
+                groupId,
+                workspaceId: ws,
+                idSeed: area.idSeed,
+                servedVersion: 3,
+                grant: null,
+                selfGrant: third.selfGrant,
+            }),
+        ).resolves.toMatchObject({ version: 3 });
+        await alice.call('driveOpenNodes', {
+            workspaceId: ws,
+            nodes: [
+                {
+                    ...r.rotatedRoot(false),
+                    parentKeyEpoch: 3,
+                    keyEpoch: 7,
+                    keyEnvelope: third.root.keyEnvelope,
+                    metadataEnvelope: third.root.rotated!.metadataEnvelope,
+                },
+            ],
+        });
+        // The walk's pending key for CHILD is rooted at version 2: nothing more goes under it.
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, CHILD, 5, LATER.replace('c5', 'ce'))),
+        ).rejects.toThrow(KEY_CHANGE_PENDING);
+    });
+
+    test('design 2.10 (F14): a node planted at the walk’s target under a folder’s old key is not carried into the new tree', async () => {
+        const f = await family();
+        const r = await rotated(f);
+        const { alice, groupId, ws, area } = f;
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: r.rotation.selfGrant,
+        });
+        await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        // A removed member holds CHILD's key 1 (any member did before the rotation). With the
+        // server, they plant a node under it already at the walk's target, under a key of theirs.
+        const areaKey = await openAreaSelfGrant(alice.root, ALICE, groupId, area.selfGrant);
+        const rootKey = await openNodeKey(decode(f.rootListing.keyEnvelope), areaKey, {
+            workspaceId: ws,
+            nodeId: area.root.id,
+            parentId: ws,
+            parentKeyEpoch: 1,
+            keyEpoch: 1,
+        });
+        const childKey = await openNodeKey(decode(r.childListing.keyEnvelope), rootKey, {
+            workspaceId: ws,
+            nodeId: CHILD,
+            parentId: area.root.id,
+            parentKeyEpoch: 1,
+            keyEpoch: 1,
+        });
+        const theirs = crypto.getRandomValues(new Uint8Array(32));
+        const planted = {
+            ...r.grandInput,
+            id: PLANTED,
+            keyEpoch: 5,
+            parentKeyEpoch: 5,
+            keyEnvelope: encode(
+                await wrapNodeKey(theirs, childKey, {
+                    workspaceId: ws,
+                    nodeId: PLANTED,
+                    parentId: CHILD,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 5,
+                }),
+            ),
+        };
+        // The walk re-keys CHILD, and is handed the planted node to re-wrap under CHILD's new key.
+        const walked = await alice.call('driveRotateNodes', {
+            workspaceId: ws,
+            targetEpoch: 5,
+            granterUserId: ALICE,
+            signers: {},
+            group: { groupId, staged: null, writers: [] },
+            nodes: [
+                {
+                    id: CHILD,
+                    kind: 'folder',
+                    parentId: area.root.id,
+                    parentKeyEpoch: 5,
+                    keyEpoch: 1,
+                    wrappedParentKeyEpoch: 1,
+                    keyEnvelope: r.child.nodes[0]!.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: r.child.nodes[0]!.metadataEnvelope,
+                    metadataSigner: ALICE,
+                    metadataSignature: r.child.nodes[0]!.metadataSignature,
+                    versions: [],
+                    shares: [],
+                    links: [],
+                },
+                planted,
+                // Alice's own grandchild, cached since she made it under CHILD's key 1 (which the
+                // removed member held too), and served as already at the target.
+                { ...r.grandInput, parentKeyEpoch: 5 },
+            ],
+        });
+        // The honest part of the walk completes; neither key is wrapped under the new one.
+        expect(walked.nodes[0]!.error).toBeUndefined();
+        expect(walked.nodes.slice(1)).toEqual([
+            { id: PLANTED, error: NOT_CARRIED },
+            { id: GRAND, error: NOT_CARRIED },
+        ]);
+        await alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [CHILD] });
+        // Nor is it cached as anything a write may go under.
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, PLANTED, 5, LATER)),
+        ).rejects.toThrow();
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, CHILD, 5, LATER)),
+        ).resolves.toBeTruthy();
+        // A key rooted at the folder's key (the folder just made) handed to a walk as if it sat
+        // under the grandchild, whose key the removed member holds: never wrapped under it.
+        const misplaced = await alice.call('driveRotateNodes', {
+            workspaceId: ws,
+            targetEpoch: 5,
+            granterUserId: ALICE,
+            signers: {},
+            group: { groupId, staged: null, writers: [] },
+            nodes: [
+                {
+                    ...r.grandInput,
+                    id: LATER,
+                    parentId: GRAND,
+                    parentKeyEpoch: 9,
+                    wrappedParentKeyEpoch: 9,
+                },
+            ],
+        });
+        expect(misplaced.nodes[0]).toEqual({ id: LATER, error: KEY_CHANGE_PENDING });
+    });
+
     test('design 2.10 (F14): no write that seals under a folder’s key takes one reached through a previous key', async () => {
         const f = await family();
         const r = await rotated(f);
@@ -3112,6 +3345,50 @@ describe('the device store and the lock', () => {
         ).resolves.toMatchObject({ status: 'accepted' });
     });
 
+    test('a record whose cache is refused is accepted without it, and its pin still refuses an older list', async () => {
+        const f = await family();
+        const { alice, groupId, server } = f;
+        const opened = (await openDeviceRecord(
+            alice.root,
+            ALICE,
+            groupId,
+            'chains',
+            f.marks.alice.record!,
+        )) as { v: 1; cache: GroupChainCache; pin: GroupPin };
+        expect(opened.pin.rosterVersion).toBe(2);
+        // A cache a newer release wrote: refused here over any list served.
+        const newer = await sealDeviceRecord(alice.root, ALICE, groupId, 'chains', {
+            ...opened,
+            cache: { ...opened.cache, cacheVersion: 3 },
+        });
+        const served = server.served();
+        // A reload: no chain held in the session to mark the family.
+        const device = await alice.device();
+        const ask = (chain: typeof served, extra: Partial<CryptoRequests['groupAccept']> = {}) =>
+            device.call('groupAccept', {
+                userId: ALICE,
+                groupId,
+                served: chain,
+                record: newer,
+                checkedAt: CHECKED,
+                ...extra,
+            });
+        // The server cuts the list before Bob's admission and serves settings with no pin.
+        alice.settings.groups = {};
+        await saveSettings(device);
+        await loadSettings(device);
+        const cut = { ...served, rosters: served.rosters.slice(0, 1) };
+        await expect(ask(cut)).rejects.toThrow('Invalid member list cache.');
+        await expect(ask(cut, { withoutCache: true })).rejects.toThrow(
+            'This is an older member list than this device has seen.',
+        );
+        // The whole list: taken without the cache, at the version the record's pin holds.
+        await expect(ask(served, { withoutCache: true })).resolves.toMatchObject({
+            status: 'accepted',
+            view: { rosterVersion: 2 },
+        });
+    });
+
     test('a staged roster another tab landed is dropped once acceptance takes it, and junk under it drops nothing', async () => {
         const f = await family();
         const { alice, groupId, server, marks, sync } = f;
@@ -3325,6 +3602,55 @@ describe('copying in a family folder (1c step 7)', () => {
         nodeId: COPY,
         kind: 'file' as const,
         metadataVersion: 1,
+    });
+
+    test('design 2.10 (F14): a copy goes into no folder whose key is not rooted at the folder’s current key', async () => {
+        const f = await family();
+        const source = await bobsFile(f);
+        const r = await rotated(f);
+        const { alice, bob, groupId, ws, area } = f;
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: r.rotation.selfGrant,
+        });
+        await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        const copy = (parentId: string, parentKeyEpoch: number) =>
+            alice.call('driveCopyFile', {
+                workspaceId: ws,
+                signers: {},
+                source,
+                node: {
+                    id: COPY,
+                    parentId,
+                    parentKeyEpoch,
+                    keyEpoch: 8,
+                    metadata: folder('notes (copy).txt'),
+                },
+                versionId: COPY_VERSION,
+                group: {
+                    groupId,
+                    staged: null,
+                    writers: [
+                        {
+                            userId: BOB,
+                            pinned: null,
+                            served: bob.served,
+                            links: [],
+                            personal: null,
+                        },
+                    ],
+                },
+            });
+        // CHILD's key is cached under the replaced root: no copy goes under it.
+        await expect(copy(CHILD, 1)).rejects.toThrow(KEY_CHANGE_PENDING);
+        // Under the rotated root, it does.
+        await expect(copy(area.root.id, 5)).resolves.toMatchObject({
+            keyEnvelope: expect.any(String),
+        });
     });
 
     test('a copy is judged by the family: a member’s file is vouched for, a former member’s only re-sealed', async () => {
