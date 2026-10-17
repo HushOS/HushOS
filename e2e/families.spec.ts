@@ -1,6 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, test, type Browser, type Locator, type Page, type Route } from '@playwright/test';
+import {
+    expect,
+    test,
+    type Browser,
+    type Locator,
+    type Page,
+    type Response,
+    type Route,
+} from '@playwright/test';
 import {
     newContext,
     PASSWORD,
@@ -788,15 +796,21 @@ test.describe('removal, leaving and key changes', () => {
             timeout: 60_000,
         });
 
-        // Ana uploads into Trips while the walk is held there. Her device saw no key change, so
-        // only the server says to wait (409 rotating): the upload waits and says so, not failed.
-        const refused = ana.page.waitForResponse(
-            (response) =>
-                response.request().method() === 'POST' &&
-                new URL(response.url()).pathname === '/api/drive/uploads' &&
-                response.status() === 409,
-            { timeout: 60_000 },
-        );
+        // Ana uploads into Trips while the walk is held there. Either her device has already seen
+        // the key change and waits on its own (KEY_CHANGE_PENDING), or the server says to wait
+        // (409 rotating); which one depends on whether her sync ran first. Either way the upload
+        // waits and says so, and nothing is published until the walk has re-keyed the folder.
+        const uploads: { status: number; code?: string }[] = [];
+        const onUpload = async (response: Response) => {
+            if (
+                response.request().method() !== 'POST' ||
+                new URL(response.url()).pathname !== '/api/drive/uploads'
+            )
+                return;
+            const body = (await response.json().catch(() => ({}))) as { code?: string };
+            uploads.push({ status: response.status(), code: body.code });
+        };
+        ana.page.on('response', onUpload);
         await ana.page
             .locator('input[type=file]')
             .first()
@@ -807,13 +821,17 @@ test.describe('removal, leaving and key changes', () => {
                     buffer: Buffer.from('Late, but here\n'),
                 },
             ]);
-        expect(((await (await refused).json()) as { code?: string }).code).toBe('rotating');
         const late = ana.page
             .locator('section[aria-label=Transfers]')
             .getByRole('listitem')
             .filter({ hasText: 'late.txt' })
             .last();
         await expect(late).toContainText('Finishing a key change…', { timeout: 60_000 });
+        // While the walk is held, no upload has been accepted: any begin the server saw was refused
+        // as rotating, never published under the folder's old keys.
+        expect(uploads.filter((u) => u.status < 400)).toEqual([]);
+        expect(uploads.every((u) => u.status === 409 && u.code === 'rotating')).toBe(true);
+        ana.page.off('response', onUpload);
         await ana.page.screenshot({ path: test.info().outputPath('upload-refused-waits.png') });
 
         // While the walk is held, Sam's file is still his record: a former member's.
