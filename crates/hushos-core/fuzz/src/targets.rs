@@ -12,8 +12,9 @@
 
 use crate::fixtures;
 use crate::groups::{case_from, judge};
+use crate::rekeyed;
 use crate::shape::{self, encoded, number, text};
-use hushos_core::fuzzing::{encode_statement, parse_statement};
+use hushos_core::fuzzing::{self, encode_statement, parse_statement};
 use hushos_core::*;
 use serde_json::{json, Value};
 
@@ -32,6 +33,8 @@ pub const TARGETS: &[&str] = &[
     "key_seal_context",
     "pins",
     "accept",
+    "record_integrity",
+    "origin_open",
 ];
 
 /// The verdict of `target` on `data`; `None` for a target this crate does not have.
@@ -50,6 +53,8 @@ pub fn verdict(target: &str, data: &[u8]) -> Option<Value> {
         "key_seal_context" => with_json(data, key_seal_context),
         "pins" => with_json(data, pins),
         "accept" => with_json(data, accept),
+        "record_integrity" => with_json(data, record_integrity),
+        "origin_open" => origin_open(data),
         _ => return None,
     })
 }
@@ -195,7 +200,77 @@ pub fn statements(value: &Value) -> Option<Value> {
             let ctx = shape::area_grant_context(value.get("ctx")?)?;
             either(area_grant_statement(ctx, shape::bytes(value, "sealed")?), |s| ok_bytes(&s))
         }
+        "metadata" | "version" => return record_statement(&kind, value),
         _ => return None,
+    })
+}
+
+/*
+ * A drive record statement in any of its four forms: the writer's three
+ * (ordinary, saved, re-sealed) and the rekeyed one, which also reads
+ * `keyEpoch` and `origin`. Every field is read before the form is judged, so a
+ * misshapen one is skipped as the web skips it; an unknown form is refused,
+ * as the web refuses it by name. Given `publicKey` and `signature`, a
+ * signature that verifies implies its statement builds.
+ */
+fn record_statement(kind: &str, value: &Value) -> Option<Value> {
+    let metadata =
+        if kind == "metadata" { Some(shape::metadata_statement(value.get("statement")?)?) } else { None };
+    let version =
+        if kind == "version" { Some(shape::version_statement(value.get("statement")?)?) } else { None };
+    let envelope = shape::bytes(value, "envelope")?;
+    let form = text(value, "form")?;
+    let check = match (shape::bytes(value, "publicKey"), shape::bytes(value, "signature")) {
+        (Some(key), Some(signature)) => Some((key, signature)),
+        _ => None,
+    };
+    if form == "rekeyed" {
+        let key_epoch = number(value, "keyEpoch")?;
+        let origin = shape::record_origin(value.get("origin")?)?;
+        let (statement, verified) = match (metadata, version) {
+            (Some(m), _) => (
+                metadata_rekeyed_statement(m.clone(), key_epoch, envelope.clone(), origin.clone()),
+                check.map(|(k, s)| metadata_rekeyed_verify(k, m, key_epoch, envelope, origin, s)),
+            ),
+            (_, Some(v)) => (
+                version_rekeyed_statement(v.clone(), key_epoch, envelope.clone(), origin.clone()),
+                check.map(|(k, s)| version_rekeyed_verify(k, v, key_epoch, envelope, origin, s)),
+            ),
+            _ => unreachable!("one of the two"),
+        };
+        if verified == Some(true) {
+            assert!(statement.is_ok(), "a rekey signature verified over a statement that does not build");
+        }
+        return Some(either(statement, |s| ok_bytes(&s)));
+    }
+    if !["ordinary", "saved", "resealed"].contains(&form.as_str()) {
+        return Some(refused());
+    }
+    let (statement, verified) = match (metadata, version) {
+        (Some(m), _) => {
+            let verify = |k: Vec<u8>, s: Vec<u8>| match form.as_str() {
+                "ordinary" => metadata_verify(k, m.clone(), envelope.clone(), s),
+                "saved" => metadata_saved_verify(k, m.clone(), envelope.clone(), s),
+                _ => metadata_resealed_verify(k, m.clone(), envelope.clone(), s),
+            };
+            (fuzzing::metadata_statement_as(&form, &m, &envelope), check.map(|(k, s)| verify(k, s)))
+        }
+        (_, Some(v)) => {
+            let verify = |k: Vec<u8>, s: Vec<u8>| match form.as_str() {
+                "ordinary" => version_verify(k, v.clone(), envelope.clone(), s),
+                "saved" => version_saved_verify(k, v.clone(), envelope.clone(), s),
+                _ => version_resealed_verify(k, v.clone(), envelope.clone(), s),
+            };
+            (fuzzing::version_statement_as(&form, &v, &envelope), check.map(|(k, s)| verify(k, s)))
+        }
+        _ => unreachable!("one of the two"),
+    };
+    if verified == Some(true) {
+        assert!(statement.is_some(), "a record signature verified over a statement that does not build");
+    }
+    Some(match statement {
+        Some(s) => ok(json!(encoded(&s))),
+        None => refused(),
     })
 }
 
@@ -517,4 +592,214 @@ pub fn accept(value: &Value) -> Option<Value> {
         assert_eq!(json!(roster.roster_version), verdict["rosterVersion"]);
     }
     Some(ok(verdict))
+}
+
+/* An origin the shared fixtures sealed, and the record it was sealed for. */
+fn known_origin(envelope: &[u8]) -> Option<&'static Value> {
+    let encoded = shape::encoded(envelope);
+    [fixtures::core(), fixtures::web()]
+        .into_iter()
+        .flat_map(|f| f["rekeyed"]["origins"].as_array().into_iter().flatten())
+        .find(|o| o["envelope"].as_str() == Some(encoded.as_str()))
+}
+
+/* The record a rekeyed input names, as the origin oracle writes it. */
+fn named_record(record: &rekeyed::Record) -> Value {
+    match record {
+        rekeyed::Record::Metadata(r) => json!({
+            "record": "metadata", "workspaceId": r.statement.workspace_id, "nodeId": r.statement.node_id,
+            "metadataVersion": r.statement.metadata_version,
+        }),
+        rekeyed::Record::Version(r) => json!({
+            "record": "version", "workspaceId": r.statement.workspace_id, "nodeId": r.statement.node_id,
+            "versionId": r.statement.version_id,
+        }),
+    }
+}
+
+/* The origin's bytes under its wrapped key and the current envelope's under the node key, when both open. */
+fn plaintexts(node_key: &[u8], record: &rekeyed::Record) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (ws, node, key_epoch, origin, current, position, aad) = match record {
+        rekeyed::Record::Metadata(r) => {
+            let s = &r.statement;
+            let ctx = MetadataContext {
+                workspace_id: s.workspace_id.clone(),
+                node_id: s.node_id.clone(),
+                metadata_version: s.metadata_version,
+            };
+            (
+                &s.workspace_id,
+                &s.node_id,
+                r.key_epoch,
+                &r.origin,
+                &r.envelope,
+                OriginRecord::Metadata { metadata_version: s.metadata_version },
+                fuzzing::metadata_aad(&ctx),
+            )
+        }
+        rekeyed::Record::Version(r) => {
+            let s = &r.statement;
+            let ctx = VersionContext {
+                workspace_id: s.workspace_id.clone(),
+                node_id: s.node_id.clone(),
+                version_id: s.version_id.clone(),
+                object_id: s.object_id.clone(),
+            };
+            (
+                &s.workspace_id,
+                &s.node_id,
+                r.key_epoch,
+                &r.origin,
+                &r.envelope,
+                OriginRecord::Version { version_id: s.version_id.clone() },
+                fuzzing::version_aad(&ctx, s.content_suite),
+            )
+        }
+    };
+    let key = origin_key_open(
+        OriginKeyContext {
+            workspace_id: ws.clone(),
+            node_id: node.clone(),
+            key_epoch,
+            record: position,
+            origin_envelope: origin.envelope.clone(),
+        },
+        node_key.to_vec(),
+        origin.key_envelope.clone(),
+    )
+    .ok()?;
+    Some((
+        fuzzing::origin_plaintext(&key, &origin.envelope, &aad)?,
+        fuzzing::plaintext(node_key, current, &aad)?,
+    ))
+}
+
+/*
+ * A re-keyed record's verdict, personal or in a group's area, as the shared
+ * cases' input carries it. Invariants:
+ * - a record the reader can check that is not a mismatch has an origin whose
+ *   bytes are the current envelope's (verified implies equal plaintext);
+ * - an origin verdict that verified implies the origin's statement builds,
+ *   and the rekeyed one too unless the origin's signer is gone (the re-keyer
+ *   then reads unchecked, and only the plaintext binds the record);
+ * - an origin the fixtures sealed for another node or version never passes.
+ */
+pub fn record_integrity(value: &Value) -> Option<Value> {
+    let input = rekeyed::read(value)?;
+    let verdict = rekeyed::judge(&input);
+    let checkable = match &input.trust {
+        rekeyed::Trust::Personal(trust) => trust.is_some(),
+        rekeyed::Trust::Group(_) => true,
+    };
+    if verdict["mismatch"] == false && checkable {
+        if let Some(node_key) = &input.node_key {
+            let (written, current) =
+                plaintexts(node_key, &input.record).expect("a record that is no mismatch opens both ways");
+            assert_eq!(written, current, "a record that is no mismatch holds other bytes than its origin");
+            let (envelope, origin) = match &input.record {
+                rekeyed::Record::Metadata(r) => (&r.origin.envelope, named_record(&input.record)),
+                rekeyed::Record::Version(r) => (&r.origin.envelope, named_record(&input.record)),
+            };
+            if let Some(known) = known_origin(envelope) {
+                let mut sealed_for = known.clone();
+                sealed_for.as_object_mut().unwrap().remove("envelope");
+                assert_eq!(sealed_for, origin, "an origin sealed for another record passed");
+            }
+        }
+    }
+    let verified = verdict["origin"] == "verified" || verdict["origin"]["integrity"] == "verified";
+    if verified && verdict["mismatch"] == false {
+        let built = match &input.record {
+            rekeyed::Record::Metadata(r) => {
+                fuzzing::metadata_statement_as("ordinary", &r.statement, &r.origin.envelope).is_some()
+                    && r.origin.signer_id.as_ref().is_none_or(|signer| {
+                        metadata_rekeyed_statement(
+                            r.statement.clone(),
+                            r.key_epoch,
+                            r.envelope.clone(),
+                            RecordOrigin {
+                                envelope: r.origin.envelope.clone(),
+                                signer_id: signer.clone(),
+                                signature: r.origin.signature.clone().unwrap_or_default(),
+                            },
+                        )
+                        .is_ok()
+                    })
+            }
+            rekeyed::Record::Version(r) => {
+                fuzzing::version_statement_as("ordinary", &r.statement, &r.origin.envelope).is_some()
+                    && r.origin.signer_id.as_ref().is_none_or(|signer| {
+                        version_rekeyed_statement(
+                            r.statement.clone(),
+                            r.key_epoch,
+                            r.envelope.clone(),
+                            RecordOrigin {
+                                envelope: r.origin.envelope.clone(),
+                                signer_id: signer.clone(),
+                                signature: r.origin.signature.clone().unwrap_or_default(),
+                            },
+                        )
+                        .is_ok()
+                    })
+            }
+        };
+        assert!(built, "a verified re-keyed record whose statements do not build");
+    }
+    Some(ok(verdict))
+}
+
+const KEY_ENVELOPE_BYTES: usize = 72;
+
+/*
+ * The rekeyed metadata in core.json, its wrapped origin key and its origin
+ * replaced by these bytes (the first 72, then the rest), opened by the
+ * fixture's node key: the origin's plaintext, which can only be the bytes the
+ * current envelope holds, under the very key the core derived.
+ */
+pub fn origin_open(data: &[u8]) -> Value {
+    let fixture = &fixtures::core()["rekeyed"];
+    let record = &fixture["metadata"];
+    let statement = shape::metadata_statement(&record["statement"]).expect("the fixture's statement");
+    let node_key = shape::bytes(fixture, "nodeKey").unwrap();
+    let (key_envelope, origin) = (data.get(..KEY_ENVELOPE_BYTES), data.get(KEY_ENVELOPE_BYTES..));
+    let (Some(key_envelope), Some(origin)) = (key_envelope, origin) else {
+        return refused();
+    };
+    let ctx = MetadataContext {
+        workspace_id: statement.workspace_id.clone(),
+        node_id: statement.node_id.clone(),
+        metadata_version: statement.metadata_version,
+    };
+    let opened = origin_key_open(
+        OriginKeyContext {
+            workspace_id: statement.workspace_id.clone(),
+            node_id: statement.node_id.clone(),
+            key_epoch: number(record, "keyEpoch").unwrap(),
+            record: OriginRecord::Metadata { metadata_version: statement.metadata_version },
+            origin_envelope: origin.to_vec(),
+        },
+        node_key.clone(),
+        key_envelope.to_vec(),
+    );
+    let Ok(key) = opened else {
+        return refused();
+    };
+    assert_eq!(
+        shape::encoded(&key),
+        fixture["metadataOriginKey"].as_str().unwrap(),
+        "an origin key opened that was not sealed"
+    );
+    let aad = fuzzing::metadata_aad(&ctx);
+    if origin.len() > 24 + 4096 + 16 {
+        return refused();
+    }
+    match fuzzing::origin_plaintext(&key, origin, &aad) {
+        Some(plaintext) => {
+            let current =
+                fuzzing::plaintext(&node_key, &shape::bytes(record, "envelope").unwrap(), &aad).unwrap();
+            assert_eq!(plaintext, current, "an origin opened to other bytes than the record holds");
+            ok(ok_bytes(&plaintext))
+        }
+        None => refused(),
+    }
 }

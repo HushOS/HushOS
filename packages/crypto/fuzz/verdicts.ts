@@ -46,11 +46,27 @@ import { checkGroupPin, pinVerified, type GroupPin } from '../src/pins';
 import { openShareKey, type ShareContext } from '../src/shares';
 import {
     keysStatement,
+    metadataRekeyedStatement,
+    metadataStatementAs,
     shareStatement,
     successionConsentStatement,
     successionStatement,
+    versionRekeyedStatement,
+    versionStatementAs,
+    type MetadataStatement,
+    type RecordOrigin,
+    type RekeyedRecord,
+    type VersionStatement,
 } from '../src/signatures';
-import { chain, core, groups, people, shareGrantee, signed, type Json } from './fixtures';
+import {
+    contentKeyContext,
+    metadataContext,
+    openEnvelopeBytes,
+    openOriginKey,
+    openWithOriginKey,
+} from '../src/drive';
+import { judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
+import { chain, core, groups, people, shareGrantee, signed, web, type Json } from './fixtures';
 
 /*
  * Every target as one function from the input bytes to a verdict, the same
@@ -79,6 +95,8 @@ export const TARGETS = [
     'key_seal_context',
     'pins',
     'accept',
+    'record_integrity',
+    'origin_open',
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
@@ -510,9 +528,85 @@ async function statements(value: Doc): Promise<Verdict | undefined> {
             if (!ctx || !sealed) return undefined;
             return either(() => areaGrantStatement(ctx, sealed), out);
         }
+        case 'metadata':
+        case 'version':
+            return recordStatement(text(value, 'kind') as 'metadata' | 'version', value);
         default:
             return undefined;
     }
+}
+
+function metadataStatementOf(value: unknown): MetadataStatement | undefined {
+    if (!isObject(value)) return undefined;
+    const fields = all({
+        workspaceId: text(value, 'workspaceId'),
+        nodeId: text(value, 'nodeId'),
+        metadataVersion: number(value, 'metadataVersion'),
+        kind: text(value, 'kind'),
+    });
+    if (!fields || (fields.kind !== 'folder' && fields.kind !== 'file')) return undefined;
+    return fields as MetadataStatement;
+}
+function versionStatementOf(value: unknown): VersionStatement | undefined {
+    if (!isObject(value)) return undefined;
+    return all({
+        workspaceId: text(value, 'workspaceId'),
+        nodeId: text(value, 'nodeId'),
+        versionId: text(value, 'versionId'),
+        objectId: text(value, 'objectId'),
+        contentSuite: small(value, 'contentSuite'),
+    });
+}
+function recordOriginOf(value: unknown): RecordOrigin | undefined {
+    if (!isObject(value)) return undefined;
+    return all({
+        envelope: bytes(value, 'envelope'),
+        signerId: text(value, 'signerId'),
+        signature: bytes(value, 'signature'),
+    });
+}
+
+/*
+ * A drive record statement in any of its four forms, read as shape.rs reads
+ * it: every field before the form is judged, then the rekeyed form's
+ * `keyEpoch` and `origin`; an unknown form is refused by name.
+ */
+async function recordStatement(kind: 'metadata' | 'version', value: Doc) {
+    const statement =
+        kind === 'metadata'
+            ? metadataStatementOf(value.statement)
+            : versionStatementOf(value.statement);
+    const envelope = bytes(value, 'envelope');
+    const form = text(value, 'form');
+    if (!statement || !envelope || form === undefined) return undefined;
+    const out = (bytes: Uint8Array) => encode(bytes);
+    if (form === 'rekeyed') {
+        const keyEpoch = number(value, 'keyEpoch');
+        const origin = recordOriginOf(value.origin);
+        if (keyEpoch === undefined || !origin) return undefined;
+        return either(
+            () =>
+                kind === 'metadata'
+                    ? metadataRekeyedStatement(
+                          { ...(statement as MetadataStatement), keyEpoch },
+                          envelope,
+                          origin,
+                      )
+                    : versionRekeyedStatement(
+                          { ...(statement as VersionStatement), keyEpoch },
+                          envelope,
+                          origin,
+                      ),
+            out,
+        );
+    }
+    return either(
+        () =>
+            kind === 'metadata'
+                ? metadataStatementAs(form as 'ordinary', statement as MetadataStatement, envelope)
+                : versionStatementAs(form as 'ordinary', statement as VersionStatement, envelope),
+        out,
+    );
 }
 
 async function keysHold(
@@ -846,6 +940,179 @@ async function accept(input: Json): Promise<Verdict> {
     return ok(verdict);
 }
 
+/* An origin the shared fixtures sealed, with the record it was sealed for. */
+function knownOrigin(envelope: Uint8Array): Doc | undefined {
+    const encoded = encode(envelope);
+    for (const fixture of [core(), web()])
+        for (const origin of (fixture.rekeyed?.origins ?? []) as Doc[])
+            if (origin.envelope === encoded) return origin;
+    return undefined;
+}
+
+function namedRecord(record: RekeyedRecord): Doc {
+    const s = record.statement;
+    return record.record === 'metadata'
+        ? {
+              record: 'metadata',
+              workspaceId: s.workspaceId,
+              nodeId: s.nodeId,
+              metadataVersion: (s as MetadataStatement).metadataVersion,
+          }
+        : {
+              record: 'version',
+              workspaceId: s.workspaceId,
+              nodeId: s.nodeId,
+              versionId: (s as VersionStatement).versionId,
+          };
+}
+
+/* The origin's bytes under its wrapped key and the current envelope's under the node key, when both open. */
+async function plaintexts(nodeKey: Uint8Array, record: RekeyedRecord) {
+    try {
+        const s = record.statement;
+        const aad =
+            record.record === 'metadata'
+                ? metadataContext({
+                      workspaceId: s.workspaceId,
+                      nodeId: s.nodeId,
+                      metadataVersion: record.statement.metadataVersion,
+                  })
+                : contentKeyContext({
+                      workspaceId: s.workspaceId,
+                      nodeId: s.nodeId,
+                      versionId: record.statement.versionId,
+                      objectId: record.statement.objectId,
+                      suite: record.statement.contentSuite,
+                  });
+        const key = await openOriginKey(record.origin.keyEnvelope, nodeKey, {
+            workspaceId: s.workspaceId,
+            nodeId: s.nodeId,
+            keyEpoch: record.keyEpoch,
+            record:
+                record.record === 'metadata'
+                    ? { kind: 'metadata', metadataVersion: record.statement.metadataVersion }
+                    : { kind: 'version', versionId: record.statement.versionId },
+            originEnvelope: record.origin.envelope,
+        });
+        return [
+            await openWithOriginKey(record.origin.envelope, key, aad),
+            await openEnvelopeBytes(record.envelope, nodeKey, aad),
+        ] as const;
+    } catch (error) {
+        if (error instanceof CryptoError) return undefined;
+        throw error;
+    }
+}
+
+/*
+ * A re-keyed record's verdict, personal or in a group's area, with the
+ * invariants of targets.rs: no mismatch for a record the reader can check
+ * means the origin holds the current envelope's bytes, verified means the
+ * statements build, and an origin sealed for another record never passes.
+ */
+async function recordIntegrity(value: Doc): Promise<Verdict | undefined> {
+    const input = readRekeyed(value);
+    if (!input) return undefined;
+    const verdict = (await judgeRekeyed(input)) as Json;
+    const checkable = input.trust.kind === 'group' || input.trust.trust !== null;
+    if (verdict.mismatch === false && checkable && input.nodeKey) {
+        const both = await plaintexts(input.nodeKey, input.record);
+        invariant(both !== undefined, 'a record that is no mismatch opens both ways');
+        invariant(
+            sameBytes(both[0], both[1]),
+            'a record that is no mismatch holds other bytes than its origin',
+        );
+        const known = knownOrigin(input.record.origin.envelope);
+        if (known) {
+            const { envelope: _, ...sealedFor } = known;
+            invariant(
+                isDeepStrictEqual(sealedFor, namedRecord(input.record)),
+                'an origin sealed for another record passed',
+            );
+        }
+    }
+    const verified = verdict.origin === 'verified' || verdict.origin?.integrity === 'verified';
+    if (verified && verdict.mismatch === false) {
+        const r = input.record;
+        const signer = r.origin.signerId;
+        const origin = {
+            envelope: r.origin.envelope,
+            signerId: signer ?? '',
+            signature: r.origin.signature ?? new Uint8Array(),
+        };
+        // The rekeyed statement names the origin's signer; with them gone only the plaintext binds it.
+        const built =
+            (await holds(() =>
+                r.record === 'metadata'
+                    ? metadataStatementAs('ordinary', r.statement, r.origin.envelope)
+                    : versionStatementAs('ordinary', r.statement, r.origin.envelope),
+            )) &&
+            (signer === null ||
+                (await holds(() =>
+                    r.record === 'metadata'
+                        ? metadataRekeyedStatement(
+                              { ...r.statement, keyEpoch: r.keyEpoch },
+                              r.envelope,
+                              origin,
+                          )
+                        : versionRekeyedStatement(
+                              { ...r.statement, keyEpoch: r.keyEpoch },
+                              r.envelope,
+                              origin,
+                          ),
+                )));
+        invariant(built, 'a verified re-keyed record whose statements do not build');
+    }
+    return ok(verdict);
+}
+
+const KEY_ENVELOPE_BYTES = 72;
+
+/* The rekeyed metadata in core.json with its origin key and origin replaced by these bytes (targets.rs). */
+async function originOpen(data: Uint8Array): Promise<Verdict> {
+    const fixture = core().rekeyed;
+    const record = fixture.metadata;
+    const s = record.statement;
+    const nodeKey = decode(fixture.nodeKey);
+    if (data.length < KEY_ENVELOPE_BYTES) return refused;
+    const keyEnvelope = data.subarray(0, KEY_ENVELOPE_BYTES);
+    const origin = data.subarray(KEY_ENVELOPE_BYTES);
+    let key: Uint8Array;
+    try {
+        key = await openOriginKey(keyEnvelope, nodeKey, {
+            workspaceId: s.workspaceId,
+            nodeId: s.nodeId,
+            keyEpoch: record.keyEpoch,
+            record: { kind: 'metadata', metadataVersion: s.metadataVersion },
+            originEnvelope: origin,
+        });
+    } catch (error) {
+        if (error instanceof CryptoError) return refused;
+        throw error;
+    }
+    invariant(
+        encode(key) === fixture.metadataOriginKey,
+        'an origin key opened that was not sealed',
+    );
+    if (origin.length > 24 + 4096 + 16) return refused;
+    const aad = metadataContext({
+        workspaceId: s.workspaceId,
+        nodeId: s.nodeId,
+        metadataVersion: s.metadataVersion,
+    });
+    return either(
+        () => openWithOriginKey(origin, key, aad),
+        async (plaintext) => {
+            const current = await openEnvelopeBytes(decode(record.envelope), nodeKey, aad);
+            invariant(
+                sameBytes(plaintext, current),
+                'an origin opened to other bytes than the record holds',
+            );
+            return encode(plaintext);
+        },
+    );
+}
+
 /* The verdict of `target` on `data`, with every invariant asserted. */
 export async function verdict(target: Target, data: Uint8Array): Promise<Verdict> {
     switch (target) {
@@ -875,5 +1142,9 @@ export async function verdict(target: Target, data: Uint8Array): Promise<Verdict
             return withJson(data, pins);
         case 'accept':
             return withJson(data, accept);
+        case 'record_integrity':
+            return withJson(data, recordIntegrity);
+        case 'origin_open':
+            return originOpen(data);
     }
 }

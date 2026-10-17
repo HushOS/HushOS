@@ -50,10 +50,13 @@ import { successionPath } from './succession-path';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import type { ContactPin } from './contacts';
 import {
+    breaksBinding,
     digest,
     integrityOf,
+    rekeyedChecks,
     verifyHybrid,
     type Integrity,
+    type RekeyedRecord,
     type StatementForms,
     type TrustedSigner,
 } from './signatures';
@@ -2095,34 +2098,105 @@ export async function groupIntegrityOf(
     trust: GroupWriterTrust,
     personal: TrustedSigner | null,
 ): Promise<{ integrity: GroupIntegrity; via: string | null }> {
+    return groupVerdictOf(trust, personal, !!signature, (signer) =>
+        integrityOf(statements, signature, signer),
+    );
+}
+
+/* groupIntegrityOf over any check of one signature under the keys it is given (Rust's group_integrity). */
+async function groupVerdictOf(
+    trust: GroupWriterTrust,
+    personal: TrustedSigner | null,
+    signed: boolean,
+    check: (signer: TrustedSigner | null) => Promise<Integrity>,
+): Promise<{ integrity: GroupIntegrity; via: string | null }> {
     // Without the writer's served identity and links, a key their chain retired may be missing.
     const unknown = (integrity: Integrity, linksLoaded: boolean): Integrity =>
         integrity === 'bad-signature' && !linksLoaded ? 'unchecked' : integrity;
     switch (trust.trust) {
         case 'outside':
-            return { integrity: await integrityOf(statements, signature, personal), via: null };
+            return { integrity: await check(personal), via: null };
         case 'unchecked':
             return { integrity: 'unchecked', via: null };
         case 'key-conflict':
-            return { integrity: signature ? 'key-conflict' : 'unsigned', via: null };
+            return { integrity: signed ? 'key-conflict' : 'unsigned', via: null };
         case 'former-member': {
-            const integrity = unknown(
-                await integrityOf(statements, signature, trust.signer),
-                trust.linksLoaded,
-            );
-            const signed = ['verified', 'saved-from-link', 'resealed', 'retired-key'];
+            const integrity = unknown(await check(trust.signer), trust.linksLoaded);
+            const valid = ['verified', 'saved-from-link', 'resealed', 'retired-key'];
             return {
-                integrity: signed.includes(integrity) ? 'former-member' : integrity,
+                integrity: valid.includes(integrity) ? 'former-member' : integrity,
                 via: null,
             };
         }
         case 'roster': {
-            const integrity = unknown(
-                await integrityOf(statements, signature, trust.signer),
-                trust.linksLoaded,
-            );
+            const integrity = unknown(await check(trust.signer), trust.linksLoaded);
             const vouched = integrity === 'verified' || integrity === 'saved-from-link';
             return { integrity, via: vouched ? trust.via : null };
         }
+    }
+}
+
+/*
+ * Whose keys a re-keyed record's two signatures are checked under in a
+ * group's area: groupWriterTrust for the origin's signer and for the
+ * re-keyer, and the personal keys the reader trusts for each (outside the
+ * roster's reach).
+ */
+export type GroupRekeyedTrust = {
+    origin: GroupWriterTrust;
+    originPersonal: TrustedSigner | null;
+    rekeyer: GroupWriterTrust;
+    rekeyerPersonal: TrustedSigner | null;
+};
+export type GroupVerdictWithVia = { integrity: GroupIntegrity; via: string | null };
+/*
+ * A re-keyed record in a group's area: the origin's verdict in light of the
+ * origin signer's trust (so a removed member's file reads `former-member`,
+ * named after them, never as the re-keyer's), the re-keyer's in light of
+ * theirs (Info only), and whether the binding failed (`origin` is then
+ * `bad-signature`, shown as the re-keyer's).
+ */
+export type GroupRekeyedVerdict = {
+    origin: GroupVerdictWithVia;
+    rekeyer: GroupVerdictWithVia;
+    mismatch: boolean;
+};
+
+/*
+ * rekeyedIntegrityOf in a group's area. `nodeKey` is the node's key at the
+ * record's epoch, null when the reader does not hold it (`unchecked`); a roster
+ * that did not load is `{ trust: 'unchecked' }` in `trust`.
+ */
+export async function groupRekeyedIntegrityOf(
+    record: RekeyedRecord,
+    nodeKey: Uint8Array | null,
+    trust: GroupRekeyedTrust,
+): Promise<GroupRekeyedVerdict> {
+    const unchecked = (): GroupRekeyedVerdict => ({
+        origin: { integrity: 'unchecked', via: null },
+        rekeyer: { integrity: 'unchecked', via: null },
+        mismatch: false,
+    });
+    if (!nodeKey) return unchecked();
+    try {
+        const checks = await rekeyedChecks(record, nodeKey);
+        const rekeyer = await groupVerdictOf(
+            trust.rekeyer,
+            trust.rekeyerPersonal,
+            checks.rekeySigned,
+            checks.rekeyer,
+        );
+        // Missing, or bad under keys the reader trusts, a roster's included.
+        if (!checks.bound || breaksBinding(rekeyer.integrity))
+            return { origin: { integrity: 'bad-signature', via: null }, rekeyer, mismatch: true };
+        const origin = await groupVerdictOf(
+            trust.origin,
+            trust.originPersonal,
+            checks.originSigned,
+            checks.origin,
+        );
+        return { origin, rekeyer, mismatch: false };
+    } catch {
+        return unchecked();
     }
 }

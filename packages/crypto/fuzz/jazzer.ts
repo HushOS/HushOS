@@ -27,6 +27,8 @@ export const key_seal_open = plain('key_seal_open');
 export const area_grant_open = plain('area_grant_open');
 export const key_seal_context = plain('key_seal_context');
 export const pins = plain('pins');
+export const record_integrity = plain('record_integrity');
+export const origin_open = plain('origin_open');
 
 const USERS = [
     '00000001-abcd-4abc-8abc-abcdefabcdef',

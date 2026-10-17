@@ -8,6 +8,11 @@ pub mod shape;
 pub mod structured;
 pub mod targets;
 
+/// Re-keyed records as the shared fixtures write them, read and judged as the fixture tests do.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/rekeyed.rs"]
+pub mod rekeyed;
+
 /// People, group keys and the shared cases' JSON shapes, as the fixture tests use them.
 #[allow(dead_code, unused_imports, clippy::all)]
 #[path = "../../tests/common/groups.rs"]

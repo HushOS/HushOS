@@ -119,3 +119,17 @@ test = false
 doc = false
 bench = false
 
+
+[[bin]]
+name = "record_integrity"
+path = "fuzz_targets/record_integrity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "origin_open"
+path = "fuzz_targets/origin_open.rs"
+test = false
+doc = false
+bench = false

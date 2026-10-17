@@ -107,6 +107,40 @@ export function documents(target: Target): Uint8Array[] {
                     ctx: g.seals.areaGrant.ctx,
                     sealed: withoutSignature(g.seals.areaGrant.envelope),
                 }),
+                // Drive record statements in all four forms, from both twins' signed records.
+                ...[c, w].flatMap((f: Json) =>
+                    (['metadata', 'version'] as const).flatMap((kind) => {
+                        const signed = f.signatures[kind];
+                        const rekeyed = f.rekeyed[kind];
+                        return [
+                            ...(['ordinary', 'saved', 'resealed'] as const).map((form) =>
+                                json({
+                                    kind,
+                                    form,
+                                    statement: signed.statement,
+                                    envelope: signed.envelope,
+                                    publicKey: f.signatures.signingPublicKey,
+                                    signature:
+                                        form === 'ordinary' ? signed.signature : signed[form],
+                                }),
+                            ),
+                            json({
+                                kind,
+                                form: 'rekeyed',
+                                statement: rekeyed.statement,
+                                envelope: rekeyed.envelope,
+                                keyEpoch: rekeyed.keyEpoch,
+                                origin: {
+                                    envelope: rekeyed.origin.envelope,
+                                    signerId: rekeyed.origin.signerId,
+                                    signature: rekeyed.origin.signature,
+                                },
+                                publicKey: f.rekeyed.rekeyer.signingPublicKey,
+                                signature: rekeyed.rekeySignature,
+                            }),
+                        ];
+                    }),
+                ),
             ];
         }
         case 'identity':
@@ -232,6 +266,20 @@ export function documents(target: Target): Uint8Array[] {
         }
         case 'accept':
             return g.cases.map((k: Json) => json(k.input));
+        case 'record_integrity':
+            return [c, w].flatMap((f: Json) => f.rekeyed.cases.map((k: Json) => json(k.input)));
+        case 'origin_open': {
+            const r = c.rekeyed.metadata;
+            const theirs = w.rekeyed.metadata;
+            // The core's opens; the web's is wrapped under another node key and reaches the AEAD check.
+            return [
+                new Uint8Array([...bytes(r.origin.keyEnvelope), ...bytes(r.origin.envelope)]),
+                new Uint8Array([
+                    ...bytes(theirs.origin.keyEnvelope),
+                    ...bytes(theirs.origin.envelope),
+                ]),
+            ];
+        }
     }
 }
 

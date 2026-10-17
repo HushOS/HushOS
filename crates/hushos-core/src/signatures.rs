@@ -10,13 +10,23 @@
 //! which a rotation or copy signs over a record it could not verify. Their
 //! domains differ, so no signature passes for another form.
 //!
+//! A rotation that keeps the writer's record (its "origin") signs a fourth,
+//! the rekeyed statement, binding the origin to the envelope it sealed again
+//! (`docs/integrity-design.md`, "Re-keyed records"). A reader judges such a
+//! record by its origin's signature, after opening both envelopes and
+//! comparing their bytes.
+//!
 //! What decides whose keys to trust (the keys statement, successions and
 //! shares) is signed with the hybrid signature instead: Ed25519 and ML-DSA-65
 //! over the same statement, valid only if both halves verify
 //! (`docs/identity-pq-design.md`).
 
-use crate::bytes::{decode, encode, expect_len};
-use crate::envelope::context;
+use crate::bytes::{decode, encode, expect_len, KEY_BYTES};
+use crate::drive::{
+    metadata_context, origin_key_context, version_context, version_envelope_len, MetadataContext,
+    OriginKeyContext, OriginRecord, VersionContext, KEY_ENVELOPE_BYTES, METADATA_ENVELOPE_MAX_BYTES,
+};
+use crate::envelope::{context, open, open_key, open_with_opening_key};
 use crate::error::{input, CoreResult};
 use crate::identity::KEM_PUBLIC_KEY_BYTES;
 use crate::pq::{ml_dsa_sign, ml_dsa_verify, ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SIGNATURE_BYTES};
@@ -134,6 +144,8 @@ const METADATA_RESEALED_DOMAIN: &str = "hushos/drive/sig/metadata-resealed";
 const VERSION_RESEALED_DOMAIN: &str = "hushos/drive/sig/version-resealed";
 const METADATA_SAVED_DOMAIN: &str = "hushos/drive/sig/metadata-saved";
 const VERSION_SAVED_DOMAIN: &str = "hushos/drive/sig/version-saved";
+const METADATA_REKEYED_DOMAIN: &str = "hushos/drive/sig/metadata-rekeyed";
+const VERSION_REKEYED_DOMAIN: &str = "hushos/drive/sig/version-rekeyed";
 /* Where a saved copy came from, the saved statements' last element. Only links, in version 1. */
 const SAVED_FROM_LINK: &str = "link";
 
@@ -212,6 +224,35 @@ fn version_parts(form: Form, statement: &VersionStatement, envelope: &[u8]) -> C
     Ok(context(&parts))
 }
 
+/* The three writer forms by name, for the fuzz targets (crate::fuzzing). */
+#[cfg(feature = "fuzzing")]
+fn form_named(form: &str) -> Option<Form> {
+    match form {
+        "ordinary" => Some(Form::Ordinary),
+        "saved" => Some(Form::Saved),
+        "resealed" => Some(Form::Resealed),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn metadata_statement_as(
+    form: &str,
+    statement: &MetadataStatement,
+    envelope: &[u8],
+) -> Option<Vec<u8>> {
+    metadata_parts(form_named(form)?, statement, envelope).ok()
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) fn version_statement_as(
+    form: &str,
+    statement: &VersionStatement,
+    envelope: &[u8],
+) -> Option<Vec<u8>> {
+    version_parts(form_named(form)?, statement, envelope).ok()
+}
+
 fn metadata_message(statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
     metadata_parts(Form::Ordinary, statement, envelope)
 }
@@ -257,7 +298,8 @@ pub(crate) fn verify(signing_public_key: &[u8], message: &[u8], signature: &[u8]
 }
 
 /* A record's three statements, in the order a reader tries them. */
-struct Messages {
+#[derive(Clone)]
+pub(crate) struct Messages {
     ordinary: Vec<u8>,
     saved: Vec<u8>,
     resealed: Vec<u8>,
@@ -342,6 +384,22 @@ fn copy_form(prior: Integrity, from_link: bool) -> CoreResult<Form> {
         return Ok(Form::Saved);
     }
     reseal_form(prior)
+}
+
+/*
+ * The legacy signature a rotation writes beside the rekeyed one, for readers
+ * that do not know it yet (the honest form, docs/integrity-design.md,
+ * "Re-keyed records"): ordinary (or saved) only for the re-keyer's own record
+ * whose origin verified as such; re-sealed for everything else, an unchecked
+ * record included, so it never claims another person's authorship and never
+ * blocks the rotation.
+ */
+fn compat_form(prior: Integrity, own_record: bool) -> Form {
+    match (prior, own_record) {
+        (Integrity::Verified, true) => Form::Ordinary,
+        (Integrity::SavedFromLink, true) => Form::Saved,
+        _ => Form::Resealed,
+    }
 }
 
 fn sign_metadata_as(
@@ -600,6 +658,501 @@ pub fn version_copy_sign(
     content_key_envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
     sign_version_as(copy_form(prior, from_link)?, &signing_seed, &statement, &content_key_envelope)
+}
+
+/// The legacy metadata signature a rotation writes beside the rekeyed one
+/// ([`metadata_rekey_sign`]), for readers that do not know rekeyed records
+/// yet: the ordinary statement only when the origin is the re-keyer's own
+/// (`own_record`) and verified, the saved one when it is their own and
+/// verified as saved, the re-sealed one otherwise. Never refuses: an
+/// `Unchecked` origin is signed re-sealed.
+///
+/// ```
+/// use hushos_core::*;
+/// let seed = random_bytes(32)?;
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+/// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 1 };
+/// let read = |signature| metadata_integrity(Some(me.clone()), statement.clone(), b"new".to_vec(), Some(signature));
+/// let own = metadata_compat_sign(seed.clone(), Integrity::Verified, true, statement.clone(), b"new".to_vec())?;
+/// assert_eq!(read(own), Integrity::Verified);
+/// // Someone else's verified file: re-locked, never "written by" the re-keyer.
+/// let theirs = metadata_compat_sign(seed.clone(), Integrity::Verified, false, statement.clone(), b"new".to_vec())?;
+/// assert_eq!(read(theirs), Integrity::Resealed);
+/// let unchecked = metadata_compat_sign(seed, Integrity::Unchecked, true, statement.clone(), b"new".to_vec())?;
+/// assert_eq!(read(unchecked), Integrity::Resealed);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_compat_sign(
+    signing_seed: Vec<u8>,
+    prior: Integrity,
+    own_record: bool,
+    statement: MetadataStatement,
+    metadata_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    sign_metadata_as(compat_form(prior, own_record), &signing_seed, &statement, &metadata_envelope)
+}
+
+/// The legacy version signature a rotation writes beside the rekeyed one; see
+/// [`metadata_compat_sign`].
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_compat_sign(
+    signing_seed: Vec<u8>,
+    prior: Integrity,
+    own_record: bool,
+    statement: VersionStatement,
+    content_key_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    sign_version_as(compat_form(prior, own_record), &signing_seed, &statement, &content_key_envelope)
+}
+
+/// A record as its writer signed it, before a rotation re-sealed it: the
+/// envelope, who the server says signed it and the signature. What a rekeyed
+/// statement names.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RecordOrigin {
+    pub envelope: Vec<u8>,
+    pub signer_id: String,
+    pub signature: Vec<u8>,
+}
+
+/*
+ * [domain, 1, ...the record's fields, keyEpoch, sha256(envelope), sha256(originEnvelope),
+ *  originSignerId, sha256(originSignature)]
+ */
+fn rekeyed_tail(key_epoch: u64, envelope: &[u8], origin: &RecordOrigin) -> CoreResult<[Value; 5]> {
+    Ok([
+        json!(safe_positive(key_epoch, "key epoch")?),
+        json!(digest(envelope)),
+        json!(digest(&origin.envelope)),
+        json!(id(&origin.signer_id, "user id")?),
+        json!(digest(&origin.signature)),
+    ])
+}
+
+fn metadata_rekeyed_message(
+    statement: &MetadataStatement,
+    key_epoch: u64,
+    envelope: &[u8],
+    origin: &RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    let mut parts = vec![
+        json!(METADATA_REKEYED_DOMAIN),
+        json!(1),
+        json!(id(&statement.workspace_id, "workspace id")?),
+        json!(id(&statement.node_id, "node id")?),
+        json!(statement.kind.as_str()),
+        json!(safe_positive(statement.metadata_version, "metadata version")?),
+    ];
+    parts.extend(rekeyed_tail(key_epoch, envelope, origin)?);
+    Ok(context(&parts))
+}
+
+fn version_rekeyed_message(
+    statement: &VersionStatement,
+    key_epoch: u64,
+    envelope: &[u8],
+    origin: &RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    let mut parts = vec![
+        json!(VERSION_REKEYED_DOMAIN),
+        json!(1),
+        json!(id(&statement.workspace_id, "workspace id")?),
+        json!(id(&statement.node_id, "node id")?),
+        json!(id(&statement.version_id, "version id")?),
+        json!(id(&statement.object_id, "object id")?),
+        json!(positive(statement.content_suite as u64, "content suite")?),
+    ];
+    parts.extend(rekeyed_tail(key_epoch, envelope, origin)?);
+    Ok(context(&parts))
+}
+
+/// `["hushos/drive/sig/metadata-rekeyed",1,workspaceId,nodeId,kind,metadataVersion,keyEpoch,sha256(metadataEnvelope),sha256(originEnvelope),originSignerId,sha256(originSignature)]`:
+/// what the account running a rotation signs over metadata it re-keyed while
+/// keeping the writer's record, `key_epoch` the node key's new epoch. It
+/// vouches only that it re-sealed that origin; who wrote it is the origin's
+/// signature's business.
+///
+/// ```
+/// use hushos_core::*;
+/// let statement = MetadataStatement { workspace_id: "WS".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 2 };
+/// let origin = RecordOrigin { envelope: b"origin".to_vec(), signer_id: "Sam".into(), signature: vec![7; 64] };
+/// let bytes = metadata_rekeyed_statement(statement, 5, b"current".to_vec(), origin)?;
+/// assert!(String::from_utf8(bytes).unwrap().starts_with(r#"["hushos/drive/sig/metadata-rekeyed",1,"ws","n1","file",2,5,"#));
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_rekeyed_statement(
+    statement: MetadataStatement,
+    key_epoch: u64,
+    metadata_envelope: Vec<u8>,
+    origin: RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    metadata_rekeyed_message(&statement, key_epoch, &metadata_envelope, &origin)
+}
+
+/// `["hushos/drive/sig/version-rekeyed",1,workspaceId,nodeId,versionId,objectId,contentSuite,keyEpoch,sha256(contentKeyEnvelope),sha256(originEnvelope),originSignerId,sha256(originSignature)]`;
+/// see [`metadata_rekeyed_statement`].
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_rekeyed_statement(
+    statement: VersionStatement,
+    key_epoch: u64,
+    content_key_envelope: Vec<u8>,
+    origin: RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    version_rekeyed_message(&statement, key_epoch, &content_key_envelope, &origin)
+}
+
+/// Signs the rekeyed statement over re-keyed metadata with the re-keyer's
+/// signing seed: send as the record's `rekey.signature`.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_rekey_sign(
+    signing_seed: Vec<u8>,
+    statement: MetadataStatement,
+    key_epoch: u64,
+    metadata_envelope: Vec<u8>,
+    origin: RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    sign(&signing_seed, &metadata_rekeyed_message(&statement, key_epoch, &metadata_envelope, &origin)?)
+}
+
+/// Signs the rekeyed statement over a re-keyed version; see [`metadata_rekey_sign`].
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_rekey_sign(
+    signing_seed: Vec<u8>,
+    statement: VersionStatement,
+    key_epoch: u64,
+    content_key_envelope: Vec<u8>,
+    origin: RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    sign(&signing_seed, &version_rekeyed_message(&statement, key_epoch, &content_key_envelope, &origin)?)
+}
+
+/// Whether `signature` is `signing_public_key`'s rekeyed statement over this metadata.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_rekeyed_verify(
+    signing_public_key: Vec<u8>,
+    statement: MetadataStatement,
+    key_epoch: u64,
+    metadata_envelope: Vec<u8>,
+    origin: RecordOrigin,
+    signature: Vec<u8>,
+) -> bool {
+    metadata_rekeyed_message(&statement, key_epoch, &metadata_envelope, &origin)
+        .is_ok_and(|message| verify(&signing_public_key, &message, &signature))
+}
+
+/// Whether `signature` is `signing_public_key`'s rekeyed statement over this version.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_rekeyed_verify(
+    signing_public_key: Vec<u8>,
+    statement: VersionStatement,
+    key_epoch: u64,
+    content_key_envelope: Vec<u8>,
+    origin: RecordOrigin,
+    signature: Vec<u8>,
+) -> bool {
+    version_rekeyed_message(&statement, key_epoch, &content_key_envelope, &origin)
+        .is_ok_and(|message| verify(&signing_public_key, &message, &signature))
+}
+
+/// A re-keyed record's origin as the server serves it: the writer's
+/// envelope, signer (`None` once their account is gone) and signature, and
+/// the origin's opening key wrapped under the current node key.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ServedOrigin {
+    pub envelope: Vec<u8>,
+    pub signer_id: Option<String>,
+    pub signature: Option<Vec<u8>>,
+    pub key_envelope: Vec<u8>,
+}
+
+/// Re-keyed metadata as served: the current envelope (under the node key at
+/// `key_epoch`), its origin and the re-keyer's signature.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RekeyedMetadata {
+    pub statement: MetadataStatement,
+    pub key_epoch: u64,
+    pub envelope: Vec<u8>,
+    pub origin: ServedOrigin,
+    pub rekey_signature: Option<Vec<u8>>,
+}
+
+/// A re-keyed version as served; see [`RekeyedMetadata`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RekeyedVersion {
+    pub statement: VersionStatement,
+    pub key_epoch: u64,
+    pub envelope: Vec<u8>,
+    pub origin: ServedOrigin,
+    pub rekey_signature: Option<Vec<u8>>,
+}
+
+/// The keys a reader trusts for a re-keyed record's two signers: the origin's
+/// writer and the re-keyer (`None` for someone the reader has not checked).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RekeyedTrust {
+    pub origin: Option<TrustedKeys>,
+    pub rekeyer: Option<TrustedKeys>,
+}
+
+/// What a reader shows for a re-keyed record. `origin` is the record's verdict,
+/// named after the origin's signer, as [`metadata_integrity`] gives it for the
+/// origin; `rekeyer` is the re-keyer's, for the Info line only. When
+/// `mismatch` is set the binding failed (the origin did not open, its bytes
+/// differ from the current envelope's, or the re-keyer's signature is missing
+/// or bad under a key the reader trusts): `origin` is then `BadSignature`,
+/// shown as the re-keyer's ("What Maya locked again doesn't match what was
+/// written").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RekeyedVerdict {
+    pub origin: Integrity,
+    pub rekeyer: Integrity,
+    pub mismatch: bool,
+}
+
+/*
+ * A re-keyed record's checks, before trust: whether its origin opens to the
+ * current envelope's bytes, the origin's statements and signature, and the
+ * rekeyed statement (None when the origin's signer is gone, so the statement
+ * cannot name them) with the re-keyer's signature.
+ */
+pub(crate) struct Rekeyed {
+    pub(crate) bound: bool,
+    origin: CoreResult<Messages>,
+    pub(crate) origin_signature: Option<Vec<u8>>,
+    rekeyed: Option<CoreResult<Vec<u8>>>,
+    pub(crate) rekey_signature: Option<Vec<u8>>,
+}
+
+/*
+ * Whether the origin, opened with the key wrapped beside it, holds exactly the
+ * bytes the current envelope holds under the node key. Any refusal on the way
+ * (a wrong length, a context, a tag) is false.
+ */
+fn bound(
+    node_key: &[u8],
+    aad: &[u8],
+    key_ctx: &OriginKeyContext,
+    envelope: &[u8],
+    key_envelope: &[u8],
+) -> bool {
+    if node_key.len() != KEY_BYTES || key_envelope.len() != KEY_ENVELOPE_BYTES {
+        return false;
+    }
+    let Ok(origin_key) = open_key(node_key, key_envelope, &origin_key_context(key_ctx), "origin key") else {
+        return false;
+    };
+    let origin_key = zeroize::Zeroizing::new(origin_key);
+    let (Ok(origin), Ok(current)) =
+        (open_with_opening_key(&origin_key, &key_ctx.origin_envelope, aad), open(node_key, envelope, aad))
+    else {
+        return false;
+    };
+    let (origin, current) = (zeroize::Zeroizing::new(origin), zeroize::Zeroizing::new(current));
+    *origin == *current
+}
+
+/*
+ * The origin as its rekeyed statement names it: none when its signer is gone
+ * (the statement names them and the server no longer does), refused when its
+ * signature is missing (no state a server may serve).
+ */
+fn served_origin(origin: &ServedOrigin) -> Option<CoreResult<RecordOrigin>> {
+    let signer_id = origin.signer_id.clone()?;
+    Some(match &origin.signature {
+        Some(signature) => {
+            Ok(RecordOrigin { envelope: origin.envelope.clone(), signer_id, signature: signature.clone() })
+        }
+        None => Err(input("This record's origin carries no signature.")),
+    })
+}
+
+impl Rekeyed {
+    pub(crate) fn of_metadata(node_key: &[u8], record: &RekeyedMetadata) -> Rekeyed {
+        let s = &record.statement;
+        let ctx = MetadataContext {
+            workspace_id: s.workspace_id.clone(),
+            node_id: s.node_id.clone(),
+            metadata_version: s.metadata_version,
+        };
+        let key_ctx = OriginKeyContext {
+            workspace_id: s.workspace_id.clone(),
+            node_id: s.node_id.clone(),
+            key_epoch: record.key_epoch,
+            record: OriginRecord::Metadata { metadata_version: s.metadata_version },
+            origin_envelope: record.origin.envelope.clone(),
+        };
+        let fits = |envelope: &[u8]| envelope.len() <= METADATA_ENVELOPE_MAX_BYTES;
+        let bound = fits(&record.envelope)
+            && fits(&record.origin.envelope)
+            && bound(
+                node_key,
+                &metadata_context(&ctx),
+                &key_ctx,
+                &record.envelope,
+                &record.origin.key_envelope,
+            );
+        Rekeyed {
+            bound,
+            origin: metadata_messages(s, &record.origin.envelope),
+            origin_signature: record.origin.signature.clone(),
+            rekeyed: served_origin(&record.origin).map(|origin| {
+                origin.and_then(|origin| {
+                    metadata_rekeyed_message(s, record.key_epoch, &record.envelope, &origin)
+                })
+            }),
+            rekey_signature: record.rekey_signature.clone(),
+        }
+    }
+
+    pub(crate) fn of_version(node_key: &[u8], record: &RekeyedVersion) -> Rekeyed {
+        let s = &record.statement;
+        let ctx = VersionContext {
+            workspace_id: s.workspace_id.clone(),
+            node_id: s.node_id.clone(),
+            version_id: s.version_id.clone(),
+            object_id: s.object_id.clone(),
+        };
+        let key_ctx = OriginKeyContext {
+            workspace_id: s.workspace_id.clone(),
+            node_id: s.node_id.clone(),
+            key_epoch: record.key_epoch,
+            record: OriginRecord::Version { version_id: s.version_id.clone() },
+            origin_envelope: record.origin.envelope.clone(),
+        };
+        let bound = version_envelope_len(s.content_suite)
+            .is_ok_and(|length| record.envelope.len() == length && record.origin.envelope.len() == length)
+            && bound(
+                node_key,
+                &version_context(&ctx, s.content_suite),
+                &key_ctx,
+                &record.envelope,
+                &record.origin.key_envelope,
+            );
+        Rekeyed {
+            bound,
+            origin: version_messages(s, &record.origin.envelope),
+            origin_signature: record.origin.signature.clone(),
+            rekeyed: served_origin(&record.origin).map(|origin| {
+                origin.and_then(|origin| {
+                    version_rekeyed_message(s, record.key_epoch, &record.envelope, &origin)
+                })
+            }),
+            rekey_signature: record.rekey_signature.clone(),
+        }
+    }
+
+    /* The origin's verdict under the keys trusted for its signer, exactly as metadata_integrity gives it. */
+    pub(crate) fn origin(&self, trusted: Option<&TrustedKeys>) -> Integrity {
+        integrity(trusted, self.origin.clone(), self.origin_signature.clone())
+    }
+
+    /*
+     * The re-keyer's verdict over the rekeyed statement, its one form: no
+     * signature is Unsigned, no trusted keys UnknownSigner, an origin whose
+     * signer is gone Unchecked (the statement names them, and the server no
+     * longer does), a statement that does not build BadSignature; then the
+     * current key (Verified), the retired ones (RetiredKey), else BadSignature.
+     */
+    pub(crate) fn rekeyer(&self, trusted: Option<&TrustedKeys>) -> Integrity {
+        let Some(signature) = &self.rekey_signature else {
+            return Integrity::Unsigned;
+        };
+        let Some(trusted) = trusted else {
+            return Integrity::UnknownSigner;
+        };
+        let Some(message) = &self.rekeyed else {
+            return Integrity::Unchecked;
+        };
+        let Ok(message) = message else {
+            return Integrity::BadSignature;
+        };
+        if verify(&trusted.current, message, signature) {
+            return Integrity::Verified;
+        }
+        if trusted.retired.iter().any(|key| verify(key, message, signature)) {
+            return Integrity::RetiredKey;
+        }
+        Integrity::BadSignature
+    }
+}
+
+/* A re-keyer's verdict that breaks the binding: a signature missing, or bad under a key the reader trusts. */
+pub(crate) fn breaks_binding(rekeyer: Integrity) -> bool {
+    matches!(rekeyer, Integrity::BadSignature | Integrity::Unsigned)
+}
+
+const UNCHECKED: RekeyedVerdict =
+    RekeyedVerdict { origin: Integrity::Unchecked, rekeyer: Integrity::Unchecked, mismatch: false };
+
+fn rekeyed_verdict(rekeyed: Option<Rekeyed>, trust: Option<RekeyedTrust>) -> RekeyedVerdict {
+    let (Some(rekeyed), Some(trust)) = (rekeyed, trust) else {
+        return UNCHECKED;
+    };
+    let rekeyer = rekeyed.rekeyer(trust.rekeyer.as_ref());
+    if !rekeyed.bound || breaks_binding(rekeyer) {
+        return RekeyedVerdict { origin: Integrity::BadSignature, rekeyer, mismatch: true };
+    }
+    RekeyedVerdict { origin: rekeyed.origin(trust.origin.as_ref()), rekeyer, mismatch: false }
+}
+
+/// What a reader shows for re-keyed metadata: its origin's verdict (named
+/// after the origin's signer), the re-keyer's for the Info line, and whether
+/// the binding failed ([`RekeyedVerdict`]). `node_key` is the node's key at
+/// `record.key_epoch`, `None` when the reader does not hold it; `trust` is
+/// `None` when what the reader trusts did not load. Either missing is
+/// `Unchecked`, never clean.
+///
+/// ```
+/// use hushos_core::*;
+/// let (old, fresh) = (random_bytes(32)?, random_bytes(32)?);
+/// let (writer, rekeyer) = (random_bytes(32)?, random_bytes(32)?);
+/// let trusted = |seed: &Vec<u8>| Some(TrustedKeys { current: signing_public_key(seed.clone()).unwrap(), retired: vec![] });
+/// let ctx = MetadataContext { workspace_id: "ws".into(), node_id: "n1".into(), metadata_version: 1 };
+/// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 1 };
+/// // Sam writes; Maya rotates the folder to epoch 2 and keeps Sam's record.
+/// let origin = metadata_seal(ctx.clone(), old.clone(), NodeMetadata { name: "a.txt".into(), mime: None, size: None, modified: None })?;
+/// let signature = metadata_sign(writer.clone(), statement.clone(), origin.clone())?;
+/// let envelope = metadata_rekey(ctx, old.clone(), fresh.clone(), origin.clone())?;
+/// let key_ctx = OriginKeyContext { workspace_id: "ws".into(), node_id: "n1".into(), key_epoch: 2, record: OriginRecord::Metadata { metadata_version: 1 }, origin_envelope: origin.clone() };
+/// let key_envelope = origin_key_wrap(key_ctx, fresh.clone(), origin_opening_key(origin.clone(), old)?)?;
+/// let named = RecordOrigin { envelope: origin.clone(), signer_id: "sam".into(), signature: signature.clone() };
+/// let rekey_signature = metadata_rekey_sign(rekeyer.clone(), statement.clone(), 2, envelope.clone(), named)?;
+/// let record = RekeyedMetadata {
+///     statement, key_epoch: 2, envelope,
+///     origin: ServedOrigin { envelope: origin, signer_id: Some("sam".into()), signature: Some(signature), key_envelope },
+///     rekey_signature: Some(rekey_signature),
+/// };
+/// let trust = RekeyedTrust { origin: trusted(&writer), rekeyer: trusted(&rekeyer) };
+/// let verdict = metadata_rekeyed_integrity(Some(fresh.clone()), Some(trust.clone()), record.clone());
+/// assert_eq!(verdict, RekeyedVerdict { origin: Integrity::Verified, rekeyer: Integrity::Verified, mismatch: false });
+/// assert_eq!(metadata_rekeyed_integrity(None, Some(trust), record).origin, Integrity::Unchecked);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_rekeyed_integrity(
+    node_key: Option<Vec<u8>>,
+    trust: Option<RekeyedTrust>,
+    record: RekeyedMetadata,
+) -> RekeyedVerdict {
+    rekeyed_verdict(node_key.map(|key| Rekeyed::of_metadata(&key, &record)), trust)
+}
+
+/// What a reader shows for a re-keyed version; see [`metadata_rekeyed_integrity`].
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_rekeyed_integrity(
+    node_key: Option<Vec<u8>>,
+    trust: Option<RekeyedTrust>,
+    record: RekeyedVersion,
+) -> RekeyedVerdict {
+    rekeyed_verdict(node_key.map(|key| Rekeyed::of_version(&key, &record)), trust)
 }
 
 /// What a reader shows for a node's metadata. `trusted` holds the signing
@@ -1250,5 +1803,219 @@ mod tests {
         assert!(keys_statement(user.clone(), MAX_SAFE_INTEGER, key(1), key(2), ml_dsa.clone(), kem.clone())
             .is_ok());
         assert!(keys_statement(user, MAX_SAFE_INTEGER + 1, key(1), key(2), ml_dsa, kem).is_err());
+    }
+
+    const SAM: &str = "55555555-5555-4555-8555-555555555555";
+
+    #[test]
+    fn the_rekeyed_statements_are_the_web_s_canonical_arrays() {
+        let (current, origin, signature) = (random(296), random(296), random(64));
+        let named = RecordOrigin {
+            envelope: origin.clone(),
+            signer_id: SAM.to_uppercase(),
+            signature: signature.clone(),
+        };
+        assert_eq!(
+            String::from_utf8(metadata_rekeyed_message(&statement(), 7, &current, &named).unwrap()).unwrap(),
+            format!(
+                r#"["hushos/drive/sig/metadata-rekeyed",1,"ws","n1","folder",2,7,"{}","{}","{SAM}","{}"]"#,
+                digest(&current),
+                digest(&origin),
+                digest(&signature)
+            )
+        );
+        assert_eq!(
+            String::from_utf8(version_rekeyed_message(&version(), 7, &current, &named).unwrap()).unwrap(),
+            format!(
+                r#"["hushos/drive/sig/version-rekeyed",1,"ws","n1","v1","o1",3,7,"{}","{}","{SAM}","{}"]"#,
+                digest(&current),
+                digest(&origin),
+                digest(&signature)
+            )
+        );
+        assert!(metadata_rekeyed_message(&statement(), 0, &current, &named).is_err());
+        assert!(metadata_rekeyed_message(&statement(), MAX_SAFE_INTEGER + 1, &current, &named).is_err());
+        let nobody = RecordOrigin { signer_id: String::new(), ..named };
+        assert!(version_rekeyed_message(&version(), 7, &current, &nobody).is_err());
+    }
+
+    /* Sam writes and signs; Maya rotates to epoch 3 keeping Sam's record. */
+    /* The envelope contexts carry ids as given, so a record is sealed and read with lowercase ones. */
+    fn lower() -> MetadataStatement {
+        MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), ..statement() }
+    }
+
+    struct Rotated {
+        sam: Vec<u8>,
+        maya: Vec<u8>,
+        old: Vec<u8>,
+        fresh: Vec<u8>,
+        record: RekeyedMetadata,
+    }
+
+    fn metadata_ctx() -> MetadataContext {
+        MetadataContext { workspace_id: "ws".into(), node_id: "n1".into(), metadata_version: 2 }
+    }
+
+    fn rekey_signed(maya: &[u8], record: &RekeyedMetadata) -> Vec<u8> {
+        let named = RecordOrigin {
+            envelope: record.origin.envelope.clone(),
+            signer_id: SAM.into(),
+            signature: record.origin.signature.clone().unwrap(),
+        };
+        metadata_rekey_sign(maya.to_vec(), lower(), 3, record.envelope.clone(), named).unwrap()
+    }
+
+    fn rotated() -> Rotated {
+        let (sam, maya, old, fresh) = (random(32), random(32), random(32), random(32));
+        let metadata =
+            crate::NodeMetadata { name: "plan.md".into(), mime: None, size: Some(4), modified: None };
+        let origin = crate::metadata_seal(metadata_ctx(), old.clone(), metadata).unwrap();
+        let written = metadata_sign(sam.clone(), lower(), origin.clone()).unwrap();
+        let key_envelope = crate::origin_key_wrap(
+            OriginKeyContext {
+                workspace_id: "ws".into(),
+                node_id: "n1".into(),
+                key_epoch: 3,
+                record: OriginRecord::Metadata { metadata_version: 2 },
+                origin_envelope: origin.clone(),
+            },
+            fresh.clone(),
+            crate::origin_opening_key(origin.clone(), old.clone()).unwrap(),
+        )
+        .unwrap();
+        let mut record = RekeyedMetadata {
+            statement: lower(),
+            key_epoch: 3,
+            envelope: crate::metadata_rekey(metadata_ctx(), old.clone(), fresh.clone(), origin.clone())
+                .unwrap(),
+            origin: ServedOrigin {
+                envelope: origin,
+                signer_id: Some(SAM.into()),
+                signature: Some(written),
+                key_envelope,
+            },
+            rekey_signature: None,
+        };
+        record.rekey_signature = Some(rekey_signed(&maya, &record));
+        Rotated { sam, maya, old, fresh, record }
+    }
+
+    fn trust_of(r: &Rotated) -> RekeyedTrust {
+        RekeyedTrust {
+            origin: Some(TrustedKeys { current: key(&r.sam), retired: vec![] }),
+            rekeyer: Some(TrustedKeys { current: key(&r.maya), retired: vec![] }),
+        }
+    }
+
+    #[test]
+    fn a_rekeyed_record_reads_as_its_writer_s_and_the_re_keyer_stays_in_info() {
+        let r = rotated();
+        assert_eq!(
+            metadata_rekeyed_integrity(Some(r.fresh.clone()), Some(trust_of(&r)), r.record.clone()),
+            RekeyedVerdict { origin: Integrity::Verified, rekeyer: Integrity::Verified, mismatch: false }
+        );
+        let unchecked =
+            RekeyedVerdict { origin: Integrity::Unchecked, rekeyer: Integrity::Unchecked, mismatch: false };
+        assert_eq!(metadata_rekeyed_integrity(None, Some(trust_of(&r)), r.record.clone()), unchecked);
+        assert_eq!(metadata_rekeyed_integrity(Some(r.fresh.clone()), None, r.record.clone()), unchecked);
+        // The old node key opens nothing the record carries now.
+        assert!(metadata_rekeyed_integrity(Some(r.old.clone()), Some(trust_of(&r)), r.record).mismatch);
+    }
+
+    #[test]
+    fn the_re_keyer_cannot_pair_the_writer_s_signature_with_other_bytes() {
+        let r = rotated();
+        let other = crate::metadata_seal(
+            metadata_ctx(),
+            r.fresh.clone(),
+            crate::NodeMetadata { name: "not-sam.md".into(), mime: None, size: Some(4), modified: None },
+        )
+        .unwrap();
+        let mut forged = RekeyedMetadata { envelope: other, ..r.record.clone() };
+        forged.rekey_signature = Some(rekey_signed(&r.maya, &forged));
+        assert_eq!(
+            metadata_rekeyed_integrity(Some(r.fresh.clone()), Some(trust_of(&r)), forged),
+            RekeyedVerdict { origin: Integrity::BadSignature, rekeyer: Integrity::Verified, mismatch: true }
+        );
+    }
+
+    #[test]
+    fn the_origin_key_is_not_the_node_key_wrapping_the_old_node_key_opens_nothing() {
+        let r = rotated();
+        let wrapped_node_key = crate::origin_key_wrap(
+            OriginKeyContext {
+                workspace_id: "ws".into(),
+                node_id: "n1".into(),
+                key_epoch: 3,
+                record: OriginRecord::Metadata { metadata_version: 2 },
+                origin_envelope: r.record.origin.envelope.clone(),
+            },
+            r.fresh.clone(),
+            r.old.clone(),
+        )
+        .unwrap();
+        let record = RekeyedMetadata {
+            origin: ServedOrigin { key_envelope: wrapped_node_key, ..r.record.origin.clone() },
+            ..r.record.clone()
+        };
+        assert!(metadata_rekeyed_integrity(Some(r.fresh.clone()), Some(trust_of(&r)), record).mismatch);
+    }
+
+    #[test]
+    fn a_rekeyed_signature_passes_for_no_other_form_and_no_other_form_for_it() {
+        let r = rotated();
+        let maya = TrustedKeys { current: key(&r.maya), retired: vec![] };
+        for form in [Form::Ordinary, Form::Saved, Form::Resealed] {
+            let signed = sign_metadata_as(form, &r.maya, &lower(), &r.record.envelope).unwrap();
+            let record = RekeyedMetadata { rekey_signature: Some(signed), ..r.record.clone() };
+            let verdict = metadata_rekeyed_integrity(Some(r.fresh.clone()), Some(trust_of(&r)), record);
+            assert_eq!(verdict.rekeyer, Integrity::BadSignature, "{form:?}");
+            assert!(verdict.mismatch, "{form:?}");
+        }
+        assert_eq!(
+            metadata_integrity(
+                Some(maya),
+                lower(),
+                r.record.envelope.clone(),
+                r.record.rekey_signature.clone()
+            ),
+            Integrity::BadSignature
+        );
+    }
+
+    #[test]
+    fn the_legacy_form_beside_it_is_honest_and_never_refuses() {
+        let seed = random(32);
+        let me = TrustedKeys { current: key(&seed), retired: vec![] };
+        let envelope = random(84);
+        for prior in [
+            Integrity::Verified,
+            Integrity::SavedFromLink,
+            Integrity::Resealed,
+            Integrity::RetiredKey,
+            Integrity::UnknownSigner,
+            Integrity::BadSignature,
+            Integrity::Unsigned,
+            Integrity::Unchecked,
+        ] {
+            let own = match prior {
+                Integrity::Verified => Integrity::Verified,
+                Integrity::SavedFromLink => Integrity::SavedFromLink,
+                _ => Integrity::Resealed,
+            };
+            let mine = version_compat_sign(seed.clone(), prior, true, version(), envelope.clone()).unwrap();
+            assert_eq!(
+                version_integrity(Some(me.clone()), version(), envelope.clone(), Some(mine)),
+                own,
+                "{prior:?}"
+            );
+            let theirs = metadata_compat_sign(seed.clone(), prior, false, lower(), envelope.clone()).unwrap();
+            assert_eq!(
+                metadata_integrity(Some(me.clone()), lower(), envelope.clone(), Some(theirs)),
+                Integrity::Resealed,
+                "{prior:?}"
+            );
+        }
     }
 }

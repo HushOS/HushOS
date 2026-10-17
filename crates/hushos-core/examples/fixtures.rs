@@ -3,6 +3,9 @@
 //! `packages/crypto/src/__fixtures__/core.json`; `bun run fixtures` at the
 //! repository root runs both directions.
 
+#[path = "../tests/common/rekeyed.rs"]
+mod rekeyed;
+
 use hushos_core::*;
 use serde_json::json;
 use std::fs;
@@ -92,6 +95,15 @@ fn link_of(old: &IdentityEnvelope, next: &IdentitySuccession) -> SuccessionLink 
         new_kem_public_key: n.kem.as_ref().unwrap().public_key.clone(),
         signature: next.signature.clone(),
         consent: None,
+    }
+}
+
+fn version_ctx_of(s: &VersionStatement) -> VersionContext {
+    VersionContext {
+        workspace_id: s.workspace_id.clone(),
+        node_id: s.node_id.clone(),
+        version_id: s.version_id.clone(),
+        object_id: s.object_id.clone(),
     }
 }
 
@@ -318,7 +330,7 @@ fn main() {
         node_id: node_id.clone(),
         key_epoch: 9,
         grantee_user_id: web_user.clone(),
-        granter_user_id: granter_user,
+        granter_user_id: granter_user.clone(),
     };
     let grantee_public = base64url_decode(str_of(web_identity, "encryptionPublicKey")).unwrap();
     let grantee_kem = base64url_decode(str_of(&web_identity["kem"], "publicKey")).unwrap();
@@ -388,6 +400,7 @@ fn main() {
     )
     .unwrap()
     .envelope;
+    let signed_metadata_rekeyed = signed_metadata.clone();
     let signatures = json!({
         "signingPublicKey": granter.signing_public_key,
         "metadata": {
@@ -404,6 +417,109 @@ fn main() {
             "resealed": e(&version_resealed_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
             "saved": e(&version_saved_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
         },
+    });
+
+    // Re-keyed records (docs/integrity-design.md): the granter's metadata and version above, re-keyed to
+    // the next epoch by another account keeping them as origins, and the cases both twins judge alike.
+    let rekeyer_seed = random_bytes(32).unwrap();
+    let rekeyer = rekeyed::CaseSigner {
+        user_id: uuid(),
+        seed: rekeyer_seed.clone(),
+        public_key: signing_public_key(rekeyer_seed).unwrap(),
+    };
+    let writer = rekeyed::CaseSigner {
+        user_id: granter_user.to_uppercase(),
+        seed: granter.signing_seed.to_vec(),
+        public_key: base64url_decode(granter.signing_public_key.clone()).unwrap(),
+    };
+    let other_version = VersionStatement { version_id: uuid(), object_id: uuid(), ..signed_version.clone() };
+    let other_version_envelope =
+        version_seal(version_ctx_of(&other_version), node_key.clone(), content_key.clone(), 5, 0)
+            .unwrap()
+            .envelope;
+    let other_node = MetadataStatement { node_id: uuid(), ..signed_metadata_rekeyed.clone() };
+    let other_node_envelope = metadata_seal(
+        MetadataContext {
+            workspace_id: workspace_id.clone(),
+            node_id: other_node.node_id.clone(),
+            metadata_version: 3,
+        },
+        node_key.clone(),
+        metadata.clone(),
+    )
+    .unwrap();
+    let fresh_node_key = random_bytes(32).unwrap();
+    let made = rekeyed::rekeyed_cases(&rekeyed::CaseMaterial {
+        old_node_key: node_key.clone(),
+        node_key: fresh_node_key.clone(),
+        key_epoch: node_ctx.key_epoch + 1,
+        parent_id: node_ctx.parent_id.clone(),
+        writer: writer.clone(),
+        rekeyer: rekeyer.clone(),
+        stranger: signing_public_key(random_bytes(32).unwrap()).unwrap(),
+        group: uuid(),
+        metadata: rekeyed::Written {
+            statement: signed_metadata_rekeyed.clone(),
+            envelope: metadata_envelope.clone(),
+            signature: metadata_sign(
+                granter.signing_seed.to_vec(),
+                signed_metadata_rekeyed.clone(),
+                metadata_envelope.clone(),
+            )
+            .unwrap(),
+        },
+        plaintext: metadata.clone(),
+        version: rekeyed::Written {
+            statement: signed_version.clone(),
+            envelope: signed_version_envelope.clone(),
+            signature: version_sign(
+                granter.signing_seed.to_vec(),
+                signed_version.clone(),
+                signed_version_envelope.clone(),
+            )
+            .unwrap(),
+        },
+        version_record: ContentKey {
+            key: content_key.clone().into(),
+            plaintext_size: 1000,
+            thumbnail_bytes: 0,
+        },
+        other_version: rekeyed::Written {
+            statement: other_version.clone(),
+            envelope: other_version_envelope.clone(),
+            signature: version_sign(granter.signing_seed.to_vec(), other_version, other_version_envelope)
+                .unwrap(),
+        },
+        other_version_record: ContentKey {
+            key: content_key.clone().into(),
+            plaintext_size: 5,
+            thumbnail_bytes: 0,
+        },
+        other_node: rekeyed::Written {
+            statement: other_node.clone(),
+            envelope: other_node_envelope.clone(),
+            signature: metadata_sign(granter.signing_seed.to_vec(), other_node, other_node_envelope).unwrap(),
+        },
+    });
+    // The declared verdicts must be this twin's own before the other twin is held to them.
+    for (name, input, expected) in &made.cases {
+        let read = rekeyed::read(input).unwrap_or_else(|| panic!("rekeyed case {name} does not read"));
+        assert_eq!(&rekeyed::judge(&read), expected, "rekeyed case {name}");
+    }
+    let rekeyed = json!({
+        "oldNodeKey": e(&node_key),
+        "nodeKey": e(&fresh_node_key),
+        "keyEpoch": node_ctx.key_epoch + 1,
+        "writer": { "userId": writer.user_id, "signingPublicKey": granter.signing_public_key },
+        "rekeyer": { "userId": rekeyer.user_id, "signingPublicKey": e(&rekeyer.public_key) },
+        "metadata": made.metadata,
+        "version": made.version,
+        "metadataOriginKey": made.metadata_origin_key,
+        "versionOriginKey": made.version_origin_key,
+        "metadataStatement": made.metadata_statement,
+        "versionStatement": made.version_statement,
+        "origins": made.origins,
+        "cases": made.cases.iter().map(|(name, input, expected)| json!({ "name": name, "input": input, "expected": expected })).collect::<Vec<_>>(),
     });
 
     // Scoped ids: the same fixed seeds and scopes as the web's fixture, so both carry known answers.
@@ -537,6 +653,7 @@ fn main() {
         "share": share,
         "settings": settings,
         "signatures": signatures,
+        "rekeyed": rekeyed,
         "succession": succession,
         "identity": identity_made_here,
         "keys": keys,

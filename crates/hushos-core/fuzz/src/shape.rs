@@ -389,3 +389,34 @@ pub fn group_key(value: &Value) -> Option<GroupPublicKey> {
         ml_dsa_public_key: text(value, "mlDsaPublicKey")?,
     })
 }
+
+/* A drive metadata statement's fields; a kind other than folder or file does not fit. */
+pub fn metadata_statement(value: &Value) -> Option<MetadataStatement> {
+    let (workspace_id, node_id, metadata_version) =
+        (text(value, "workspaceId")?, text(value, "nodeId")?, number(value, "metadataVersion")?);
+    let kind = match text(value, "kind")?.as_str() {
+        "folder" => NodeKind::Folder,
+        "file" => NodeKind::File,
+        _ => return None,
+    };
+    Some(MetadataStatement { workspace_id, node_id, kind, metadata_version })
+}
+
+pub fn version_statement(value: &Value) -> Option<VersionStatement> {
+    Some(VersionStatement {
+        workspace_id: text(value, "workspaceId")?,
+        node_id: text(value, "nodeId")?,
+        version_id: text(value, "versionId")?,
+        object_id: text(value, "objectId")?,
+        content_suite: small(value, "contentSuite")?,
+    })
+}
+
+/* The writer's record a rekeyed statement names. */
+pub fn record_origin(value: &Value) -> Option<RecordOrigin> {
+    Some(RecordOrigin {
+        envelope: bytes(value, "envelope")?,
+        signer_id: text(value, "signerId")?,
+        signature: bytes(value, "signature")?,
+    })
+}

@@ -2,6 +2,7 @@ import sodium from 'libsodium-wrappers';
 import { CryptoError } from './errors';
 import { paddedLength } from './padding';
 import { encryptKey, decryptKey } from './aead';
+import { encode } from './keys';
 
 /*
  * Drive's envelopes and content framing, as fixed by docs/drive-design.md.
@@ -511,6 +512,213 @@ export async function openVersion(
     } finally {
         record.fill(0);
     }
+}
+
+/*
+ * Re-keyed records (docs/integrity-design.md, "Re-keyed records"). A rotation
+ * that keeps the writer's record (its origin) seals the same bytes again under
+ * the fresh node key and hands readers a key that opens the origin alone.
+ */
+
+/* The longest metadata envelope: the padded maximum, its nonce and its tag. */
+export const METADATA_ENVELOPE_MAX_BYTES =
+    ENVELOPE_NONCE_BYTES + METADATA_MAX_BYTES + CHUNK_TAG_BYTES;
+/* A version envelope's length in its suite: the key alone under suite 1, the record under 2 and 3. */
+export function versionEnvelopeBytes(suite: number) {
+    return checkSuite(suite) === LEGACY_CONTENT_SUITE ? KEY_ENVELOPE_BYTES : VERSION_ENVELOPE_BYTES;
+}
+
+function key32(key: Uint8Array, what: string) {
+    if (!(key instanceof Uint8Array) || key.length !== KEY_BYTES)
+        throw new CryptoError(`Invalid ${what}.`);
+    return key;
+}
+
+/*
+ * The plaintext of an envelope exactly as it was sealed, padding and all:
+ * for the re-keyed binding, which compares bytes and never parses.
+ */
+export async function openEnvelopeBytes(envelope: Uint8Array, key: Uint8Array, aad: Uint8Array) {
+    const { nonce, body } = split(envelope);
+    return decryptKey(body, key32(key, 'key'), nonce, aad);
+}
+
+/*
+ * A raw re-seal: the plaintext exactly as it was sealed (padding, field order
+ * and all) sealed again under `newKey` with a fresh nonce and the same
+ * associated data. Nothing is parsed or cleaned, so a re-keyed record's origin
+ * and its current envelope hold the same bytes and a reader can compare them.
+ */
+export async function rekeyEnvelope(
+    envelope: Uint8Array,
+    oldKey: Uint8Array,
+    newKey: Uint8Array,
+    aad: Uint8Array,
+) {
+    key32(newKey, 'key');
+    const plaintext = await openEnvelopeBytes(envelope, oldKey, aad);
+    try {
+        return await seal(plaintext, newKey, aad);
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+/* ChaCha20's quarter round on four words of the state. */
+function quarter(x: Uint32Array, a: number, b: number, c: number, d: number) {
+    x[a] = (x[a]! + x[b]!) | 0;
+    x[d] = rotl(x[d]! ^ x[a]!, 16);
+    x[c] = (x[c]! + x[d]!) | 0;
+    x[b] = rotl(x[b]! ^ x[c]!, 12);
+    x[a] = (x[a]! + x[b]!) | 0;
+    x[d] = rotl(x[d]! ^ x[a]!, 8);
+    x[c] = (x[c]! + x[d]!) | 0;
+    x[b] = rotl(x[b]! ^ x[c]!, 7);
+}
+function rotl(value: number, bits: number) {
+    return (value << bits) | (value >>> (32 - bits));
+}
+
+/*
+ * HChaCha20 (draft-irtf-cfrg-xchacha, 2.2): the ChaCha20 state over the key
+ * and a 16-byte input, twenty rounds, no feed-forward; words 0-3 and 12-15
+ * are the subkey. libsodium-wrappers 0.8.4 does not export
+ * crypto_core_hchacha20, so it is written out here, pinned by the draft's
+ * known answer and by opening libsodium's own XChaCha20-Poly1305 envelopes.
+ */
+function hchacha20(key: Uint8Array, input: Uint8Array) {
+    const view = (bytes: Uint8Array) =>
+        new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const x = new Uint32Array(16);
+    x.set([0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
+    for (let i = 0; i < 8; i++) x[4 + i] = view(key).getUint32(i * 4, true);
+    for (let i = 0; i < 4; i++) x[12 + i] = view(input).getUint32(i * 4, true);
+    for (let round = 0; round < 10; round++) {
+        quarter(x, 0, 4, 8, 12);
+        quarter(x, 1, 5, 9, 13);
+        quarter(x, 2, 6, 10, 14);
+        quarter(x, 3, 7, 11, 15);
+        quarter(x, 0, 5, 10, 15);
+        quarter(x, 1, 6, 11, 12);
+        quarter(x, 2, 7, 8, 13);
+        quarter(x, 3, 4, 9, 14);
+    }
+    const out = new Uint8Array(KEY_BYTES);
+    const words = [0, 1, 2, 3, 12, 13, 14, 15];
+    for (const [i, word] of words.entries()) view(out).setUint32(i * 4, x[word]!, true);
+    x.fill(0);
+    return out;
+}
+
+/*
+ * The key that opens this one envelope and nothing else `key` sealed:
+ * XChaCha20-Poly1305's own subkey, HChaCha20 of the key and the first 16
+ * bytes of the envelope's nonce. A rotation wraps it under the fresh node key
+ * (wrapOriginKey) instead of handing out the old node key, which still opens
+ * what was moved out of the folder before the rotation.
+ */
+export function originOpeningKey(envelope: Uint8Array, key: Uint8Array) {
+    const { nonce } = split(envelope);
+    return hchacha20(key32(key, 'node key'), nonce.subarray(0, 16));
+}
+
+/*
+ * An envelope opened with its opening key: ChaCha20-Poly1305 (IETF) under the
+ * subkey, the nonce four zero bytes and then the envelope nonce's last eight,
+ * which is what XChaCha20-Poly1305 does after deriving it.
+ */
+export async function openWithOriginKey(
+    envelope: Uint8Array,
+    originKey: Uint8Array,
+    aad: Uint8Array,
+) {
+    await sodium.ready;
+    const { nonce, body } = split(envelope);
+    const ietf = new Uint8Array(12);
+    ietf.set(nonce.subarray(16), 4);
+    try {
+        return new Uint8Array(
+            sodium.crypto_aead_chacha20poly1305_ietf_decrypt(
+                null,
+                body,
+                aad,
+                ietf,
+                key32(originKey, 'origin key'),
+            ),
+        );
+    } catch (error) {
+        if (error instanceof CryptoError) throw error;
+        throw new CryptoError('This item could not be opened. It may be damaged.');
+    }
+}
+
+/* Which record an origin is: a node's metadata at a metadata version, or one version of a file. */
+export type OriginRecord =
+    | { kind: 'metadata'; metadataVersion: number }
+    | { kind: 'version'; versionId: string };
+/* What binds a wrapped origin key: the node, the record, the node key's epoch, and the origin it opens. */
+export type OriginKeyContext = {
+    workspaceId: string;
+    nodeId: string;
+    keyEpoch: number;
+    record: OriginRecord;
+    originEnvelope: Uint8Array;
+};
+
+/*
+ * ["hushos/drive/origin-key", 1, ws, nodeId, "metadata", metadataVersion, keyEpoch, sha256(originEnvelope)]
+ * ["hushos/drive/origin-key", 1, ws, nodeId, "version", versionId, keyEpoch, sha256(originEnvelope)]
+ * Its own label: the wrapped origin key is 72 bytes, as a node key or a legacy
+ * content key envelope is, and must never open as either.
+ */
+export async function originKeyContext(ctx: OriginKeyContext) {
+    const record = ctx.record;
+    let position: unknown[];
+    if (record?.kind === 'metadata')
+        position = ['metadata', epoch(record.metadataVersion, 'metadata version')];
+    else if (record?.kind === 'version') position = ['version', id(record.versionId, 'version id')];
+    else throw new CryptoError('Invalid origin.');
+    if (!(ctx.originEnvelope instanceof Uint8Array)) throw new CryptoError('Invalid origin.');
+    const digest = encode(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', ctx.originEnvelope.slice())),
+    );
+    return context([
+        'hushos/drive/origin-key',
+        DRIVE_ENVELOPE_SUITE,
+        id(ctx.workspaceId, 'workspace id'),
+        id(ctx.nodeId, 'node id'),
+        ...position,
+        epoch(ctx.keyEpoch, 'key epoch'),
+        digest,
+    ]);
+}
+
+/* An origin's opening key under the node key at the epoch it now has: the 72-byte originKeyEnvelope. */
+export async function wrapOriginKey(
+    originKey: Uint8Array,
+    nodeKey: Uint8Array,
+    ctx: OriginKeyContext,
+) {
+    key32(originKey, 'origin key');
+    return seal(originKey, key32(nodeKey, 'node key'), await originKeyContext(ctx));
+}
+export async function openOriginKey(
+    envelope: Uint8Array,
+    nodeKey: Uint8Array,
+    ctx: OriginKeyContext,
+) {
+    const { nonce, body } = split(envelope, KEY_BYTES + CHUNK_TAG_BYTES);
+    const key = await decryptKey(
+        body,
+        key32(nodeKey, 'node key'),
+        nonce,
+        await originKeyContext(ctx),
+    );
+    if (key.length !== KEY_BYTES) {
+        key.fill(0);
+        throw new CryptoError('Invalid origin key.');
+    }
+    return key;
 }
 
 /* The thumbnail's key is derived for that one role; the content key never opens it. */

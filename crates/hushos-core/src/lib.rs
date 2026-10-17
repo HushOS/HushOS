@@ -66,6 +66,46 @@ pub mod fuzzing {
     pub fn encode_statement(parts: &[Value]) -> Option<Vec<u8>> {
         crate::canonical::encode_statement(parts).ok()
     }
+
+    /// A metadata statement in one of its three writer forms (`ordinary`,
+    /// `saved`, `resealed`), or none when its fields are refused or the form is
+    /// another; the rekeyed form is `metadata_rekeyed_statement`.
+    pub fn metadata_statement_as(
+        form: &str,
+        statement: &crate::MetadataStatement,
+        envelope: &[u8],
+    ) -> Option<Vec<u8>> {
+        crate::signatures::metadata_statement_as(form, statement, envelope)
+    }
+
+    /// A version statement in one of its three writer forms; see [`metadata_statement_as`].
+    pub fn version_statement_as(
+        form: &str,
+        statement: &crate::VersionStatement,
+        envelope: &[u8],
+    ) -> Option<Vec<u8>> {
+        crate::signatures::version_statement_as(form, statement, envelope)
+    }
+
+    /// An envelope's plaintext exactly as sealed, under `key` and `aad`, or none.
+    pub fn plaintext(key: &[u8], envelope: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
+        crate::envelope::open(key, envelope, aad).ok()
+    }
+
+    /// An envelope's plaintext under its opening key (an origin key), or none.
+    pub fn origin_plaintext(origin_key: &[u8], envelope: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
+        crate::envelope::open_with_opening_key(origin_key, envelope, aad).ok()
+    }
+
+    /// A metadata envelope's associated data.
+    pub fn metadata_aad(ctx: &crate::MetadataContext) -> Vec<u8> {
+        crate::drive::metadata_context(ctx)
+    }
+
+    /// A version envelope's associated data in `suite`.
+    pub fn version_aad(ctx: &crate::VersionContext, suite: u32) -> Vec<u8> {
+        crate::drive::version_context(ctx, suite)
+    }
 }
 
 #[cfg(feature = "uniffi")]

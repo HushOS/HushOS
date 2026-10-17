@@ -1,6 +1,9 @@
 //! Records sealed by the web app (`packages/crypto`) must open here byte for
 //! byte. The fixture is written by `bun run --cwd packages/crypto fixtures:core`.
 
+#[path = "common/rekeyed.rs"]
+mod rekeyed;
+
 use hushos_core::*;
 use serde_json::Value;
 
@@ -828,4 +831,142 @@ fn the_web_s_device_session_proof_is_this_core_s_byte_for_byte() {
         b(session, "signature")
     ));
     assert_eq!(device_email_hash(s(session, "email")), s(session, "emailDigest"));
+}
+
+/* A record of the web's rekeyed fixture as the core reads it. */
+fn rekeyed_record(value: &Value) -> rekeyed::Input {
+    let mut input = value.clone();
+    input["nodeKey"] = Value::Null;
+    input["trust"] = Value::Null;
+    rekeyed::read(&input).expect("the web's rekeyed record reads")
+}
+
+#[test]
+fn the_web_s_rekeyed_records_read_here_as_the_web_declared_every_case() {
+    let fixture = &fixture()["rekeyed"];
+    let cases = fixture["cases"].as_array().unwrap();
+    assert!(cases.len() >= 30, "the cases are there");
+    for case in cases {
+        let name = s(case, "name");
+        let input = rekeyed::read(&case["input"]).unwrap_or_else(|| panic!("{name} reads"));
+        assert_eq!(rekeyed::judge(&input), case["expected"], "{name}");
+    }
+}
+
+#[test]
+fn the_web_s_rekeyed_statements_origin_keys_and_raw_reseals_are_this_core_s() {
+    let fixture = &fixture()["rekeyed"];
+    let (old, fresh) = (b(fixture, "oldNodeKey"), b(fixture, "nodeKey"));
+    let rekeyer = b(&fixture["rekeyer"], "signingPublicKey");
+    for (which, statement_key, origin_key) in [
+        ("metadata", "metadataStatement", "metadataOriginKey"),
+        ("version", "versionStatement", "versionOriginKey"),
+    ] {
+        let record = &fixture[which];
+        let origin = &record["origin"];
+        let (envelope, origin_envelope) = (b(record, "envelope"), b(origin, "envelope"));
+        let named = RecordOrigin {
+            envelope: origin_envelope.clone(),
+            signer_id: s(origin, "signerId"),
+            signature: b(origin, "signature"),
+        };
+        let key_epoch = n(record, "keyEpoch");
+        // The statement bytes, built here from the same fields, and the web's signature over them.
+        let (statement, holds) = match rekeyed_record(record).record {
+            rekeyed::Record::Metadata(r) => (
+                metadata_rekeyed_statement(r.statement.clone(), key_epoch, envelope.clone(), named.clone())
+                    .unwrap(),
+                metadata_rekeyed_verify(
+                    rekeyer.clone(),
+                    r.statement,
+                    key_epoch,
+                    envelope.clone(),
+                    named.clone(),
+                    r.rekey_signature.unwrap(),
+                ),
+            ),
+            rekeyed::Record::Version(r) => (
+                version_rekeyed_statement(r.statement.clone(), key_epoch, envelope.clone(), named.clone())
+                    .unwrap(),
+                version_rekeyed_verify(
+                    rekeyer.clone(),
+                    r.statement,
+                    key_epoch,
+                    envelope.clone(),
+                    named.clone(),
+                    r.rekey_signature.unwrap(),
+                ),
+            ),
+        };
+        assert_eq!(base64url_encode(statement), s(fixture, statement_key), "{which}");
+        assert!(holds, "{which}: the web's rekey signature verifies here");
+        // The origin key: HChaCha20 of the old node key and the origin's nonce, as the web derived it.
+        assert_eq!(
+            base64url_encode(origin_opening_key(origin_envelope.clone(), old.clone()).unwrap()),
+            s(fixture, origin_key)
+        );
+        let ctx = |position: OriginRecord| OriginKeyContext {
+            workspace_id: s(&record["statement"], "workspaceId"),
+            node_id: s(&record["statement"], "nodeId"),
+            key_epoch,
+            record: position,
+            origin_envelope: origin_envelope.clone(),
+        };
+        let position = if which == "metadata" {
+            OriginRecord::Metadata { metadata_version: n(&record["statement"], "metadataVersion") }
+        } else {
+            OriginRecord::Version { version_id: s(&record["statement"], "versionId") }
+        };
+        let opened = origin_key_open(ctx(position), fresh.clone(), b(origin, "keyEnvelope")).unwrap();
+        assert_eq!(base64url_encode(opened), s(fixture, origin_key));
+        // The web's wrapped origin key is no node key and no content key under the fresh key.
+        let node_ctx = NodeKeyContext {
+            workspace_id: s(&record["statement"], "workspaceId"),
+            node_id: s(&record["statement"], "nodeId"),
+            parent_id: s(&record["statement"], "nodeId"),
+            parent_key_epoch: key_epoch,
+            key_epoch,
+        };
+        assert!(node_open(node_ctx, fresh.clone(), b(origin, "keyEnvelope")).is_err());
+        // And the core's own re-seal of the web's origin holds the same bytes as the web's re-seal.
+        let mine = match rekeyed_record(record).record {
+            rekeyed::Record::Metadata(r) => {
+                let ctx = MetadataContext {
+                    workspace_id: r.statement.workspace_id.clone(),
+                    node_id: r.statement.node_id.clone(),
+                    metadata_version: r.statement.metadata_version,
+                };
+                let mine =
+                    metadata_rekey(ctx.clone(), old.clone(), fresh.clone(), origin_envelope.clone()).unwrap();
+                assert_eq!(
+                    metadata_open(ctx.clone(), fresh.clone(), mine.clone()).unwrap(),
+                    metadata_open(ctx, fresh.clone(), envelope.clone()).unwrap()
+                );
+                mine
+            }
+            rekeyed::Record::Version(r) => {
+                let ctx = VersionContext {
+                    workspace_id: r.statement.workspace_id.clone(),
+                    node_id: r.statement.node_id.clone(),
+                    version_id: r.statement.version_id.clone(),
+                    object_id: r.statement.object_id.clone(),
+                };
+                let suite = r.statement.content_suite;
+                let mine =
+                    version_rekey(ctx.clone(), suite, old.clone(), fresh.clone(), origin_envelope.clone())
+                        .unwrap();
+                let (a, b) = (
+                    version_open(ctx.clone(), suite, fresh.clone(), mine.clone(), None).unwrap(),
+                    version_open(ctx, suite, fresh.clone(), envelope.clone(), None).unwrap(),
+                );
+                assert_eq!(
+                    (a.key, a.plaintext_size, a.thumbnail_bytes),
+                    (b.key, b.plaintext_size, b.thumbnail_bytes)
+                );
+                mine
+            }
+        };
+        assert_ne!(mine[..24], envelope[..24], "{which}: a fresh nonce");
+        assert_eq!(mine.len(), envelope.len());
+    }
 }
