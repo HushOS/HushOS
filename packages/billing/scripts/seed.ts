@@ -150,15 +150,15 @@ for (const tier of tiers) {
  * currency (the catalogue drops a product whose currencies disagree).
  * `quota_bytes` is the whole family's pool.
  *
- * PLACEHOLDER PRICES, NEEDING THE OWNER. Bases are the spike's sandbox figures:
- * 15 USD, 15 EUR, 12 GBP, 599 INR a month. The per-member rate is 2.00 USD, EUR
- * and GBP beyond six members; INR is 79 a member, scaled from USD by the bases
- * (599 / 15, so about 40 rupees to the dollar, the spike's purchasing-power
- * ratio, not the exchange rate). A year is ten months. Until the owner sets
- * every figure and FAMILY_PRICES_CONFIRMED, the seed creates family products in
- * a sandbox organisation only.
+ * Prices, confirmed by the owner on 2026-10-17: 15 USD, 15 EUR, 12 GBP and
+ * 599 INR a month for up to six members, then 2.00 USD, EUR or GBP, or 79 INR,
+ * a member a month (INR scaled from USD by the bases, about 40 rupees to the
+ * dollar, the spike's purchasing-power ratio). A year is ten months. The pool
+ * is 2 TB; a family has at most 20 members, and one raise adds at most five
+ * (protocol.ts). The seed runs only when someone runs `bun run polar:seed`:
+ * nothing in CI, Docker or `dev` starts it.
  */
-const FAMILY_PRICES_CONFIRMED = false;
+const FAMILY_PRICES_CONFIRMED = true;
 const family = {
     name: 'Family',
     quota: 2n * 1024n * GIB,
@@ -212,7 +212,7 @@ function sameUnitPrice(
 
 if (environment === 'production' && !FAMILY_PRICES_CONFIRMED) {
     console.log(
-        '  skipped  Family plans: their prices are placeholders until the owner confirms them',
+        '  skipped  Family plans: their prices are not confirmed (FAMILY_PRICES_CONFIRMED)',
     );
 } else {
     const storage = `${family.quota / (1024n * GIB)} TB`;
@@ -235,7 +235,7 @@ if (environment === 'production' && !FAMILY_PRICES_CONFIRMED) {
                 prices: creates,
                 metadata,
             });
-            console.log(`  created  ${name}  ${product.id}  (placeholder prices)`);
+            console.log(`  created  ${name}  ${product.id}`);
             continue;
         }
         if (!update) {
@@ -275,6 +275,6 @@ if (environment === 'production' && !FAMILY_PRICES_CONFIRMED) {
             continue;
         }
         await polar.products.update(current.id, { description, metadata, prices });
-        console.log(`  updated  ${name}  (placeholder prices)`);
+        console.log(`  updated  ${name}`);
     }
 }

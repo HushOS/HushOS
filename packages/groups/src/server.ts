@@ -28,6 +28,7 @@ import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
 import {
     billingEnabled,
     ensureGroupSeat,
+    familyHasPlan,
     paysForGroup,
     type SeatResult,
 } from '@hushos/billing/server';
@@ -1641,6 +1642,24 @@ export async function postSuccession(
     );
 }
 
+/*
+ * With billing on, a family without a live plan invites nobody, makes no
+ * family folders and takes no acceptances (docs/groups-design.md 3.5):
+ * nobody could be let in, and the pool is empty. An invitation sent while a
+ * plan ran stays open, so it works again once the plan is renewed. Asked
+ * after the caller's own checks, so only a manager learns whether the family
+ * has a plan.
+ */
+async function requirePlan(groupId: string, name?: string) {
+    if (await familyHasPlan(groupId)) return;
+    const family = name ?? (await groupsRepository.getGroupRow(groupId))?.name ?? 'this family';
+    throw new GroupError(
+        'no-plan',
+        `Choose a plan for ${family} first. Until it has one, nobody can be invited and no family folders can be made.`,
+        402,
+    );
+}
+
 /* Route 11: an invitation by email, mailed with its one-time link. */
 export async function invite(
     userId: string,
@@ -1648,6 +1667,7 @@ export async function invite(
     input: { email: string; roles: GroupRoleWire[] },
 ) {
     const found = await membershipOf(groupId, userId, 'members');
+    await requirePlan(groupId, found.group.name);
     const email = input.email.trim();
     const normalizedEmail = email.toLowerCase();
     if (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail))
@@ -1758,6 +1778,15 @@ export async function openInvitation(userId: string, token: string, address: str
 export async function acceptInvitation(userId: string, token: string, address: string) {
     await limit(`invitations:accept:address:${address}`, 30, 15 * 60 * 1000);
     await limit(`invitations:accept:user:${userId}`, 10, 15 * 60 * 1000);
+    // A family whose plan lapsed takes nobody new: accepting would only wait for a place.
+    const opened = await groupsRepository.openInvitation(invitationHash(token));
+    if (opened && !(await familyHasPlan(opened.group.id)))
+        throw new GroupError(
+            'no-plan',
+            `${opened.group.name} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`,
+            402,
+            { invitee: true },
+        );
     const result = await groupsRepository.acceptInvitation({
         tokenHash: invitationHash(token),
         userId,
@@ -1887,7 +1916,7 @@ export async function removeMember(
     if (await paysForGroup(groupId, targetId))
         throw new GroupError(
             'payer',
-            'They pay for this family’s plan. They can cancel it in Plan and storage; then you can remove them.',
+            'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
             409,
         );
     return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
@@ -1896,7 +1925,7 @@ export async function removeMember(
 const youPay = () =>
     new GroupError(
         'payer',
-        'You pay for this family’s plan. Cancel it in Plan and storage before you leave; the family keeps it until the end of the period.',
+        'You pay for this family’s plan. Cancel it in Billing on the family’s page before you leave; the family keeps it until the end of the period.',
         409,
     );
 
@@ -2009,7 +2038,11 @@ export async function createArea(
         userId,
         call,
         { kind: 'area', area: areaInput(call.area, groupsEnv.GROUP_AREA_LIMIT) },
-        { newArea: { workspaceId: call.area.workspaceId } },
+        // After every check of the call, before anything is written: a plan, where plans are sold.
+        {
+            newArea: { workspaceId: call.area.workspaceId },
+            beforeAppend: () => requirePlan(groupId),
+        },
     );
 }
 

@@ -29,6 +29,7 @@ export {
 export {
     createGroupPortalSession,
     ensureGroupSeat,
+    familyHasPlan,
     getGroupBilling,
     paysForGroup,
     quoteUnitsChange,

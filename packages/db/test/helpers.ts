@@ -268,6 +268,14 @@ export async function setTestMember(input: {
         });
 }
 
+/* What a workspace holds, as finished uploads leave it. */
+export async function setTestUsedBytes(workspaceId: string, usedBytes: bigint) {
+    await db
+        .update(workspaceStorage)
+        .set({ usedBytes })
+        .where(eq(workspaceStorage.workspaceId, workspaceId));
+}
+
 /* An account deleted outright, as deleteAccount leaves the rows that point at it. */
 export async function deleteTestAccount(userId: string) {
     await db.delete(users).where(eq(users.id, userId));

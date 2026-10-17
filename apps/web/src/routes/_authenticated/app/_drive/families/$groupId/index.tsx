@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { ForkAlert, NoticeList } from '@/components/families/family-alerts';
+import { FamilyPlan, useFamilyPlanGate } from '@/components/families/family-billing';
 import { InviteDialog } from '@/components/families/invite-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
 import { InvitationList, MemberList, PendingList } from '@/components/families/members';
@@ -38,6 +39,7 @@ import { groupsApi } from '@/lib/groups/api';
 import { familySynced } from '@/lib/families-keys';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
+import { placesOf } from '@/lib/family-billing';
 import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
 
@@ -46,17 +48,24 @@ const KEY_CHANGE_POLL_MS = 15_000;
 
 export const Route = createFileRoute('/_authenticated/app/_drive/families/$groupId/')({
     head: () => ({ meta: [{ title: 'Family · HushOS' }] }),
+    // Back from Polar's checkout: `checkout_id` says a plan is on its way.
+    validateSearch: (search: Record<string, unknown>): { checkout_id?: string } =>
+        typeof search.checkout_id === 'string' ? { checkout_id: search.checkout_id } : {},
     component: FamilyPage,
 });
 
 /*
- * One family: who waits to join, the members, open invitations, and leaving.
+ * One family: its plan (where plans are sold, "Choose a plan" comes before
+ * anything else), who waits to join, the members, open invitations, Billing,
+ * and leaving.
  * The member list is synced on this device first (after the outbox), and a
  * list shown differently is the hard warning. The family's folders are its
  * space (/app/s/<family>), which its sidebar row opens.
  */
 function FamilyPage() {
     const { groupId } = Route.useParams();
+    const { checkout_id: checkoutId } = Route.useSearch();
+    const navigate = useNavigate();
     const { userId } = useDrive();
     const families = useQuery(familiesQueryOptions(userId));
     const summary = families.data?.find((family) => family.id === groupId);
@@ -81,6 +90,8 @@ function FamilyPage() {
     });
     const [inviting, setInviting] = useState(false);
     const [leaving, setLeaving] = useState(false);
+    // Inviting waits for a plan where plans are sold: nobody could be let in without one.
+    const plan = useFamilyPlanGate(userId, groupId, summary?.state === 'active');
 
     if (families.isPending) return <SkeletonRows rows={3} />;
     if (families.isError)
@@ -125,6 +136,7 @@ function FamilyPage() {
     const ownWrong = view ? view.ownEntryWrongAt.length > 0 : false;
     const ownBehind = view ? view.ownEntryBehindAt.length > 0 : false;
     const activeCount = detail.data?.members.filter((member) => member.state === 'active').length;
+    const seats = placesOf(detail.data?.seats, plan.summary);
 
     return (
         <div className="flex flex-1 flex-col">
@@ -132,8 +144,9 @@ function FamilyPage() {
                 back={<Link to="/app/families">Families</Link>}
                 title={family}
                 description={
-                    detail.data
-                        ? `${detail.data.seats.used} of ${detail.data.seats.limit} places taken.`
+                    // One source with Billing (placesOf); without a plan, "Choose a plan" says it.
+                    seats && !plan.waiting
+                        ? `${seats.used} of ${seats.limit} places taken.`
                         : undefined
                 }
             >
@@ -144,7 +157,9 @@ function FamilyPage() {
                 >
                     Family folders
                 </Link>
-                {manager && <Button onClick={() => setInviting(true)}>Invite someone</Button>}
+                {manager && !plan.waiting && (
+                    <Button onClick={() => setInviting(true)}>Invite someone</Button>
+                )}
             </PageHeader>
 
             <div className="flex flex-col gap-2 px-5 empty:hidden sm:px-8">
@@ -208,6 +223,25 @@ function FamilyPage() {
                 )}
             </div>
 
+            <div className="flex flex-col pt-2 empty:hidden">
+                <FamilyPlan
+                    place="top"
+                    userId={userId}
+                    groupId={groupId}
+                    family={family}
+                    roles={summary.roles}
+                    checkoutId={checkoutId}
+                    onCheckoutSeen={() =>
+                        void navigate({
+                            to: '/app/families/$groupId',
+                            params: { groupId },
+                            search: {},
+                            replace: true,
+                        })
+                    }
+                />
+            </div>
+
             {detail.isPending && <SkeletonRows rows={2} />}
             {detail.isError && (
                 <EmptyState
@@ -229,6 +263,7 @@ function FamilyPage() {
                     family={family}
                     pending={pending.data}
                     names={names}
+                    waitingForPlan={plan.waiting}
                     blocked={
                         markLeft.length > 0 ? leftDueCopy({ userIds: markLeft }, { names }) : null
                     }
@@ -254,6 +289,15 @@ function FamilyPage() {
                     members={detail.data?.members ?? []}
                 />
             )}
+
+            <FamilyPlan
+                place="bottom"
+                userId={userId}
+                groupId={groupId}
+                family={family}
+                roles={summary.roles}
+                onCheckoutSeen={() => undefined}
+            />
 
             <section className="flex flex-col gap-3 px-5 pt-8 sm:px-8">
                 <details className="rounded-xl border border-rule px-4 py-3 text-[13px]">

@@ -81,11 +81,11 @@ export function refusalCopy(
                 case 'cap':
                     return `${family} has as many members as its plan allows.`;
                 case 'canceling':
-                    return `${family}’s plan is set to end. Resume it in billing before letting anyone in.`;
+                    return `${family}’s plan is set to end, so nobody new can join. Resume it under Billing first.`;
                 case 'declined':
                     return 'Your bank declined the charge for another place. Nothing was charged and nobody was let in.';
                 case 'confirm':
-                    return 'Your bank wants you to confirm the charge for another place. Confirm it in billing, then let them in again.';
+                    return 'Your bank wants you to confirm the charge for another place. Confirm it, then let them in again.';
                 case 'payment':
                     return 'The payment for another place didn’t go through. Nobody was let in.';
             }
@@ -95,10 +95,19 @@ export function refusalCopy(
                 ? `${family} is full (${used} of ${limit}).`
                 : `${family} is full.`;
         }
+        case 'no-plan':
+            // The invitee of a family whose plan lapsed, or a manager inviting or making a folder.
+            return data && typeof data === 'object' && (data as { invitee?: unknown }).invitee
+                ? `${ctx.family ?? 'This family'} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`
+                : `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
         case 'organizer':
             return 'Make someone else the organizer first.';
+        // The payer of a live plan can't leave or be removed until it is cancelled, under Billing
+        // on this page (through the billing portal). Removing them names them; leaving doesn't.
         case 'payer':
-            return `You pay for ${ctx.family ?? 'this family'}’s plan. Cancel it in Plan and storage first; the family keeps it until the end of the period.`;
+            return ctx.person
+                ? `${ctx.person} pays for ${ctx.family ?? 'this family'}’s plan. They can cancel it under Billing on this page; then you can remove them.`
+                : `You pay for ${ctx.family ?? 'this family'}’s plan. Cancel it under Billing on this page first; the family keeps it until the end of the period.`;
         case 'last-holder':
             return 'Let someone else manage the family first.';
         case 'unsupported':

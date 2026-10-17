@@ -35,9 +35,30 @@ export type FamilyPlan = {
     quotaBytes: string;
 };
 
-/* What a family's billing page shows its managers and its payer. */
-export type GroupBillingSummary = {
+/*
+ * What a family's billing page shows. Its `billing` holders and its payer get
+ * the whole of it (`view: 'manage'`); any other member, a manager without
+ * `billing` included, gets `FamilyPlanGlance`.
+ */
+export type GroupBillingSummary = FamilyBillingDetail | FamilyPlanGlance;
+
+/*
+ * A member's view: the plan's name, the storage used and the pool's size,
+ * and whether a plan is live at all, which is what keeps inviting, letting
+ * people in and new family folders shut (the server refuses them anyway). No
+ * prices, places, payer or state of the subscription.
+ */
+export type FamilyPlanGlance = {
     enabled: boolean;
+    view: 'member';
+    hasPlan: boolean;
+    planName: string | null;
+    storage: { usedBytes: string; quotaBytes: string } | null;
+};
+
+export type FamilyBillingDetail = {
+    enabled: boolean;
+    view: 'manage';
     plans: FamilyPlan[];
     /* Who pays: the only person who can add or remove places, or open the portal. */
     payer: { userId: string; you: boolean } | null;
@@ -56,13 +77,28 @@ export type GroupBillingSummary = {
         pendingUnits: number | null;
         includedMembers: number;
         quotaBytes: string;
+        /* With the end, what a raise is prorated over: the web quotes it with `quoteUnitsChange`. */
+        currentPeriodStart: string;
         currentPeriodEnd: string;
         cancelAtPeriodEnd: boolean;
     } | null;
+    /*
+     * The plan the family had last, once none is live: it ran out or was
+     * cancelled. Null while a plan is live, and for a family that never had one.
+     */
+    lastPlan: { productName: string; endedAt: string } | null;
+    /*
+     * The family's storage pool as Drive reads it: every family folder's bytes
+     * against the pool's size (zero once a plan has ended). Null for a family
+     * with no pool, made before this server sold plans and never on one: its
+     * folders keep their own allowance.
+     */
+    storage: { usedBytes: string; quotaBytes: string } | null;
     seats: { used: number; limit: number };
     /*
-     * What one more place costs now, before tax: the rest of this period at
-     * the per-member price, truncated to the minor unit as Polar charges it.
+     * What one more place costs now, before tax and any discount: the rest of
+     * this period at the per-member price, truncated to the minor unit as
+     * Polar charges it.
      */
     nextPlace: { amount: number; currency: string } | null;
 };
@@ -192,6 +228,23 @@ export interface GrowthApi {
     ): Promise<AffiliateView>;
     deleteAffiliate(id: string): Promise<{ deleted: true }>;
     markAffiliatePaid(id: string): Promise<{ paid: number }>;
+}
+
+/* A family's plan (`/api/billing/groups/:id`); only its payer changes it. */
+export interface GroupBillingApi {
+    summary(groupId: string): Promise<GroupBillingSummary>;
+    /* Polar's hosted checkout; whoever starts it becomes the family's payer. */
+    checkout(groupId: string, productId: string, currency?: string): Promise<{ url: string }>;
+    /*
+     * More places are charged at once; fewer are scheduled for the period's
+     * end. `url` is the portal when the bank wants the payer to confirm.
+     */
+    setUnits(
+        groupId: string,
+        units: number,
+    ): Promise<{ billing: GroupBillingSummary; url: string | null; confirmPayment?: true }>;
+    portal(groupId: string): Promise<{ url: string }>;
+    sync(groupId: string): Promise<GroupBillingSummary>;
 }
 
 export interface BillingApi {

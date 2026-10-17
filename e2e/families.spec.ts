@@ -1049,6 +1049,213 @@ test.describe('three people', () => {
     });
 });
 
+/*
+ * Family plans. A real Polar checkout can't run here (verification and CI run with
+ * BILLING_PROVIDER=none, and nothing may call Polar), so the family's billing summary is
+ * stubbed with page.route, the shapes the server answers: no plan, a live one the person
+ * pays for, one set to end, one that ended, and the view of a member who sees only the
+ * plan's name. What the page offers and hides is real; checkout, the portal and the
+ * places routes are not exercised.
+ */
+test.describe('family plans, with the billing summary stubbed', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    const DAY = 24 * 60 * 60 * 1000;
+    const family = 'Ekström family';
+    const plans = [
+        {
+            id: 'plan-month',
+            name: 'Family (monthly)',
+            description: null,
+            interval: 'month',
+            prices: { usd: { base: 1500, perMember: 200 } },
+            includedMembers: 6,
+            maxMembers: 20,
+            quotaBytes: String(2 * 1024 ** 4),
+        },
+        {
+            id: 'plan-year',
+            name: 'Family (yearly)',
+            description: null,
+            interval: 'year',
+            prices: { usd: { base: 15000, perMember: 2000 } },
+            includedMembers: 6,
+            maxMembers: 20,
+            quotaBytes: String(2 * 1024 ** 4),
+        },
+    ];
+    const none = {
+        enabled: true,
+        view: 'manage',
+        plans,
+        payer: null,
+        subscription: null,
+        lastPlan: null,
+        storage: { usedBytes: '0', quotaBytes: '0' },
+        seats: { used: 1, limit: 1 },
+        nextPlace: null,
+    };
+    // Nineteen of thirty days left: a raise of two is 253.33, charged 253 (twice 126 is 252).
+    const live = (overrides: Record<string, unknown> = {}) => ({
+        ...none,
+        payer: { userId: 'payer', you: true },
+        subscription: {
+            id: 'sub',
+            productId: 'plan-month',
+            productName: 'Family (monthly)',
+            status: 'active',
+            recurringInterval: 'month',
+            amount: 1900,
+            currency: 'usd',
+            units: 8,
+            paidUnits: 8,
+            pendingUnits: null,
+            includedMembers: 6,
+            quotaBytes: String(2 * 1024 ** 4),
+            currentPeriodStart: new Date(Date.now() - 11 * DAY).toISOString(),
+            currentPeriodEnd: new Date(Date.now() + 19 * DAY).toISOString(),
+            cancelAtPeriodEnd: false,
+            ...overrides,
+        },
+        storage: { usedBytes: String(300 * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
+        seats: { used: 1, limit: 8 },
+        nextPlace: { amount: 126, currency: 'usd' },
+    });
+    let maya: Person;
+    let groupId: string;
+    let answer: unknown = none;
+
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(300_000);
+        maya = await person(browser, 'Maya Ekström');
+        await createFamily(maya, family);
+        groupId = new URL(maya.page.url()).pathname.split('/').at(-1)!;
+        await maya.page.route(
+            (url) => url.pathname === `/api/billing/groups/${groupId}`,
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({ json: answer, headers: { 'cache-control': 'no-store' } })
+                    : route.continue(),
+        );
+    });
+    test.afterAll(async () => {
+        await maya?.page.context().close();
+    });
+
+    async function show(summary: unknown, path = `/app/families/${groupId}`) {
+        answer = summary;
+        await maya.page.goto(path);
+    }
+
+    test('before a plan: Choose a plan comes first, priced monthly and yearly, and nobody can be invited or a folder made', async () => {
+        await show(none);
+        const choose = maya.page.locator('[data-choose-plan]');
+        await expect(choose.getByRole('heading', { name: 'Choose a plan' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(choose).toContainText(
+            `${family} needs a plan before you can invite anyone or make family folders.`,
+        );
+        await expect(choose).toContainText('$15 a month');
+        await expect(choose).toContainText('Plus tax where it applies; Polar adds it at checkout.');
+        await expect(choose).toContainText('For up to 6 members, sharing 2 TB.');
+        await expect(choose).toContainText('Then $2 a month for each member after that, up to 20.');
+        await choose.getByRole('button', { name: 'Yearly' }).click();
+        await expect(choose).toContainText('$150 a year · 2 months free');
+        await expect(choose.getByRole('button', { name: 'Choose Family' })).toBeEnabled();
+        await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
+        await expect(maya.page.locator('[data-family-plan]')).toHaveCount(0);
+
+        await show(none, `/app/s/${groupId}`);
+        await expect(maya.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(maya.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
+    });
+
+    test('a live plan the person pays for: the facts, places quoted as Polar charges them, and every control', async () => {
+        await show(live());
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        await expect(billing).toContainText('Family · 2 TB', { timeout: 60_000 });
+        await expect(billing).toContainText('$19 a month · renews');
+        await expect(billing).toContainText('1 of 8 taken · 6 included');
+        // The header reads the same paid limit, not the family row's default.
+        await expect(maya.page.getByText('1 of 8 places taken.')).toBeVisible();
+        await expect(billing).toContainText('300 GB of 2 TB used');
+        await expect(billing).toContainText('Paid by');
+        await expect(maya.page.locator('[data-choose-plan]')).toHaveCount(0);
+        await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toBeVisible();
+        for (const name of [
+            'Manage payment and invoices',
+            'Remove places at renewal',
+            'Cancel plan',
+        ])
+            await expect(billing.getByRole('button', { name })).toBeVisible();
+
+        await billing.getByRole('button', { name: 'Add places' }).click();
+        const dialog = maya.page.getByRole('dialog', { name: 'Add places' });
+        await expect(dialog).toContainText('Each place past the 6 included is $2 a month.');
+        await expect(dialog).toContainText('Charged now$1.26');
+        await dialog.getByRole('button', { name: 'More' }).click();
+        // Truncated once over the raise, not per place.
+        await expect(dialog).toContainText('Charged now$2.53');
+        await expect(dialog).toContainText('Then$23 a month');
+        await expect(dialog.getByRole('button', { name: 'Add 2 places' })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+        await show(live(), `/app/s/${groupId}`);
+        await expect(maya.page.getByRole('button', { name: 'New family folder' })).toBeVisible({
+            timeout: 60_000,
+        });
+    });
+
+    test('a plan set to end, one that ended, and a member’s view each say only what is true', async () => {
+        await show(live({ cancelAtPeriodEnd: true }));
+        const ending = maya.page.locator('[data-plan-notice="ending"]');
+        await expect(ending).toContainText(`${family}’s plan ends on`, { timeout: 60_000 });
+        await expect(ending).toContainText(
+            'After that, nobody can upload to the family folders. Nothing is deleted.',
+        );
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        await expect(
+            billing.getByRole('button', { name: 'Manage payment and invoices' }),
+        ).toBeVisible();
+        for (const name of ['Add places', 'Remove places at renewal', 'Cancel plan'])
+            await expect(billing.getByRole('button', { name })).toHaveCount(0);
+
+        await show({
+            ...none,
+            payer: { userId: 'payer', you: true },
+            lastPlan: {
+                productName: 'Family (monthly)',
+                endedAt: new Date(Date.now() - 3 * DAY).toISOString(),
+            },
+        });
+        const lapsed = maya.page.locator('[data-plan-notice="lapsed"]');
+        await expect(lapsed).toContainText(`${family}’s plan ended on`, { timeout: 60_000 });
+        await expect(lapsed).toContainText('Nothing has been deleted.');
+        await expect(maya.page.getByRole('heading', { name: 'Choose a plan' })).toBeVisible();
+        await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
+
+        // A member who doesn't hold billing: the plan's name and the storage, no money, no controls.
+        // The real member payload: the plan's name, the pool and whether a plan is live; nothing else.
+        await show({
+            enabled: true,
+            view: 'member',
+            hasPlan: true,
+            planName: 'Family (monthly)',
+            storage: { usedBytes: String(300 * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
+        });
+        const glance = maya.page.locator('[data-family-plan="glance"]');
+        await expect(glance).toContainText('Family · 2 TB', { timeout: 60_000 });
+        await expect(glance).toContainText('300 GB of 2 TB used');
+        await expect(maya.page.getByText('Next charge')).toHaveCount(0);
+        await expect(maya.page.getByRole('button', { name: 'Add places' })).toHaveCount(0);
+        await expect(
+            maya.page.getByRole('button', { name: 'Manage payment and invoices' }),
+        ).toHaveCount(0);
+    });
+});
+
 test.describe('families off', () => {
     test.skip(familiesOn, 'Families are on (GROUPS_ENABLED).');
 

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
+import { useBillingEnabled } from '@/lib/queries';
 import { afterFamilyChange, familyContext } from '@/lib/families';
 import { errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { createFamily } from '@/lib/groups/outbox';
@@ -34,6 +35,8 @@ export function CreateFamilyDialog({
     const id = useId();
     const queryClient = useQueryClient();
     const navigate = useNavigate();
+    // Where plans are sold, a family chooses one before anyone can join (docs/groups-design.md 3.5).
+    const billing = useBillingEnabled();
     const [name, setName] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
@@ -81,7 +84,9 @@ export function CreateFamilyDialog({
                 <DialogHeader>
                     <DialogTitle>Create a family</DialogTitle>
                     <DialogDescription>
-                        You’ll be its organizer. Then invite people by email.
+                        {billing
+                            ? 'You’ll be its organizer. Then choose a plan and invite people by email.'
+                            : 'You’ll be its organizer. Then invite people by email.'}
                     </DialogDescription>
                 </DialogHeader>
                 <form

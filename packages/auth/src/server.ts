@@ -1785,7 +1785,7 @@ async function refuseWhileHoldingGroups(userId: string) {
     // The last member of a family with a plan still paid for: deleting would dissolve it.
     if (blockers.some((blocker) => blocker.reason === 'billed'))
         throw new AuthError(
-            'Your family has a plan that is still being paid for. Cancel it in Plan and storage before deleting your account; the family keeps it until the end of the period.',
+            'Your family has a plan that is still being paid for. Cancel it in Billing on the family’s page before deleting your account; the family keeps it until the end of the period.',
             409,
         );
     if (blockers.length > 0)

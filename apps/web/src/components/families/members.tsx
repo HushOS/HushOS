@@ -107,6 +107,7 @@ export function PendingList({
     pending,
     names,
     blocked = null,
+    waitingForPlan = false,
 }: {
     userId: string;
     groupId: string;
@@ -114,6 +115,8 @@ export function PendingList({
     pending: PendingPerson[];
     names: Record<string, string>;
     blocked?: string | null;
+    /* No live plan where plans are sold: admission would be refused, so it isn't offered. */
+    waitingForPlan?: boolean;
 }) {
     const [letting, setLetting] = useState<PendingPerson | null>(null);
     return (
@@ -128,9 +131,18 @@ export function PendingList({
                             data={{ 'data-pending': person.email }}
                             line={`${person.email} · accepted ${formatWhen(person.acceptedAt, { lower: true })}`}
                         >
-                            <Button variant="outline" onClick={() => setLetting(person)}>
-                                Let them in
-                            </Button>
+                            {waitingForPlan ? (
+                                <span
+                                    className="shrink-0 text-[13px] text-muted-foreground"
+                                    data-waits-for-plan
+                                >
+                                    Can join once there’s a plan
+                                </span>
+                            ) : (
+                                <Button variant="outline" onClick={() => setLetting(person)}>
+                                    Let them in
+                                </Button>
+                            )}
                         </Row>
                     ))}
                 </Section>

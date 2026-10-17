@@ -267,6 +267,42 @@ const fakeClient = {
             polar.customers.set(body.external_id, customer);
             return { id: customer.id, type: body.type, metadata: body.metadata };
         },
+        async updateExternal(externalId: string, body: { metadata?: Record<string, string> }) {
+            polar.calls.push(`customers.updateExternal:${externalId}`);
+            const customer = polar.customers.get(externalId);
+            if (!customer) throw notFound();
+            if (body.metadata) customer.metadata = body.metadata;
+            return { id: customer.id, type: customer.type, metadata: customer.metadata ?? {} };
+        },
+        // A team customer's members, owner first; promoting one demotes the owner (spike 3).
+        members: {
+            async createExternal(externalId: string, body: { external_id: string; role: string }) {
+                polar.calls.push(`members.createExternal:${externalId}:${body.external_id}`);
+                const customer = polar.customers.get(externalId);
+                if (!customer) throw notFound();
+                if (customer.members?.includes(body.external_id))
+                    throw new PolarClientError(409, { error: 'MemberAlreadyExists' });
+                customer.members = [...(customer.members ?? []), body.external_id];
+                return { external_id: body.external_id, role: body.role };
+            },
+            async updateExternal(externalId: string, memberId: string, body: { role?: string }) {
+                polar.calls.push(`members.updateExternal:${externalId}:${memberId}:${body.role}`);
+                const customer = polar.customers.get(externalId);
+                if (!customer?.members?.includes(memberId)) throw notFound();
+                if (body.role === 'owner')
+                    customer.members = [
+                        memberId,
+                        ...customer.members.filter((m) => m !== memberId),
+                    ];
+                return { external_id: memberId, role: body.role };
+            },
+            async deleteExternal(externalId: string, memberId: string) {
+                polar.calls.push(`members.deleteExternal:${externalId}:${memberId}`);
+                const customer = polar.customers.get(externalId);
+                if (!customer?.members?.includes(memberId)) throw notFound();
+                customer.members = customer.members.filter((m) => m !== memberId);
+            },
+        },
         async getExternal(externalId: string) {
             polar.calls.push(`customers.getExternal:${externalId}`);
             const customer = polar.customers.get(externalId);
@@ -449,6 +485,7 @@ const {
     deleteTestAccount,
     resetDatabase,
     setTestMember,
+    setTestUsedBytes,
 } = await import('../../db/test/helpers');
 const { billingRepository, authRepository, driveRepository, groupsRepository, growthRepository } =
     await import('@hushos/db');
@@ -1015,6 +1052,14 @@ describe('referrals', () => {
 /* Families                                                                   */
 /* ------------------------------------------------------------------------- */
 
+/* The priced summary a payer or `billing` holder gets; anything else fails the test. */
+async function priced(pending: ReturnType<typeof billing.getGroupBilling>) {
+    const summary = await pending;
+    if (summary.view !== 'manage')
+        throw new Error(`Expected the priced summary, got ${summary.view}.`);
+    return summary;
+}
+
 const userOf = (account: { userId: string; email: string }, name = 'Test') => ({
     id: account.userId,
     name,
@@ -1108,7 +1153,7 @@ describe('family catalogue', () => {
             'Max (yearly)',
         ]);
         const { payer, groupId } = await familyOnPlan();
-        const summary = await billing.getGroupBilling(payer, groupId);
+        const summary = await priced(billing.getGroupBilling(payer, groupId));
         // The mismatched, off-bound, low-minimum, fractional and per-member products are dropped whole.
         expect(summary.plans).toEqual([
             {
@@ -1232,18 +1277,8 @@ describe('family checkout and webhooks', () => {
             metadata: { hushos_group_id: groupId },
         });
         expect(polar.checkouts.at(-1)).not.toHaveProperty('customer_email');
-        // A family whose customer names another payer: its billing holder is refused.
-        const rival = await createTestAccount();
-        const { groupId: other } = await createTestFamily({ organizerId: rival.userId });
-        await billingRepository.recordGroupCustomer({
-            groupId: other,
-            provider: 'polar',
-            providerCustomerId: 'cus_rival',
-            payerUserId: organizer.userId,
-        });
-        await expect(
-            billing.startGroupCheckout(userOf(rival), other, { productId: FAMILY }),
-        ).rejects.toMatchObject({ status: 409 });
+        // Another payer's family is theirs while its plan runs (and open to a billing holder once
+        // it has none): see 'a new payer'.
         // Before the plan: the organizer alone, and an empty pool.
         expect(await seatLimit(groupId)).toBeNull();
         expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
@@ -1327,7 +1362,7 @@ describe('family places', () => {
         await billing.setGroupUnits(payer, groupId, 9);
         expect(subscription).toMatchObject({ units: 9, pending_update: null });
         expect(await seatLimit(groupId)).toBe(9);
-        const summary = await billing.getGroupBilling(payer, groupId);
+        const summary = await priced(billing.getGroupBilling(payer, groupId));
         expect(summary.subscription).toMatchObject({ units: 9, pendingUnits: null });
         expect(
             (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
@@ -1512,7 +1547,7 @@ describe('unpaid places', () => {
         expect(subscription.units).toBe(7);
         await billing.reconcileGroup(groupId);
         expect(await seatLimit(groupId)).toBe(6);
-        expect((await billing.getGroupBilling(payer, groupId)).subscription).toMatchObject({
+        expect((await priced(billing.getGroupBilling(payer, groupId))).subscription).toMatchObject({
             units: 7,
             paidUnits: 6,
         });
@@ -1712,6 +1747,179 @@ describe('review fixes', () => {
         const { payer, groupId } = await familyOnPlan();
         for (let index = 0; index < 10; index++) await billing.syncGroup(payer, groupId);
         await expect(billing.syncGroup(payer, groupId)).rejects.toMatchObject({ status: 429 });
+    });
+});
+
+describe('family summary', () => {
+    test('a member without billing, a manager included, sees the plan’s name and the pool, nothing priced, and can’t refresh it', async () => {
+        const { payer, groupId, areaIds, subscription, others } = await familyOnPlan({
+            units: 7,
+            members: 1,
+        });
+        const member = await createTestAccount();
+        await setTestMember({ groupId, userId: member.userId, state: 'active' });
+        await setTestUsedBytes(areaIds[0]!, 300n * GIB);
+        const glance = {
+            enabled: true,
+            view: 'member',
+            hasPlan: true,
+            planName: 'Family (monthly)',
+            storage: { usedBytes: (300n * GIB).toString(), quotaBytes: FAMILY_POOL.toString() },
+        };
+        // Exactly these fields: no product, places, payer, status or amounts.
+        expect(await billing.getGroupBilling(userOf(member), groupId)).toEqual(glance);
+        // A manager without `billing` (familyOnPlan's others hold `members`) gets the same.
+        expect(await billing.getGroupBilling(userOf(others[0]!), groupId)).toEqual(glance);
+        for (const who of [member, others[0]!])
+            await expect(billing.syncGroup(userOf(who), groupId)).rejects.toMatchObject({
+                status: 403,
+            });
+        // The payer gets the amounts, and the period a raise is prorated over.
+        const full = await priced(billing.getGroupBilling(payer, groupId));
+        expect(full.subscription).toMatchObject({
+            amount: 1500,
+            currency: 'usd',
+            currentPeriodStart: subscription.current_period_start,
+        });
+        expect(full.plans.length).toBeGreaterThan(0);
+        // Someone outside the family learns nothing of it.
+        const outsider = await createTestAccount();
+        await expect(billing.getGroupBilling(userOf(outsider), groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        // Nor does someone who only accepted an invitation.
+        const waiting = await createTestAccount();
+        await setTestMember({ groupId, userId: waiting.userId, state: 'accepted' });
+        await expect(billing.getGroupBilling(userOf(waiting), groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+    });
+
+    test('the pool counts every family folder, and a plan that ended is named with its end', async () => {
+        const organizer = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: organizer.userId,
+            areas: 2,
+            pooled: true,
+        });
+        const before = await priced(billing.getGroupBilling(userOf(organizer), groupId));
+        // Never paid: nothing ended, so it is a family still choosing, not a lapsed one.
+        expect(before).toMatchObject({ subscription: null, lastPlan: null });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        const subscription = familySubscription(groupId, { units: 6 });
+        await billing.reconcileGroup(groupId);
+        await setTestUsedBytes(areaIds[0]!, 5n * GIB);
+        await setTestUsedBytes(areaIds[1]!, 7n * GIB);
+        expect((await billing.getGroupBilling(userOf(organizer), groupId)).storage).toEqual({
+            usedBytes: (12n * GIB).toString(),
+            quotaBytes: FAMILY_POOL.toString(),
+        });
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        const after = await priced(billing.getGroupBilling(userOf(organizer), groupId));
+        expect(after.subscription).toBeNull();
+        expect(after.lastPlan?.productName).toBe('Family (monthly)');
+        expect(Date.parse(after.lastPlan!.endedAt)).toBeGreaterThan(Date.now() - 60_000);
+        // The files stay; the pool they count against is gone until a plan returns.
+        expect(after.storage).toEqual({ usedBytes: (12n * GIB).toString(), quotaBytes: '0' });
+    });
+
+    test('a family made before plans were sold has no pool until a plan, and none left once it ends', async () => {
+        const organizer = await createTestAccount();
+        // No group_storage row: its folder keeps its own 10 GB, as before billing.
+        const { groupId, areaIds } = await createTestFamily({ organizerId: organizer.userId });
+        expect(
+            (await priced(billing.getGroupBilling(userOf(organizer), groupId))).storage,
+        ).toBeNull();
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(10n * GIB);
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        const subscription = familySubscription(groupId, { units: 6 });
+        await billing.reconcileGroup(groupId);
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(FAMILY_POOL);
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        // Lapsed: the pool row stays at zero, so the old per-folder allowance never comes back.
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
+        expect((await priced(billing.getGroupBilling(userOf(organizer), groupId))).storage).toEqual(
+            {
+                usedBytes: '0',
+                quotaBytes: '0',
+            },
+        );
+    });
+});
+
+describe('a new payer', () => {
+    test('once the plan has ended, another billing holder checks out and becomes the payer, at Polar too', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        const heir = await createTestAccount();
+        await setTestMember({ groupId, userId: heir.userId, state: 'active', roles: ['billing'] });
+        // While the plan runs, the payer stays the payer.
+        await expect(
+            billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 409 });
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        polar.calls = [];
+        await billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY });
+        const customer = polar.customers.get(`group:${groupId}`)!;
+        // The heir is the owner, and the former payer is off the customer.
+        expect(customer.members).toEqual([heir.userId]);
+        expect(customer.metadata?.hushos_payer).toBe(heir.userId);
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(heir.userId);
+        expect(polar.checkouts.at(-1)).toMatchObject({ customer_id: customer.id });
+        // The family's billing page names the new payer to both of them.
+        expect((await priced(billing.getGroupBilling(userOf(heir), groupId))).payer).toEqual({
+            userId: heir.userId,
+            you: true,
+        });
+        // The former payer has no portal into it now.
+        await expect(billing.createGroupPortalSession(payer, groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+    });
+
+    test('an abandoned checkout doesn’t lock the family to whoever started it', async () => {
+        const organizer = await createTestAccount();
+        const heir = await createTestAccount();
+        const { groupId } = await createTestFamily({
+            organizerId: organizer.userId,
+            members: [{ userId: heir.userId, roles: ['billing'] }],
+            pooled: true,
+        });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY });
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(heir.userId);
+        // Someone without `billing` never takes it over.
+        const plain = await createTestAccount();
+        await setTestMember({ groupId, userId: plain.userId, state: 'active', roles: ['members'] });
+        await expect(
+            billing.startGroupCheckout(userOf(plain), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 403 });
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(heir.userId);
+    });
+
+    test('a plan Polar has that HushOS hasn’t heard of yet still keeps its payer', async () => {
+        const organizer = await createTestAccount();
+        const heir = await createTestAccount();
+        const { groupId } = await createTestFamily({
+            organizerId: organizer.userId,
+            members: [{ userId: heir.userId, roles: ['billing'] }],
+            pooled: true,
+        });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        // Paid at Polar; the delivery hasn't arrived.
+        familySubscription(groupId, { units: 6 });
+        await expect(
+            billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 409 });
+        expect(polar.customers.get(`group:${groupId}`)!.members).toEqual([organizer.userId]);
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(
+            organizer.userId,
+        );
     });
 });
 

@@ -27,17 +27,19 @@ import { lookupContact, pinContact, readSettingsForWrite, type Lookup } from '@/
 import { formatDay } from '@/lib/drive';
 import {
     afterFamilyChange,
+    familiesQueryOptions,
     familyContext,
     familyKeys,
     firstName,
     pendingQueryOptions,
     type PendingPerson,
 } from '@/lib/families';
-import { groupsApi } from '@/lib/groups/api';
+import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy, leftDueCopy, outcomeCopy } from '@/lib/groups/copy';
 import { memberJoinCode } from '@/lib/groups/join';
 import { dropKeptAdmission, letIn, type OutboxEntry } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
+import { SeatHelp, SeatNote } from './family-billing';
 import { CompareGuidance, WordList } from './word-list';
 
 /*
@@ -69,6 +71,15 @@ type Props = {
     open: boolean;
     onOpenChange: (open: boolean) => void;
 };
+
+/* A `seats` refusal's reason and, when the bank wants a confirmation, where. */
+function seatOf(data: unknown) {
+    const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    return {
+        reason: typeof body.reason === 'string' ? body.reason : 'full',
+        url: typeof body.url === 'string' ? body.url : null,
+    };
+}
 
 /* Whether the looked-up keys are the ones route 16 served for this person: the same server, asked twice. */
 function sameKeys(lookup: Lookup, person: PendingPerson) {
@@ -110,6 +121,10 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
     const [keptOther, setKeptOther] = useState<OutboxEntry | null>(null);
     // "Sam says they don't match", after Sam is in.
     const [notMatching, setNotMatching] = useState(false);
+    // Refused for want of a place: why, and the bank's confirmation page when it wants one.
+    const [seat, setSeat] = useState<{ reason: string; url: string | null } | null>(null);
+    const roles =
+        useQuery(familiesQueryOptions(userId)).data?.find((at) => at.id === groupId)?.roles ?? [];
 
     const lookup = useQuery({
         queryKey: ['families', userId, 'family', groupId, 'lookup', person.userId],
@@ -175,6 +190,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
         setBusy('send');
         setError('');
         setNote('');
+        setSeat(null);
         try {
             for (let attempt = 0; attempt < 3; attempt++) {
                 const fresh = (
@@ -245,6 +261,8 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                         return;
                     default:
                         cue('error');
+                        if (outcome.status === 'refused' && outcome.code === 'seats')
+                            setSeat(seatOf(outcome.data));
                         setError(outcomeCopy(outcome, { family, person: first, names }) ?? '');
                         return;
                 }
@@ -252,6 +270,8 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
             throw new Error(`${family} keeps changing. Try again in a moment.`);
         } catch (cause) {
             cue('error');
+            if (cause instanceof GroupApiError && cause.code === 'seats')
+                setSeat(seatOf(cause.data));
             setError(errorCopy(cause, { family, person: first, names }));
         } finally {
             setBusy(null);
@@ -479,6 +499,26 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 <p role="alert" className="text-sm text-destructive">
                     {error}
                 </p>
+            )}
+            {seat && !admitted && (
+                <SeatHelp
+                    userId={userId}
+                    groupId={groupId}
+                    roles={roles}
+                    reason={seat.reason}
+                    url={seat.url}
+                    onChoosePlan={() => {
+                        onOpenChange(false);
+                        requestAnimationFrame(() =>
+                            document
+                                .getElementById('choose-plan')
+                                ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+                        );
+                    }}
+                />
+            )}
+            {!admitted && !seat && personDone && (
+                <SeatNote userId={userId} groupId={groupId} first={first} />
             )}
             <div className="flex flex-wrap justify-end gap-2 border-t border-rule pt-4">
                 {admitted ? (
