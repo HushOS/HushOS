@@ -1,0 +1,27 @@
+packages/db/src/drive.rekeyed.test.ts
+  s_c56e31c87cddde::t_783a9497154227 1154-1193
+apps/web/src/lib/integrity-lines.test.ts
+  s_c56e31c87cddde::t_2bd48c83668200 328-330,581-592
+packages/db/drizzle/20261017153848_origin_drop_evidence/migration.sql
+  s_c56e31c87cddde::t_c3191c722e9e66 17
+packages/db/drizzle/20261017153848_origin_drop_evidence/snapshot.json
+  s_c56e31c87cddde::t_8cf5ac0c753c1b 12020
+packages/db/src/schema/drive.ts
+  s_c56e31c87cddde::t_c449af0bf87251 331
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ff5d92f895db0c6f1baf5cd30b30ce73b23d06b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
