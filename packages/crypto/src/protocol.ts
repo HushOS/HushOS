@@ -72,3 +72,18 @@ export const KEY_CHANGE_PENDING =
  */
 export const NOT_CARRIED =
     'This item was added under a key the key change replaces, so it is not carried over.';
+
+/*
+ * What the crypto worker answers an acceptance that lost a race with a later
+ * one this session already committed (a background sync finishing after the
+ * foreground's): nothing of it is kept. The data layer reads the device
+ * record again and accepts once more, quietly (lib/groups/sync.ts).
+ */
+export const OLDER_CHAIN =
+    'This device already holds a later member list for this family. Sync again.';
+/*
+ * What the ledger answers a chain at the very roster version it holds with
+ * another digest: never committed. Acceptance with the session's committed
+ * chain as a mark reports it as a fork (the hard warning) before this.
+ */
+export const SPLIT_CHAIN = 'This family’s member list was shown differently to this device.';

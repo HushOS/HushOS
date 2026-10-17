@@ -239,6 +239,8 @@ pub struct History {
     pub retired: std::collections::BTreeSet<String>,
     /* The format the next roster is signed in (design 2.10); a case may switch it. */
     pub format: u8,
+    /* The group the history is of: GROUP unless a case writes another family's. */
+    pub group_id: String,
 }
 
 fn same_entry(a: &RosterMember, b: &RosterMember) -> bool {
@@ -266,6 +268,7 @@ impl History {
             area_versions: Default::default(),
             retired: Default::default(),
             format: 1,
+            group_id: GROUP.into(),
         }
     }
 
@@ -353,7 +356,7 @@ impl History {
             .collect();
         members.sort_by(|a, b| a.user_id.cmp(&b.user_id));
         let roster = Roster {
-            group_id: GROUP.into(),
+            group_id: self.group_id.clone(),
             kind: self.kind,
             roster_version: version,
             previous_roster_digest: self
@@ -376,7 +379,7 @@ impl History {
         let from = self.key_count;
         let (old, new) = (self.key(from), self.key(from + 1));
         let succession = GroupKeySuccession {
-            group_id: GROUP.into(),
+            group_id: self.group_id.clone(),
             old_version: from as u64,
             new_version: from as u64 + 1,
             old_ed25519_public_key: old.ed25519_public_key,

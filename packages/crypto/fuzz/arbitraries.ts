@@ -214,6 +214,113 @@ const structured = (target: 'accept' | 'roster_build') =>
         data: (target === 'accept' ? acceptDocument : rosterDocument)(Buffer.from(bytes)),
     }));
 
+/*
+ * Step sequences for the family write rules, drawn from the vocabulary both
+ * twins read (area-ledger-testkit.ts): chains, area keys, listings under
+ * named and made keys, writes, walks and their batches, in any order.
+ */
+const ledgerNode = fc.constantFrom('ROOT', 'A', 'B', 'C', 'D');
+const ledgerGroup = fc.constantFrom('family', 'family', 'other');
+const ledgerParent = fc.constantFrom('WS', 'ROOT', 'A', 'B', 'C');
+const ledgerEpoch = fc.integer({ min: 0, max: 4 });
+const ledgerKey = fc.oneof(
+    fc.constantFrom(
+        'area:1',
+        'area:2',
+        'area:3',
+        'root:1',
+        'root:2',
+        'root:3',
+        'k:1',
+        'k:2',
+        'k:3',
+    ),
+    fc.tuple(ledgerNode, ledgerEpoch).map(([node, epoch]) => `made:${node}@${epoch}`),
+);
+const ledgerWrapped = fc.record({
+    key: ledgerKey,
+    under: ledgerKey,
+    parentKeyEpoch: ledgerEpoch,
+    keyEpoch: ledgerEpoch,
+    label: fc.constantFrom('node', 'node', 'previous-root'),
+});
+const ledgerStep = fc.oneof(
+    fc.record({
+        op: fc.constant('commit'),
+        chain: fc.constantFrom(
+            'f2-v1',
+            'f2-v2',
+            'f2-v3',
+            'f1-v1',
+            'f1-v2',
+            'f1-to-f2',
+            'f2-retired',
+            'other-f2-v1',
+            'f2-v2-split',
+            'other-lists-personal',
+        ),
+    }),
+    fc.record({ op: fc.constantFrom('uncommit', 'forget'), group: ledgerGroup }),
+    fc.constantFrom(
+        { op: 'requireWritable' },
+        { op: 'state' },
+        { op: 'dropAllPending' },
+        { op: 'personalState' },
+        { op: 'foreign' },
+    ),
+    fc.record({ op: fc.constant('openPersonal'), version: ledgerEpoch }),
+    fc.record({
+        op: fc.constant('personalCreate'),
+        node: ledgerNode,
+        parentKeyEpoch: ledgerEpoch,
+        keyEpoch: ledgerEpoch,
+    }),
+    fc.record({
+        op: fc.constant('openArea'),
+        group: ledgerGroup,
+        version: ledgerEpoch,
+        served: ledgerEpoch,
+    }),
+    fc
+        .tuple(
+            ledgerNode,
+            ledgerParent,
+            ledgerWrapped,
+            fc.option(ledgerWrapped, { nil: undefined }),
+        )
+        .map(([node, parent, envelope, prev]) => ({
+            op: 'list',
+            node,
+            parent,
+            ...envelope,
+            ...(prev ? { prev } : {}),
+        })),
+    fc.record({
+        op: fc.constantFrom('create', 'rewrap'),
+        node: ledgerNode,
+        parent: ledgerParent,
+        parentKeyEpoch: ledgerEpoch,
+        keyEpoch: ledgerEpoch,
+    }),
+    fc.record({ op: fc.constant('writable'), node: ledgerNode }),
+    fc.record({ op: fc.constant('keyAt'), node: ledgerNode, epoch: ledgerEpoch }),
+    fc.record({
+        op: fc.constant('rotate'),
+        node: ledgerNode,
+        parent: ledgerParent,
+        parentKeyEpoch: ledgerEpoch,
+        target: ledgerEpoch,
+        served: ledgerWrapped.map((w) => ({ ...w, label: 'node' })),
+    }),
+    fc.record({
+        op: fc.constantFrom('commitPending', 'dropPending'),
+        nodes: fc.array(ledgerNode, { maxLength: 3 }),
+    }),
+);
+const ledgerSteps = fc
+    .array(ledgerStep, { minLength: 1, maxLength: 24 })
+    .map((steps) => ({ target: 'area_ledger' as Target, data: utf8(JSON.stringify({ steps })) }));
+
 export function inputs(target: Target): fc.Arbitrary<{ target: Target; data: Uint8Array }> {
     const seeds = documents(target);
     switch (target) {
@@ -238,6 +345,8 @@ export function inputs(target: Target): fc.Arbitrary<{ target: Target; data: Uin
             return structured(target);
         case 'roster_build':
             return fc.oneof(structured(target), edited(target, seeds));
+        case 'area_ledger':
+            return fc.oneof(ledgerSteps, edited(target, seeds));
         default:
             return edited(target, seeds);
     }

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GROUP } from '../src/group-testkit';
 import { parseRoster } from '../src/groups';
-import { core, groups, repository, web, webGroups, type Json } from './fixtures';
+import { core, groups, ledgerScenarios, repository, web, webGroups, type Json } from './fixtures';
 import { TARGETS, type Target } from './verdicts';
 
 /*
@@ -281,6 +281,12 @@ export function documents(target: Target): Uint8Array[] {
         }
         case 'accept':
             return g.cases.map((k: Json) => json(k.input));
+        case 'area_ledger':
+            // Each scenario's steps, and its first half: a walk or a write cut short.
+            return ledgerScenarios().scenarios.flatMap((k: Json) => [
+                json({ steps: k.steps }),
+                json({ steps: k.steps.slice(0, Math.ceil(k.steps.length / 2)) }),
+            ]);
         case 'record_integrity':
             return [c, w].flatMap((f: Json) => f.rekeyed.cases.map((k: Json) => json(k.input)));
         case 'origin_open': {
