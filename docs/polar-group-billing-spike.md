@@ -1,6 +1,6 @@
 # Polar group billing spike
 
-Status: research, 15 October 2026. Nothing was called against Polar. Evidence comes from three places, cited inline:
+Status: research, 15 October 2026; the card-free sandbox runs of 17 October are in section 8. Sections 1 to 7 cite three sources inline:
 
 - **[SDK]** the installed `@polar-sh/sdk` 1.0.0-alpha.20, `2026-04` namespace: `node_modules/.bun/@polar-sh+sdk@1.0.0-alpha.20/node_modules/@polar-sh/sdk/dist/models-Os3Vmw3y.d.mts` (line numbers below). The `2026-10` models file differs from it in two doc strings only.
 - **[src]** Polar's public server source at commit `a4bae2b` (14 October 2026): `https://github.com/polarsource/polar/blob/a4bae2b742befdb6dcc696a841f259aed24f2086/server/polar/<path>`. Source shows intent, not what the sandbox does; anything load-bearing is repeated as an experiment in section 6.
@@ -416,3 +416,359 @@ Use Stripe test cards ([Stripe testing docs](https://docs.stripe.com/testing)):
 - **A quantity below the admitted count can be set outside HushOS** (in the dashboard or by support). HushOS would then serve more members than it bills. Reconciliation must flag it.
 - **Refunds on old charges** (yearly plans) can fail at the card network. That needs an operator path, which the sandbox cannot exercise.
 - **Refunds leave affiliate commission in place** until `order.refunded` reverses it.
+
+## 8. Sandbox results (2026-10-17)
+
+These are the card-free parts of section 6, then the card runs after the owner paid the checkout links ("Card runs" below). They ran against `https://sandbox-api.polar.sh` only, with `@polar-sh/sdk` 1.0.0-alpha.20 on `2026-04`. The scripts are in `packages/billing/scripts/experiments/`. `sandbox.ts` refuses to run unless `POLAR_ENVIRONMENT` is `sandbox`, and it pins the server URL. Run any of them with `bun --env-file=.env <script>`. Every created ID is in `state.json` next to them, and is listed at the end of this section.
+
+**How the tests avoid cards.** Each subscription comes from a checkout that carries the 100%-off discount `exp-free` (code `EXPFREE`, duration `forever`, limited to the `exp-` products). The checkout is confirmed with `checkouts.clientConfirm(client_secret, { customer_billing_address: { country: 'IE' } })`, with no Stripe `confirmation_token_id`. On such a checkout:
+
+- `is_payment_required`, `is_payment_setup_required` and `is_payment_form_required` are all false;
+- the checkout reaches `succeeded` in about 2 seconds;
+- the subscription is `active` with `amount: 0`.
+
+**Every amount after checkout was 0.** These runs say nothing about charges, 402s, proration amounts or tax.
+
+**Token scopes.** The first token lacked `orders:read`, `checkout_links:write` and `webhooks:read`. The owner replaced it the same day, and `scopes.ts` confirms the new one has all three: the five checkout links were created, and order and webhook-delivery reads work. It still lacks:
+
+- `members:read` and `members:write`, so members cannot be listed or changed (E6 needs them);
+- `events:read`, so Polar's system events, including `subscription.units_updated`, cannot be read;
+- `organizations:read`.
+
+`free-orders.ts` re-read the free subscriptions' orders with the new token; the results are folded into E2, E4 and E3 below.
+
+**No webhook can be observed yet.** The sandbox organisation has no webhook endpoint (`listWebhookEndpoints` returns `[]`), so no deliveries exist to read. Observing the webhook order needs an endpoint, such as the relay URL, added in the dashboard, or the `webhooks:write` scope plus a receiver.
+
+### E2. Product shape: passes
+
+- **Accepted.** `exp-Family (monthly)` and `exp-Family (yearly)` were created with one `fixed` and one `unit_based` price in each of USD, EUR, GBP and INR. The tiers are `{bound: 6, unit_amount: 0}` then `{bound: null, unit_amount: 200}` (2000 for yearly), with `minimum_units: 6` and the member/members `unit_label`.
+- **Base prices are placeholders.** They are 15 USD, 15 EUR, 12 GBP and 599 INR a month; a year is ten months.
+- **Unit amounts come back as decimal strings.** Polar returns `unit_amount` as `"0"` and `"200"`, not as numbers.
+- **Quotes from unconfirmed checkouts.** `amount` equals `net_amount` equals `total_amount`, and `tax_amount` is null because no address was given.
+
+    | Product, currency | 6 units | 7 units | 5 units                         |
+    | ----------------- | ------- | ------- | ------------------------------- |
+    | monthly USD       | 1500    | 1700    | 422 `Minimum 6 units required.` |
+    | monthly EUR       | 1500    | 1700    | 422                             |
+    | monthly GBP       | 1200    | 1400    | 422                             |
+    | monthly INR       | 59900   | 60100   | 422                             |
+    | yearly USD        | 15000   | 17000   | 422                             |
+    | yearly EUR        | 15000   | 17000   | 422                             |
+    | yearly GBP        | 12000   | 14000   | 422                             |
+    | yearly INR        | 599000  | 601000  | 422                             |
+
+    The bound is inclusive: units 1 to 6 are free, and the 7th costs one tier-2 unit. The checkout's `min_units` reads `null`, but the price's `minimum_units` is still enforced.
+
+- **Order lines use the plural label.** The `subscription_create` order lines read `exp-Family (monthly)` (the base) and `exp-Family (monthly) (8 members)` (400, two members above the free six, before the discount). At 6 units the line reads `(6 members)` at 0. The singular "member" and the rendered invoice PDF are unseen.
+- **Mismatched bounds are accepted.** `exp-Family mismatch (monthly)` has bound and minimum 5 in EUR and INR, and 6 in USD and GBP. Polar created it without complaint. It also enforces each currency's own minimum:
+    - a USD checkout at 5 units gets 422;
+    - a EUR checkout at 5 units is accepted and quotes 1500 EUR.
+
+    A mismatched product therefore really sells a cheaper, smaller family in some currencies.
+
+- **The default currency is required.** An INR-only product is refused with 422 `The organization's default presentment currency must be present in the prices.`
+- **Discount codes must be alphanumeric.** `exp-free` is refused with 422 `Code must contain only alphanumeric characters.`; `EXPFREE` is accepted.
+
+**Design changes:**
+
+1. The catalogue reader must parse `unit_amount` as a decimal string.
+2. Dropping products whose currencies disagree on bound or minimum (section 5) is now confirmed as necessary, not a precaution.
+3. `min_units` on `checkouts.create` is redundant with `minimum_units`. It is harmless (E1 passed it), so keep it or drop it.
+
+### E1. Team customer: passes
+
+- **Setup:**
+    - Individual customer X, `exp-owner+mvbsgq7b2h58@thebinary.dev`, with a free `exp-Personal (monthly)` subscription.
+    - Team customer `group:2a22c995-3d0e-4ed7-9d50-ba5aa19023ea`, with `email: null` and owner `{ email: X, external_id: 'exp-user-mvbsgq7b2h58' }`. Polar accepted the owner's email even though X's individual customer already uses it.
+- **Checkout.** Family monthly, with the team's `customer_id`, `units: 6`, `currency: 'usd'` and `exp-free`. It completed through `clientConfirm` with no payment method.
+- **Who owns the subscription.** It belongs to the team customer (`customer_id` is the team's), with `units: 6` and `currency: usd`. X's individual customer still has only its personal subscription.
+- **Customer type.** `customer.type` is `team` before and after checkout, and `email` stays null.
+- **Portal sessions:**
+
+    | Call                                                                    | Result                                                                                              |
+    | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+    | `customerSessions.create({ external_customer_id, external_member_id })` | Works: returns a token and a `sandbox.polar.sh` portal URL that expires after one hour. Not opened. |
+    | Without a member                                                        | 422 `member_id is required for team customers.`                                                     |
+    | With an `external_member_id` that is not on the team                    | 422 `Member does not exist for this customer.`                                                      |
+
+- **Receipt recipients are not visible.** `orders.list` returned 403 because of scope. `orders.receipt` only returns a PDF URL; no endpoint reports recipients. This still needs the owner's mailbox and a real paid order.
+
+**Design changes:**
+
+1. A group's portal session must pass `external_member_id`. Today's `openPortal` in `packages/billing/src/server.ts` (line 511) passes only `external_customer_id: user.id`, which Polar refuses for team customers.
+2. The owner member's `external_id` must be the HushOS user id, as section 5 already writes it. That is how the payer's portal is reached.
+3. The Polar API keeps a member to their own team: opening a session needs a real member of that customer.
+
+### E4 part 2. Monthly to yearly: passes
+
+- **The switch.** A free Family monthly subscription with 8 units was moved with `subscriptions.update(id, { product_id: yearly, proration_behavior: 'prorate' })`. `prorate` was passed on purpose, to see whether Polar forces `invoice`. The call succeeded.
+- **Units stay at 8**, in the response, in a re-read and in `customers.getState`.
+- **A new period starts at once:**
+
+    | Field                  | Before               | After                              |
+    | ---------------------- | -------------------- | ---------------------------------- |
+    | `current_period_start` | 2026-10-17T02:41:07Z | 2026-10-17T02:41:10Z (switch time) |
+    | `current_period_end`   | 2026-11-17           | 2027-10-17                         |
+
+    That fits an immediate invoice for the yearly period.
+
+- **It invoices immediately, even though `prorate` was asked for.** At 02:41:11, one second after the switch, Polar created a `subscription_update` order, `paid`, total 0, with four proration lines:
+
+    | Line                                                                                     | Amount |
+    | ---------------------------------------------------------------------------------------- | ------ |
+    | `exp-Family (yearly) — From Oct 17, 2026 to Oct 17, 2027`                                | 0      |
+    | `Remaining time on exp-Family (monthly) — From Oct 17, 2026 to Nov 17, 2026`             | 0      |
+    | `exp-Family (yearly) (8 members) — From Oct 17, 2026 to Oct 17, 2027`                    | 0      |
+    | `Remaining time on exp-Family (monthly) (8 members) — From Oct 17, 2026 to Nov 17, 2026` | 0      |
+
+    The amounts are 0 because of the discount. The order's own `units` is null.
+
+- **Still untested:** part 1 (adding a member a day into a paid yearly plan) needs a card.
+
+**Design change:** none. Expect an interval change to restart the billing period from the switch moment, not to keep the old anniversary.
+
+### E7. Limits: Polar enforces no cap
+
+- **Unit subscription.** Updates to `units: 1001` and then `units: 10001` with `invoice` both succeeded.
+- **Unit checkout.** A quote at 1001 units was accepted at 200500 USD minor units.
+- **Seat-based product** (`exp-Seat throwaway (monthly)`, one tier, `min_seats: 1`, `max_seats: null`):
+    - checkout quotes at 1000 and 1001 seats were accepted;
+    - a free seat subscription at 2 seats updated to 1001 with `invoice`.
+
+    The documented 1,000-seat cap is not enforced by the API, which settles the docs-versus-source conflict in section 1.
+
+- **Portal setting:** for the owner to check. The owner should confirm in the dashboard that "Enable subscription unit changes" is off, and that a portal session then shows no units control.
+
+**Design change:** Polar will not stop a typo like 10001 members, which on a paid plan is an immediate, large invoice. HushOS should bound a single raise itself: refuse a jump of more than a set step at a time, and pass `max_units` on checkout. This can stay consistent with "no upper limit" in groups-design 3.5, because a deliberate large count is still possible in steps or through support.
+
+### E3. Quantity changes, discount-only parts: matches section 1 on `pending_update`
+
+One free Family monthly subscription, starting at 6 units:
+
+| Step | Call                                        | `units` after | `pending_update` after                                         |
+| ---- | ------------------------------------------- | ------------- | -------------------------------------------------------------- |
+| 1    | `units: 7`, `invoice`                       | 7             | null                                                           |
+| 2    | `units: 6`, `next_period`                   | 7             | `{ units: 6, applies_at: <current_period_end> }`               |
+| 3    | `units: 8`, `invoice`                       | 8             | null: the raise deleted the pending cut                        |
+| 4    | `units: 5`, `next_period`                   | 8             | 422 `BelowMinimumUnits`: the minimum also binds scheduled cuts |
+| 5    | `units: 7`, `next_period`                   | 8             | `{ units: 7 }`, with a new `pending_update.id`                 |
+| 6    | `units: 9`, `prorate`                       | 9             | null: a `prorate` raise also deletes the pending cut           |
+| 7    | `cancel_at_period_end: true`                | 9             | null                                                           |
+| 8    | `units: 10`, `invoice`, while set to cancel | 9             | 403 `AlreadyCanceledSubscription`                              |
+| 9    | `cancel_at_period_end: false`               | 9             | null                                                           |
+
+- **No orders for the raises.** With the new token, this subscription has exactly one order, its `subscription_create`. Neither `invoice` raise (steps 1 and 3) produced a `subscription_update` order. Neither did E7's raises to 1001 and 10001 units. A product change at the same zero amount does produce one (E4).
+
+    The likely cause is that Polar skips a unit proration whose total is 0, but this is unconfirmed. Either way, free subscriptions cannot show E3's order lines; the card runs must.
+
+- **Webhook order:** not observable; the organisation has no endpoint (see the top of this section).
+
+**Design change:** "re-issue a pending cut after any increase" (section 5) must cover `prorate` increases too, not only `invoice`. Section 1's other predictions hold:
+
+- the cut is pending until the period end;
+- a cut below the minimum is refused;
+- a plan set to cancel blocks quantity changes.
+
+### Checkout links for the owner: created, not opened
+
+`e6-checkout-links.ts` created five links, each locked to 6 units with discount codes off. Each link's label and metadata (`hushos_card`, `hushos_link`) name its card, and each URL pre-fills a distinct `exp-` email:
+
+| Link key       | Product        | Card                | Link ID                                |
+| -------------- | -------------- | ------------------- | -------------------------------------- |
+| `monthly0341`  | Family monthly | 4000 0000 0000 0341 | `5b01f3df-663f-4d52-9305-0ef120093ab8` |
+| `monthly3184`  | Family monthly | 4000 0027 6000 3184 | `090e8fc0-d77a-4ff2-b81f-b9026e6af883` |
+| `monthly4242`  | Family monthly | 4242 4242 4242 4242 | `b9222dfb-70bd-4e98-bd22-728402a5433a` |
+| `yearly4242`   | Family yearly  | 4242 4242 4242 4242 | `9908fe9b-1aa1-4186-9ac4-c30b7b932cf7` |
+| `monthlyIndia` | Family monthly | 4000 0035 6000 0008 | `9589de8a-b3cb-4198-aebb-740c8eca87ab` |
+
+The full URLs are in `state.json` under `links`. Three facts matter before the links are paid:
+
+- **All five will probably check out in INR.** A link cannot fix its currency. Polar picks it from the visitor's IP country, falling back to USD, and the redirect accepts no `currency` parameter (Polar `checkout_link/endpoints.py`; `checkout/service.py` `_get_currencies`). An INR-only product is refused (E2). The owner is in India, so expect INR on every link, including the "USD" ones.
+
+    The card behaviours under test do not depend on currency. E8's ₹15,000 threshold does: `e8-card.ts` uses it directly for INR, and needs `--threshold=<minor units>` in any other currency.
+
+- **A link cannot carry a customer.** Each one makes or reuses an individual customer from the email typed at checkout, never a team customer. Keep the pre-filled email, because the card scripts find the subscription by link metadata first, and by that email if the metadata was not copied onto the subscription. Card runs from links test subscription and payment behaviour, not the team-customer path, which E1 covered.
+- **Links are long-lived.** Each open creates a fresh checkout session; a session itself expires 24 hours after creation.
+
+**Card scripts.** Each case runs once (state `cardRuns`) unless `--force` is passed:
+
+| Script                       | What it does                                                                                                                                                                                                                                                                                               |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `find-card-subscriptions.ts` | Read-only. Finds each link's subscription and prints its status, currency, units and the customer's card last 4 digits.                                                                                                                                                                                    |
+| `e3-card.ts`                 | Raises the 0341 and 3184 subscriptions by one with `invoice`. It records the error body, whether `units` moved anyway, and the pending order. It runs invoice, `next_period`, then invoice on the 4242 one. It reads the webhook trail and system events where scopes allow. `--only=<key>` runs one case. |
+| `e4-card.ts`                 | Adds one member to the yearly subscription, and prints the expected charge (yearly per-member price × fraction of the period left) beside the actual order.                                                                                                                                                |
+| `e8-card.ts`                 | On the India subscription, raises by one member (far below ₹15,000), then raises by enough members that the proration net exceeds ₹15,000 by 10%. With the placeholder ₹2 a member, that is thousands of units; E7 shows no cap.                                                                           |
+| `payments.ts <checkout>`     | Read-only. A checkout's state and its payment attempts. The attempts need `payments:read`, which the token lacks.                                                                                                                                                                                          |
+
+### Card runs (2026-10-17, after the owner paid the links)
+
+These ran on the `2026-04` API path, as everything above did. Main is moving to `2026-10` in PR #43; see "The 2026-10 path" below.
+
+**What the links produced:**
+
+| Link           | Checkout                                                              | Subscription                                                 | Card on the customer |
+| -------------- | --------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------- |
+| `monthly0341`  | `87b163aa-7d26-470e-866d-c3c979f2c307`: still `open`, total 70682 INR | None                                                         | None                 |
+| `monthly3184`  | `7f6ff8e2-…`: `succeeded`                                             | `a00b4e37-db36-45ca-8b6f-e371d073b5d6`: active, INR, 6 units | visa 3184            |
+| `monthly4242`  | `9f32259d-…`: `succeeded`                                             | `90197bd1-98cd-4408-a273-15d4552a1096`: active, INR, 6 units | visa 4242            |
+| `yearly4242`   | `cf70681f-…`: `succeeded`                                             | `c083ee20-aa47-4bb9-9803-4a00790b210d`: active, INR, 6 units | visa 4242            |
+| `monthlyIndia` | `6fd3cd32-…`: `succeeded`                                             | `e1eb5f51-43c7-40e6-b5d7-240f0c9710d8`: active, INR, 6 units | visa 0008            |
+
+- **All four paid checkouts are in INR**, as expected from an Indian IP. Each paid 59900 net plus 10782 GST (18%) = 70682; the yearly one paid 599000 + 107820 = 706820. GST sits on the order, and each line's `tax_amount` is 0.
+- **Link metadata is copied onto the subscription** (`hushos_card`, `hushos_link`). All four were found by metadata, and every customer is `individual`.
+- **The 0341 checkout declined.** It is still `open` (Polar keeps it open for a retry). Its customer `11acfb7c-13b0-457e-80a0-70dcd14613b0` was created, but has no card, no order and no subscription. The decline reason is not visible: `payments.list` needs `payments:read`, which the token lacks.
+
+    This matches Stripe's documentation for 0341: attaching the card succeeds, and any charge fails. Polar's checkout charges the first period at once, so the first charge is the one that fails. 0341 only gets past checkout when the first charge is zero and the card is saved for later.
+
+    **E3's 0341 case did not run and is untested.** To set it up: give the 0341 link a 100%-off `once` discount, so the first period costs nothing but the card is saved (expect `is_payment_setup_required: true`), or have the owner add 0341 as the default card in the portal of a paid subscription.
+
+**E3 with cards:**
+
+- **3184 charged off-session with no authentication.** A raise from 6 to 7 with `invoice` returned 200. `units` is 7, and a `subscription_update` order is `paid`: net 199, tax 36, total 235, one line `exp-Family (monthly) (6 members → 7 members) — From Oct 17, 2026 to Nov 17, 2026` (proration). There was no 402 and no pending order.
+
+    Stripe documents 3184 as requiring authentication on every transaction. Through Polar's sandbox it did not, at least for ₹2.35. **The `PaymentActionRequired` path is still unreproduced.**
+
+- **4242 matches section 1's predictions:**
+
+    | Step | Call                      | `units` after | `pending_update` after                                        | New order                                                                  |
+    | ---- | ------------------------- | ------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+    | 1    | `units: 7`, `invoice`     | 7             | null                                                          | `subscription_update` paid, 199 + 36 = 235, line `(6 members → 7 members)` |
+    | 2    | `units: 6`, `next_period` | 7             | `{ units: 6, applies_at: 2026-11-17T04:32:04Z }` (period end) | None                                                                       |
+    | 3    | `units: 8`, `invoice`     | 8             | null: the raise deleted the pending cut                       | `subscription_update` paid, 199 + 36 = 235, line `(7 members → 8 members)` |
+    - Each raise is its own order, taxed on its own.
+    - The cut produced no credit and no order.
+    - The prorated amount is truncated: 200 × 0.99994 of the period left came to 199, not 200.
+
+- **Webhook order: not observable.** The organisation has no webhook endpoint, and `events:read` is missing.
+
+**E4 part 1, add a member to the yearly plan:**
+
+- The period was 3 minutes old, not a day (paid 04:32:15, raised 04:35:23), so the fraction of the period left was 0.99999, not 364/365.
+- Raise 6→7 with `invoice` gave a `subscription_update` order, paid: net 1999, tax 360, total 2359. The line reads `exp-Family (yearly) (6 members → 7 members) — From Oct 17, 2026 to Oct 17, 2027`.
+- Expected: 2000 × 0.999994 = 1999.99, truncated to 1999. The per-second proration and the truncation are confirmed.
+- **The 364/365 point is untested.** Rerun `e4-card.ts --force` a day or more after 2026-10-17 04:32Z for a second add, and expect about `floor(2000 × fraction left)`.
+
+**E8, Indian card 4000 0035 6000 0008:**
+
+| Step | Raise                                                   | Result                                                                             | `units` after   | Orders                               |
+| ---- | ------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------- | ------------------------------------ |
+| 1    | 6→7, `invoice` (₹2.35)                                  | 200; charged off-session                                                           | 7               | `subscription_update` paid, 199 + 36 |
+| 2    | 7→8258, `invoice` (net ₹16,501, about ₹19,471 with GST) | 402 `{"error":"PaymentFailed","detail":"Payment failed with reason: card_error."}` | 7 (rolled back) | No new order of any status           |
+
+- Above ₹15,000 the sandbox **declined**; it did not return `PaymentActionRequired`.
+- **The failed raise was rolled back completely:** `units` stayed 7, the status stayed `active`, and no unpaid or pending order was left behind. This is the first direct evidence for the section 1 question "does a unit change survive a 402?": it does not, at least for `PaymentFailed`.
+- **What the payer must do:** nothing is pending. The portal holds no order to pay or confirm, so `hasPendingOrder` and the portal route never trigger. HushOS only has the 402. What the portal offers this payer, and whether a real Indian card would ask for authentication instead, are untested.
+
+### The 2026-10 path
+
+`api-2026-10.ts` uses `@polar-sh/sdk/2026-10` with the same sandbox options.
+
+- **The E2 product** read through `2026-10` is field-for-field identical to the `2026-04` read.
+- **On the free E3 subscription:**
+    - a raise 9→10 with `invoice` returned `units: 10`;
+    - a cut to 9 with `next_period` returned `pending_update { units: 9, applies_at: <period end> }`;
+    - a cut to 5 returned the same 422 `BelowMinimumUnits` body.
+- **After each change**, a `2026-04` re-read of the subscription matched the `2026-10` response exactly.
+
+**Nothing differs.** The E3 free subscription now stands at 10 units with a pending cut to 9.
+
+### Design consequences for groups-design 3.5
+
+1. **Charge for a raise before admitting the member, and treat a 402 as "nothing happened".** A failed off-session raise leaves `units`, status and orders untouched (E8 step 2). HushOS admits only after a 200, and on a 402 has nothing to roll back. This was observed for `PaymentFailed`; `PaymentActionRequired` is unreproduced.
+2. **A 402 is not always a portal case.** The India decline is `PaymentFailed` with no pending order, so the "send the payer to the portal to confirm" route in section 5 does not apply. The admission screen needs a plain "your bank declined this charge" outcome.
+3. **INR groups with large raises.** One raise whose proration crosses ₹15,000 failed outright in the sandbox. With realistic prices, that is a company adding dozens of members at once. HushOS should say so before the attempt for INR payers. Splitting a raise to stay under the RBI limit is not proposed.
+4. **Every raise is its own taxed order.** It carries 18% GST in India, and in production Polar's fixed per-order fee. On a ₹2 member, the fee would exceed the charge. This confirms section 4's fee warning for `invoice` raises at INR prices.
+5. **Quote truncated amounts.** Any "you will be charged X now" figure HushOS computes must truncate per currency minor unit, to match Polar's 199 and 1999.
+6. **A pending cut dies on any raise.** This is now seen on a paid subscription too: re-issue the cut after every increase (E3).
+
+### Still untested; needs a card, wider scopes or the owner
+
+| Item                                                         | Needs                                                                                                 |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| E3: 0341 decline on a raise                                  | A 0341 subscription whose first charge was zero (a `once` 100% discount), or 0341 added in the portal |
+| E3: `PaymentActionRequired` and where its pending order goes | A card that actually demands authentication off-session through Polar; 3184 did not                   |
+| E3: webhook order                                            | A webhook endpoint on the sandbox organisation, or `events:read`                                      |
+| E3: deferred `prorate` charge after cancellation             | A card and a period end                                                                               |
+| E4 part 1: 364/365 of the yearly price                       | `e4-card.ts --force` a day or more after 2026-10-17 04:32Z                                            |
+| E8: what the portal offers after the decline                 | The owner, in the portal                                                                              |
+| E8: the 0341 decline reason                                  | `payments:read`                                                                                       |
+| E6: payer handover and card ownership                        | `members:write` and two test users                                                                    |
+| E2: singular "member" and the rendered invoice PDF           | An order at 1 unit, or the owner opening an invoice                                                   |
+| E1: receipt recipients                                       | The owner's mailbox                                                                                   |
+| E7: portal setting ("Enable subscription unit changes" off)  | The owner, in the dashboard                                                                           |
+
+The production app token will also need `members:write` once handover is built, since section 3's steps call `customers.members.*`.
+
+### Sandbox objects created (all `exp-`)
+
+**Products:**
+
+- `b216cc0b-89d5-408e-a3cd-a2a56cbafec6` exp-Family (monthly);
+- `0c71028e-093d-4d41-83bb-d2cf3a111a4f` exp-Family (yearly);
+- `ef18669c-3241-4b3b-ad77-4532209e5fa7` exp-Family mismatch (monthly);
+- `b0b3210c-6029-4d4c-93eb-7e7034641fbe` exp-Personal (monthly);
+- `3d82b99f-41e4-48b4-95dd-c2ffe007f3c0` exp-Seat throwaway (monthly).
+
+**Discount:** `745a7270-22d7-4a7d-848e-d4ed5caab47f` exp-free (code `EXPFREE`).
+
+**Checkout links:** the five IDs in the links table above.
+
+**Customers:**
+
+- E1 individual: `17ee620e-de7e-46fe-ba9c-9e4756bcc25f`;
+- E1 team: `f01708e4-a4ed-4e35-b3fd-c313e89e197a` (`group:2a22c995-3d0e-4ed7-9d50-ba5aa19023ea`);
+- E4: `780739e8-0ff6-4fdd-b784-f7bd7e7fd0fe`;
+- E7 units: `f959699a-0f02-4b53-9c2f-2a8ffc94646b`;
+- E7 seats: `21159dc9-183f-49c5-beab-79e73b688256`;
+- E3: `95900563-7f27-46be-b1e5-f0497a0ad7cf`;
+- card links, all individual:
+    - 0341 (declined, no card): `11acfb7c-13b0-457e-80a0-70dcd14613b0`;
+    - 3184: `66e00a09-1405-4eb0-841b-88da62a188cf`;
+    - monthly 4242: `357f3005-3ab9-434e-9876-291eaf64579d`;
+    - yearly 4242: `80413f60-c9b3-4772-a167-e40785a7d5ba`;
+    - India: `07f1fb96-20b7-4b6f-a380-38ad5f22ea91`.
+
+All five team customers have `external_id` `group:<random uuid>`, an `exp-owner+…@thebinary.dev` owner and metadata `hushos_experiment: true`.
+
+**Free subscriptions (active):**
+
+- E1 personal: `333e1e2e-3a1e-4aa1-9ead-ba9a5538861f`;
+- E1 family: `bd47de0e-c7fc-40ff-89c8-7ea39127a31d`;
+- E4: `cfc7ce1a-c84c-455f-b416-243c671dc0e0`;
+- E7 units: `31766d2e-5c38-4ab8-968a-825915f9b5f8` (10001 units);
+- E7 seats: `a008b991-ae17-4ba2-9c10-48541c95b825` (1001 seats);
+- E3: `46f1a101-f69f-4eb3-ba8e-d3a8731685b6` (10 units, cut to 9 pending).
+
+**Card-paid subscriptions (active, INR, renewing on test cards):**
+
+- 3184: `a00b4e37-db36-45ca-8b6f-e371d073b5d6` (7 units);
+- monthly 4242: `90197bd1-98cd-4408-a273-15d4552a1096` (8 units);
+- yearly 4242: `c083ee20-aa47-4bb9-9803-4a00790b210d` (7 units);
+- India: `e1eb5f51-43c7-40e6-b5d7-240f0c9710d8` (7 units).
+
+The open 0341 checkout `87b163aa-7d26-470e-866d-c3c979f2c307` expires on 2026-10-18 at 04:31Z.
+
+**Checkouts.** The confirmed ones are:
+
+- `1b726e85-3af4-46c7-8ec3-22dedc80a543`;
+- `d9c67b2c-7d5d-4c30-8746-883d85266cfe`;
+- `41075113-8574-4e74-af80-b9dde50906ab`;
+- `69ef92db-41e8-44a4-a50a-32cbfccebe1a`;
+- `23f6a202-7685-4bbe-b786-f087a83caa04`;
+- `60947a43-5456-4f38-93ce-edf45a786f3a`.
+
+The open quote-only checkouts expire 24 hours after creation:
+
+- the 16 checkouts listed in `state.json` under `e2Checkouts`;
+- `999e6d09-94cb-45d5-a5bf-9a918a7e9f60` (mismatch, EUR);
+- `1976de3b-add0-4145-964f-0425e10fed2c` (1001 units);
+- `41e64ca3-66d4-49b0-94cd-fc3e3c9cbc0c` (1001 seats);
+- `60d419d0-e9c3-4e39-ba1a-d0f52a10ff01` (1000 seats).
+
+**Cleanup:**
+
+1. Revoke the ten subscriptions (six free, four card-paid).
+2. Delete the eleven customers with `anonymize: true`.
+3. Delete the five checkout links.
+4. Archive the five products.
+5. Delete the discount.
