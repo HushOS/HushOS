@@ -1,7 +1,7 @@
 // @vitest-environment node
 import type { RosterCallBody } from '@hushos/crypto';
 import { parseRoster } from '@hushos/crypto/groups';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { GroupContext } from './context';
 import { createFamily, stageChange } from './outbox';
 import { foldIn, removeMember, repairPreviousRoots, replaceKeys, runDue } from './removal';
@@ -18,6 +18,12 @@ import { refusal } from './test-harness';
  * what route 29, the epochs route and the documents route served, rebuilt on
  * every answer that says a folder moved and never with another roster.
  */
+
+/*
+ * Each test builds whole families through the real crypto worker (ML-KEM and Ed25519 keys,
+ * sealed rosters): about half a second here, ten times that on a loaded CI runner.
+ */
+vi.setConfig({ testTimeout: 30_000 });
 
 type Server = Awaited<ReturnType<typeof familyServer>>;
 
@@ -162,8 +168,8 @@ describe('removing someone: hold, finish, remove', () => {
         expect(await removeMember(ctx, groupId, BOB)).toMatchObject({ heldBy: null });
     });
 
-    test('the hold is placed again before each folder’s finish walk, and a refused renewal stops the removal', async () => {
-        const { server, ctx, groupId, workspaceId } = await family();
+    test('the hold is placed again before each folder’s finish walk', async () => {
+        const { server, ctx, groupId } = await family();
         const added = await stageChange(ctx, groupId, { kind: 'area', name: 'Photos' });
         expect(added).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
         for (const area of server.areas.values())
@@ -173,9 +179,10 @@ describe('removing someone: hold, finish, remove', () => {
             .map((entry) => entry.route)
             .filter((route) => ['hold', 'walk', 'remove'].includes(route));
         expect(order).toEqual(['hold', 'hold', 'walk', 'hold', 'walk', 'hold', 'remove']);
+    });
 
-        // Another removal whose renewal is refused (another manager paused Alice meanwhile): it
-        // stops there, says so, and sends nothing.
+    test('a refused hold renewal stops the removal: it says so and sends nothing', async () => {
+        // Another manager paused Alice between the first hold and the renewal before the walk.
         const next = await family({ carol: true });
         next.server.areas.get(next.workspaceId)!.rotation = {
             id: 'run-x',
@@ -197,7 +204,6 @@ describe('removing someone: hold, finish, remove', () => {
         });
         expect(next.server.walked).toEqual([]);
         expect(next.server.sent('remove')).toEqual([]);
-        void workspaceId;
     });
 
     test('the hold is placed again before every build of the call, rebuilds included', async () => {
