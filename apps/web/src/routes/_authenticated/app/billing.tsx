@@ -500,7 +500,8 @@ function BillingPage() {
                             </div>
                         )}
                         <p className="mt-3 text-[13px] text-muted-foreground">
-                            Prices include tax where it applies. Payments are handled by Polar.
+                            Plus tax where it applies; Polar adds it at checkout. Payments are
+                            handled by Polar.
                         </p>
                     </SettingsGroup>
                 )}
