@@ -1306,7 +1306,16 @@ describe('departures', () => {
                             keyEnvelope: randomBytes(72),
                             rotated: {
                                 metadataEnvelope: randomBytes(100),
-                                versions: [],
+                                // Every ready version goes with the file's new key (#37): the one published.
+                                versions:
+                                    id === file.id
+                                        ? [
+                                              {
+                                                  id: file.currentVersionId!,
+                                                  contentKeyEnvelope: randomBytes(72),
+                                              },
+                                          ]
+                                        : [],
                                 shares: [],
                                 links: [],
                                 unsealableLinks: [],
