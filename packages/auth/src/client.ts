@@ -487,27 +487,39 @@ export function createAuthClient(
                     const deviceKey = await deviceKeys.load(device.deviceKeyId);
                     if (epoch !== restoringEpoch)
                         return stop('locked while reading the device key');
-                    if (!deviceKey) throw new Error('The saved device key is unavailable.');
+                    // Gone from this browser (cleared by a lock or sign-out elsewhere): the
+                    // bundle can never open again.
+                    if (!deviceKey)
+                        throw Object.assign(new Error('The saved device key is unavailable.'), {
+                            invalid: true,
+                        });
                     step('worker');
                     await rpc('restore', { bundle: device, deviceKey });
                     if (epoch !== restoringEpoch) return stop('locked while opening the key');
                     store.setState({ unlockedUserId: user.id, rememberError: '' });
                 } catch (error) {
                     lock();
-                    // Storage that merely failed to answer keeps the bundle for next time;
-                    // the password unlocks this visit.
                     // The trail is part of the message on purpose: a report from a phone
                     // then says which step stalled, and for how long. It goes to the
                     // console too, where a browser trace keeps it even when the page moved on.
                     console.warn(`Device restore failed after ${describeTrail()}.`, error);
-                    if (error instanceof DeviceStorageTimeout)
-                        store.setState({
-                            rememberError: `Saved device access did not respond (${describeTrail()}). Enter your password to continue.`,
-                        });
-                    else
+                    // Only a verdict on the saved access erases it: its device key is gone, or
+                    // the worker found that the two do not open (a wrong key, a changed bundle).
+                    // A lock cut the restore short (the page was left, the worker died or went
+                    // silent), or storage failed to answer: none says the device is gone, so the
+                    // bundle is kept and the password unlocks this visit. A removed device or a
+                    // revoked session is the server's to say, at the session step above.
+                    if ((error as { invalid?: unknown } | null)?.invalid === true)
                         store.setState({
                             device: null,
                             rememberError: `Saved device access could not be restored (${describeTrail()}). Please sign in again.`,
+                        });
+                    else
+                        store.setState({
+                            rememberError:
+                                error instanceof DeviceStorageTimeout
+                                    ? `Saved device access did not respond (${describeTrail()}). Enter your password to continue.`
+                                    : `Saved device access could not be opened this time (${describeTrail()}). Enter your password to continue.`,
                         });
                 } finally {
                     store.setState({ restoring: false, restoreStep: null });
