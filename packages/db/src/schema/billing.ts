@@ -1,5 +1,17 @@
-import { bigint, boolean, index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+    bigint,
+    boolean,
+    check,
+    index,
+    integer,
+    pgTable,
+    text,
+    timestamp,
+    uuid,
+} from 'drizzle-orm/pg-core';
 import { users } from './auth';
+import { groups } from './groups';
 import { workspaces } from './workspaces';
 
 // The provider's customer for a user. Polar finds it by external id (the user id);
@@ -67,3 +79,84 @@ export const accountIntents = pgTable('account_intents', {
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
 });
+
+/*
+ * A group's customer at the provider (docs/polar-group-billing-spike.md 3): a
+ * Polar team customer with external id `group:<groupId>`, whose owner member
+ * is the paying person (external id: their user id). `payer_user_id` is who
+ * HushOS lets raise, cut and open the portal; it moves only with a completed
+ * handover, which is not built yet.
+ */
+export const groupBillingCustomers = pgTable(
+    'group_billing_customers',
+    {
+        groupId: uuid('group_id')
+            .primaryKey()
+            .references(() => groups.id, { onDelete: 'cascade' }),
+        provider: text().notNull(),
+        providerCustomerId: text('provider_customer_id').notNull().unique(),
+        payerUserId: uuid('payer_user_id').references(() => users.id, { onDelete: 'set null' }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    // Account deletion asks what a person pays for, and the foreign key's set-null needs it too.
+    (table) => [
+        index('group_billing_customers_payer_idx')
+            .on(table.payerUserId)
+            .where(sql`${table.payerUserId} is not null`),
+    ],
+);
+
+/*
+ * A read model of a group's provider subscriptions, rewritten from the
+ * provider's state on every webhook and reconcile. `units` is the member
+ * capacity bought; `pending_units` a cut scheduled for the period's end. The
+ * live row's figures are projected onto `groups.seat_limit` and
+ * `group_storage` in the same transaction.
+ */
+export const groupBillingSubscriptions = pgTable(
+    'group_billing_subscriptions',
+    {
+        id: text().primaryKey(),
+        groupId: uuid('group_id')
+            .notNull()
+            .references(() => groups.id, { onDelete: 'cascade' }),
+        provider: text().notNull(),
+        productId: text('product_id').notNull(),
+        productName: text('product_name').notNull(),
+        status: text().notNull(),
+        recurringInterval: text('recurring_interval').notNull(),
+        amount: bigint('amount', { mode: 'number' }),
+        currency: text(),
+        units: integer().notNull(),
+        /*
+         * The places HushOS counts as paid for: Polar's `units` when no order of the
+         * subscription is waiting for payment, else the last count that was paid.
+         * A raise awaiting the bank's confirmation opens nothing until its order is
+         * paid. Seats follow the lowest of this, `units` and a scheduled cut.
+         */
+        paidUnits: integer('paid_units').notNull().default(0),
+        pendingUnits: integer('pending_units'),
+        /*
+         * The next-period count HushOS last asked for (a cut), kept until the
+         * period it applies to begins, so a cut Polar lost (a raise deletes it) is
+         * re-issued by the retry job and the daily reconcile.
+         */
+        intendedUnits: integer('intended_units'),
+        includedMembers: integer('included_members').notNull(),
+        quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
+        currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
+        currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }).notNull(),
+        cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+        endedAt: timestamp('ended_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => [
+        index('group_billing_subscriptions_group_idx').on(table.groupId),
+        check(
+            'group_billing_subscriptions_counts_valid',
+            sql`${table.units} >= 0 and ${table.paidUnits} >= 0 and (${table.pendingUnits} is null or ${table.pendingUnits} >= 0) and (${table.intendedUnits} is null or ${table.intendedUnits} >= 1) and ${table.includedMembers} >= 1 and ${table.quotaBytes} >= 0`,
+        ),
+    ],
+);

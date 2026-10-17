@@ -397,3 +397,25 @@ export const groupChainCaches = pgTable(
     },
     (table) => [check('group_chain_caches_revision_valid', sql`${table.chainRevision} >= 1`)],
 );
+
+/*
+ * A family's storage pool (docs/groups-design.md 3.5), written only by
+ * billing from the group's plan. While a group has a row, every one of its
+ * areas draws from it: Drive's free-space check reads this allowance against
+ * the used and reserved bytes of all the group's areas together, locking this
+ * row first. A group without a row keeps each area's own allowance, as with
+ * BILLING_PROVIDER=none. `expires_at` is the plan's period end plus the grace
+ * days; past it the pool reads as empty until billing writes it again.
+ */
+export const groupStorage = pgTable(
+    'group_storage',
+    {
+        groupId: uuid('group_id')
+            .primaryKey()
+            .references(() => groups.id, { onDelete: 'cascade' }),
+        quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull().default(0n),
+        expiresAt: timestamp('expires_at', { withTimezone: true }),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => [check('group_storage_quota_valid', sql`${table.quotaBytes} >= 0`)],
+);

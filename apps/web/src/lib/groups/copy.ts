@@ -23,6 +23,12 @@ const list = (names: string[]) =>
         ? (names[0] ?? 'someone')
         : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 
+function stringField(data: unknown, key: string) {
+    const value =
+        data && typeof data === 'object' ? (data as Record<string, unknown>)[key] : undefined;
+    return typeof value === 'string' ? value : null;
+}
+
 function numberField(data: unknown, key: string) {
     const value = (data as Record<string, unknown> | null)?.[key];
     return typeof value === 'number' ? value : null;
@@ -66,6 +72,23 @@ export function refusalCopy(
         case 'stale':
             return `${family} changed while you were working on it. Try again.`;
         case 'seats': {
+            // With billing on, the server says why no place could be had (docs/groups-design.md 3.5).
+            switch (stringField(data, 'reason')) {
+                case 'no-plan':
+                    return `Choose a plan for ${ctx.family ?? 'this family'} before letting anyone in.`;
+                case 'payer':
+                    return `${family} is full. Ask the person who pays for it to add a place.`;
+                case 'cap':
+                    return `${family} has as many members as its plan allows.`;
+                case 'canceling':
+                    return `${family}’s plan is set to end. Resume it in billing before letting anyone in.`;
+                case 'declined':
+                    return 'Your bank declined the charge for another place. Nothing was charged and nobody was let in.';
+                case 'confirm':
+                    return 'Your bank wants you to confirm the charge for another place. Confirm it in billing, then let them in again.';
+                case 'payment':
+                    return 'The payment for another place didn’t go through. Nobody was let in.';
+            }
             const used = numberField(data, 'used');
             const limit = numberField(data, 'limit');
             return used !== null && limit !== null

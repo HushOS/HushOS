@@ -2,148 +2,46 @@ import { billingRepository, growthRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import { billingEnv } from '@hushos/env/billing';
 import { log } from '@hushos/logging';
-import { createPolar, webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
+import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
-import type { BillingSummary, Catalogue, DiscountTerms, Plan } from './api';
+import type { BillingSummary, Catalogue, DiscountTerms } from './api';
+import { groupIdOf, reconcileGroup } from './groups';
 import {
-    PLAN_METADATA_KEY,
-    QUOTA_METADATA_KEY,
-    DEFAULT_CURRENCY,
-    RECOMMENDED_METADATA_KEY,
-    type CancellationReason,
-} from './protocol';
+    BillingError,
+    PROVIDER,
+    billingEnabled,
+    getCatalogue,
+    polar,
+    statusOf,
+    unavailable,
+    type BillingUser,
+    type CatalogueProduct,
+} from './provider';
+import { GROUP_CUSTOMER_PREFIX, type CancellationReason } from './protocol';
 
-const PROVIDER = 'polar';
-const CATALOGUE_TTL_MS = 60_000;
+export {
+    BillingError,
+    billingEnabled,
+    parseMinorUnits,
+    readFamilyProduct,
+    type BillingUser,
+} from './provider';
+export {
+    createGroupPortalSession,
+    ensureGroupSeat,
+    getGroupBilling,
+    quoteUnitsChange,
+    reconcileGroup,
+    reissueCut,
+    setCutRetryQueue,
+    setGroupUnits,
+    startGroupCheckout,
+    syncGroup,
+    type SeatResult,
+} from './groups';
+
 const WEBHOOK_MAX_BYTES = 256 * 1024;
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-export type BillingUser = { id: string; name: string; email: string };
-
-export class BillingError extends Error {
-    constructor(
-        message: string,
-        readonly status: 400 | 401 | 403 | 404 | 409 | 429 | 503 = 400,
-        options?: { cause?: unknown },
-    ) {
-        super(message, options);
-        this.name = 'BillingError';
-    }
-}
-
-export function billingEnabled() {
-    return billingEnv.BILLING_PROVIDER === 'polar';
-}
-
-let client: Polar | undefined;
-function polar() {
-    if (!billingEnabled() || !billingEnv.POLAR_ACCESS_TOKEN)
-        throw new BillingError('Billing is not available on this server.', 404);
-    client ??= createPolar({
-        accessToken: billingEnv.POLAR_ACCESS_TOKEN,
-        environment: billingEnv.POLAR_ENVIRONMENT,
-        timeout: 15,
-    });
-    return client;
-}
-
-function unavailable(error: unknown) {
-    if (error instanceof PolarClientError && error.statusCode === 403)
-        return new BillingError(
-            'Polar does not allow that change on this subscription right now. Manage it in the billing portal, or contact support.',
-            409,
-            { cause: error },
-        );
-    if (error instanceof PolarClientError && error.statusCode === 422)
-        return new BillingError(
-            'Polar could not accept these details. Check your account name and email, then try again.',
-            400,
-            { cause: error },
-        );
-    return new BillingError('Billing is temporarily unavailable. Please try again.', 503, {
-        cause: error,
-    });
-}
-
-function statusOf(error: unknown) {
-    return error instanceof PolarClientError ? error.statusCode : null;
-}
-
-/* The catalogue: every recurring product marked as a HushOS plan, archived ones included. */
-type CatalogueProduct = Plan & { archived: boolean };
-let catalogue: { at: number; products: CatalogueProduct[] } | undefined;
-let loading: Promise<CatalogueProduct[]> | undefined;
-
-function readProduct(product: models.Product): CatalogueProduct | null {
-    const metadata = product.metadata as Record<string, unknown>;
-    if (!metadata[PLAN_METADATA_KEY]) return null;
-    const interval = product.recurring_interval;
-    if (interval !== 'month' && interval !== 'year') return null;
-    let quotaBytes: bigint;
-    try {
-        quotaBytes = BigInt(String(metadata[QUOTA_METADATA_KEY]));
-    } catch {
-        return null;
-    }
-    if (quotaBytes <= 0n) return null;
-    // One fixed price per currency; the default currency's is the one every plan has.
-    const prices: Record<string, number> = {};
-    for (const candidate of product.prices)
-        if (
-            'amount_type' in candidate &&
-            candidate.amount_type === 'fixed' &&
-            !candidate.is_archived &&
-            !(candidate.price_currency in prices)
-        )
-            prices[candidate.price_currency] = candidate.price_amount;
-    const amount = prices[DEFAULT_CURRENCY];
-    if (amount === undefined) return null;
-    return {
-        id: product.id,
-        name: product.name,
-        description: product.description,
-        interval,
-        amount,
-        currency: DEFAULT_CURRENCY,
-        prices,
-        quotaBytes: quotaBytes.toString(),
-        recommended: [true, 'true', 1, '1'].includes(metadata[RECOMMENDED_METADATA_KEY] as never),
-        archived: product.is_archived,
-    };
-}
-
-async function loadCatalogue() {
-    const products: CatalogueProduct[] = [];
-    for await (const product of polar().products.iterList({ is_recurring: true, limit: 100 })) {
-        const plan = readProduct(product);
-        if (plan) products.push(plan);
-    }
-    products.sort(
-        (a, b) =>
-            Number(BigInt(a.quotaBytes) - BigInt(b.quotaBytes)) ||
-            a.interval.localeCompare(b.interval) ||
-            a.amount - b.amount,
-    );
-    return products;
-}
-
-async function getCatalogue() {
-    if (catalogue && Date.now() - catalogue.at < CATALOGUE_TTL_MS) return catalogue.products;
-    loading ??= loadCatalogue()
-        .then((products) => {
-            catalogue = { at: Date.now(), products };
-            return products;
-        })
-        .finally(() => {
-            loading = undefined;
-        });
-    try {
-        return await loading;
-    } catch (error) {
-        if (catalogue) return catalogue.products;
-        throw unavailable(error);
-    }
-}
 
 export async function listCatalogue(): Promise<Catalogue> {
     const freeQuotaBytes = appEnv.INITIAL_STORAGE_QUOTA_BYTES.toString();
@@ -628,9 +526,19 @@ export async function reconcileCustomer(userId: string) {
     });
 }
 
-/* Before an account is deleted: stop billing now, then forget the customer at the provider. */
+/*
+ * Before an account is deleted: stop billing now, then forget the customer at
+ * the provider. A person who pays for a family's live plan is refused first:
+ * the card on the family's customer is theirs and would go on being charged
+ * (docs/polar-group-billing-spike.md 3).
+ */
 export async function revokeForDeletion(userId: string) {
     if (!billingEnabled()) return;
+    if ((await billingRepository.listGroupsPaidBy(userId)).length)
+        throw new BillingError(
+            'You pay for a family plan. Hand its billing to another member, or cancel the family plan in its billing portal, then delete your account.',
+            409,
+        );
     if (!(await billingRepository.getCustomer(userId))) return;
     try {
         let state: models.CustomerState | null = null;
@@ -656,13 +564,17 @@ export async function revokeForDeletion(userId: string) {
     }
 }
 
-function externalIdOf(event: webhooks.WebhookPayload) {
+/* Whom a delivery concerns: a person (their user id) or a group (`group:<groupId>`). */
+function ownerOf(event: webhooks.WebhookPayload) {
     const data = event.data as {
         external_id?: string | null;
         customer?: { external_id?: string | null } | null;
     };
     const id = data.external_id ?? data.customer?.external_id ?? null;
-    return id && USER_ID_PATTERN.test(id) ? id : null;
+    if (!id) return null;
+    if (USER_ID_PATTERN.test(id)) return { kind: 'user' as const, id };
+    const groupId = id.startsWith(GROUP_CUSTOMER_PREFIX) ? groupIdOf(id) : null;
+    return groupId ? { kind: 'group' as const, id: groupId } : null;
 }
 
 /*
@@ -701,8 +613,10 @@ export async function handleWebhook(request: Request): Promise<Response> {
         type: event.type,
     });
     if (pending) {
-        const userId = externalIdOf(event);
+        const owner = ownerOf(event);
+        const userId = owner?.kind === 'user' ? owner.id : null;
         if (userId) await reconcileCustomer(userId);
+        if (owner?.kind === 'group') await reconcileGroup(owner.id);
         if (event.type === 'order.paid') {
             await recordAffiliateEarning(
                 event.data as Parameters<typeof recordAffiliateEarning>[0],

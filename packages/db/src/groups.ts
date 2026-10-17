@@ -34,6 +34,7 @@ import {
     groupKeySuccessions,
     groupMemberships,
     groupRosters,
+    groupStorage,
     groups,
     users,
     workspaceDocuments,
@@ -1042,6 +1043,11 @@ export async function createGroup(input: {
     ownedLimit?: number;
     /* SHA-256 of the creation call, kept so an identical resend is a replay (route 1). */
     creationDigest?: Buffer;
+    /*
+     * With billing on, the group's areas draw from a pool its plan fills: the
+     * group starts with an empty one, so nothing is stored free (group_storage).
+     */
+    pooled?: boolean;
 }): Promise<CreateResult> {
     const digest = statementDigest(input.roster.statement);
     const replay = async (): Promise<CreateResult> => {
@@ -1135,6 +1141,8 @@ export async function createGroup(input: {
                 });
                 if (input.keySeal.holderUserId !== input.creatorUserId) invalid('seal-holder');
                 await upsertSeals(tx, input.id, input.creatorUserId, true, 1, [input.keySeal]);
+                if (input.pooled)
+                    await tx.insert(groupStorage).values({ groupId: input.id, quotaBytes: 0n });
                 if (input.area) await insertArea(tx, input.id, input.creatorUserId, input.area);
                 await upsertGrants(tx, input.id, input.creatorUserId, true, input.grants ?? []);
                 await writeCache(tx, input.id, 1, input.cache);

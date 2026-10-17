@@ -23,6 +23,7 @@ import {
     fileVersions,
     groupHolds,
     groupMemberships,
+    groupStorage,
     personalWorkspaces,
     storageEntitlements,
     users,
@@ -1249,7 +1250,27 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
  * `reserved_bytes` change only here and in purge, never from a client number.
  */
 
+/*
+ * What a workspace may still take. A group area whose group has a storage
+ * pool (billing wrote one, docs/groups-design.md 3.5) reads the pool instead
+ * of its own allowance: the pool's quota against the used and reserved bytes
+ * of every area of the group. The pool row is locked first, so reservations
+ * in two areas of one group cannot both spend the same free bytes; each area
+ * still counts its own bytes, so purges and releases are unchanged.
+ */
 async function freeBytes(tx: Tx, workspaceId: string) {
+    const [owner] = await tx
+        .select({ groupId: workspaces.groupId })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId));
+    const groupId = owner?.groupId ?? null;
+    const [pool] = groupId
+        ? await tx
+              .select({ quotaBytes: groupStorage.quotaBytes, expiresAt: groupStorage.expiresAt })
+              .from(groupStorage)
+              .where(eq(groupStorage.groupId, groupId))
+              .for('update')
+        : [];
     const [storage] = await tx
         .select({
             baseQuotaBytes: workspaceStorage.baseQuotaBytes,
@@ -1260,6 +1281,22 @@ async function freeBytes(tx: Tx, workspaceId: string) {
         .where(eq(workspaceStorage.workspaceId, workspaceId))
         .for('update');
     if (!storage) return null;
+    if (pool && groupId) {
+        const [totals] = await tx
+            .select({
+                used: sql<string>`coalesce(sum(${workspaceStorage.usedBytes}), 0)::text`,
+                reserved: sql<string>`coalesce(sum(${workspaceStorage.reservedBytes}), 0)::text`,
+            })
+            .from(workspaceStorage)
+            .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
+            .where(eq(workspaces.groupId, groupId));
+        const used = BigInt(totals?.used ?? '0');
+        const reserved = BigInt(totals?.reserved ?? '0');
+        // Past the plan's period and grace, the pool is empty until billing writes it again.
+        const live = pool.expiresAt === null || pool.expiresAt.getTime() > Date.now();
+        const allowance = live ? pool.quotaBytes : 0n;
+        return { allowance, used, reserved, free: allowance - used - reserved };
+    }
     const grants = await tx
         .select({ quotaBytes: storageEntitlements.quotaBytes })
         .from(storageEntitlements)
