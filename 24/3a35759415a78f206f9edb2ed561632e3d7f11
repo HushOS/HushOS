@@ -1,0 +1,44 @@
+packages/drive/src/transfers.ts
+  s_c56e31c87cddde::t_d34f57f7db34ab 156-169
+  s_c56e31c87cddde::t_ce16df00591d07 230-238
+  s_c56e31c87cddde::t_2e9c3a716e304b 300-313
+  s_c56e31c87cddde::t_0b46072cd1072d 503-509
+  s_c56e31c87cddde::t_a11669ceaccef3 668-670,683,696-749,779,791,845,860,877,881,1124,1693
+  s_c56e31c87cddde::t_9c644966e7cb55 2,750,776-778,780-790,792-844,846-859,861-871,873-876,878-880,883-910,912,917,1117-1119,1122-1123,1125-1136,1315-1317,1690-1692,1694-1695
+DESIGN.md
+  s_c56e31c87cddde::t_3b3868cba5ff28 396
+apps/web/src/components/drive/transfers-panel.tsx
+  s_c56e31c87cddde::t_509ed1f24bad42 95-98
+apps/web/src/lib/drive.ts
+  s_c56e31c87cddde::t_ef1f16f07631da 70-71
+apps/web/src/lib/integrity-lines.test.ts
+  s_c56e31c87cddde::t_92c6260750d06f 217-226
+apps/web/src/lib/integrity-lines.ts
+  s_c56e31c87cddde::t_c9afea355a5b96 183-184,368-369
+apps/web/src/lib/space-registry.ts
+  s_c56e31c87cddde::t_bed1d5214b714b 33-38,83-86
+apps/web/src/lib/spaces.ts
+  s_c56e31c87cddde::t_0c52b2e9aeae4c 12,20-26,139,353-377
+apps/web/src/lib/transfers.ts
+  s_c56e31c87cddde::t_a9e3e9ba4ab5d2 1,12-18,21,67-84,95-97
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_3817ace5444274 3,584-604,749,753-756,787-814,857-870
+packages/drive/src/transfers.test.ts
+  s_c56e31c87cddde::t_5699688aacb215 10,101-102,109,111,125,129,132,145,148,332-333,363,993-1184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "243a35759415a78f206f9edb2ed561632e3d7f11",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
