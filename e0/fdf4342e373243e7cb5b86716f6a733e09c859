@@ -1,0 +1,30 @@
+apps/web/src/lib/checkout-return.test.ts
+  s_c56e31c87cddde::t_82f5ce55451d9a 3-9,28-35,37-38,41,46-56,60,62,70-104
+  s_c56e31c87cddde::t_f8c0cf83bbf760 105
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_204aef294b1a4d 94-97
+apps/web/src/lib/checkout-return.ts
+  s_c56e31c87cddde::t_1b9b815be52809 6-11,13-14,21-26,30,32-44
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_c56e31c87cddde::t_6547238cba6d0f 40,202-205,217-219
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_65e2f03d74fc51 639-652
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_a5098e145a1dec 1-2,451-456,458-463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e0fdf4342e373243e7cb5b86716f6a733e09c859",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
