@@ -1498,6 +1498,9 @@ function FolderPath({
         index > 0 && crumb.workspaceId === workspaceId ? crumb.id : undefined;
     const crumbClass =
         '-mx-1.5 min-w-0 truncate rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-muted sm:text-2xl';
+    // The "…" menus: a 44px target on touch, as every control there.
+    const foldClass =
+        'inline-flex shrink-0 cursor-pointer items-center justify-center pointer-coarse:min-h-11 pointer-coarse:min-w-11';
     // On a phone, two or more places above fold into one "…" menu holding them all.
     const fold = (area ? 1 : 0) + (shared ? 1 : 0) + above.length > 1;
     // Each folder above gives up its room before the heading loses a pixel, down to about three
@@ -1521,7 +1524,7 @@ function FolderPath({
                     <DropdownMenu>
                         <DropdownMenuTrigger
                             aria-label="Folders above"
-                            className={cn(crumbClass, 'shrink-0 cursor-pointer')}
+                            className={cn(crumbClass, foldClass)}
                         >
                             …
                         </DropdownMenuTrigger>
@@ -1612,7 +1615,7 @@ function FolderPath({
                         <DropdownMenu>
                             <DropdownMenuTrigger
                                 aria-label="More folders"
-                                className={cn(crumbClass, 'shrink-0 cursor-pointer')}
+                                className={cn(crumbClass, foldClass)}
                             >
                                 …
                             </DropdownMenuTrigger>

@@ -528,8 +528,26 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
             {!admitted && !seat && personDone && (
                 <SeatNote userId={userId} groupId={groupId} first={first} />
             )}
-            {/* Pinned to the foot of the scrolling card, so its actions stay in reach on a phone. */}
-            <div className="sticky -bottom-6 z-10 -mx-6 -mb-6 flex flex-wrap justify-end gap-2 border-t border-rule bg-popover px-6 pt-4 pb-6 sm:-bottom-7 sm:-mx-7 sm:-mb-7 sm:px-7 sm:pb-7">
+            {/*
+             * Pinned to the foot of the scrolling card, so its actions stay in reach on a phone.
+             * The card's scroll padding is its height, so what is scrolled into view (a refusal)
+             * lands above it rather than under it.
+             */}
+            <div
+                ref={(footer) => {
+                    const card = footer?.parentElement;
+                    if (!footer || !card) return;
+                    const pad = () => (card.style.scrollPaddingBottom = `${footer.offsetHeight}px`);
+                    pad();
+                    const observer = new ResizeObserver(pad);
+                    observer.observe(footer);
+                    return () => {
+                        observer.disconnect();
+                        card.style.scrollPaddingBottom = '';
+                    };
+                }}
+                className="sticky -bottom-6 z-10 -mx-6 -mb-6 flex flex-wrap justify-end gap-2 border-t border-rule bg-popover px-6 pt-4 pb-6 sm:-bottom-7 sm:-mx-7 sm:-mb-7 sm:px-7 sm:pb-7"
+            >
                 {admitted ? (
                     <Button onClick={() => onOpenChange(false)}>Done</Button>
                 ) : (

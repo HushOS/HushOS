@@ -38,12 +38,14 @@ export const Route = createFileRoute('/_authenticated/app/_drive/families/$group
  *    the code it works out with two words hidden, at positions it picks for
  *    this showing; the person checks the other ten and types the two. "They
  *    match" joins only if the two are the code's, with the code as this
- *    device's mark. Wrong typed words keep nothing and say, calmly and without
- *    saying which, that one of them is wrong; "They don't match" keeps nothing and says not to use the
- *    family yet. The page never says the person was let in: when route 2 says
- *    so is the server's call, which is why the two words are typed.
+ *    device's mark. Wrong typed words keep nothing; the first time for a code
+ *    they say, calmly and without saying which, that one of them is wrong,
+ *    and again for the same code they say, as "They don't match" does, not to
+ *    use the family yet. The page never says the person was let in: when
+ *    route 2 says so is the server's call, which is why the two words are
+ *    typed.
  * Waiting and comparing survive a reload: the code is worked out again, with
- * new hidden positions.
+ * new hidden positions, unless a wrong pair held them for that code.
  */
 
 type Step =
@@ -137,6 +139,10 @@ function JoinFamily() {
                 return setStep((current) =>
                     current.kind === 'compare' ? { ...current, wrong: true } : current,
                 );
+            case 'mismatch':
+                // Wrong again for the same code, its positions held: the alarm, not a typo.
+                cue('error');
+                return setStep({ kind: 'mismatch' });
             case 'fork':
                 return setStep({ kind: 'fork', fork: outcome.fork });
         }

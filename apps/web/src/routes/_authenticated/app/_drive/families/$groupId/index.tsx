@@ -10,6 +10,7 @@ import { InviteDialog } from '@/components/families/invite-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
 import { InvitationList, MemberList, PendingList } from '@/components/families/members';
 import { ServerKnowsLine } from '@/components/families/server-knows';
+import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -138,7 +139,9 @@ function FamilyPage() {
     const ownBehind = view ? view.ownEntryBehindAt.length > 0 : false;
     const activeCount = detail.data?.members.filter((member) => member.state === 'active').length;
     const seats = placesOf(detail.data?.seats, plan.summary);
-    // Known up front from the member list: Leave family is disabled with the reason, never refused.
+    // Known up front from the member list: Leave family is disabled with the reason, rather than
+    // offered and refused. The server still decides (an unsealed manager or the payer), and its
+    // refusal shows in the dialog.
     const cantLeave = detail.data ? leaveBlocker(userId, detail.data.members) : null;
 
     return (
@@ -304,7 +307,9 @@ function FamilyPage() {
 
             <section className="flex flex-col gap-3 px-5 pt-8 sm:px-8">
                 <details className="rounded-xl border border-rule px-4 py-3 text-[13px]">
-                    <summary className="cursor-pointer font-semibold">Technical details</summary>
+                    <summary className="cursor-pointer font-semibold">
+                        Technical details and leaving
+                    </summary>
                     {view ? (
                         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
                             <dt className="text-muted-foreground">Member list version</dt>
@@ -344,6 +349,12 @@ function FamilyPage() {
                         </p>
                     )}
                     <div className="mt-4 flex flex-col items-start gap-2 border-t border-rule pt-4">
+                        {/* Before the button, so it is read on the way to it: a disabled button can't take focus. */}
+                        {cantLeave && (
+                            <p id="leave-blocked" className="text-muted-foreground">
+                                {cantLeave}
+                            </p>
+                        )}
                         <Button
                             variant="destructive-outline"
                             disabled={!detail.data || cantLeave !== null}
@@ -352,11 +363,6 @@ function FamilyPage() {
                         >
                             Leave family
                         </Button>
-                        {cantLeave && (
-                            <p id="leave-blocked" className="text-muted-foreground">
-                                {cantLeave}
-                            </p>
-                        )}
                     </div>
                 </details>
             </section>
@@ -457,7 +463,7 @@ function LeaveDialog({
                 <AlertDialogFooter>
                     <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
                     <Button variant="destructive" disabled={busy} onClick={() => void leave()}>
-                        {busy ? 'Leaving…' : 'Leave family'}
+                        <PendingLabel pending={busy} idle="Leave family" busy="Leaving" />
                     </Button>
                 </AlertDialogFooter>
             </AlertDialogContent>
