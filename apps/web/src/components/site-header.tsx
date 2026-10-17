@@ -10,8 +10,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { comparisons } from '@/lib/compare';
 import { useInApp } from '@/lib/in-app';
-import { rememberReturn, safeReturnPath } from '@/lib/return-to';
-import { routePath } from '@/lib/analytics-paths';
+import { rememberReturn, signInReturn } from '@/lib/return-to';
 
 /*
  * The public site's header and footer. The header names every page (the one
@@ -37,18 +36,19 @@ function usePages() {
 
 const isAt = (pathname: string, to: string) => pathname === to || pathname.startsWith(`${to}/`);
 
-/* Sign in comes back to the page it was pressed on; a shared link keeps its key in this browser. */
+/*
+ * Sign in goes to the app, except from the few pages worth coming back to (signInReturn): a
+ * shared link is remembered in this browser, key and all, and an invitation as plain `/join`
+ * (its token is already in this tab's sessionStorage); pricing and an offer page come back
+ * through `?redirect=`.
+ */
 function useSignIn() {
     const location = useLocation();
-    // As the router matches it: `/S/…` or `/%73/…` is a shared link too, with a key in its fragment.
-    const onLink = routePath(location.pathname)?.startsWith('/s/') ?? true;
-    const redirect = onLink
-        ? undefined
-        : (safeReturnPath(location.pathname + location.searchStr) ?? undefined);
+    const { redirect, remember } = signInReturn(location.pathname, location.searchStr);
     return {
         redirect,
         remember: () =>
-            onLink &&
+            remember &&
             rememberReturn(
                 window.location.pathname + window.location.search + window.location.hash,
             ),

@@ -1,10 +1,19 @@
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newContext, newFolder, newLink, PASSWORD, registerAccount } from './helpers';
+import {
+    grip,
+    landedOnHome,
+    newContext,
+    newFolder,
+    newLink,
+    PASSWORD,
+    registerAccount,
+} from './helpers';
 
 /*
  * Signing in comes back to where it was asked for: an app page through
  * ?redirect=, and a shared link through a return kept in the browser, key and
- * all, whether the visitor signs in or makes a new account on the way.
+ * all, whether the visitor signs in or makes a new account on the way. From
+ * the home page it goes to the app, not back to the page it was pressed on.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -52,6 +61,15 @@ test('a signed-out app page sends its address to sign-in, and signing in returns
     await signIn(owner, ownerEmail);
     await expect(owner).toHaveURL(folderUrl, { timeout: 60_000 });
     await expect(row(owner, 'Deeper')).toBeVisible({ timeout: 60_000 });
+});
+
+test('Sign in on the home page lands in the app, not back on the home page', async () => {
+    await owner.context().clearCookies();
+    await owner.goto('/', { waitUntil: 'networkidle' });
+    await owner.getByRole('banner').getByRole('link', { name: 'Sign in', exact: true }).click();
+    await expect(owner).toHaveURL(/\/login$/);
+    await signIn(owner, ownerEmail);
+    await landedOnHome(owner);
 });
 
 test('a redirect that leaves the site is dropped, not followed', async ({ browser }) => {
