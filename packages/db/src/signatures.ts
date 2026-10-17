@@ -42,7 +42,9 @@ export function digest(bytes: Uint8Array) {
     return createHash('sha256').update(bytes).digest('base64url');
 }
 
-function statement(parts: (string | number)[]) {
+/* One field of a statement: a label or id, a count, or an array of them (nothing else serializes canonically). */
+type Part = string | number | readonly Part[];
+function statement(parts: readonly Part[]) {
     return Buffer.from(JSON.stringify(parts), 'utf8');
 }
 
@@ -85,6 +87,74 @@ export function versionStatement(input: VersionStatementInput, form: StatementFo
         input.contentSuite,
         digest(input.contentKeyEnvelope),
         ...(form === 'saved' ? [SAVED_FROM_LINK] : []),
+    ]);
+}
+
+/*
+ * A record as its writer signed it, before a rotation re-sealed it, and the
+ * wrapped key the rotation hands readers to open it (docs/integrity-design.md,
+ * "Re-keyed records"). The server copies the envelope, signer and signature
+ * from the row as it stood; only the wrapped key comes from the client.
+ */
+export type RecordOriginInput = {
+    envelope: Uint8Array;
+    signerId: string;
+    signature: Uint8Array;
+    keyEnvelope: Uint8Array;
+};
+function rekeyedTail(keyEpoch: number, envelope: Uint8Array, origin: RecordOriginInput): Part[] {
+    return [
+        keyEpoch,
+        digest(envelope),
+        digest(origin.envelope),
+        origin.signerId.toLowerCase(),
+        digest(origin.signature),
+        digest(origin.keyEnvelope),
+    ];
+}
+
+/*
+ * ["hushos/drive/sig/metadata-rekeyed", 1, workspaceId, nodeId, kind, metadataVersion, keyEpoch,
+ *  sha256(metadataEnvelope), sha256(originEnvelope), originSignerId, sha256(originSignature),
+ *  sha256(originKeyEnvelope)]
+ * What the account running a rotation signs over metadata it re-keyed while
+ * keeping the writer's record: that it re-sealed that origin under the node
+ * key at `keyEpoch`, and nothing about who wrote it.
+ */
+export function metadataRekeyedStatement(
+    input: MetadataStatementInput & { keyEpoch: number },
+    origin: RecordOriginInput,
+) {
+    return statement([
+        'hushos/drive/sig/metadata-rekeyed',
+        1,
+        input.workspaceId.toLowerCase(),
+        input.nodeId.toLowerCase(),
+        input.kind,
+        input.metadataVersion,
+        ...rekeyedTail(input.keyEpoch, input.metadataEnvelope, origin),
+    ]);
+}
+
+/*
+ * ["hushos/drive/sig/version-rekeyed", 1, workspaceId, nodeId, versionId, objectId, contentSuite,
+ *  keyEpoch, sha256(contentKeyEnvelope), sha256(originEnvelope), originSignerId,
+ *  sha256(originSignature), sha256(originKeyEnvelope)]
+ * See metadataRekeyedStatement.
+ */
+export function versionRekeyedStatement(
+    input: VersionStatementInput & { keyEpoch: number },
+    origin: RecordOriginInput,
+) {
+    return statement([
+        'hushos/drive/sig/version-rekeyed',
+        1,
+        input.workspaceId.toLowerCase(),
+        input.nodeId.toLowerCase(),
+        input.versionId.toLowerCase(),
+        input.objectId.toLowerCase(),
+        input.contentSuite,
+        ...rekeyedTail(input.keyEpoch, input.contentKeyEnvelope, origin),
     ]);
 }
 
@@ -279,5 +349,17 @@ export function versionSigned(
 
 /* Whether `signed` holds under the raw Ed25519 `publicKey`, in any form. */
 export function verifySigned(publicKey: Uint8Array, signed: SignedStatement) {
-    return signed.messages.some((message) => verifySignature(publicKey, message, signed.signature));
+    return signedForm(publicKey, signed) !== null;
+}
+
+/*
+ * Which form a writer signature holds in under `publicKey`, or null when it
+ * holds in none: a rotation in a group's area may sign only the re-sealed one
+ * (docs/integrity-design.md, "What the server enforces"). Only statements
+ * built by metadataSigned and versionSigned carry the three forms in order.
+ */
+export function signedForm(publicKey: Uint8Array, signed: SignedStatement): StatementForm | null {
+    for (const [index, message] of signed.messages.entries())
+        if (verifySignature(publicKey, message, signed.signature)) return FORMS[index] ?? null;
+    return null;
 }

@@ -1,4 +1,6 @@
+import { randomBytes } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { db } from '../../db/src/client';
 import { closeDatabase, resetDatabase } from '../../db/test/helpers';
 import { file, folder, keysOf, link, member, root, type Account } from '../test/fixtures';
 import * as server from './server';
@@ -19,7 +21,17 @@ vi.mock('./storage', () => ({
     }),
 }));
 
-const SIGNED_FIELDS = ['metadataSigner', 'metadataSignature', 'signer', 'signature'];
+// A re-keyed record's origin names its writer and carries their signature: as good as a signer.
+const SIGNED_FIELDS = [
+    'metadataSigner',
+    'metadataSignature',
+    'metadataRekey',
+    'metadataOriginDropped',
+    'signer',
+    'signature',
+    'rekey',
+    'originDropped',
+];
 const ADDRESS = '203.0.113.7';
 
 let owner: Account;
@@ -59,6 +71,71 @@ describe('link visitors', () => {
         expect(download.version.id).toBe(doc.currentVersion!.id);
         for (const node of [opened.node, listing.folder, ...listing.children, download.node])
             expect(node.changeSeq).toBeNull();
+    });
+
+    test('a re-keyed record’s origin is served to members, and to no visitor', async () => {
+        const shared = await folder(owner, top);
+        const doc = await file(owner, shared);
+        const writer = '0e1d2c3b-4a59-4687-9a6b-5c4d3e2f1a0b';
+        const origin = {
+            envelope: randomBytes(100),
+            keyEnvelope: randomBytes(72),
+            signature: randomBytes(64),
+            rekey: randomBytes(64),
+        };
+        // As a rotation leaves them (the writer need not be an account any more: no foreign key).
+        await db.$client.query(
+            `update drive_nodes set metadata_origin_envelope = $2, metadata_origin_key_envelope = $3,
+                metadata_origin_signer = $4, metadata_origin_signature = $5, metadata_rekey_signature = $6
+             where id = $1`,
+            [doc.id, origin.envelope, origin.keyEnvelope, writer, origin.signature, origin.rekey],
+        );
+        await db.$client.query(
+            `update file_versions set origin_envelope = content_key_envelope, origin_key_envelope = $2,
+                origin_signer = $3, origin_signature = $4, rekey_signature = $5
+             where id = $1`,
+            [doc.currentVersion!.id, origin.keyEnvelope, writer, origin.signature, origin.rekey],
+        );
+        // And a drop's trace, as a later rotation would leave it beside the record.
+        await db.$client.query(
+            `update drive_nodes set metadata_dropped_signer = $2, metadata_origin_dropped_by = $3 where id = $1`,
+            [doc.id, writer, owner.userId],
+        );
+        await db.$client.query(
+            `update file_versions set dropped_signer = $2, origin_dropped_by = $3 where id = $1`,
+            [doc.currentVersion!.id, writer, owner.userId],
+        );
+        const token = await link(owner, shared);
+
+        const own = await server.listChildren(owner.userId, owner.workspaceId, shared.id);
+        // Members get who the server says dropped it, never the dropped origin's writer.
+        expect(own.children[0]?.metadataOriginDropped).toEqual({ by: { id: owner.userId } });
+        expect(own.children[0]?.currentVersion?.originDropped).toEqual({
+            by: { id: owner.userId },
+        });
+        expect(own.children[0]?.metadataRekey).toEqual({
+            origin: {
+                envelope: origin.envelope.toString('base64url'),
+                signer: { id: writer },
+                signature: origin.signature.toString('base64url'),
+                keyEnvelope: origin.keyEnvelope.toString('base64url'),
+            },
+            signature: origin.rekey.toString('base64url'),
+        });
+        expect(own.children[0]?.currentVersion?.rekey?.origin.signer).toEqual({ id: writer });
+
+        const listing = await server.linkChildren(token, ADDRESS, shared.id);
+        expect(listing.children.map((child) => child.id)).toEqual([doc.id]);
+        const keys = keysOf(listing);
+        for (const field of SIGNED_FIELDS) expect(keys.has(field)).toBe(false);
+        const [child] = listing.children;
+        for (const field of ['metadataRekey', 'metadataOriginDropped', 'metadataSigner'])
+            expect(child).not.toHaveProperty(field);
+        for (const field of ['rekey', 'originDropped', 'signer'])
+            expect(child!.currentVersion).not.toHaveProperty(field);
+        const opened = await server.openLink(token, ADDRESS);
+        expect(opened.node).not.toHaveProperty('metadataOriginDropped');
+        expect(opened.node).not.toHaveProperty('metadataRekey');
     });
 
     test('a node outside the linked subtree is not served, however it is named', async () => {

@@ -25,6 +25,7 @@ import {
 import {
     createGroupSession,
     isGroupMessage,
+    servedRekeyedRecord,
     type GroupRequests,
     type GroupResults,
     type GroupRotationTrust,
@@ -42,24 +43,31 @@ import {
 } from './contacts';
 import { openShareKey, sealShareKey, type GranteeSecrets, type ShareContext } from './shares';
 import {
+    carryOrigin,
     copyForm,
     integrityOf,
+    metadataRekeyedStatement,
     metadataStatementAs,
     metadataStatements,
+    rekeyedIntegrityOf,
     resealForm,
     signStatement,
+    versionRekeyedStatement,
     versionStatementAs,
     versionStatements,
     type HybridPublicKey,
     type Integrity,
     type MetadataStatement,
     type NodeKind,
+    type RecordOrigin,
+    type RekeyedRecord,
     type SignatureForm,
     type StatementForms,
     type TrustedSigner,
     type VersionStatement,
 } from './signatures';
 import { openReportKey, sealReportKey } from './reports';
+import { rekeyedFor } from './rekeyed-scope';
 import { KEM_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import {
     generateLinkSalt,
@@ -97,8 +105,13 @@ import {
     generateKey,
     KEY_ENVELOPE_BYTES,
     LEGACY_CONTENT_SUITE,
+    contentKeyContext,
+    metadataContext,
     openMetadata,
     openNodeKey,
+    originOpeningKey,
+    rekeyEnvelope,
+    wrapOriginKey,
     openPreviousRootKey,
     openVersion,
     sealMetadata,
@@ -520,6 +533,14 @@ type BaseRequests = {
             /* Who signed the source version's envelope. */
             signer: string | null;
             signature: string | null;
+            /*
+             * A re-keyed source (family folders, rekeyedFor): the node's key epoch and
+             * each record's origin, so the copy is judged on its writer's record (the
+             * origin's verdict, when its bytes bind), not on the re-keyer's columns.
+             */
+            keyEpoch?: number;
+            metadataRekey?: ServedRekey | null;
+            rekey?: ServedRekey | null;
         } & DriveVersionEnvelope;
         node: {
             id: string;
@@ -616,6 +637,14 @@ export type DriveSignedNode = {
     /* The account the server says wrote the metadata, and its signature; null before signatures. */
     metadataSigner: string | null;
     metadataSignature: string | null;
+    /*
+     * The node's key epoch, which a re-keyed record's origin key is wrapped at:
+     * its key at that epoch is what opens both envelopes. Rows mirrored before
+     * re-keyed records carry neither field.
+     */
+    keyEpoch?: number;
+    /* What a rotation kept of the metadata's writer; the signer above is then the re-keyer. */
+    metadataRekey?: ServedRekey | null;
     /* The versions to check: the current one for a listing, all of them for a versions list. */
     versions?: DriveSignedVersion[];
 };
@@ -626,11 +655,19 @@ export type DriveSignedVersion = {
     contentKeyEnvelope: string;
     signer: string | null;
     signature: string | null;
+    rekey?: ServedRekey | null;
 };
+/*
+ * A re-keyed record's second verdict: the re-keyer's over the rekeyed
+ * statement, and what the plaintexts showed (RekeyedVerdict). The record's
+ * own verdict is its origin's.
+ */
+export type RekeyCheck = { rekeyer: Integrity; bound: boolean | null };
 export type DriveVerifiedNode = {
     id: string;
     metadata: Integrity;
-    versions: { id: string; integrity: Integrity }[];
+    metadataRekey?: RekeyCheck | null;
+    versions: { id: string; integrity: Integrity; rekey?: RekeyCheck | null }[];
 };
 /* A version as the server hands it over: the envelope, its object's suite, and suite 1's size on the row. */
 export type DriveVersionEnvelope = {
@@ -673,8 +710,14 @@ export type RotateNodeInput = {
     /* Who signed the metadata envelope being replaced, and how, as the rotation work serves it. */
     metadataSigner: string | null;
     metadataSignature: string | null;
-    /* Each version with who signed the envelope being replaced. */
-    versions: (DriveVersionEnvelope & { signer: string | null; signature: string | null })[];
+    /* The origin an earlier rotation kept of the metadata, which this one carries. */
+    metadataRekey?: ServedRekey | null;
+    /* Each version with who signed the envelope being replaced, and any origin kept. */
+    versions: (DriveVersionEnvelope & {
+        signer: string | null;
+        signature: string | null;
+        rekey?: ServedRekey | null;
+    })[];
     shares: {
         id: string;
         granteeUserId: string;
@@ -683,15 +726,41 @@ export type RotateNodeInput = {
     }[];
     links: { id: string; hasPassword: boolean; secretEnvelope: string | null }[];
 };
+/*
+ * A re-keyed record's origin as the server serves it (RekeyView in
+ * @hushos/drive/api, the signer by id): the envelope its writer signed, that
+ * writer and their signature, the key that opens it alone wrapped under the
+ * node key at the node's epoch, and the re-keyer's signature.
+ */
+export type ServedRekey = {
+    origin: { envelope: string; signerId: string | null; signature: string; keyEnvelope: string };
+    signature: string;
+};
+/* A re-keyed record's part of a rotation: the origin's opening key under the new node key, and the rekeyed statement's signature. */
+export type RekeyOut = { originKeyEnvelope: string; signature: string };
+/*
+ * How one record re-sealed by a rotation is signed (docs/integrity-design.md,
+ * "Re-keyed records"): re-keyed, with or without the honest legacy signature
+ * beside it; or, where there is no writer's record to keep, the legacy
+ * signature alone, re-sealed; `dropOrigin` when it drops an origin that did
+ * not bind or names nobody.
+ */
+export type RotatedRecord = {
+    signature: string | null;
+    rekey: RekeyOut | null;
+    dropOrigin?: true;
+};
 export type RotatedNode =
     | {
           id: string;
           keyEnvelope: string;
           metadataEnvelope: string;
-          /* The re-sealed metadata's signature by this account; null when only rewrapped. */
+          /* The re-sealed metadata's legacy signature by this account; null when only rewrapped or not sent. */
           metadataSignature: string | null;
-          /* Each re-sealed version and its signature by this account. */
-          versions: { id: string; contentKeyEnvelope: string; signature: string }[];
+          metadataRekey?: RekeyOut | null;
+          metadataDropOrigin?: true;
+          /* Each re-sealed version and how this account signed it. */
+          versions: ({ id: string; contentKeyEnvelope: string } & RotatedRecord)[];
           shares: { id: string; shareEnvelope: string }[];
           links: (
               | { id: string; linkEnvelope: string; secretEnvelope: string }
@@ -953,6 +1022,17 @@ export function createCryptoSession() {
     }
     function nodeKey(workspaceId: string, nodeId: string) {
         return nodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
+    }
+    /*
+     * The node's key at `epoch` as this session holds it (its current key, or
+     * the previous one a rotation in progress keeps), for a re-keyed record's
+     * check; null when it holds neither at that epoch, which reads unchecked.
+     */
+    function keyAtEpoch(workspaceId: string, nodeId: string, epoch: number) {
+        const current = nodeKey(workspaceId, nodeId);
+        if (current?.epoch === epoch) return current.key;
+        const previous = prevNodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
+        return previous?.epoch === epoch ? previous.key : null;
     }
     /* A share, link or report naming one of this account's own workspaces: a key planted, never taken. */
     function refuseOwnWorkspace(workspaceId: string) {
@@ -1413,7 +1493,14 @@ export function createCryptoSession() {
         pool.get(slot(workspaceId, nodeId))?.key.fill(0);
         pool.set(slot(workspaceId, nodeId), { key, epoch, own });
     }
-    /* How a rotation re-signs each record, from the record as served: personal trust, or a group's. */
+    /*
+     * How a personal rotation re-signs each record, from the record as served,
+     * exactly as before re-keyed records (they wait for the shipped apps,
+     * rekeyedFor): a verified record ordinary, saved stays saved, anything
+     * else re-sealed, and an unchecked one is not re-signed at all. When
+     * personal workspaces move to the re-keyed form, this becomes the honest
+     * legacy form beside it (compatForm, decision D2).
+     */
     function personalJudge(trusted: Map<string, TrustedSigner>): RecordJudge {
         return async (record) =>
             resealForm(
@@ -1440,12 +1527,206 @@ export function createCryptoSession() {
             },
         )) as Uint8Array<ArrayBuffer>;
     }
+    type ResealInput = {
+        record: RekeyedRecord['record'];
+        statement: MetadataStatement | VersionStatement;
+        aad: Uint8Array;
+        envelope: Uint8Array;
+        signer: string | null;
+        signature: string | null;
+        rekey: ServedRekey | null | undefined;
+        keyEpoch: number;
+        targetEpoch: number;
+        old: Uint8Array;
+        fresh: Uint8Array;
+        judge: RecordJudge;
+        /* Suite 1 versions only: the size the row carries, which the legacy path re-seals. */
+        plaintextSize?: number | null;
+    };
+    /*
+     * One record re-sealed the way rotations wrote it before re-keyed records,
+     * where rekeyedFor does not reach (personal workspaces, until the shipped
+     * apps read origins): the plaintext opened and sealed again under `fresh`,
+     * and signed by this account in the form `judge` gives on the record as
+     * served (ordinary for a verified record, re-sealed otherwise; an
+     * unchecked one is not re-signed at all). No origin is kept or carried,
+     * whatever the server serves.
+     */
+    async function legacyRecord(
+        input: ResealInput,
+    ): Promise<{ envelope: Uint8Array } & RotatedRecord> {
+        const { record, statement, envelope, old, fresh } = input;
+        const form =
+            (await input.judge({
+                statements: async () =>
+                    record === 'metadata'
+                        ? metadataStatements(statement as MetadataStatement, envelope)
+                        : versionStatements(statement as VersionStatement, envelope),
+                signer: input.signer,
+                signature: input.signature,
+            })) ?? 'resealed';
+        if (record === 'metadata') {
+            const m = statement as MetadataStatement;
+            const ctx = {
+                workspaceId: m.workspaceId,
+                nodeId: m.nodeId,
+                metadataVersion: m.metadataVersion,
+            };
+            const next = await sealMetadata(await openMetadata(envelope, old, ctx), fresh, ctx);
+            return { envelope: next, signature: await signMetadata(m, next, form), rekey: null };
+        }
+        const v = statement as VersionStatement;
+        const opened = await openVersionUnder(old, v.workspaceId, v.nodeId, {
+            id: v.versionId,
+            objectId: v.objectId,
+            contentKeyEnvelope: encode(envelope),
+            contentSuite: v.contentSuite,
+            plaintextSize: input.plaintextSize ?? null,
+        });
+        try {
+            // The same record, sealed under the fresh key in the object's own suite.
+            const next = await sealVersion(
+                {
+                    contentKey: opened.contentKey,
+                    plaintextSize: opened.plaintextSize,
+                    thumbnailBytes: opened.thumbnailBytes,
+                },
+                fresh,
+                {
+                    workspaceId: v.workspaceId,
+                    nodeId: v.nodeId,
+                    versionId: v.versionId,
+                    objectId: v.objectId,
+                    suite: opened.suite,
+                },
+            );
+            return {
+                envelope: next,
+                signature: await signVersion({ ...v, contentSuite: opened.suite }, next, form),
+                rekey: null,
+            };
+        } finally {
+            opened.contentKey.fill(0);
+        }
+    }
+    /*
+     * One record re-sealed by a rotation and how it is signed
+     * (docs/integrity-design.md, "Re-keyed records"). The new envelope is the
+     * old one's plaintext sealed again raw under `fresh`, nothing parsed. A
+     * record that already carries an origin carries it on, after the same
+     * bound check a reader makes (carryOrigin), or drops it, re-sealed, when it
+     * does not bind or names nobody; a signed record with a named writer
+     * becomes its own origin; anything else is re-sealed (decision D6). `judge`
+     * says what legacy signature goes beside a re-key, judged on the writer's
+     * record: none in a family folder.
+     */
+    async function rekeyRecord(
+        input: ResealInput,
+    ): Promise<{ envelope: Uint8Array } & RotatedRecord> {
+        const { record, statement, envelope, old, fresh, targetEpoch } = input;
+        const next = await rekeyEnvelope(envelope, old, fresh, input.aad);
+        const statementsOver = (bytes: Uint8Array) => async () =>
+            record === 'metadata'
+                ? metadataStatements(statement as MetadataStatement, bytes)
+                : versionStatements(statement as VersionStatement, bytes);
+        const legacyOver = async (form: SignatureForm) =>
+            record === 'metadata'
+                ? signMetadata(statement as MetadataStatement, next, form)
+                : signVersion(statement as VersionStatement, next, form);
+        const resealed = async (
+            dropOrigin: boolean,
+        ): Promise<{ envelope: Uint8Array } & RotatedRecord> => ({
+            envelope: next,
+            signature: await legacyOver('resealed'),
+            rekey: null,
+            ...(dropOrigin ? { dropOrigin: true as const } : {}),
+        });
+        const position =
+            record === 'metadata'
+                ? {
+                      kind: 'metadata' as const,
+                      metadataVersion: (statement as MetadataStatement).metadataVersion,
+                  }
+                : {
+                      kind: 'version' as const,
+                      versionId: (statement as VersionStatement).versionId,
+                  };
+        let origin: RecordOrigin;
+        if (input.rekey) {
+            const served = input.rekey.origin;
+            // The rekeyed statement names the writer: an origin whose writer is gone is dropped.
+            if (!served.signerId) return resealed(true);
+            const carried: RekeyedRecord = {
+                record,
+                statement,
+                keyEpoch: input.keyEpoch,
+                envelope,
+                origin: {
+                    envelope: decode(served.envelope),
+                    signerId: served.signerId,
+                    signature: decode(served.signature),
+                    keyEnvelope: decode(served.keyEnvelope),
+                },
+                rekeySignature: decode(input.rekey.signature),
+            } as RekeyedRecord;
+            const wrapped = await carryOrigin(carried, old, fresh, targetEpoch);
+            // Not bound: an honest rotation never signs its name under someone else's mismatch.
+            if (!wrapped) return resealed(true);
+            origin = {
+                envelope: carried.origin.envelope,
+                signerId: served.signerId,
+                signature: carried.origin.signature!,
+                keyEnvelope: wrapped,
+            };
+        } else if (input.signer && input.signature) {
+            const opening = originOpeningKey(envelope, old);
+            try {
+                origin = {
+                    envelope,
+                    signerId: input.signer,
+                    signature: decode(input.signature),
+                    keyEnvelope: await wrapOriginKey(opening, fresh, {
+                        workspaceId: statement.workspaceId,
+                        nodeId: statement.nodeId,
+                        keyEpoch: targetEpoch,
+                        record: position,
+                        originEnvelope: envelope,
+                    }),
+                };
+            } finally {
+                opening.fill(0);
+            }
+        } else return resealed(false);
+        const bytes =
+            record === 'metadata'
+                ? await metadataRekeyedStatement(
+                      { ...(statement as MetadataStatement), keyEpoch: targetEpoch },
+                      next,
+                      origin,
+                  )
+                : await versionRekeyedStatement(
+                      { ...(statement as VersionStatement), keyEpoch: targetEpoch },
+                      next,
+                      origin,
+                  );
+        // Judged on the writer's record, the origin, never on what a previous re-keyer signed.
+        const legacy = await input.judge({
+            statements: statementsOver(origin.envelope),
+            signer: origin.signerId,
+            signature: encode(origin.signature),
+        });
+        return {
+            envelope: next,
+            signature: legacy ? await legacyOver(legacy) : null,
+            rekey: { originKeyEnvelope: encode(origin.keyEnvelope), signature: await sign(bytes) },
+        };
+    }
     /*
      * One node re-keyed from `old` to `fresh` at `targetEpoch`, wrapped under
      * `parentKey` at the node's parentKeyEpoch: metadata, every version's
      * content key, every share and every link sealed again under the fresh key,
-     * each record re-signed as `judge` says it may be. Nothing is cached and
-     * neither key is zeroed: the caller owns both.
+     * each record kept re-keyed where it can be (resealRecord). Nothing is
+     * cached and neither key is zeroed: the caller owns both.
      */
     async function rekeyNode(input: {
         workspaceId: string;
@@ -1460,38 +1741,7 @@ export function createCryptoSession() {
         const { workspaceId, targetEpoch, granterUserId, node, judge, old, fresh, parentKey } =
             input;
         const nodeId = node.id;
-        // Everything re-sealed below is signed by the account running the rotation,
-        // as it was checked first: what did not verify is signed re-sealed.
         if (!identityKey) throw new CryptoError('Open your identity first.');
-        const metadataForm = await judge({
-            statements: async () =>
-                metadataStatements(
-                    { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
-                    decode(node.metadataEnvelope),
-                ),
-            signer: node.metadataSigner,
-            signature: node.metadataSignature,
-        });
-        const versionForms = new Map<string, SignatureForm>();
-        for (const version of node.versions)
-            versionForms.set(
-                version.id,
-                await judge({
-                    statements: async () =>
-                        versionStatements(
-                            {
-                                workspaceId,
-                                nodeId,
-                                versionId: version.id,
-                                objectId: version.objectId,
-                                contentSuite: version.contentSuite,
-                            },
-                            decode(version.contentKeyEnvelope),
-                        ),
-                    signer: version.signer,
-                    signature: version.signature,
-                }),
-            );
         const keyEnvelope = await wrapNodeKey(fresh, parentKey, {
             workspaceId,
             nodeId,
@@ -1499,59 +1749,76 @@ export function createCryptoSession() {
             parentKeyEpoch: node.parentKeyEpoch,
             keyEpoch: targetEpoch,
         });
-        const metadata = await openMetadata(decode(node.metadataEnvelope), old, {
-            workspaceId,
-            nodeId,
-            metadataVersion: node.metadataVersion,
+        // The one switch (rekeyedFor): outside it, exactly what rotations wrote before.
+        const inScope = rekeyedFor({
+            ownerKind: groups.isArea(workspaceId) ? 'group' : 'personal',
         });
-        const metadataEnvelope = await sealMetadata(metadata, fresh, {
-            workspaceId,
-            nodeId,
-            metadataVersion: node.metadataVersion,
+        const resealRecord = inScope ? rekeyRecord : legacyRecord;
+        const metadata = await resealRecord({
+            record: 'metadata',
+            statement: {
+                workspaceId,
+                nodeId,
+                kind: node.kind,
+                metadataVersion: node.metadataVersion,
+            },
+            aad: metadataContext({
+                workspaceId,
+                nodeId,
+                metadataVersion: node.metadataVersion,
+            }),
+            envelope: decode(node.metadataEnvelope),
+            signer: node.metadataSigner,
+            signature: node.metadataSignature,
+            rekey: node.metadataRekey,
+            keyEpoch: node.keyEpoch,
+            targetEpoch,
+            old,
+            fresh,
+            judge,
         });
-        const metadataSignature = await signMetadata(
-            { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
-            metadataEnvelope,
-            metadataForm,
-        );
-        const versions: { id: string; contentKeyEnvelope: string; signature: string }[] = [];
+        const versions: ({ id: string; contentKeyEnvelope: string } & RotatedRecord)[] = [];
         for (const version of node.versions) {
-            // The same record, sealed under the fresh key in the object's own suite.
-            const opened = await openVersionUnder(old, workspaceId, nodeId, version);
-            try {
-                const envelope = await sealVersion(
-                    {
-                        contentKey: opened.contentKey,
-                        plaintextSize: opened.plaintextSize,
-                        thumbnailBytes: opened.thumbnailBytes,
-                    },
-                    fresh,
-                    {
-                        workspaceId,
-                        nodeId,
-                        versionId: version.id,
-                        objectId: version.objectId,
-                        suite: opened.suite,
-                    },
-                );
-                versions.push({
-                    id: version.id,
-                    contentKeyEnvelope: encode(envelope),
-                    signature: await signVersion(
-                        {
-                            workspaceId,
-                            nodeId,
-                            versionId: version.id,
-                            objectId: version.objectId,
-                            contentSuite: opened.suite,
-                        },
-                        envelope,
-                        versionForms.get(version.id) ?? 'resealed',
-                    ),
-                });
-            } finally {
-                opened.contentKey.fill(0);
-            }
+            const suite = version.contentSuite;
+            // The same record in the object's own suite: its length is the suite's.
+            const envelope = decode(
+                version.contentKeyEnvelope,
+                suite === LEGACY_CONTENT_SUITE ? KEY_ENVELOPE_BYTES : VERSION_ENVELOPE_BYTES,
+            );
+            const resealedVersion = await resealRecord({
+                record: 'version',
+                statement: {
+                    workspaceId,
+                    nodeId,
+                    versionId: version.id,
+                    objectId: version.objectId,
+                    contentSuite: suite,
+                },
+                aad: contentKeyContext({
+                    workspaceId,
+                    nodeId,
+                    versionId: version.id,
+                    objectId: version.objectId,
+                    suite,
+                }),
+                envelope,
+                signer: version.signer,
+                signature: version.signature,
+                rekey: version.rekey,
+                plaintextSize: version.plaintextSize,
+                keyEpoch: node.keyEpoch,
+                targetEpoch,
+                old,
+                fresh,
+                judge,
+            });
+            versions.push({
+                id: version.id,
+                contentKeyEnvelope: encode(resealedVersion.envelope),
+                signature: resealedVersion.signature,
+                rekey: resealedVersion.rekey,
+                ...(resealedVersion.dropOrigin ? { dropOrigin: true as const } : {}),
+            });
         }
         const shares = [];
         for (const share of node.shares) {
@@ -1615,8 +1882,10 @@ export function createCryptoSession() {
         return {
             id: nodeId,
             keyEnvelope: encode(keyEnvelope),
-            metadataEnvelope: encode(metadataEnvelope),
-            metadataSignature,
+            metadataEnvelope: encode(metadata.envelope),
+            metadataSignature: metadata.signature,
+            metadataRekey: metadata.rekey,
+            ...(metadata.dropOrigin ? { metadataDropOrigin: true as const } : {}),
             versions,
             shares,
             links,
@@ -1738,6 +2007,7 @@ export function createCryptoSession() {
         dropWorkspace,
         currentKeyOf,
         rekeyNode,
+        nodeKeyAt: keyAtEpoch,
         previousNodeKey(workspaceId, nodeId, epoch) {
             // Only the key this device opened as the node's own: never one a served envelope gave.
             const held = prevNodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
@@ -2472,7 +2742,7 @@ export function createCryptoSession() {
                         'A family folder is rotated only with the family’s trust.',
                     );
                 const judge = message.input.group
-                    ? await groups.rotationJudge(workspaceId, message.input.group, trusted)
+                    ? await groups.rotationJudge(workspaceId, message.input.group)
                     : personalJudge(trusted);
                 const out: RotatedNode[] = [];
                 for (const node of message.input.nodes) {
@@ -2795,45 +3065,104 @@ export function createCryptoSession() {
                         'A family folder is checked only with the family’s member list.',
                     );
                 const trusted = trustSet(message.input.signers);
+                // Never a family folder here: origins are read only where rekeyedFor reaches, so a
+                // personal row read as shipped apps read it, by its legacy columns, whatever is served.
+                const readsOrigins = rekeyedFor({ ownerKind: 'personal' });
                 const nodes: DriveVerifiedNode[] = [];
                 for (const node of message.input.nodes) {
-                    const metadata = await checkRecord(
-                        trusted,
-                        async () =>
-                            metadataStatements(
-                                {
-                                    workspaceId,
-                                    nodeId: node.id,
-                                    kind: node.kind,
-                                    metadataVersion: node.metadataVersion,
-                                },
-                                decode(node.metadataEnvelope),
-                            ),
-                        node.metadataSigner,
-                        node.metadataSignature,
-                    );
-                    const versions = [];
-                    for (const version of node.versions ?? [])
-                        versions.push({
-                            id: version.id,
-                            integrity: await checkRecord(
-                                trusted,
-                                async () =>
-                                    versionStatements(
-                                        {
-                                            workspaceId,
-                                            nodeId: node.id,
-                                            versionId: version.id,
-                                            objectId: version.objectId,
-                                            contentSuite: version.contentSuite,
-                                        },
-                                        decode(version.contentKeyEnvelope),
-                                    ),
-                                version.signer,
-                                version.signature,
-                            ),
+                    // A re-keyed record reads as its origin, opened with the node's key at its epoch.
+                    const key =
+                        node.keyEpoch === undefined
+                            ? null
+                            : keyAtEpoch(workspaceId, node.id, node.keyEpoch);
+                    const rekeyed = async (
+                        record: RekeyedRecord,
+                        rekeyer: string | null,
+                    ): Promise<{ integrity: Integrity; rekey: RekeyCheck }> => {
+                        const origin = record.origin.signerId;
+                        const verdict = await rekeyedIntegrityOf(record, key, {
+                            origin: origin ? (trusted.get(origin.toLowerCase()) ?? null) : null,
+                            rekeyer: rekeyer ? (trusted.get(rekeyer.toLowerCase()) ?? null) : null,
                         });
-                    nodes.push({ id: node.id, metadata, versions });
+                        return {
+                            integrity: verdict.origin,
+                            rekey: { rekeyer: verdict.rekeyer, bound: verdict.bound },
+                        };
+                    };
+                    const metadataStatement = {
+                        workspaceId,
+                        nodeId: node.id,
+                        kind: node.kind,
+                        metadataVersion: node.metadataVersion,
+                    };
+                    let metadata: Integrity;
+                    let metadataRekey: RekeyCheck | null = null;
+                    if (readsOrigins && node.metadataRekey) {
+                        const checked = await rekeyed(
+                            servedRekeyedRecord(
+                                'metadata',
+                                metadataStatement,
+                                node.keyEpoch ?? 0,
+                                node.metadataEnvelope,
+                                node.metadataRekey,
+                            ),
+                            node.metadataSigner,
+                        );
+                        metadata = checked.integrity;
+                        metadataRekey = checked.rekey;
+                    } else
+                        metadata = await checkRecord(
+                            trusted,
+                            async () =>
+                                metadataStatements(
+                                    metadataStatement,
+                                    decode(node.metadataEnvelope),
+                                ),
+                            node.metadataSigner,
+                            node.metadataSignature,
+                        );
+                    const versions: DriveVerifiedNode['versions'] = [];
+                    for (const version of node.versions ?? []) {
+                        const statement = {
+                            workspaceId,
+                            nodeId: node.id,
+                            versionId: version.id,
+                            objectId: version.objectId,
+                            contentSuite: version.contentSuite,
+                        };
+                        if (readsOrigins && version.rekey) {
+                            const checked = await rekeyed(
+                                servedRekeyedRecord(
+                                    'version',
+                                    statement,
+                                    node.keyEpoch ?? 0,
+                                    version.contentKeyEnvelope,
+                                    version.rekey,
+                                ),
+                                version.signer,
+                            );
+                            versions.push({ id: version.id, ...checked });
+                        } else
+                            versions.push({
+                                id: version.id,
+                                integrity: await checkRecord(
+                                    trusted,
+                                    async () =>
+                                        versionStatements(
+                                            statement,
+                                            decode(version.contentKeyEnvelope),
+                                        ),
+                                    version.signer,
+                                    version.signature,
+                                ),
+                            });
+                    }
+                    nodes.push({
+                        id: node.id,
+                        metadata,
+                        ...(metadataRekey ? { metadataRekey } : {}),
+                        versions,
+                    });
                 }
                 return { nodes };
             }
@@ -3027,6 +3356,36 @@ export function createCryptoSession() {
                 // The source as a reading would check it: only what verified is vouched for again,
                 // and a copy of something saved from a link stays saved.
                 const trusted = trustSet(message.input.signers);
+                // A re-keyed source is judged on its writer's record, where origins are read.
+                const readsOrigins =
+                    group !== null &&
+                    source.keyEpoch !== undefined &&
+                    rekeyedFor({ ownerKind: groups.isArea(workspaceId) ? 'group' : 'personal' });
+                const originKey = readsOrigins
+                    ? keyAtEpoch(workspaceId, source.nodeId, source.keyEpoch!)
+                    : null;
+                const rekeyedOf = (
+                    record: 'metadata' | 'version',
+                    statement: MetadataStatement | VersionStatement,
+                    envelope: string,
+                    rekey: ServedRekey | null | undefined,
+                    rekeyer: string | null,
+                ) =>
+                    readsOrigins && rekey
+                        ? {
+                              rekeyed: {
+                                  record: servedRekeyedRecord(
+                                      record,
+                                      statement,
+                                      source.keyEpoch!,
+                                      envelope,
+                                      rekey,
+                                  ),
+                                  nodeKey: originKey,
+                                  rekeyer,
+                              },
+                          }
+                        : {};
                 const metadataRecord = {
                     statements: async () =>
                         metadataStatements(
@@ -3040,6 +3399,18 @@ export function createCryptoSession() {
                         ),
                     signer: source.metadataSigner,
                     signature: source.metadataSignature,
+                    ...rekeyedOf(
+                        'metadata',
+                        {
+                            workspaceId,
+                            nodeId: source.nodeId,
+                            kind: 'file',
+                            metadataVersion: source.metadataVersion,
+                        },
+                        source.metadataEnvelope,
+                        source.metadataRekey,
+                        source.metadataSigner,
+                    ),
                 };
                 const versionRecord = {
                     statements: async () =>
@@ -3055,11 +3426,24 @@ export function createCryptoSession() {
                         ),
                     signer: source.signer,
                     signature: source.signature,
+                    ...rekeyedOf(
+                        'version',
+                        {
+                            workspaceId,
+                            nodeId: source.nodeId,
+                            versionId: source.id,
+                            objectId: source.objectId,
+                            contentSuite: source.contentSuite,
+                        },
+                        source.contentKeyEnvelope,
+                        source.rekey,
+                        source.signer,
+                    ),
                 };
                 // In a family folder the family's judge (it refuses another group's or a
                 // personal workspace); elsewhere this person's own pins.
                 const judge = group
-                    ? await groups.rotationJudge(workspaceId, group, trusted)
+                    ? await groups.copyJudge(workspaceId, group, trusted)
                     : async (record: typeof metadataRecord) =>
                           copyForm(
                               await checkRecord(
@@ -3070,8 +3454,8 @@ export function createCryptoSession() {
                               ),
                               false,
                           );
-                const metadataForm = await judge(metadataRecord);
-                const versionForm = await judge(versionRecord);
+                const metadataForm = (await judge(metadataRecord)) ?? 'resealed';
+                const versionForm = (await judge(versionRecord)) ?? 'resealed';
                 const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
                     sourceKey.key,

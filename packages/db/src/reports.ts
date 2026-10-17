@@ -220,6 +220,9 @@ export async function createReport(input: CreateReport) {
                     metadataSignature: item.metadataSignature,
                     versionSignerId: item.currentVersion?.signerId ?? null,
                     versionSignature: item.currentVersion?.signature ?? null,
+                    // The writers of re-keyed records, next to their re-keyer (D10).
+                    metadataOriginSignerId: item.metadataOriginSignerId,
+                    versionOriginSignerId: item.currentVersion?.originSignerId ?? null,
                     versionId: item.currentVersion?.id ?? null,
                     objectId: item.currentVersion?.objectId ?? null,
                     objectKey: item.currentVersion ? objectKeyOf(item) : null,
@@ -502,6 +505,8 @@ async function release(tx: Tx, reportId: string, now: Date) {
             metadataSignature: null,
             versionSignerId: null,
             versionSignature: null,
+            metadataOriginSignerId: null,
+            versionOriginSignerId: null,
         })
         .where(eq(driveReportItems.reportId, reportId));
     await tx

@@ -15,7 +15,10 @@ import type { AreaState } from './sync';
  * in its envelope). Any other run the server names (a holder's Drive walk of
  * a subtree, or one the server made up) is walked only when a call of this
  * device met it (409 rotating) or a removal finishes it, never on the
- * server's word alone: every walk re-signs records as the walker.
+ * server's word alone. A walk no longer signs anyone's record as the
+ * walker's (re-keyed records keep each writer's), but it still re-seals only
+ * the shares and links the walker's own sharing ledger records and closes the
+ * rest, so walking someone else's run would close what their ledger keeps.
  */
 export function ownReasonToWalk(state: Pick<AreaState, 'opened' | 'rootListed' | 'view'>) {
     const { rotation, root } = state.view;

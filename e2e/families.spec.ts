@@ -722,11 +722,11 @@ test.describe('removal, leaving and key changes', () => {
         });
     });
 
-    test('removing someone: hold, finish, remove; their files read as a former member’s until the walk passes; the rest open on a fresh device; their family is gone', async ({
+    test('removing someone: hold, finish, remove; their files read as a former member’s before the walk passes and after it; the rest open on a fresh device; their family is gone', async ({
         browser,
     }) => {
         test.setTimeout(480_000);
-        // Replace keys re-signed every record as Maya's (decision D4): Sam adds one now, after it.
+        // Sam adds a file after Replace keys, so the removal's walk is the first to re-key it.
         await openFamilyFolder(sam, family, 'Family');
         await upload(sam, 'sam-notes.txt', 'Notes by Sam\n');
         await openFamilyPage(maya, groupPath, family);
@@ -795,17 +795,32 @@ test.describe('removal, leaving and key changes', () => {
         await openSubfolder(fresh, 'Trips');
         await expect(fileRow(fresh.page, 'trip.txt')).toBeVisible({ timeout: 60_000 });
 
-        // The walk ends. It re-sealed Sam's records as Maya's: after it, his file reads as
-        // re-locked by her (decision D4), never as verified.
+        // The walk ends. It kept Sam's records as his (re-keyed, docs/integrity-design.md
+        // "Re-keyed records"): after it his file still reads as a former member's, never as
+        // re-locked by Maya, and Info names her only as the one who replaced the keys.
         await walk.release();
         await waitForRotation(maya.page, before);
         for (const other of others) await other.release();
         await maya.page.reload();
-        await expect(mark(maya.page, 'sam-notes.txt')).toHaveAttribute(
-            'data-integrity',
-            'resealed',
-            { timeout: 90_000 },
+        const after = mark(maya.page, 'sam-notes.txt');
+        await expect(after).toHaveAttribute('data-integrity', 'former-member', {
+            timeout: 90_000,
+        });
+        await expect(after).toHaveAttribute(
+            'aria-label',
+            new RegExp(`Written by Sam, who has left ${family}\\.`),
         );
+        await fileRow(maya.page, 'sam-notes.txt')
+            .locator('button')
+            .first()
+            .click({ position: { x: 16, y: 12 } });
+        await maya.page.keyboard.press('i');
+        await expect(maya.page.locator('[data-details] [data-keys-replaced]')).toHaveText(
+            'Keys replaced by you',
+            { timeout: 60_000 },
+        );
+        await maya.page.screenshot({ path: test.info().outputPath('rekeyed-info.png') });
+        await maya.page.keyboard.press('Escape');
         await fresh.page.goto(groupPath.replace('/families/', '/s/'));
         await expect(fresh.page.locator('[data-area="Family"]')).toHaveAttribute(
             'data-area-write',

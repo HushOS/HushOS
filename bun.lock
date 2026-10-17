@@ -168,6 +168,7 @@
     "packages/db": {
       "name": "@hushos/db",
       "dependencies": {
+        "@hushos/crypto": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
         "@noble/post-quantum": "0.7.1",

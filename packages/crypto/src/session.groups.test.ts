@@ -34,6 +34,7 @@ import {
 } from './session-groups';
 import {
     digest,
+    metadataRekeyedStatement,
     metadataResealedStatement,
     metadataStatement,
     verifyStatement,
@@ -1787,36 +1788,34 @@ describe('group verdicts', () => {
         ).resolves.toMatchObject({ metadata: 'unsigned' });
     });
 
-    test('a removal’s finish walk re-seals the departing member’s records, though the committed chain still lists them', async () => {
+    test('a walk keeps a member’s record as theirs, re-keyed, with no word of who is leaving, and one nobody can check no longer stops it', async () => {
         const f = await family();
         const bobs = await bobsFolder(f);
         await f.alice.call('driveOpenNodes', { workspaceId: f.ws, nodes: [f.rootListing] });
-        const bobWriter = writer({}, f.bob.served);
-        const walk = (departing?: string[]) =>
+        const node = (metadataSignature: string) => ({
+            id: CHILD,
+            kind: 'folder' as const,
+            parentId: f.area.root.id,
+            parentKeyEpoch: 1,
+            keyEpoch: 1,
+            wrappedParentKeyEpoch: 1,
+            keyEnvelope: bobs.keyEnvelope,
+            metadataVersion: 1,
+            metadataEnvelope: bobs.metadataEnvelope,
+            metadataSigner: BOB,
+            metadataSignature,
+            versions: [],
+            shares: [],
+            links: [],
+        });
+        const walk = (writers: GroupWriter[], metadataSignature = bobs.metadataSignature) =>
             f.alice.call('driveRotateNodes', {
                 workspaceId: f.ws,
                 targetEpoch: 7,
                 granterUserId: ALICE,
                 signers: {},
-                group: { groupId: f.groupId, staged: null, writers: [bobWriter], departing },
-                nodes: [
-                    {
-                        id: CHILD,
-                        kind: 'folder',
-                        parentId: f.area.root.id,
-                        parentKeyEpoch: 1,
-                        keyEpoch: 1,
-                        wrappedParentKeyEpoch: 1,
-                        keyEnvelope: bobs.keyEnvelope,
-                        metadataVersion: 1,
-                        metadataEnvelope: bobs.metadataEnvelope,
-                        metadataSigner: BOB,
-                        metadataSignature: bobs.metadataSignature,
-                        versions: [],
-                        shares: [],
-                        links: [],
-                    },
-                ],
+                group: { groupId: f.groupId, staged: null, writers },
+                nodes: [node(metadataSignature)],
             });
         const aliceKey = decode(f.alice.served.signingPublicKey, 32);
         const ctx = {
@@ -1825,30 +1824,51 @@ describe('group verdicts', () => {
             kind: 'folder' as const,
             metadataVersion: 1,
         };
-        const signedAs = async (result: CryptoResults['driveRotateNodes']) => {
-            const node = result.nodes[0]!;
-            if (node.error !== undefined) throw new Error(node.error);
-            const envelope = decode(node.metadataEnvelope);
-            const signature = decode(node.metadataSignature!);
-            if (await verifyStatement(await metadataStatement(ctx, envelope), signature, aliceKey))
-                return 'ordinary';
-            if (
-                await verifyStatement(
-                    await metadataResealedStatement(ctx, envelope),
-                    signature,
-                    aliceKey,
-                )
-            )
-                return 'resealed';
-            return 'neither';
+        /* What the walk signed: nothing in Alice's name as writer, only the binding to Bob's record. */
+        const signedOver = async (
+            result: CryptoResults['driveRotateNodes'],
+            originSignature: string,
+        ) => {
+            const rotated = result.nodes[0]!;
+            if (rotated.error !== undefined) throw new Error(rotated.error);
+            expect(rotated.metadataSignature).toBeNull();
+            expect(rotated.metadataDropOrigin).toBeUndefined();
+            const rekey = rotated.metadataRekey!;
+            return verifyStatement(
+                await metadataRekeyedStatement(
+                    { ...ctx, keyEpoch: 7 },
+                    decode(rotated.metadataEnvelope),
+                    {
+                        envelope: decode(bobs.metadataEnvelope),
+                        signerId: BOB,
+                        signature: decode(originSignature),
+                        keyEnvelope: decode(rekey.originKeyEnvelope),
+                    },
+                ),
+                decode(rekey.signature),
+                aliceKey,
+            );
         };
-        // Bob is active on the committed chain: without a word, his record would become Alice's own.
-        expect(await signedAs(await walk())).toBe('ordinary');
-        // Named as departing, it is re-sealed instead.
-        expect(await signedAs(await walk([BOB]))).toBe('resealed');
+        // Bob is active on the committed chain, and the walk need not know he is leaving.
+        expect(
+            await signedOver(await walk([writer({}, f.bob.served)]), bobs.metadataSignature),
+        ).toBe(true);
+        // A record nobody can check (a signature none of Bob's keys holds, his links withheld)
+        // stopped the walk before: it is kept as it is, for readers to judge.
+        const flipped = decode(bobs.metadataSignature);
+        flipped[0]! ^= 1;
+        const tampered = encode(flipped);
+        expect(
+            await signedOver(
+                await walk([writer({ served: null, links: null }, f.bob.served)], tampered),
+                tampered,
+            ),
+        ).toBe(true);
+        // Nor does the walk depend on who the family's list names at all.
+        expect(await signedOver(await walk([]), bobs.metadataSignature)).toBe(true);
     });
 
-    test('a removal’s rotation re-seals the removed member’s records and never re-signs them as the remover’s', async () => {
+    test('a removal’s rotation keeps the removed member’s records as theirs and never re-signs them as the remover’s', async () => {
         const f = await family();
         const { alice, bob, groupId, ws, area, server, marks } = f;
         const bobs = await bobsFolder(f);
@@ -1886,26 +1906,62 @@ describe('group verdicts', () => {
         });
         if (removal.outboxId === null) throw new Error('nothing staged');
         const [rotation] = removal.body.rotations!;
-        // Judged as the roster marking Bob left judges him: re-sealed, not "Alice wrote this".
+        // Bob's record stays his: re-keyed over his envelope and signature, and nothing beside it
+        // in Alice's name, ordinary or re-sealed (readers then name Bob, who has left).
         const ctx = {
             workspaceId: ws,
             nodeId: area.root.id,
             kind: 'folder' as const,
             metadataVersion: 2,
         };
-        const envelope = decode(rotation!.root.rotated!.metadataEnvelope);
-        const signature = decode(rotation!.root.rotated!.metadataSignature);
+        const rotated = rotation!.root.rotated!;
+        expect(rotated.metadataSignature).toBeNull();
         const aliceKey = decode(alice.served.signingPublicKey, 32);
         expect(
             await verifyStatement(
-                await metadataResealedStatement(ctx, envelope),
-                signature,
+                await metadataRekeyedStatement(
+                    { ...ctx, keyEpoch: 7 },
+                    decode(rotated.metadataEnvelope),
+                    {
+                        envelope: decode(renamed.metadataEnvelope),
+                        signerId: BOB,
+                        signature: decode(renamed.metadataSignature),
+                        keyEnvelope: decode(rotated.metadataRekey!.originKeyEnvelope),
+                    },
+                ),
+                decode(rotated.metadataRekey!.signature),
                 aliceKey,
             ),
         ).toBe(true);
-        expect(
-            await verifyStatement(await metadataStatement(ctx, envelope), signature, aliceKey),
-        ).toBe(false);
+        // A record nobody can check no longer stops the removal: staged all the same.
+        const flipped = decode(renamed.metadataSignature);
+        flipped[0]! ^= 1;
+        const unreadable = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 2,
+            op: {
+                kind: 'remove',
+                userId: BOB,
+                rotations: [
+                    {
+                        workspaceId: ws,
+                        targetEpoch: 7,
+                        root: f.rootInput({
+                            metadataVersion: 2,
+                            metadataEnvelope: renamed.metadataEnvelope,
+                            metadataSigner: BOB,
+                            metadataSignature: encode(flipped),
+                        }),
+                        documents: [],
+                    },
+                ],
+            },
+            kems: {},
+            writers: [writer({ served: null, links: null }, bob.served)],
+        });
+        if (unreadable.outboxId === null) throw new Error('nothing staged');
+        expect(unreadable.body.rotations![0]!.root.rotated!.metadataRekey).toBeTruthy();
+        await alice.call('groupDrop', { outboxId: unreadable.outboxId });
         // Only the remaining member is granted the new key.
         expect(removal.body.grants!.map((grant) => grant.granteeUserId)).toEqual([ALICE]);
         // A walk in a family folder is never judged personally, nor by another group's roster.
@@ -2006,10 +2062,22 @@ describe('group verdicts', () => {
             kind: 'folder' as const,
             metadataVersion: 1,
         };
+        // Nothing in Alice's name as its writer: no legacy signature, only her re-key.
+        expect(node.metadataSignature).toBeNull();
+        const rekey = node.metadataRekey!;
         expect(
             await verifyStatement(
-                await metadataResealedStatement(childCtx, decode(node.metadataEnvelope)),
-                decode(node.metadataSignature!),
+                await metadataRekeyedStatement(
+                    { ...childCtx, keyEpoch: 7 },
+                    decode(node.metadataEnvelope),
+                    {
+                        envelope: decode(bobs.metadataEnvelope),
+                        signerId: BOB,
+                        signature: decode(bobs.metadataSignature),
+                        keyEnvelope: decode(rekey.originKeyEnvelope),
+                    },
+                ),
+                decode(rekey.signature),
                 aliceKey,
             ),
         ).toBe(true);
@@ -2021,6 +2089,127 @@ describe('group verdicts', () => {
             nodes: [bobs.signed],
         });
         expect(verdict.nodes[0]).toMatchObject({ metadata: 'former-member', via: null });
+        // And so does the re-keyed record, as the server serves it once applied: named after
+        // Bob, who has left, with Alice as the re-keyer the family vouches for.
+        await alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [CHILD] });
+        const served = {
+            ...bobs.signed,
+            metadataEnvelope: node.metadataEnvelope,
+            metadataSigner: ALICE,
+            metadataSignature: null,
+            keyEpoch: 7,
+            metadataRekey: {
+                origin: {
+                    envelope: bobs.metadataEnvelope,
+                    signerId: BOB,
+                    signature: bobs.metadataSignature,
+                    keyEnvelope: rekey.originKeyEnvelope,
+                },
+                signature: rekey.signature,
+            },
+        };
+        const rekeyed = await alice.call('groupVerify', {
+            groupId,
+            workspaceId: ws,
+            writers: [bobWriter],
+            nodes: [served],
+        });
+        expect(rekeyed.nodes[0]).toMatchObject({
+            metadata: 'former-member',
+            metadataRekey: { rekeyer: 'verified', bound: true },
+        });
+        // A current envelope the node's key does not open (the server's own doing, for all a
+        // reader knows): couldn't confirm, never Bob's verdict and never Alice's fault.
+        const swapped = await alice.call('groupVerify', {
+            groupId,
+            workspaceId: ws,
+            writers: [bobWriter],
+            nodes: [{ ...served, metadataEnvelope: bobs.metadataEnvelope }],
+        });
+        expect(swapped.nodes[0]).toMatchObject({
+            metadata: 'unchecked',
+            metadataRekey: { bound: null },
+        });
+
+        // The next walk carries Bob's origin byte for byte, under a new wrap at the new epoch,
+        // after its own bound check, and the record still reads as his.
+        const walkAgain = (
+            from: typeof node,
+            keyEpoch: number,
+            targetEpoch: number,
+            rekey: unknown,
+        ) =>
+            alice.call('driveRotateNodes', {
+                workspaceId: ws,
+                targetEpoch,
+                granterUserId: ALICE,
+                signers: {},
+                group: { groupId, staged: null, writers: [bobWriter] },
+                nodes: [
+                    {
+                        id: CHILD,
+                        kind: 'folder',
+                        parentId: area.root.id,
+                        parentKeyEpoch: 7,
+                        keyEpoch,
+                        wrappedParentKeyEpoch: 7,
+                        keyEnvelope: from.keyEnvelope,
+                        metadataVersion: 1,
+                        metadataEnvelope: from.metadataEnvelope,
+                        metadataSigner: ALICE,
+                        metadataSignature: null,
+                        metadataRekey: rekey as never,
+                        versions: [],
+                        shares: [],
+                        links: [],
+                    },
+                ],
+            });
+        const again = (await walkAgain(node, 7, 9, served.metadataRekey)).nodes[0]!;
+        if (again.error !== undefined) throw new Error(again.error);
+        expect(again.metadataDropOrigin).toBeUndefined();
+        expect(again.metadataRekey!.originKeyEnvelope).not.toBe(rekey.originKeyEnvelope);
+        await alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [CHILD] });
+        const carried = {
+            ...served,
+            metadataEnvelope: again.metadataEnvelope,
+            keyEpoch: 9,
+            metadataRekey: {
+                origin: {
+                    ...served.metadataRekey.origin,
+                    keyEnvelope: again.metadataRekey!.originKeyEnvelope,
+                },
+                signature: again.metadataRekey!.signature,
+            },
+        };
+        const reread = await alice.call('groupVerify', {
+            groupId,
+            workspaceId: ws,
+            writers: [bobWriter],
+            nodes: [carried],
+        });
+        expect(reread.nodes[0]).toMatchObject({
+            metadata: 'former-member',
+            metadataRekey: { rekeyer: 'verified', bound: true },
+        });
+        // An origin that does not bind (the wrap opens no such envelope): dropped and re-sealed,
+        // never carried under Alice's name.
+        const dropped = (
+            await walkAgain(again, 9, 11, {
+                ...carried.metadataRekey,
+                origin: { ...carried.metadataRekey.origin, envelope: bobs.keyEnvelope },
+            })
+        ).nodes[0]!;
+        if (dropped.error !== undefined) throw new Error(dropped.error);
+        expect(dropped.metadataDropOrigin).toBe(true);
+        expect(dropped.metadataRekey ?? null).toBeNull();
+        expect(
+            await verifyStatement(
+                await metadataResealedStatement(childCtx, decode(dropped.metadataEnvelope)),
+                decode(dropped.metadataSignature!),
+                aliceKey,
+            ),
+        ).toBe(true);
     });
 });
 
@@ -2746,6 +2935,8 @@ describe('copying in a family folder (1c step 7)', () => {
             metadataSignature: node.metadataSignature,
             signer: BOB,
             signature: prepared.versionSignature,
+            // Not a copy's field: what a walk of the file re-keys under.
+            fileKeyEnvelope: node.keyEnvelope,
         };
     }
     const copyCtx = (ws: string) => ({
@@ -2867,6 +3058,146 @@ describe('copying in a family folder (1c step 7)', () => {
                 aliceKey,
             ),
         ).toBe(true);
+    });
+
+    test('a copy of a file a rotation re-keyed is judged on its writer’s record: vouched for, not re-sealed', async () => {
+        const f = await family();
+        const { alice, bob, groupId, ws, area } = f;
+        const source = await bobsFile(f);
+        const bobWriter: GroupWriter = {
+            userId: BOB,
+            pinned: null,
+            served: bob.served,
+            links: [],
+            personal: null,
+        };
+        const group = { groupId, staged: null, writers: [bobWriter] };
+        // Alice's walk re-keys Bob's file: it stays his (an origin), her name only on the binding.
+        const fileRow = (
+            await alice.call('driveRotateNodes', {
+                workspaceId: ws,
+                targetEpoch: 9,
+                granterUserId: ALICE,
+                signers: {},
+                group,
+                nodes: [
+                    {
+                        id: FILE,
+                        kind: 'file',
+                        parentId: area.root.id,
+                        parentKeyEpoch: 1,
+                        keyEpoch: 3,
+                        wrappedParentKeyEpoch: 1,
+                        keyEnvelope: source.fileKeyEnvelope,
+                        metadataVersion: 1,
+                        metadataEnvelope: source.metadataEnvelope,
+                        metadataSigner: BOB,
+                        metadataSignature: source.metadataSignature,
+                        versions: [
+                            {
+                                id: VERSION,
+                                objectId: OBJECT,
+                                contentKeyEnvelope: source.contentKeyEnvelope,
+                                contentSuite: CONTENT_SUITE,
+                                plaintextSize: null,
+                                signer: BOB,
+                                signature: source.signature,
+                            },
+                        ],
+                        shares: [],
+                        links: [],
+                    },
+                ],
+            })
+        ).nodes[0]!;
+        if (fileRow.error !== undefined) throw new Error(fileRow.error);
+        await alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [FILE] });
+        const version = fileRow.versions[0]!;
+        // The file as the server then serves it: Alice's columns, Bob's origins, no legacy signature.
+        const rekeyedSource = {
+            ...source,
+            metadataEnvelope: fileRow.metadataEnvelope,
+            metadataSigner: ALICE,
+            metadataSignature: null,
+            contentKeyEnvelope: version.contentKeyEnvelope,
+            signer: ALICE,
+            signature: null,
+            keyEpoch: 9,
+            metadataRekey: {
+                origin: {
+                    envelope: source.metadataEnvelope,
+                    signerId: BOB,
+                    signature: source.metadataSignature,
+                    keyEnvelope: fileRow.metadataRekey!.originKeyEnvelope,
+                },
+                signature: fileRow.metadataRekey!.signature,
+            },
+            rekey: {
+                origin: {
+                    envelope: source.contentKeyEnvelope,
+                    signerId: BOB,
+                    signature: source.signature,
+                    keyEnvelope: version.rekey!.originKeyEnvelope,
+                },
+                signature: version.rekey!.signature,
+            },
+        };
+        const copy = (from: typeof rekeyedSource | typeof source) =>
+            alice.call('driveCopyFile', {
+                workspaceId: ws,
+                signers: {},
+                source: from as typeof rekeyedSource,
+                node: {
+                    id: COPY,
+                    parentId: area.root.id,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 4,
+                    metadata: folder('notes (copy).txt'),
+                },
+                versionId: COPY_VERSION,
+                group,
+            });
+        const aliceKey = decode(alice.served.signingPublicKey, 32);
+        const formOf = async (copied: Awaited<ReturnType<typeof copy>>) => {
+            const envelope = decode(copied.metadataEnvelope);
+            const signature = decode(copied.metadataSignature);
+            if (
+                await verifyStatement(
+                    await metadataStatement(copyCtx(ws), envelope),
+                    signature,
+                    aliceKey,
+                )
+            )
+                return 'ordinary';
+            if (
+                await verifyStatement(
+                    await metadataResealedStatement(copyCtx(ws), envelope),
+                    signature,
+                    aliceKey,
+                )
+            )
+                return 'resealed';
+            return 'neither';
+        };
+        // Bob's record, which the family vouches for: the copy is vouched for too, as before the walk.
+        expect(await formOf(await copy(rekeyedSource))).toBe('ordinary');
+        // Judged on the re-keyer's columns alone (no signature there), it would only be re-sealed.
+        const { metadataRekey: _m, rekey: _v, ...columnsOnly } = rekeyedSource;
+        expect(await formOf(await copy(columnsOnly as typeof rekeyedSource))).toBe('resealed');
+        // An origin that does not bind is never vouched for: the version's wrap in the metadata's
+        // place (the re-key signature no longer covers it), or an epoch whose key is not held.
+        const swapped = {
+            ...rekeyedSource,
+            metadataRekey: {
+                ...rekeyedSource.metadataRekey,
+                origin: {
+                    ...rekeyedSource.metadataRekey.origin,
+                    keyEnvelope: rekeyedSource.rekey.origin.keyEnvelope,
+                },
+            },
+        };
+        expect(await formOf(await copy(swapped))).toBe('resealed');
+        expect(await formOf(await copy({ ...rekeyedSource, keyEpoch: 8 }))).toBe('resealed');
     });
 
     test('a group’s trust on a personal workspace is refused', async () => {

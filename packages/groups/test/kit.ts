@@ -33,7 +33,7 @@ import {
     driveNodes,
     workspaceDocuments,
 } from '../../db/src/schema';
-import { metadataStatement } from '../../db/src/signatures';
+import { metadataRekeyedStatement, metadataStatement } from '../../db/src/signatures';
 import { createTestAccount, storeTestIdentity } from '../../db/test/helpers';
 import type {
     GrantWire,
@@ -193,6 +193,25 @@ async function signMetadata(
     );
 }
 
+/* The rekeyed statement over `origin` (as the server will copy it), signed by `by`. */
+async function rekeyMetadata(
+    by: Person,
+    fields: Parameters<typeof metadataRekeyedStatement>[0],
+    origin: { envelope: Buffer; signerId: string; signature: Buffer },
+) {
+    await sodium.ready;
+    const keyEnvelope = randomBytes(72);
+    return {
+        originKeyEnvelope: b64(keyEnvelope),
+        signature: b64(
+            sodium.crypto_sign_detached(
+                metadataRekeyedStatement(fields, { ...origin, keyEnvelope }),
+                by.signer.signingKey,
+            ),
+        ),
+    };
+}
+
 export async function rootWire(workspaceId: string, by: Person) {
     const idSeed = b64(randomBytes(16));
     const id = scopedId('node', workspaceId, idSeed)!;
@@ -244,12 +263,22 @@ export async function rotationWire(
             keyEnvelope: b64(randomBytes(72)),
             rotated: {
                 metadataEnvelope: b64(metadataEnvelope),
-                metadataSignature: await signMetadata(
+                // A family folder's rotation keeps the writer's record: re-keyed, never re-signed.
+                metadataRekey: await rekeyMetadata(
                     by,
-                    workspaceId,
-                    root!.id,
-                    root!.metadataVersion,
-                    metadataEnvelope,
+                    {
+                        workspaceId,
+                        nodeId: root!.id,
+                        kind: 'folder',
+                        metadataVersion: root!.metadataVersion,
+                        metadataEnvelope,
+                        keyEpoch: range!.from,
+                    },
+                    {
+                        envelope: root!.metadataOriginEnvelope ?? root!.metadataEnvelope!,
+                        signerId: root!.metadataOriginSignerId ?? root!.metadataSignerId!,
+                        signature: root!.metadataOriginSignature ?? root!.metadataSignature!,
+                    },
                 ),
                 versions: [],
                 shares: [],

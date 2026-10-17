@@ -407,6 +407,13 @@ const nodeColumns = {
     envelopeSuite: driveNodes.envelopeSuite,
     metadataSignerId: driveNodes.metadataSignerId,
     metadataSignature: driveNodes.metadataSignature,
+    metadataOriginEnvelope: driveNodes.metadataOriginEnvelope,
+    metadataOriginKeyEnvelope: driveNodes.metadataOriginKeyEnvelope,
+    metadataOriginSignerId: driveNodes.metadataOriginSignerId,
+    metadataOriginSignature: driveNodes.metadataOriginSignature,
+    metadataRekeySignature: driveNodes.metadataRekeySignature,
+    metadataDroppedSignerId: driveNodes.metadataDroppedSignerId,
+    metadataOriginDroppedBy: driveNodes.metadataOriginDroppedBy,
     workspaceId: driveNodes.workspaceId,
     parentId: driveNodes.parentId,
     kind: driveNodes.kind,
@@ -440,7 +447,49 @@ const versionColumns = {
     readyAt: fileVersions.readyAt,
     signerId: fileVersions.signerId,
     signature: fileVersions.signature,
+    originEnvelope: fileVersions.originEnvelope,
+    originKeyEnvelope: fileVersions.originKeyEnvelope,
+    originSignerId: fileVersions.originSignerId,
+    originSignature: fileVersions.originSignature,
+    rekeySignature: fileVersions.rekeySignature,
+    droppedSignerId: fileVersions.droppedSignerId,
+    originDroppedBy: fileVersions.originDroppedBy,
 };
+/*
+ * What every write that sets a record's envelope outside a rotation clears: the
+ * origin a rotation kept and the re-keyer's signature over it, which describe
+ * the envelope being replaced (docs/integrity-design.md, "What the server
+ * enforces").
+ */
+export const NO_METADATA_ORIGIN = {
+    metadataOriginEnvelope: null,
+    metadataOriginKeyEnvelope: null,
+    metadataOriginSignerId: null,
+    metadataOriginSignature: null,
+    metadataRekeySignature: null,
+} as const;
+export const NO_VERSION_ORIGIN = {
+    originEnvelope: null,
+    originKeyEnvelope: null,
+    originSignerId: null,
+    originSignature: null,
+    rekeySignature: null,
+} as const;
+/*
+ * A purge clears a dropped origin's trace with everything else; a rename does
+ * not, so writing a record again never hides that its origin was dropped
+ * (drive_origin_drops keeps the evidence either way).
+ */
+export const PURGED_METADATA_ORIGIN = {
+    ...NO_METADATA_ORIGIN,
+    metadataDroppedSignerId: null,
+    metadataOriginDroppedBy: null,
+} as const;
+export const PURGED_VERSION_ORIGIN = {
+    ...NO_VERSION_ORIGIN,
+    droppedSignerId: null,
+    originDroppedBy: null,
+} as const;
 /*
  * Who wrote a record: the account id alone. A client names a signer from its
  * own pins ("you", a checked contact) or not at all; the server hands out no
@@ -460,6 +509,15 @@ export type VersionRow = {
     signerId: string | null;
     signature: Buffer | null;
     signer: Signer | null;
+    /* A re-keyed version's origin (see fileVersions); all null otherwise. */
+    originEnvelope: Buffer | null;
+    originKeyEnvelope: Buffer | null;
+    originSignerId: string | null;
+    originSignature: Buffer | null;
+    rekeySignature: Buffer | null;
+    /* A dropped origin's signer and who dropped it (see fileVersions); null otherwise. */
+    droppedSignerId: string | null;
+    originDroppedBy: string | null;
     status: 'pending' | 'ready' | 'purged';
     /* Suite 1 only; null under suite 2, where the envelope carries it. */
     plaintextSize: bigint | null;
@@ -520,6 +578,16 @@ export class OutdatedIdentityError extends Error {
     }
 }
 export async function signedBy(tx: Tx, userId: string, statements: SignedStatement[]) {
+    const key = await currentSigningKey(tx, userId);
+    return key !== null && statements.every((statement) => verifySigned(key, statement));
+}
+/*
+ * The Ed25519 key `userId` signs records with now, or null without an
+ * identity. A version 1 identity signs nothing: clients upgrade it on unlock
+ * before any write (docs/identity-pq-design.md 5), so only an outdated client
+ * gets here, and it is told so.
+ */
+export async function currentSigningKey(tx: Tx, userId: string) {
     const [identity] = await tx
         .select({
             version: accountIdentities.version,
@@ -527,11 +595,9 @@ export async function signedBy(tx: Tx, userId: string, statements: SignedStateme
         })
         .from(accountIdentities)
         .where(eq(accountIdentities.userId, userId));
-    if (!identity) return false;
-    // A version 1 identity signs nothing: clients upgrade it on unlock before any write
-    // (docs/identity-pq-design.md 5), so only an outdated client gets here.
+    if (!identity) return null;
     if (identity.version !== 2) throw new OutdatedIdentityError();
-    return statements.every((statement) => verifySigned(identity.signingPublicKey, statement));
+    return identity.signingPublicKey;
 }
 /* The metadata statement for a node's envelope as it is about to be stored. */
 function metadataSigned(
@@ -875,6 +941,7 @@ export async function renameNode(input: {
                 metadataVersion: input.metadataVersion + 1,
                 metadataSignerId: input.userId,
                 metadataSignature: input.metadataSignature,
+                ...NO_METADATA_ORIGIN,
                 changeSeq,
                 updatedAt: new Date(),
             })
@@ -1532,6 +1599,7 @@ async function releaseUpload(tx: Tx, upload: UploadRow, status: 'aborted' | 'com
             contentKeyEnvelope: null,
             signerId: null,
             signature: null,
+            ...PURGED_VERSION_ORIGIN,
             purgedAt: new Date(),
         })
         .where(eq(fileVersions.id, upload.versionId));
@@ -1657,6 +1725,7 @@ async function publishUpload(
                     contentKeyEnvelope: null,
                     signerId: null,
                     signature: null,
+                    ...PURGED_VERSION_ORIGIN,
                     purgedAt: now,
                 })
                 .where(eq(fileVersions.id, version.id));
@@ -1756,7 +1825,11 @@ export async function attachUpload(
             statements.push(metadataSigned(workspaceId, nodeId, 'file', 1, input.node));
         if (!(await signedBy(tx, input.userId, statements)))
             return { status: 'bad-signature' as const };
-        const signed = { signerId: input.userId, signature: input.versionSignature };
+        const signed = {
+            signerId: input.userId,
+            signature: input.versionSignature,
+            ...NO_VERSION_ORIGIN,
+        };
 
         if (input.mode === 'same-node') {
             const chain = await walk(tx, row.nodeId);
@@ -2296,6 +2369,7 @@ async function purgeVersion(tx: Tx, workspaceId: string, version: PurgedVersion)
             contentKeyEnvelope: null,
             signerId: null,
             signature: null,
+            ...PURGED_VERSION_ORIGIN,
             purgedAt: new Date(),
         })
         .where(eq(fileVersions.id, version.id));
@@ -2342,6 +2416,7 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
             metadataEnvelope: null,
             metadataSignerId: null,
             metadataSignature: null,
+            ...PURGED_METADATA_ORIGIN,
             changeSeq,
             updatedAt: now,
         })

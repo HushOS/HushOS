@@ -2056,14 +2056,14 @@ describe('departures', () => {
                     rotated: {
                         ...reseal(),
                         metadataEnvelope,
-                        metadataSignature: signerFor(creator.userId).sign(
-                            metadataStatement({
-                                workspaceId: area,
-                                nodeId: root.id,
-                                kind: 'folder',
-                                metadataVersion: current.metadataVersion,
-                                metadataEnvelope,
-                            }),
+                        // In a family folder a rotation keeps the writer's record (re-keyed).
+                        metadataSignature: null,
+                        metadataRekey: await signed.metadataRekey(
+                            creator.userId,
+                            area,
+                            root.id,
+                            target,
+                            metadataEnvelope,
                         ),
                     },
                 },
@@ -2123,11 +2123,12 @@ describe('departures', () => {
     ): Promise<groups.RotationInput> {
         const [current] = await db.select().from(driveNodes).where(eq(driveNodes.id, rootId));
         const metadataEnvelope = randomBytes(100);
+        const targetEpoch = (await drive.allocateKeyEpochs(group.areaId, 1))!.from;
         return {
             workspaceId: group.areaId,
             fromVersion: 1,
             toVersion: 2,
-            targetEpoch: (await drive.allocateKeyEpochs(group.areaId, 1))!.from,
+            targetEpoch,
             root: {
                 id: rootId,
                 changeSeq: current!.changeSeq!,
@@ -2135,14 +2136,13 @@ describe('departures', () => {
                 keyEnvelope: randomBytes(72),
                 rotated: {
                     metadataEnvelope,
-                    metadataSignature: signerFor(creatorId).sign(
-                        metadataStatement({
-                            workspaceId: group.areaId,
-                            nodeId: rootId,
-                            kind: 'folder',
-                            metadataVersion: current!.metadataVersion,
-                            metadataEnvelope,
-                        }),
+                    metadataSignature: null,
+                    metadataRekey: await signed.metadataRekey(
+                        creatorId,
+                        group.areaId,
+                        rootId,
+                        targetEpoch,
+                        metadataEnvelope,
                     ),
                     versions: [],
                     shares: [],
@@ -2415,6 +2415,125 @@ describe('departures', () => {
         if (personal.status !== 'ok') throw new Error(personal.status);
         expect(await drive.revokeShare(stayer.workspaceId, personal.share.id)).not.toBeNull();
         expect(await dueAt(stayer.workspaceId)).toBeNull();
+    });
+
+    /*
+     * Decision D3 (docs/integrity-design.md, "What the server enforces"): a rotation in a
+     * family folder never claims authorship. A record with a writer's signature to keep is
+     * taken only re-keyed (a legacy signature beside it only re-sealed); a record with none,
+     * only re-sealed.
+     */
+    test('a rotation in a family folder takes only the re-keyed form, or re-sealed where there is no writer to keep', async () => {
+        const { creator, group } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        const childEpoch = (await drive.allocateKeyEpochs(group.areaId, 1))!.from;
+        const made = await signed.createFolders({
+            workspaceId: group.areaId,
+            userId: creator.userId,
+            folders: [
+                {
+                    id: randomUUID(),
+                    parentId: root.id,
+                    envelopes: {
+                        keyEpoch: childEpoch,
+                        parentKeyEpoch: root.keyEpoch,
+                        keyEnvelope: randomBytes(72),
+                        metadataEnvelope: randomBytes(100),
+                    },
+                },
+            ],
+        });
+        if (made.status !== 'created') throw new Error(made.status);
+        const child = made.nodes[0]!;
+        // The child was written before signatures: nobody's record to keep.
+        await db
+            .update(driveNodes)
+            .set({ metadataSignerId: null, metadataSignature: null })
+            .where(eq(driveNodes.id, child.id));
+        const started = await rotations.startRotation({
+            workspaceId: group.areaId,
+            nodeId: root.id,
+            startedBy: creator.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const target = started.rotation.targetEpoch;
+        const sign = signerFor(creator.userId);
+        const nodeNow = async (id: string) =>
+            (await db.select().from(driveNodes).where(eq(driveNodes.id, id)))[0]!;
+        const send = async (
+            id: string,
+            parentKeyEpoch: number,
+            signing: { legacy?: 'ordinary' | 'saved' | 'resealed'; rekey?: boolean },
+        ) => {
+            const node = await nodeNow(id);
+            const metadataEnvelope = randomBytes(100);
+            const [result] = await rotations.rotateNodes({
+                workspaceId: group.areaId,
+                rootId: root.id,
+                targetEpoch: target,
+                userId: creator.userId,
+                nodes: [
+                    {
+                        id,
+                        changeSeq: node.changeSeq!,
+                        parentKeyEpoch,
+                        keyEnvelope: randomBytes(72),
+                        rotated: {
+                            metadataEnvelope,
+                            metadataSignature: signing.legacy
+                                ? sign.sign(
+                                      metadataStatement(
+                                          {
+                                              workspaceId: group.areaId,
+                                              nodeId: id,
+                                              kind: 'folder',
+                                              metadataVersion: node.metadataVersion,
+                                              metadataEnvelope,
+                                          },
+                                          signing.legacy,
+                                      ),
+                                  )
+                                : null,
+                            // An unsigned record has no origin to sign over: any bytes do.
+                            metadataRekey: signing.rekey
+                                ? ((await signed.metadataRekey(
+                                      creator.userId,
+                                      group.areaId,
+                                      id,
+                                      target,
+                                      metadataEnvelope,
+                                  )) ?? {
+                                      originKeyEnvelope: randomBytes(72),
+                                      signature: randomBytes(64),
+                                  })
+                                : null,
+                            versions: [],
+                            shares: [],
+                            links: [],
+                            unsealableLinks: [],
+                        },
+                    },
+                ],
+            });
+            return result!.status;
+        };
+        // The creator's own root: ordinary or saved would claim it as the walker's, alone or
+        // beside the re-key, and a bare re-seal would drop the creator's signature. Refused.
+        for (const legacy of ['ordinary', 'saved', 'resealed'] as const)
+            expect(await send(root.id, 1, { legacy })).toBe('unsupported');
+        for (const legacy of ['ordinary', 'saved'] as const)
+            expect(await send(root.id, 1, { legacy, rekey: true })).toBe('unsupported');
+        expect((await nodeNow(root.id)).keyEpoch).toBe(root.keyEpoch);
+        expect(await send(root.id, 1, { rekey: true, legacy: 'resealed' })).toBe('ok');
+        const rekeyed = await nodeNow(root.id);
+        expect(rekeyed.metadataOriginSignerId).toBe(creator.userId);
+        expect(rekeyed.metadataOriginEnvelope).not.toBeNull();
+
+        // The unsigned child: nothing to re-key, and only re-sealed.
+        expect(await send(child.id, target, { rekey: true })).toBe('unsupported');
+        expect(await send(child.id, target, { legacy: 'ordinary' })).toBe('unsupported');
+        expect(await send(child.id, target, { legacy: 'resealed' })).toBe('ok');
+        expect((await nodeNow(child.id)).metadataOriginEnvelope).toBeNull();
     });
 });
 

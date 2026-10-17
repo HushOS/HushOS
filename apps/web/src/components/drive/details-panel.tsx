@@ -17,7 +17,14 @@ import { TagStamps } from '@/components/drive/tag-stamp';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
-import { nameSigner, verifiedByLine, vouchedByLine } from '@/lib/integrity-lines';
+import {
+    changedByWords,
+    droppedLines,
+    rekeyedLines,
+    rekeyTechnical,
+    verifiedByLine,
+    vouchedByLine,
+} from '@/lib/integrity-lines';
 import { clientFor, driveError, formatBytes, formatWhen, type driveClient } from '@/lib/drive';
 import { extensionOf } from '@/lib/previews';
 import { saveSealedCopy } from '@/lib/sealed-copy';
@@ -308,24 +315,7 @@ function OwnCopy({ node }: { node: DriveNode }) {
 /* Who wrote what did not verify, as this person can name them: from their own pins only. */
 function ChangedBy({ issue }: { issue: IntegrityIssue }) {
     const userId = useStore(authClient.store, (state) => state.unlockedUserId);
-    const named = nameSigner(issue.signer, useSignerNames(userId, true));
-    return (
-        <span>
-            {issue.integrity === 'unchecked'
-                ? 'Not checked'
-                : named.kind === 'you'
-                  ? 'You'
-                  : named.kind === 'contact'
-                    ? named.name
-                    : named.kind === 'member'
-                      ? named.email
-                          ? `${named.name} (${named.email})`
-                          : named.name
-                      : issue.signer
-                        ? 'Someone you haven’t checked'
-                        : 'Unknown'}
-        </span>
-    );
+    return <span>{changedByWords(issue, useSignerNames(userId, true))}</span>;
 }
 
 export function ItemDetails({
@@ -353,6 +343,10 @@ export function ItemDetails({
     const version = node.kind === 'file' ? node.currentVersion : null;
     const size = contentSize(node);
     const unverified = integrityIssues(node);
+    // A re-keyed item names both people: who wrote it and who locked it again.
+    const rekeyed = rekeyedLines(node, names);
+    const dropped = droppedLines(node, names);
+    const notes = node.integrity?.rekeyed;
     const status =
         version === null
             ? null
@@ -400,6 +394,11 @@ export function ItemDetails({
                             <ChangedBy issue={unverified[0]!} />
                             <UnverifiedMark node={node} />
                         </span>
+                    </Fact>
+                )}
+                {rekeyed.writtenBy && unverified.length === 0 && (
+                    <Fact label="Written by">
+                        <span data-written-by>{rekeyed.writtenBy}</span>
                     </Fact>
                 )}
                 {verifiedBy && (
@@ -451,6 +450,16 @@ export function ItemDetails({
                 )}
             </dl>
             <SavedFromLinkLine node={node} />
+            {rekeyed.replacedBy.map((line) => (
+                <p key={line} data-keys-replaced className="text-[13px] text-muted-foreground">
+                    {line}
+                </p>
+            ))}
+            {dropped.map((line) => (
+                <p key={line} data-origin-dropped className="text-[13px] text-muted-foreground">
+                    {line}
+                </p>
+            ))}
             <div className="rounded-xl border border-rule">
                 <Fold title="Keep your own copy" name="own-copy">
                     <OwnCopy key={node.id} node={node} />
@@ -483,6 +492,30 @@ export function ItemDetails({
                                 <Technical label="Version" value={version.id} copy />
                                 <Technical label="Status" value={status!} />
                             </>
+                        )}
+                        {notes?.metadata && (
+                            <>
+                                <Technical
+                                    label="Written by"
+                                    value={notes.metadata.writer?.id ?? 'Not named'}
+                                    copy={Boolean(notes.metadata.writer)}
+                                />
+                                <Technical
+                                    label="Keys replaced by"
+                                    value={notes.metadata.by?.id ?? 'Not named'}
+                                    copy={Boolean(notes.metadata.by)}
+                                />
+                                <Technical
+                                    label="Key change"
+                                    value={rekeyTechnical(notes.metadata)}
+                                />
+                            </>
+                        )}
+                        {notes?.version && (
+                            <Technical
+                                label="Version key change"
+                                value={rekeyTechnical(notes.version)}
+                            />
                         )}
                         <Technical label="Item id" value={node.id} copy />
                         <Technical label="Workspace" value={node.workspaceId} copy />

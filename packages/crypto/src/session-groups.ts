@@ -20,6 +20,7 @@ import {
     firstRoster,
     foldInEntry,
     groupIntegrityOf,
+    groupRekeyedIntegrityOf,
     groupWriterTrust,
     joinCode,
     newRosterEntry,
@@ -80,7 +81,15 @@ import type { GroupPin } from './pins';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import { GROUP_OPERATIONS } from './protocol';
 import type { GranteeSecrets } from './sealing';
-import type { DriveSignedNode, DriveSigners, RotateNodeInput, RotatedNode } from './session';
+import type {
+    DriveSignedNode,
+    DriveSigners,
+    RekeyOut,
+    RotateNodeInput,
+    RotatedNode,
+    RotatedRecord,
+    ServedRekey,
+} from './session';
 import {
     digest,
     integrityOf,
@@ -94,9 +103,12 @@ import {
     HYBRID_SIGNATURE_BYTES,
     type HybridSigningKey,
     type Integrity,
+    type MetadataStatement,
+    type RekeyedRecord,
     type SignatureForm,
     type StatementForms,
     type TrustedSigner,
+    type VersionStatement,
 } from './signatures';
 import { grantAreaKey, openAreaSelfGrant, type WorkspaceKeyEnvelope } from './workspace';
 
@@ -164,8 +176,11 @@ export type RotatedNodeWire = {
     keyEnvelope: string;
     rotated: {
         metadataEnvelope: string;
-        metadataSignature: string;
-        versions: { id: string; contentKeyEnvelope: string; signature: string }[];
+        /* Re-keyed records carry no legacy signature in a family folder (decision D3). */
+        metadataSignature?: string | null;
+        metadataRekey?: RekeyOut | null;
+        metadataDropOrigin?: boolean;
+        versions: ({ id: string; contentKeyEnvelope: string } & RotatedRecord)[];
         shares: { id: string; shareEnvelope: string }[];
         links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
         unsealableLinks: string[];
@@ -259,13 +274,6 @@ export type GroupRotationTrust = {
     /* The roster call whose staged chain judges (a removal's rotation), or null for the committed chain. */
     staged: string | null;
     writers: GroupWriter[];
-    /*
-     * Members on their way out whose records must not come back as the
-     * walker's own: a removal's finish walk runs on the committed chain, where
-     * the person being removed is still active, so their verified records are
-     * re-sealed, never re-signed as ordinary (or saved) by the walker.
-     */
-    departing?: string[];
 };
 
 /*
@@ -594,7 +602,14 @@ export type GroupResults = {
             id: string;
             metadata: GroupIntegrity;
             via: string | null;
-            versions: { id: string; integrity: GroupIntegrity; via: string | null }[];
+            /* A re-keyed record's re-keyer and binding (its verdict above is its origin's). */
+            metadataRekey?: GroupRekeyCheck | null;
+            versions: {
+                id: string;
+                integrity: GroupIntegrity;
+                via: string | null;
+                rekey?: GroupRekeyCheck | null;
+            }[];
         }[];
     };
     groupJoinCode: { rosterVersion: number; code: string[]; pinMatches: boolean | null };
@@ -626,19 +641,76 @@ export function isGroupMessage(message: { operation: string }): message is Group
     return (GROUP_OPERATIONS as readonly string[]).includes(message.operation);
 }
 
-/* How a rotation re-signs one record: the form, from the record as served. */
+/* A re-keyed record's re-keyer in a family folder, as the group's trust judges them, and the binding. */
+export type GroupRekeyCheck = {
+    rekeyer: GroupIntegrity;
+    via: string | null;
+    bound: boolean | null;
+};
+function rekeyCheckOf(verdict: {
+    rekeyer: { integrity: GroupIntegrity; via: string | null };
+    bound: boolean | null;
+}): GroupRekeyCheck {
+    return { rekeyer: verdict.rekeyer.integrity, via: verdict.rekeyer.via, bound: verdict.bound };
+}
+
+/*
+ * How a record written again is signed, from the record as served: for a copy
+ * the form itself; for a rotation the legacy signature beside a re-keyed
+ * record (its writer's record is what is judged), or null for none, which is
+ * what a family folder's rotation sends (decision D3: nothing a rotation
+ * signs there claims authorship, and no shipped reader needs the legacy one).
+ */
 export type RecordJudge = (record: {
     statements: () => Promise<StatementForms>;
     signer: string | null;
     signature: string | null;
-}) => Promise<SignatureForm>;
+    /*
+     * A re-keyed record (a copy's source in a family folder): judged on its
+     * origin's verdict when its bytes bind, re-sealed when they do not, with
+     * the node's key at its epoch and the re-keyer (the record's signer).
+     */
+    rekeyed?: { record: RekeyedRecord; nodeKey: Uint8Array | null; rekeyer: string | null };
+}) => Promise<SignatureForm | null>;
+
+/* A family folder's rotation: re-keyed records only, nothing judged, so nothing unreadable stops it. */
+const rekeyOnly: RecordJudge = async () => null;
+
+/*
+ * A re-keyed record as the reader checks it, from what the server serves: the
+ * current envelope under the node key at `keyEpoch`, its origin and the
+ * re-key signature (docs/integrity-design.md, "Re-keyed records").
+ */
+export function servedRekeyedRecord(
+    record: 'metadata' | 'version',
+    statement: MetadataStatement | VersionStatement,
+    keyEpoch: number,
+    envelope: string,
+    rekey: ServedRekey,
+): RekeyedRecord {
+    return {
+        record,
+        statement,
+        keyEpoch,
+        envelope: decode(envelope),
+        origin: {
+            envelope: decode(rekey.origin.envelope),
+            signerId: rekey.origin.signerId,
+            signature: decode(rekey.origin.signature),
+            keyEnvelope: decode(rekey.origin.keyEnvelope),
+        },
+        rekeySignature: decode(rekey.signature),
+    } as RekeyedRecord;
+}
 
 type RekeyedNode = {
     id: string;
     keyEnvelope: string;
     metadataEnvelope: string;
-    metadataSignature: string;
-    versions: { id: string; contentKeyEnvelope: string; signature: string }[];
+    metadataSignature: string | null;
+    metadataRekey?: RekeyOut | null;
+    metadataDropOrigin?: true;
+    versions: ({ id: string; contentKeyEnvelope: string } & RotatedRecord)[];
     shares: { id: string; shareEnvelope: string }[];
     links: Extract<RotatedNode, { links: unknown }>['links'];
 };
@@ -657,6 +729,8 @@ export type GroupHost = {
     holdWorkspaceKey(workspaceId: string, version: number, key: Uint8Array<ArrayBuffer>): void;
     dropWorkspace(workspaceId: string): void;
     currentKeyOf(workspaceId: string, node: RotateNodeInput): Promise<Uint8Array<ArrayBuffer>>;
+    /* The node's key at `epoch` as the session holds it, not to be zeroed; null when it does not. */
+    nodeKeyAt(workspaceId: string, nodeId: string, epoch: number): Uint8Array | null;
     /* A copy of the previous key this session holds for a node at `epoch` (the caller zeroes it). */
     previousNodeKey(workspaceId: string, nodeId: string, epoch: number): Uint8Array | undefined;
     rekeyNode(input: {
@@ -1420,7 +1494,47 @@ export function createGroupSession(host: GroupHost) {
             }
             return held;
         };
-        return async (
+        /* Whose keys a re-keyed record's signer is judged under: their roster trust, or this account's own. */
+        const rekeyedTrustOf = async (
+            userId: string | null,
+        ): Promise<{ trust: GroupWriterTrust; personal: TrustedSigner | null }> => {
+            const id = userId?.toLowerCase() ?? null;
+            if (!id) return { trust: { trust: 'outside' }, personal: null };
+            if (id === me)
+                return { trust: { trust: 'outside' }, personal: trusted.get(id) ?? null };
+            return {
+                trust: (await trustOf(id)) ?? { trust: 'unchecked' },
+                personal: trusted.get(id) ?? null,
+            };
+        };
+        /*
+         * A re-keyed record's verdicts (design 2.8): its origin's, as its writer's
+         * trust says, and the re-keyer's, as theirs does. `nodeKey` is the node's
+         * key at the record's epoch, null when not held (unchecked).
+         */
+        const rekeyed = async (
+            record: RekeyedRecord,
+            nodeKey: Uint8Array | null,
+            rekeyer: string | null,
+        ) => {
+            try {
+                const origin = await rekeyedTrustOf(record.origin.signerId);
+                const by = await rekeyedTrustOf(rekeyer);
+                return await groupRekeyedIntegrityOf(record, nodeKey, {
+                    origin: origin.trust,
+                    originPersonal: origin.personal,
+                    rekeyer: by.trust,
+                    rekeyerPersonal: by.personal,
+                });
+            } catch {
+                return {
+                    origin: { integrity: 'unchecked' as const, via: null },
+                    rekeyer: { integrity: 'unchecked' as const, via: null },
+                    bound: null,
+                };
+            }
+        };
+        const check = async (
             statements: () => Promise<StatementForms>,
             signer: string | null,
             signature: string | null,
@@ -1458,6 +1572,7 @@ export function createGroupSession(host: GroupHost) {
                 return { integrity: 'unchecked', via: null };
             }
         };
+        return Object.assign(check, { rekeyed });
     }
     function personalOf(writers: GroupWriter[]) {
         const signers: DriveSigners = {};
@@ -1465,30 +1580,37 @@ export function createGroupSession(host: GroupHost) {
         return host.personalSigners(signers);
     }
     /*
-     * How a rotation in a group area re-signs a record: verified stays
-     * ordinary and saved stays saved; a former member's record and a key
-     * conflict's are re-sealed, as is anything else; an unchecked one is not
-     * re-signed at all (resealForm refuses).
+     * How a copy in a group area signs a record: verified stays ordinary and
+     * saved stays saved; a former member's record and a key conflict's are
+     * re-sealed, as is anything else; an unchecked one is not copied at all
+     * (resealForm refuses).
      */
-    function judgeWith(
-        verdict: ReturnType<typeof verdicts>,
-        departing: readonly string[] = [],
-    ): RecordJudge {
-        const leaving = new Set(departing.map((userId) => userId.toLowerCase()));
+    function judgeWith(verdict: ReturnType<typeof verdicts>): RecordJudge {
         return async (record) => {
-            const { integrity } = await verdict(record.statements, record.signer, record.signature);
+            let integrity: GroupIntegrity;
+            if (record.rekeyed) {
+                const checked = await verdict.rekeyed(
+                    record.rekeyed.record,
+                    record.rekeyed.nodeKey,
+                    record.rekeyed.rekeyer,
+                );
+                // Bytes that do not bind to the writer's record (a broken wrap, the wrong epoch,
+                // a key this device does not hold): the copy is re-sealed, never vouched for.
+                if (checked.bound !== true) return 'resealed';
+                integrity = checked.origin.integrity;
+            } else
+                integrity = (await verdict(record.statements, record.signer, record.signature))
+                    .integrity;
             if (integrity === 'key-conflict' || integrity === 'former-member') return 'resealed';
-            // Throws for an unchecked record, departing writer or not: nothing is signed unchecked.
-            const form = resealForm(integrity as Integrity);
-            if (record.signer && leaving.has(record.signer.toLowerCase())) return 'resealed';
-            return form;
+            return resealForm(integrity as Integrity);
         };
     }
-    async function rotationJudge(
-        workspaceId: string,
-        group: GroupRotationTrust,
-        trusted: Map<string, TrustedSigner>,
-    ): Promise<RecordJudge> {
+    /*
+     * The reading a family folder's rotation or copy is judged on: the staged
+     * chain of the roster call named, or the committed one; refused unless it
+     * is this family's area, opened on this device, on that chain.
+     */
+    function areaReading(workspaceId: string, group: GroupRotationTrust) {
         const groupId = uuid(group.groupId, 'group id');
         let reading = readingOf(groupId);
         if (group.staged !== null) {
@@ -1504,10 +1626,29 @@ export function createGroupSession(host: GroupHost) {
             !areasOf(groupId).has(workspaceId)
         )
             throw new CryptoError('This folder is not one of this family’s.');
-        return judgeWith(
-            verdicts(groupId, workspaceId, reading, group.writers, trusted),
-            group.departing ?? [],
-        );
+        return { groupId, reading };
+    }
+    /*
+     * A Drive walk of a family folder: every record with a writer's signature
+     * is kept re-keyed and nothing is re-signed as the walker's, so no record
+     * is judged at all (one nobody can check no longer stops a removal), and
+     * a departing member's records keep their name whoever walks them.
+     */
+    async function rotationJudge(
+        workspaceId: string,
+        group: GroupRotationTrust,
+    ): Promise<RecordJudge> {
+        areaReading(workspaceId, group);
+        return rekeyOnly;
+    }
+    /* A copy out of a family folder's record, judged as its member list says. */
+    async function copyJudge(
+        workspaceId: string,
+        group: GroupRotationTrust,
+        trusted: Map<string, TrustedSigner>,
+    ): Promise<RecordJudge> {
+        const { groupId, reading } = areaReading(workspaceId, group);
+        return judgeWith(verdicts(groupId, workspaceId, reading, group.writers, trusted));
     }
 
     /*
@@ -1669,6 +1810,8 @@ export function createGroupSession(host: GroupHost) {
                     rotated: {
                         metadataEnvelope: rekeyed.metadataEnvelope,
                         metadataSignature: rekeyed.metadataSignature,
+                        metadataRekey: rekeyed.metadataRekey ?? null,
+                        ...(rekeyed.metadataDropOrigin ? { metadataDropOrigin: true } : {}),
                         versions: rekeyed.versions,
                         shares: rekeyed.shares,
                         links: sealed,
@@ -2623,8 +2766,7 @@ export function createGroupSession(host: GroupHost) {
                     await grantTo(stagedChain, workspaceId, version, key, idSeed, member, kems),
                 );
         }
-        // Rotations, judged as the staged roster judges writers (a removal's: the removed as `left`).
-        const personal = personalOf(input.writers);
+        // Rotations keep every writer's record (re-keyed): nobody's record is judged, or re-signed.
         const rotations: RotationWire[] = [];
         const replaced: ReplacedDocument[] = [];
         for (const rotation of input.rotations) {
@@ -2638,15 +2780,7 @@ export function createGroupSession(host: GroupHost) {
                     version - 1,
                     key,
                     secrets.rootKeys.get(workspaceId)!,
-                    judgeWith(
-                        verdicts(
-                            chain.groupId,
-                            workspaceId,
-                            { status: 'accepted', chain: stagedChain },
-                            input.writers,
-                            personal,
-                        ),
-                    ),
+                    rekeyOnly,
                     await selfGrantOf(chain.groupId, workspaceId, key, version),
                     replaced,
                 ),
@@ -2710,7 +2844,6 @@ export function createGroupSession(host: GroupHost) {
             let body = input.body;
             const replaced: ReplacedDocument[] = [];
             if (input.rebuild) {
-                const personal = personalOf(input.rebuild.writers);
                 const rebuilt = new Map<string, RotationWire>();
                 for (const rotation of input.rebuild.rotations) {
                     const workspaceId = rotation.workspaceId;
@@ -2731,15 +2864,7 @@ export function createGroupSession(host: GroupHost) {
                             version - 1,
                             key,
                             rootKey,
-                            judgeWith(
-                                verdicts(
-                                    groupId,
-                                    workspaceId,
-                                    { status: 'accepted', chain: stagedChain },
-                                    input.rebuild.writers,
-                                    personal,
-                                ),
-                            ),
+                            rekeyOnly,
                             existing.selfGrant,
                             replaced,
                         ),
@@ -2823,40 +2948,81 @@ export function createGroupSession(host: GroupHost) {
         );
         const nodes: GroupResults['groupVerify']['nodes'] = [];
         for (const node of input.nodes) {
-            const metadata = await verdict(
-                async () =>
-                    metadataStatements(
-                        {
-                            workspaceId,
-                            nodeId: node.id,
-                            kind: node.kind,
-                            metadataVersion: node.metadataVersion,
-                        },
-                        decode(node.metadataEnvelope),
+            const key =
+                node.keyEpoch === undefined
+                    ? null
+                    : host.nodeKeyAt(workspaceId, node.id, node.keyEpoch);
+            const metadataStatement = {
+                workspaceId,
+                nodeId: node.id,
+                kind: node.kind,
+                metadataVersion: node.metadataVersion,
+            };
+            let metadata: { integrity: GroupIntegrity; via: string | null };
+            let metadataRekey: GroupRekeyCheck | null = null;
+            if (node.metadataRekey) {
+                const checked = await verdict.rekeyed(
+                    servedRekeyedRecord(
+                        'metadata',
+                        metadataStatement,
+                        node.keyEpoch ?? 0,
+                        node.metadataEnvelope,
+                        node.metadataRekey,
                     ),
-                node.metadataSigner,
-                node.metadataSignature,
-            );
-            const versions = [];
-            for (const version of node.versions ?? []) {
-                const result = await verdict(
+                    key,
+                    node.metadataSigner,
+                );
+                metadata = checked.origin;
+                metadataRekey = rekeyCheckOf(checked);
+            } else
+                metadata = await verdict(
                     async () =>
-                        versionStatements(
-                            {
-                                workspaceId,
-                                nodeId: node.id,
-                                versionId: version.id,
-                                objectId: version.objectId,
-                                contentSuite: version.contentSuite,
-                            },
-                            decode(version.contentKeyEnvelope),
+                        metadataStatements(metadataStatement, decode(node.metadataEnvelope)),
+                    node.metadataSigner,
+                    node.metadataSignature,
+                );
+            const versions: GroupResults['groupVerify']['nodes'][number]['versions'] = [];
+            for (const version of node.versions ?? []) {
+                const statement = {
+                    workspaceId,
+                    nodeId: node.id,
+                    versionId: version.id,
+                    objectId: version.objectId,
+                    contentSuite: version.contentSuite,
+                };
+                if (version.rekey) {
+                    const checked = await verdict.rekeyed(
+                        servedRekeyedRecord(
+                            'version',
+                            statement,
+                            node.keyEpoch ?? 0,
+                            version.contentKeyEnvelope,
+                            version.rekey,
                         ),
+                        key,
+                        version.signer,
+                    );
+                    versions.push({
+                        id: version.id,
+                        ...checked.origin,
+                        rekey: rekeyCheckOf(checked),
+                    });
+                    continue;
+                }
+                const result = await verdict(
+                    async () => versionStatements(statement, decode(version.contentKeyEnvelope)),
                     version.signer,
                     version.signature,
                 );
                 versions.push({ id: version.id, ...result });
             }
-            nodes.push({ id: node.id, metadata: metadata.integrity, via: metadata.via, versions });
+            nodes.push({
+                id: node.id,
+                metadata: metadata.integrity,
+                via: metadata.via,
+                ...(metadataRekey ? { metadataRekey } : {}),
+                versions,
+            });
         }
         return { nodes };
     }
@@ -3098,6 +3264,7 @@ export function createGroupSession(host: GroupHost) {
         legacySettings,
         isArea,
         rotationJudge,
+        copyJudge,
         forget,
     };
 }

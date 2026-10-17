@@ -570,3 +570,161 @@ describe('signatures', () => {
         expect(h.opened.map((o) => o.granterSigningPublicKey)).toEqual(['ed25519-granter-now']);
     });
 });
+
+/*
+ * Re-keyed records (docs/integrity-design.md, "Re-keyed records"): a row a
+ * rotation re-keyed reads as its writer's, with the re-keyer kept apart,
+ * where the verifier read the origin (family folders, rekeyedFor); one it did
+ * not read reads by its legacy columns; and a
+ * rotation carries a served origin to the worker and sends back only what the
+ * worker made (the server copies the origin itself).
+ */
+describe('re-keyed records', () => {
+    const SAM = 'sam';
+    const MAYA = 'maya';
+    const rekey = {
+        origin: { envelope: 'oe', signer: { id: SAM }, signature: 'osig', keyEnvelope: 'ok' },
+        signature: 'rsig',
+    };
+    const rekeyedA = (): NodeView => ({
+        ...node(A, ROOT),
+        metadataSigner: { id: MAYA },
+        metadataSignature: null,
+        metadataRekey: rekey,
+    });
+    function withRekeyed(answer: (input: { id: string }) => Record<string, unknown>) {
+        const h = harness();
+        const sent: unknown[] = [];
+        const api = {
+            ...h.api,
+            children: async (_ws: string, folderId: string) => ({
+                folder: node(folderId, folderId === ROOT ? null : ROOT),
+                ancestors: folderId === ROOT ? [] : [node(ROOT, null)],
+                children: folderId === ROOT ? [rekeyedA()] : [],
+                nextCursor: null,
+            }),
+        } as unknown as DriveApi;
+        const rpc = (async (operation: string, input: Record<string, unknown>) => {
+            if (operation !== 'driveVerify')
+                return (h.rpc as unknown as (o: string, i: unknown) => Promise<unknown>)(
+                    operation,
+                    input,
+                );
+            const nodes = input.nodes as { id: string }[];
+            sent.push(...nodes);
+            return { nodes: nodes.map((n) => ({ id: n.id, versions: [], ...answer(n) })) };
+        }) as unknown as Rpc;
+        return { client: createDriveClient(rpc, api, { signers: async () => ({}) }), sent };
+    }
+
+    test('a re-keyed row reads as its writer’s, the re-keyer apart, and the worker gets what opens it', async () => {
+        const { client, sent } = withRekeyed((n) =>
+            n.id === A
+                ? { metadata: 'verified', metadataRekey: { rekeyer: 'verified', bound: true } }
+                : { metadata: 'verified' },
+        );
+        await client.open('owner');
+        const listing = await client.listFolder(ROOT);
+        const row = listing.children[0]!;
+        expect(row.integrity).toEqual({
+            metadata: 'verified',
+            version: null,
+            rekeyed: {
+                metadata: {
+                    writer: { id: SAM },
+                    by: { id: MAYA },
+                    integrity: 'verified',
+                    via: null,
+                    bound: true,
+                },
+                version: null,
+            },
+        });
+        expect(integrityIssues(row)).toEqual([]);
+        // The node's epoch (its key there opens both envelopes) and the origin, the writer by id.
+        expect(sent.find((n) => (n as { id: string }).id === A)).toMatchObject({
+            keyEpoch: 2,
+            metadataSigner: MAYA,
+            metadataRekey: {
+                origin: { envelope: 'oe', signerId: SAM, signature: 'osig', keyEnvelope: 'ok' },
+                signature: 'rsig',
+            },
+        });
+    });
+
+    test('an origin the verifier did not read (a personal row, for now) is read by the legacy columns, as shipped apps read it', async () => {
+        const { client } = withRekeyed(() => ({ metadata: 'resealed' }));
+        await client.open('owner');
+        const row = (await client.listFolder(ROOT)).children[0]!;
+        expect(row.integrity).toEqual({ metadata: 'resealed', version: null });
+        // Named after who signed the legacy columns (the re-keyer), never the unread origin's writer.
+        expect(integrityIssues(row)).toEqual([
+            { record: 'metadata', integrity: 'resealed', signer: { id: MAYA } },
+        ]);
+    });
+
+    test('a rotation carries the served origin to the worker and sends back only the re-key it made', async () => {
+        const h = harness();
+        const toWorker: unknown[] = [];
+        const api = {
+            ...h.api,
+            rotationWork: async () =>
+                toWorker.length === 0
+                    ? {
+                          done: false,
+                          nextCursor: null,
+                          nodes: [
+                              {
+                                  ...rekeyedA(),
+                                  depth: 1,
+                                  versions: [],
+                                  shares: [],
+                                  links: [],
+                              },
+                          ],
+                      }
+                    : { done: true, nextCursor: null, nodes: [] },
+        } as unknown as DriveApi;
+        const rpc = (async (operation: string, input: Record<string, unknown>) => {
+            if (operation !== 'driveRotateNodes')
+                return (h.rpc as unknown as (o: string, i: unknown) => Promise<unknown>)(
+                    operation,
+                    input,
+                );
+            toWorker.push(...(input.nodes as unknown[]));
+            return {
+                nodes: (input.nodes as { id: string }[]).map((n) => ({
+                    id: n.id,
+                    keyEnvelope: 'k',
+                    metadataEnvelope: 'm',
+                    metadataSignature: null,
+                    metadataRekey: { originKeyEnvelope: 'wrap', signature: 'rekeyed' },
+                    versions: [],
+                    shares: [],
+                    links: [],
+                })),
+            };
+        }) as unknown as Rpc;
+        const client = createDriveClient(rpc, api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+            signers: async () => ({}),
+        });
+        await client.open('owner');
+        await client.rotate(node(A, ROOT) as never);
+        expect(toWorker).toMatchObject([
+            { id: A, metadataRekey: { origin: { signerId: SAM }, signature: 'rsig' } },
+        ]);
+        // No legacy signature beside it, and no origin of the client's: the server copies its own.
+        expect(h.wired).toEqual([
+            expect.objectContaining({
+                id: A,
+                rotated: expect.objectContaining({
+                    metadataSignature: null,
+                    metadataRekey: { originKeyEnvelope: 'wrap', signature: 'rekeyed' },
+                }),
+            }),
+        ]);
+        expect(JSON.stringify(h.wired)).not.toContain('osig');
+    });
+});
