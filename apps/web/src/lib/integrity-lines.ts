@@ -452,6 +452,17 @@ export function droppedLines(
 }
 
 /*
+ * Whose signature a record's verdict is about. A re-keyed record's verdict is
+ * its origin's, so that is the origin's writer, and only once the bytes bound.
+ * The record's own signer column is then the re-keyer, whose signature may
+ * never have verified (an unchecked re-key carries no mark), so a server
+ * could put any pinned member's id there. Null when nobody can be named.
+ */
+function verdictSigner(current: Signer | null, note: RekeyNote | null | undefined) {
+    return note ? (note.bound === true ? note.writer : null) : current;
+}
+
+/*
  * Outside family folders, the same line for an item whose verified records
  * were written by someone this person trusts on a family's word ("Trust as
  * Lindqvist family does"): the verdict rests on that family's member list,
@@ -469,10 +480,21 @@ export function vouchedByLine(
     const integrity = node.integrity;
     if (!integrity) return null;
     const records = [
-        { verdict: integrity.metadata, signer: node.metadataSigner ?? null },
+        {
+            verdict: integrity.metadata,
+            signer: verdictSigner(node.metadataSigner ?? null, integrity.rekeyed?.metadata),
+        },
         ...(integrity.version === null
             ? []
-            : [{ verdict: integrity.version, signer: node.currentVersion?.signer ?? null }]),
+            : [
+                  {
+                      verdict: integrity.version,
+                      signer: verdictSigner(
+                          node.currentVersion?.signer ?? null,
+                          integrity.rekeyed?.version,
+                      ),
+                  },
+              ]),
     ];
     if (!records.every((record) => record.verdict === 'verified')) return null;
     for (const { signer } of records) {
@@ -531,11 +553,12 @@ export function savedLine(
         integrity,
     });
     if (issues.length) return null;
+    // Whose saved signature verified: for a re-keyed record the origin's writer, never the re-keyer.
     const signer =
         integrity.metadata === 'saved-from-link'
-            ? (node.metadataSigner ?? null)
+            ? verdictSigner(node.metadataSigner ?? null, integrity.rekeyed?.metadata)
             : integrity.version === 'saved-from-link'
-              ? (node.currentVersion?.signer ?? null)
+              ? verdictSigner(node.currentVersion?.signer ?? null, integrity.rekeyed?.version)
               : undefined;
     if (signer === undefined) return null;
     const named = nameSigner(signer, names);

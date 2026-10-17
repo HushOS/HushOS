@@ -300,6 +300,34 @@ describe('outside family folders', () => {
         // A record that did not verify: the mark speaks instead.
         expect(vouchedByLine(node('resealed', SAM), vouched)).toBeNull();
         expect(vouchedByLine({ ...node('verified', SAM), integrity: null }, vouched)).toBeNull();
+
+        // Re-keyed records: the family vouches for the bound origin's writer, never the re-keyer.
+        const rekeyed = (
+            writer: string,
+            by: string,
+            over: Partial<RekeyNote> = {},
+        ): Parameters<typeof vouchedByLine>[0] => {
+            const note: RekeyNote = {
+                writer: { id: writer },
+                by: { id: by },
+                integrity: 'verified',
+                bound: true,
+                ...over,
+            };
+            return {
+                metadataSigner: { id: by },
+                currentVersion: { signer: { id: by } },
+                integrity: {
+                    metadata: 'verified',
+                    version: 'verified',
+                    rekeyed: { metadata: note, version: note },
+                },
+            };
+        };
+        expect(vouchedByLine(rekeyed(SAM, MAYA), vouched)).toBe('Verified by Lindqvist family');
+        // Sam, pinned on the family's word, only replaced the keys of Maya's record: whatever his
+        // re-key's verdict, the family vouched for no record's writer, so it is not named.
+        expect(vouchedByLine(rekeyed(MAYA, SAM), vouched)).toBeNull();
     });
 });
 
@@ -514,5 +542,53 @@ describe('a re-keyed item', () => {
         // The dropped origin's writer is never named, whoever the server says it was.
         expect(droppedLines(dropped(MAYA, 'resealed'), family)[0]).not.toMatch(/Sam/);
         expect(droppedLines({ integrity: null, currentVersion: null }, family)).toEqual([]);
+    });
+
+    test('a saved copy names who saved it, the origin’s writer, never the re-keyer', () => {
+        // I saved it from a link; Maya, a checked contact, replaced the keys since.
+        const mine = folder('saved-from-link', note({ writer: { id: ME } }));
+        expect(savedLine(mine, family)).toBe(
+            'Saved from a link by you. HushOS can’t confirm who made the original.',
+        );
+        // Maya saved it and I replaced the keys: Maya, not me.
+        expect(
+            savedLine(
+                folder('saved-from-link', note({ writer: { id: MAYA }, by: { id: ME } })),
+                family,
+            ),
+        ).toMatch(/^Saved from a link by Maya Lindqvist\./);
+        // A file whose content was saved: the version's origin writer, not its re-keyer.
+        const file = {
+            metadataSigner: { id: MAYA },
+            currentVersion: { signer: { id: MAYA } },
+            integrity: {
+                metadata: 'verified' as const,
+                version: 'saved-from-link' as const,
+                rekeyed: { metadata: note(), version: note({ writer: { id: ME } }) },
+            },
+        };
+        expect(savedLine(file, family)).toMatch(/^Saved from a link by you\./);
+        // Saved by someone this person never checked: nobody is named, the re-keyer least of all.
+        expect(
+            savedLine(folder('saved-from-link', note({ writer: { id: SAM } })), family),
+        ).toBeNull();
+    });
+
+    test('a server that puts a pinned member in the re-keyer’s place gets no name for them', () => {
+        // The origin, saved by someone unchecked, verified and bound. The server serves Maya's id
+        // as the re-keyer with a re-key signature that does not hold, and withholds her links,
+        // so her verdict is only `unchecked`: Info-only, no mark. She signed nothing that held.
+        const node = folder(
+            'saved-from-link',
+            note({ writer: { id: STRANGER }, by: { id: MAYA }, integrity: 'unchecked' }),
+        );
+        expect(savedLine(node, family)).toBeNull();
+        // Nor is the reader credited for re-keying someone else's saved copy.
+        expect(
+            savedLine(
+                folder('saved-from-link', note({ writer: { id: SAM }, by: { id: ME } })),
+                family,
+            ),
+        ).toBeNull();
     });
 });
