@@ -47,3 +47,29 @@ export const familiesQueryOptions = (userId: string) =>
         refetchOnWindowFocus: true,
         retry: 1,
     });
+
+/* How a member reads in a list: the roles in words, never colour alone. */
+export function rolesLine(roles: readonly string[]) {
+    const organizer = roles.includes('billing');
+    const manages = roles.includes('members');
+    if (organizer && manages) return 'Organizer · Manages the family';
+    if (organizer) return 'Organizer';
+    if (manages) return 'Manages the family';
+    return 'Member';
+}
+
+/* The account's family: active in it (one at most, docs/families-shared-pool.md decision 2). */
+export function activeFamily<T extends { kind: string; state: string }>(families: T[] | undefined) {
+    return families?.find((at) => at.kind === 'family' && at.state === 'active');
+}
+
+/* Route 14b: open invitations to this account's own address, accepted from their emailed links. */
+export const myInvitationsQueryOptions = (userId: string) =>
+    queryOptions({
+        queryKey: [...familyKeys.user(userId), 'invitations'] as const,
+        queryFn: async () => (await groupsApi.myInvitations()).invitations,
+        // Read afresh whenever Account → Family shows: one may have arrived since.
+        staleTime: 0,
+        refetchOnWindowFocus: true,
+        retry: 1,
+    });

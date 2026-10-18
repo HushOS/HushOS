@@ -31,6 +31,7 @@ export {
     capabilitiesQueryOptions,
     familiesQueryOptions,
     familyKeys,
+    rolesLine,
     useGroupsEnabled,
 } from '@/lib/families-shell';
 
@@ -266,16 +267,6 @@ export function useFamilySync(
 /* After any change: route 2, the family and its sync read again. */
 export function afterFamilyChange(queryClient: QueryClient, userId: string) {
     return queryClient.invalidateQueries({ queryKey: familyKeys.user(userId) });
-}
-
-/* How a member reads in a list: the roles in words, never colour alone. */
-export function rolesLine(roles: readonly string[]) {
-    const organizer = roles.includes('billing');
-    const manages = roles.includes('members');
-    if (organizer && manages) return 'Organizer · Manages the family';
-    if (organizer) return 'Organizer';
-    if (manages) return 'Manages the family';
-    return 'Member';
 }
 
 export function canManage(roles: readonly string[] | undefined) {

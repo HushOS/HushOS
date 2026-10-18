@@ -125,8 +125,12 @@ function FamilyPage() {
                 title="You’re not in this family"
                 body="It may have ended, or someone removed you."
             >
-                <Link to="/app/families" className="text-sm font-semibold text-primary underline">
-                    Families
+                <Link
+                    to="/app/account"
+                    hash="family"
+                    className="text-sm font-semibold text-primary underline"
+                >
+                    Account
                 </Link>
             </EmptyState>
         );
@@ -156,7 +160,11 @@ function FamilyPage() {
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader
-                back={<Link to="/app/families">Families</Link>}
+                back={
+                    <Link to="/app/account" hash="family">
+                        Account
+                    </Link>
+                }
                 title={family}
                 description={
                     // One source with Billing (placesOf); without a plan, "Choose a plan" says it.

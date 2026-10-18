@@ -103,8 +103,12 @@ function FamilySpaceLayout() {
                 title="You’re not in this family"
                 body="It may have ended, or someone removed you."
             >
-                <Link to="/app/families" className="text-sm font-semibold text-primary underline">
-                    Families
+                <Link
+                    to="/app/account"
+                    hash="family"
+                    className="text-sm font-semibold text-primary underline"
+                >
+                    Account
                 </Link>
             </EmptyState>
         );

@@ -38,7 +38,6 @@ import {
     TagIcon,
     Trash2Icon,
     ContactIcon,
-    UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { familyBillingQueryOptions } from '@/lib/family-billing';
@@ -52,7 +51,6 @@ export type NavItem = {
         | '/app/shared'
         | '/app/account'
         | '/app/people'
-        | '/app/families'
         | '/app/tags'
         | '/app/billing'
         | '/app/recovery-key'
@@ -64,8 +62,6 @@ export type NavItem = {
     icon: typeof FolderIcon;
     active: (pathname: string) => boolean;
     billing?: boolean;
-    /* Shown only when the server serves families (`/drive/capabilities`). */
-    groups?: boolean;
 };
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -94,13 +90,6 @@ export const organise: NavItem[] = [
         label: 'People you share with',
         icon: ContactIcon,
         active: under('/app/people'),
-    },
-    {
-        to: '/app/families',
-        label: 'Families',
-        icon: UsersIcon,
-        active: (pathname) => pathname === '/app/families' || pathname === '/app/families/',
-        groups: true,
     },
 ];
 export const operator: NavItem[] = [
@@ -394,14 +383,16 @@ function NavGroup({
 }
 
 /*
- * Each family the account is in, as one row under My files (decision D1), named after the
- * family. A row opens the family's folders (its space); one you accepted but are not in yet
- * opens the join screen. The row stays lit on the family's own page too.
+ * The account's family (one at most, docs/families-shared-pool.md decision 2), as one row
+ * under My files, named after it; it opens the family's folders (its space) and stays lit on the
+ * family's own page too. Someone not in a family sees no row: waiting to join, they find the
+ * join screen under Account → Family.
  */
 function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) {
     const enabled = useGroupsEnabled();
-    const { data: families } = useQuery({ ...familiesQueryOptions(userId), enabled });
-    if (!enabled || !families || families.length === 0) return null;
+    const { data } = useQuery({ ...familiesQueryOptions(userId), enabled });
+    const families = data?.filter((at) => at.kind === 'family' && at.state === 'active') ?? [];
+    if (!enabled || families.length === 0) return null;
     return (
         <SidebarMenu className="mt-0.5 gap-0.5">
             {families.map((family) => {
@@ -410,27 +401,14 @@ function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) 
                 return (
                     <SidebarMenuItem key={family.id}>
                         <SidebarMenuButton
-                            render={
-                                family.state === 'accepted' ? (
-                                    <Link
-                                        to="/app/families/$groupId/join"
-                                        params={{ groupId: family.id }}
-                                    />
-                                ) : (
-                                    <Link to="/app/s/$groupId" params={{ groupId: family.id }} />
-                                )
-                            }
+                            render={<Link to="/app/s/$groupId" params={{ groupId: family.id }} />}
                             isActive={[page, space].some(
                                 (base) => pathname === base || pathname.startsWith(`${base}/`),
                             )}
                             tooltip={family.name}
                             className={cn(item, collapsed)}
                         >
-                            {/*
-                             * The family's avatar, as on the Families page, so two families' rows
-                             * tell apart; the Families row keeps the icon. Collapsed, it stays and
-                             * the label goes (the last span).
-                             */}
+                            {/* The family's avatar; collapsed, it stays and the label goes (the last span). */}
                             <PersonAvatar
                                 name={family.name}
                                 seed={family.id}
@@ -455,7 +433,6 @@ export function AppSidebar({
     const { state, setOpenMobile } = useSidebar();
     const router = useRouter();
     const billing = useBillingEnabled();
-    const groups = useGroupsEnabled();
     useEffect(
         () => router.subscribe('onBeforeNavigate', () => setOpenMobile(false)),
         [router, setOpenMobile],
@@ -477,11 +454,7 @@ export function AppSidebar({
                     <NavGroup items={workspace.slice(2)} pathname={pathname} className="mt-0.5" />
                 </SidebarGroup>
                 <SidebarGroup className={group}>
-                    <NavGroup
-                        items={organise.filter((entry) => !entry.groups || groups)}
-                        pathname={pathname}
-                        small
-                    />
+                    <NavGroup items={organise} pathname={pathname} small />
                 </SidebarGroup>
                 {user.role === 'admin' && (
                     <SidebarGroup className="border-t border-rule p-0 pt-4">
