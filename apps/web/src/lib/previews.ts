@@ -1,9 +1,9 @@
 import type { DriveNode } from '@hushos/drive/client';
-import { officeKind } from '@/lib/office';
 import type { FileReader } from '@hushos/drive/downloads';
 import { downloadWorker } from '@/lib/download-sinks';
 import { downloads } from '@/lib/downloads';
-import { languageFor } from '@/lib/highlight';
+import { COLOUR_CEILING, HIGHLIGHT_LIMIT, languageFor } from '@/lib/highlight';
+import { OFFICE_LIMIT, officeKind } from '@/lib/office';
 
 /*
  * Previews are the client decrypting bytes it fetched by range and rendering
@@ -34,6 +34,70 @@ export const PREVIEW_LIMITS = {
     /* Media falls back to a blob where the service worker is unavailable. */
     mediaBlob: 256 * 1024 * 1024,
 };
+
+/* ------------------------------------------------------------------------- */
+/* Large files                                                                */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Past a kind's threshold a file is shown only in part, or not coloured, or
+ * not opened, until the person asks (the large-file card, LargeFile in
+ * viewer-parts); past its ceiling it isn't offered at all. PDF and media have
+ * neither: they stream by range. Everything still decrypts into memory only.
+ */
+export type LargeFileKind = 'colour' | 'text' | 'image' | 'office';
+export type LargeFileStage = 'fine' | 'offer' | 'ceiling';
+
+const MiB = 1024 * 1024;
+
+/*
+ * Text loads whole up to 32 MB. The bytes and the decoded string are held
+ * together (two to four times the file), the viewer draws it in blocks so the
+ * page stays usable, and past this the gain over the first 8 MB rarely
+ * outweighs a tab that a phone may kill.
+ */
+export const TEXT_CEILING = 32 * MiB;
+/*
+ * Office files and CSV open up to 64 MB. Mammoth and SheetJS parse on the
+ * page and keep several copies of what they read (a spreadsheet's XML
+ * inflates many times over); at 64 MB a CSV already takes about a gigabyte.
+ */
+export const OFFICE_CEILING = 64 * MiB;
+
+/*
+ * Images open up to 300 MB, less where the browser says the device has little
+ * memory (Chromium's navigator.deviceMemory, in GB, capped at 8; Safari and
+ * Firefox don't say). The file is held while the browser decodes it, and the
+ * decoded picture takes four bytes a pixel, often more than the file.
+ */
+export function imageCeiling(
+    deviceMemory = typeof navigator === 'undefined'
+        ? undefined
+        : (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+) {
+    if (deviceMemory !== undefined && deviceMemory <= 2) return PREVIEW_LIMITS.image;
+    if (deviceMemory !== undefined && deviceMemory <= 4) return 200 * MiB;
+    return 300 * MiB;
+}
+
+export function largeFileLimits(kind: LargeFileKind) {
+    switch (kind) {
+        case 'colour':
+            return { threshold: HIGHLIGHT_LIMIT, ceiling: COLOUR_CEILING };
+        case 'text':
+            return { threshold: PREVIEW_LIMITS.text, ceiling: TEXT_CEILING };
+        case 'image':
+            return { threshold: PREVIEW_LIMITS.image, ceiling: imageCeiling() };
+        case 'office':
+            return { threshold: OFFICE_LIMIT, ceiling: OFFICE_CEILING };
+    }
+}
+
+export function largeFileStage(kind: LargeFileKind, size: number): LargeFileStage {
+    const { threshold, ceiling } = largeFileLimits(kind);
+    if (size <= threshold) return 'fine';
+    return size <= ceiling ? 'offer' : 'ceiling';
+}
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico']);
 const TEXT_EXT = new Set([

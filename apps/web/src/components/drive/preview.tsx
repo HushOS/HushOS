@@ -16,6 +16,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNo
 import { FileMark } from '@/components/drive/file-mark';
 import { SavedFromLinkLine, UnverifiedMark } from '@/components/drive/unverified-mark';
 import {
+    LargeFile,
     Notice,
     Opening,
     SourceSwitch,
@@ -28,7 +29,9 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { formatBytes, formatWhen, nodeSize } from '@/lib/drive';
 import { languageFor } from '@/lib/highlight';
 import {
+    imageCeiling,
     isJsonFile,
+    largeFileStage,
     looksLikeText,
     openReader,
     PREVIEW_LIMITS,
@@ -39,6 +42,7 @@ import {
     recallPreview,
     rememberPreview,
     serveMedia,
+    TEXT_CEILING,
 } from '@/lib/previews';
 
 /*
@@ -354,22 +358,39 @@ function PreviewBody({
 }) {
     const kind = previewKind(node);
     const size = nodeSize(node) ?? 0;
-    const textual = kind === 'text' || kind === 'markdown';
-    const tooLarge =
-        (kind === 'image' && size > PREVIEW_LIMITS.image) ||
-        (textual && size > PREVIEW_LIMITS.text);
+    // The large-file card's choices, for this viewing only: the body is keyed by version.
+    const [imageOpened, setImageOpened] = useState(false);
+    const [textWhole, setTextWhole] = useState(false);
+    const imageStage = kind === 'image' ? largeFileStage('image', size) : 'fine';
+    const imageHeld = imageStage === 'ceiling' || (imageStage === 'offer' && !imageOpened);
     // An unknown type still gets a look: a small file that reads as text opens as text.
     const sniff = kind === 'none' && size <= PREVIEW_LIMITS.text && Boolean(node.currentVersion);
-    const remembered = node.currentVersion ? recallPreview(node.currentVersion.id) : null;
+    const recalled = node.currentVersion ? recallPreview(node.currentVersion.id) : null;
+    // Asked for the whole of a text remembered in part: read it again.
+    const remembered =
+        textWhole && recalled?.kind === 'text' && recalled.truncated ? null : recalled;
     const { reader, error } = useReader(
         node,
-        (kind !== 'none' || sniff) && !tooLarge && remembered === null,
+        (kind !== 'none' || sniff) && !imageHeld && remembered === null,
     );
     const download = () => onDownload(node);
+    const textLimit = textWhole ? TEXT_CEILING : PREVIEW_LIMITS.text;
+    const loadWhole = () => setTextWhole(true);
     if (kind === 'none' && !sniff) return <NoPreview node={node} onDownload={download} />;
-    if (tooLarge) return <TooLarge node={node} onDownload={download} />;
+    if (imageHeld)
+        return (
+            <LargeFile
+                kind="image"
+                size={size}
+                stage={imageStage === 'ceiling' ? 'ceiling' : 'offer'}
+                icon={<FileMark node={node} size="large" />}
+                onContinue={() => setImageOpened(true)}
+                onDownload={download}
+            />
+        );
     if (error) return <Failed message={error} onDownload={download} />;
-    if (remembered?.kind === 'image') return <ImageFrame url={remembered.url} node={node} />;
+    if (remembered?.kind === 'image')
+        return <ImageFrame url={remembered.url} node={node} onDownload={download} />;
     if (remembered?.kind === 'text')
         return (
             <TextFrame
@@ -377,6 +398,7 @@ function PreviewBody({
                 kind={kind === 'markdown' ? 'markdown' : 'text'}
                 text={remembered.text}
                 truncated={remembered.truncated}
+                onWhole={loadWhole}
             />
         );
     if (remembered?.kind === 'document' && (kind === 'pdf' || kind === 'office'))
@@ -405,12 +427,39 @@ function PreviewBody({
     if (!reader) return <Opening />;
     switch (kind) {
         case 'image':
-            return <ImagePreview reader={reader} node={node} onDownload={download} />;
+            return (
+                <ImagePreview
+                    reader={reader}
+                    node={node}
+                    limit={imageOpened ? imageCeiling() : PREVIEW_LIMITS.image}
+                    onDownload={download}
+                />
+            );
         case 'text':
         case 'markdown':
-            return <TextPreview reader={reader} node={node} kind={kind} onDownload={download} />;
+            return (
+                <TextPreview
+                    // A new limit reads afresh, with its own progress, rather than leaving the part on screen.
+                    key={textLimit}
+                    reader={reader}
+                    node={node}
+                    kind={kind}
+                    limit={textLimit}
+                    onWhole={loadWhole}
+                    onDownload={download}
+                />
+            );
         case 'none':
-            return <TextPreview reader={reader} node={node} kind="sniff" onDownload={download} />;
+            return (
+                <TextPreview
+                    reader={reader}
+                    node={node}
+                    kind="sniff"
+                    limit={PREVIEW_LIMITS.text}
+                    onWhole={loadWhole}
+                    onDownload={download}
+                />
+            );
         case 'pdf':
             return (
                 <Suspense fallback={<Opening />}>
@@ -430,6 +479,7 @@ function PreviewBody({
                         versionId={node.currentVersion?.id ?? null}
                         kind={officeKind(node.name, node.metadata?.mime ?? null)!}
                         name={node.name}
+                        mark={<FileMark node={node} size="large" />}
                         onDownload={download}
                     />
                 </Suspense>
@@ -495,10 +545,13 @@ const readFailure = (cause: unknown) =>
 function ImagePreview({
     reader,
     node,
+    limit,
     onDownload,
 }: {
     reader: FileReader;
     node: DriveNode;
+    /* How much may be read: the usual limit, or the ceiling once the person chose Open anyway. */
+    limit: number;
     onDownload: () => void;
 }) {
     const mime = previewMime(node);
@@ -510,7 +563,7 @@ function ImagePreview({
     });
     useEffect(() => {
         let active = true;
-        readAll(reader, PREVIEW_LIMITS.image, (value) => active && setProgress(value))
+        readAll(reader, limit, (value) => active && setProgress(value))
             .then(({ bytes }) => {
                 if (!active) return;
                 const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
@@ -524,18 +577,38 @@ function ImagePreview({
         return () => {
             active = false;
         };
-    }, [reader, mime, versionId]);
+    }, [reader, mime, versionId, limit]);
     if (state.error) return <Failed message={state.error} onDownload={onDownload} />;
     if (!state.url) return <Opening name={node.name} progress={progress} />;
-    return <ImageFrame url={state.url} node={node} />;
+    return <ImageFrame url={state.url} node={node} onDownload={onDownload} />;
 }
 
-function ImageFrame({ url, node }: { url: string; node: DriveNode }) {
+/* The picture; one the browser can't decode (damaged, or too big for this device) says so. */
+function ImageFrame({
+    url,
+    node,
+    onDownload,
+}: {
+    url: string;
+    node: DriveNode;
+    onDownload?: () => void;
+}) {
+    const [broken, setBroken] = useState(false);
+    if (broken)
+        return (
+            <Notice
+                icon={<FileMark node={node} size="large" />}
+                title={viewerWords.broken}
+                text={viewerWords.brokenText}
+                onDownload={onDownload}
+            />
+        );
     return (
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 sm:p-6">
             <img
                 src={url}
                 alt={node.name}
+                onError={() => setBroken(true)}
                 className="max-h-full max-w-full rounded-sm object-contain"
             />
         </div>
@@ -551,11 +624,16 @@ function TextPreview({
     reader,
     node,
     kind,
+    limit,
+    onWhole,
     onDownload,
 }: {
     reader: FileReader;
     node: DriveNode;
     kind: 'text' | 'markdown' | 'sniff';
+    /* How much is read: the first 8 MB, or up to the ceiling once the person asked for it all. */
+    limit: number;
+    onWhole: () => void;
     onDownload: () => void;
 }) {
     const versionId = node.currentVersion?.id ?? null;
@@ -569,7 +647,7 @@ function TextPreview({
         kind === 'sniff' || (node.metadata?.mime ?? '').toLowerCase().startsWith('video/');
     useEffect(() => {
         let active = true;
-        readAll(reader, PREVIEW_LIMITS.text, (value) => active && setProgress(value))
+        readAll(reader, limit, (value) => active && setProgress(value))
             .then(({ bytes, truncated }) => {
                 if (!active) return;
                 if (unsure && !looksLikeText(bytes)) {
@@ -592,7 +670,7 @@ function TextPreview({
         return () => {
             active = false;
         };
-    }, [reader, unsure, versionId]);
+    }, [reader, unsure, versionId, limit]);
     if (error) return <Failed message={error} onDownload={onDownload} />;
     if (!state) return <Opening name={node.name} progress={progress} />;
     if (state.binary) return <NoPreview node={node} onDownload={onDownload} />;
@@ -602,6 +680,7 @@ function TextPreview({
             kind={kind === 'markdown' ? 'markdown' : 'text'}
             text={state.text}
             truncated={state.truncated}
+            onWhole={onWhole}
         />
     );
 }
@@ -612,14 +691,22 @@ function TextFrame({
     kind,
     text,
     truncated,
+    onWhole,
 }: {
     node: DriveNode;
     kind: 'text' | 'markdown';
     text: string;
     truncated: boolean;
+    /* Loads the whole of a file shown in part. */
+    onWhole: () => void;
 }) {
-    const source = useSourceSwitch(kind === 'markdown' && !truncated);
-    const rendered = kind === 'markdown' && !truncated && !source;
+    // Markdown renders from its tree on the page, so only up to the usual limit; a larger
+    // file loaded whole shows as its source.
+    const formattable = kind === 'markdown' && !truncated && text.length <= PREVIEW_LIMITS.text;
+    const source = useSourceSwitch(formattable);
+    const rendered = formattable && !source;
+    const size = nodeSize(node) ?? 0;
+    const stage = truncated ? largeFileStage('text', size) : 'fine';
     const language = kind === 'markdown' ? 'markdown' : languageFor(node.name);
     if (!text.trim())
         return <Notice icon={<FileMark node={node} size="large" />} title={viewerWords.nothing} />;
@@ -633,6 +720,9 @@ function TextFrame({
         // A document is a sheet lying on the desk, at reading width; long lines scroll inside it.
         <div className="min-h-0 flex-1 overflow-auto px-3 py-4 sm:px-6 sm:py-8">
             <div className="sheet mx-auto flex w-full max-w-4xl min-w-0 flex-col">
+                {stage !== 'fine' && (
+                    <LargeFile kind="text" size={size} stage={stage} onContinue={onWhole} />
+                )}
                 <Suspense fallback={<Opening />}>
                     {rendered ? (
                         <MarkdownView text={text} />
@@ -640,7 +730,8 @@ function TextFrame({
                         <CodeView text={text} language={language} />
                     )}
                 </Suspense>
-                {truncated && (
+                {/* A file of unknown size can still stop at the limit; there is no card to offer then. */}
+                {truncated && stage === 'fine' && (
                     <p className="border-t border-rule px-6 py-3 text-[13px] text-muted-foreground">
                         Showing the first {formatBytes(PREVIEW_LIMITS.text)}. Download it for the
                         rest.

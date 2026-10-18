@@ -419,6 +419,10 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Account
         - Plan and storage (back from checkout, "Finishing your payment…" until a sync shows the plan live, then "Payment received. You’re on Plus (monthly). Thank you."; if it isn't live after half a minute, "Your payment may still be processing. Refresh in a minute. If your plan doesn’t appear, contact support.", the last words linking to Support)
         - Lock on this browser (web)
+    - Large files in the viewer (web; one card, `LargeFile`, with a threshold and a ceiling per kind, chosen for that viewing only):
+        - Colour anyway (code past 512 KB: "This file is large, so it isn’t coloured. Colouring it may slow this tab down."; "Colouring…" with how far it has got; past 4 MB "This file is too large to colour, so it’s shown as plain text.")
+        - Load the whole file (text and Markdown past 8 MB: "Showing the first 8 MB of 20 MB. Loading the whole file uses a lot of memory and may be slow on this device."; past 32 MB "Showing the first 8 MB of 40 MB. Download it to read the rest.")
+        - Open anyway, beside Download (images past 100 MB: "This file is 150 MB." and "Opening it uses a lot of memory, and this device may not manage to show it."; Office files and CSV past 32 MB: "Opening it uses a lot of memory and may be slow on this device."; past the ceiling, 300 MB for images (less where the browser says the device has little memory) and 64 MB for Office, "This file is 400 MB, too large to preview here." and "Download it to open it in another app.")
     - Families (web):
         - Families
         - Create a family

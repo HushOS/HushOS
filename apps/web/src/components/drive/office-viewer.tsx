@@ -4,11 +4,23 @@ import { fromHtml } from 'hast-util-from-html';
 import { sanitize, defaultSchema, type Schema } from 'hast-util-sanitize';
 import { cn } from 'cn';
 import { FileQuestionIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { CodeView, HastView } from '@/components/drive/rich-text';
-import { Notice, Opening, useSourceSwitch, viewerWords } from '@/components/drive/viewer-parts';
+import {
+    LargeFile,
+    Notice,
+    Opening,
+    useSourceSwitch,
+    viewerWords,
+} from '@/components/drive/viewer-parts';
 import { languageFor } from '@/lib/highlight';
-import { readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
+import {
+    largeFileStage,
+    OFFICE_CEILING,
+    readAll,
+    type ReadProgress,
+    rememberPreview,
+} from '@/lib/previews';
 import {
     clipSheet,
     OFFICE_LIMIT,
@@ -100,8 +112,11 @@ export function OfficeViewer({
     versionId,
     kind,
     name,
+    mark,
     onDownload,
 }: {
+    /* The file's mark, for the large-file card. */
+    mark?: ReactNode;
     /* The file to read, or its bytes when a previous open remembered them. */
     source: FileReader | Uint8Array;
     versionId: string | null;
@@ -112,12 +127,22 @@ export function OfficeViewer({
     const [state, setState] = useState<Loaded | null>(null);
     const [failure, setFailure] = useState<'large' | 'broken' | null>(null);
     const [progress, setProgress] = useState<ReadProgress | null>(null);
+    // Past the limit nothing is read until the person chooses Open anyway, for this viewing.
+    const [opened, setOpened] = useState(false);
+    const size = source instanceof Uint8Array ? source.byteLength : source.size;
+    const stage = source instanceof Uint8Array ? 'fine' : largeFileStage('office', size);
+    const held = stage === 'ceiling' || (stage === 'offer' && !opened);
     useEffect(() => {
+        if (held) return;
         let active = true;
         const read =
             source instanceof Uint8Array
                 ? Promise.resolve({ bytes: source, truncated: false })
-                : readAll(source, OFFICE_LIMIT, (value) => active && setProgress(value));
+                : readAll(
+                      source,
+                      opened ? OFFICE_CEILING : OFFICE_LIMIT,
+                      (value) => active && setProgress(value),
+                  );
         read.then(({ bytes, truncated }) => {
             if (truncated) throw new TooLarge();
             if (versionId && !(source instanceof Uint8Array))
@@ -137,7 +162,18 @@ export function OfficeViewer({
         return () => {
             active = false;
         };
-    }, [source, versionId, kind]);
+    }, [source, versionId, kind, held, opened]);
+    if (held)
+        return (
+            <LargeFile
+                kind="office"
+                size={size}
+                stage={stage === 'ceiling' ? 'ceiling' : 'offer'}
+                icon={mark}
+                onContinue={() => setOpened(true)}
+                onDownload={onDownload}
+            />
+        );
     if (failure === 'large')
         return (
             <Notice
