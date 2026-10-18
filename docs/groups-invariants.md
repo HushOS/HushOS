@@ -198,7 +198,7 @@ The signer must be active with `members` on the roster before (version 1: on its
 - `checkAreaRoot` refuses a version with no root entry at all; only an explicit `null` (a format 1 version) reads as uncommitted (TS "a root version with no entry at all is refused…", Rust `format_2_a_root_version_with_no_entry_is_refused_…`).
 
 - **TS:** `group-trust.ts:groupWriterTrust` (areas); `groups.ts:areaOf`, `openAreaGrant`, `sealAreaGrant`, `checkAreaRoot`, `areaWriteVersion`; `area-keys.ts:areaRootCommitment`; `area-ledger.ts` (the worker's key store and write rules, moved out of `session.ts` and `session-groups.ts` unchanged: `rootSeen`, `openListedNode`, `wrapKeyFor`, `writableNodeKey`, `rewrapAtTarget`, `freshKeyParent`); `ids.ts:checkId`.
-- **Rust:** `group_trust.rs:group_writer_trust`; `groups.rs:area_of`, `area_grant_open`, `area_grant_seal`, `area_root_check`, `area_write_version`, `area_root_commitment`; `area_ledger.rs:AreaLedger` (the twin of `area-ledger.ts`, for the phones: `open_area`, `open_listed_node`, `new_node_key`, `writable_node_key`, `rewrap_node`, `rotate_key`); `ids.rs:check_id`.
+- **Rust:** `group_trust.rs:group_writer_trust`; `groups.rs:area_of`, `area_grant_open`, `area_grant_seal`, `area_root_check`, `area_write_version`, `area_root_commitment`; `area_ledger.rs:AreaLedger` (the twin of `area-ledger.ts`, for the phones: `open_area`, `open_listed_node`, `new_node_key`, `writable_node_key`, `rewrap_node`, `rotate_node`); `ids.rs:check_id`.
 - **Tests:**
     - TS: "roster trust gives `verified` inside the group's areas and nothing outside them", "a grant naming this group for a workspace not derived under it opens nothing", "an area grant opens for its grantee".
     - Rust: their twins.

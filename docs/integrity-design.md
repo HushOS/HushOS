@@ -342,6 +342,8 @@ It throws instead, and the rotation stops, when the record is not one the rotato
 
 What the check does not stop: a re-keyer who holds the old node key can seal a plain ChaCha20-Poly1305 origin directly under that key (with the nonce layout the reader uses) and wrap the old node key itself as the "opening key". That origin opens, its bytes match, and the next rotation carries the wrap on, so whoever holds the next key also holds the old one. It gives such an insider nothing new (they held the old key and could hand it out anyway), and the origin still carries no writer signature they did not have, so it is accepted; a wrapped old node key beside an honestly sealed XChaCha origin, on the other hand, opens nothing and is dropped.
 
+Nor does it stop planted unsigned content being re-sealed by an honest walker. A server and a removed member (who still holds the folder's old keys) can plant a record with no writer signature, or one whose writer the server serves as nobody, under a key the walk replaces; the walker re-seals it as its own, and readers then show "Re-locked by <walker>". Decision D6 accepts this: the reader's mark says re-locked, never written by, so nobody is named as its writer, and the walker vouches only that it locked the bytes again. Refusing such records instead was tried and reverted (groups 1d, Core 2 review): children are reached through their parent's previous key during every honest walk, so the refusal would stall every walk that meets a deleted member's records, a worse cost than this residual.
+
 **Unsigned origins are not re-keyed** (decision D6). A record with no writer signature has nothing to keep; it is re-sealed and signed with the re-sealed statement as before, so the grammar never needs a null signer.
 
 ### Reading

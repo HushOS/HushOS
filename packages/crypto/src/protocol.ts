@@ -72,6 +72,14 @@ export const KEY_CHANGE_PENDING =
  */
 export const NOT_CARRIED =
     'This item was added under a key the key change replaces, so it is not carried over.';
+/*
+ * What the worker (and the Rust core) answers a walk of a family-folder node
+ * that has shares or links (design 3.4): sharing is hidden there until share
+ * records signed at family level exist, so any share is one the server listed,
+ * and re-sealing it would hand the fresh node key to whoever it names.
+ */
+export const SHARED_IN_FAMILY =
+    'This item has shares or links, which a family folder never has, so it was not re-keyed.';
 
 /*
  * What the crypto worker answers an acceptance that lost a race with a later

@@ -485,7 +485,17 @@ pub fn metadata_resealed_sign(
     statement: MetadataStatement,
     metadata_envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
-    sign(&signing_seed, &metadata_resealed_message(&statement, &metadata_envelope)?)
+    let signing_seed = Zeroizing::new(signing_seed);
+    metadata_resealed_sign_with(&signing_seed, &statement, &metadata_envelope)
+}
+
+/* The same over borrowed bytes: no copy of the seed outlives the call. */
+pub(crate) fn metadata_resealed_sign_with(
+    signing_seed: &[u8],
+    statement: &MetadataStatement,
+    metadata_envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    sign(signing_seed, &metadata_resealed_message(statement, metadata_envelope)?)
 }
 
 /// Whether `signature` is `signing_public_key`'s re-sealed statement over this metadata envelope.
@@ -508,7 +518,17 @@ pub fn version_resealed_sign(
     statement: VersionStatement,
     content_key_envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
-    sign(&signing_seed, &version_resealed_message(&statement, &content_key_envelope)?)
+    let signing_seed = Zeroizing::new(signing_seed);
+    version_resealed_sign_with(&signing_seed, &statement, &content_key_envelope)
+}
+
+/* The same over borrowed bytes: no copy of the seed outlives the call. */
+pub(crate) fn version_resealed_sign_with(
+    signing_seed: &[u8],
+    statement: &VersionStatement,
+    content_key_envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    sign(signing_seed, &version_resealed_message(statement, content_key_envelope)?)
 }
 
 /// Whether `signature` is `signing_public_key`'s re-sealed statement over this content-key envelope.
@@ -818,7 +838,19 @@ pub fn metadata_rekey_sign(
     metadata_envelope: Vec<u8>,
     origin: RecordOrigin,
 ) -> CoreResult<Vec<u8>> {
-    sign(&signing_seed, &metadata_rekeyed_message(&statement, key_epoch, &metadata_envelope, &origin)?)
+    let signing_seed = Zeroizing::new(signing_seed);
+    metadata_rekey_sign_with(&signing_seed, &statement, key_epoch, &metadata_envelope, &origin)
+}
+
+/* The same over borrowed bytes: no copy of the seed outlives the call. */
+pub(crate) fn metadata_rekey_sign_with(
+    signing_seed: &[u8],
+    statement: &MetadataStatement,
+    key_epoch: u64,
+    metadata_envelope: &[u8],
+    origin: &RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    sign(signing_seed, &metadata_rekeyed_message(statement, key_epoch, metadata_envelope, origin)?)
 }
 
 /// Signs the rekeyed statement over a re-keyed version; see [`metadata_rekey_sign`].
@@ -830,7 +862,19 @@ pub fn version_rekey_sign(
     content_key_envelope: Vec<u8>,
     origin: RecordOrigin,
 ) -> CoreResult<Vec<u8>> {
-    sign(&signing_seed, &version_rekeyed_message(&statement, key_epoch, &content_key_envelope, &origin)?)
+    let signing_seed = Zeroizing::new(signing_seed);
+    version_rekey_sign_with(&signing_seed, &statement, key_epoch, &content_key_envelope, &origin)
+}
+
+/* The same over borrowed bytes: no copy of the seed outlives the call. */
+pub(crate) fn version_rekey_sign_with(
+    signing_seed: &[u8],
+    statement: &VersionStatement,
+    key_epoch: u64,
+    content_key_envelope: &[u8],
+    origin: &RecordOrigin,
+) -> CoreResult<Vec<u8>> {
+    sign(signing_seed, &version_rekeyed_message(statement, key_epoch, content_key_envelope, origin)?)
 }
 
 /// Whether `signature` is `signing_public_key`'s rekeyed statement over this metadata.
@@ -1267,7 +1311,18 @@ pub fn metadata_origin_carry(
     target_epoch: u64,
     record: RekeyedMetadata,
 ) -> CoreResult<Option<Vec<u8>>> {
-    carry(Sealed::of_metadata(&record), &old_key, &new_key, target_epoch)
+    let (old_key, new_key) = (Zeroizing::new(old_key), Zeroizing::new(new_key));
+    metadata_origin_carry_with(&old_key, &new_key, target_epoch, &record)
+}
+
+/* The same over borrowed keys: no copy of either outlives the call. */
+pub(crate) fn metadata_origin_carry_with(
+    old_key: &[u8],
+    new_key: &[u8],
+    target_epoch: u64,
+    record: &RekeyedMetadata,
+) -> CoreResult<Option<Vec<u8>>> {
+    carry(Sealed::of_metadata(record), old_key, new_key, target_epoch)
 }
 
 /// What the next rotation does with a version that already carries an
@@ -1279,7 +1334,18 @@ pub fn version_origin_carry(
     target_epoch: u64,
     record: RekeyedVersion,
 ) -> CoreResult<Option<Vec<u8>>> {
-    carry(Sealed::of_version(&record), &old_key, &new_key, target_epoch)
+    let (old_key, new_key) = (Zeroizing::new(old_key), Zeroizing::new(new_key));
+    version_origin_carry_with(&old_key, &new_key, target_epoch, &record)
+}
+
+/* The same over borrowed keys: no copy of either outlives the call. */
+pub(crate) fn version_origin_carry_with(
+    old_key: &[u8],
+    new_key: &[u8],
+    target_epoch: u64,
+    record: &RekeyedVersion,
+) -> CoreResult<Option<Vec<u8>>> {
+    carry(Sealed::of_version(record), old_key, new_key, target_epoch)
 }
 
 /// What a reader shows for a node's metadata. `trusted` holds the signing
@@ -1328,8 +1394,14 @@ pub fn version_integrity(
 /// The Ed25519 public key of a 32-byte signing seed.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn signing_public_key(signing_seed: Vec<u8>) -> CoreResult<Vec<u8>> {
-    expect_len("signing seed", &signing_seed, 32)?;
-    let seed = Zeroizing::new(<[u8; 32]>::try_from(signing_seed.as_slice()).expect("32 bytes"));
+    let signing_seed = Zeroizing::new(signing_seed);
+    signing_public_key_of(&signing_seed)
+}
+
+/* The same over a borrowed seed: no copy of it outlives the call. */
+pub(crate) fn signing_public_key_of(signing_seed: &[u8]) -> CoreResult<Vec<u8>> {
+    expect_len("signing seed", signing_seed, 32)?;
+    let seed = Zeroizing::new(<[u8; 32]>::try_from(signing_seed).expect("32 bytes"));
     Ok(SigningKey::from_bytes(&seed).verifying_key().to_bytes().to_vec())
 }
 

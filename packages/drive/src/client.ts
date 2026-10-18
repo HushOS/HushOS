@@ -13,7 +13,7 @@ import type {
 import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
-import { NOT_CARRIED } from '@hushos/crypto/protocol';
+import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
 import { Catalogue, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
 import {
@@ -1503,6 +1503,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         let idle = 0;
         // A node the worker would not carry into the new tree (design 2.10): only a manager clears it.
         let notCarried = false;
+        // A family-folder node with shares or links, which only a server lists (design 3.4).
+        let shared = false;
         for (;;) {
             const work = await api.rotationWork(ws, rootId, cursor);
             if (work.done) break;
@@ -1592,6 +1594,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 const source = work.nodes[index]!;
                 if (result.error !== undefined) {
                     if (result.error === NOT_CARRIED) notCarried = true;
+                    if (result.error === SHARED_IN_FAMILY) shared = true;
                     continue;
                 }
                 if (!result.rewrap && !result.metadataSignature && !result.metadataRekey)
@@ -1653,9 +1656,11 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             idle = applied ? 0 : idle + 1;
             if (idle > 3)
                 throw new Error(
-                    notCarried
-                        ? 'One item in this folder can’t take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes.'
-                        : 'The rotation could not finish. Try again.',
+                    shared
+                        ? 'An item in this family folder came with shares or links, which family folders never have, so its keys weren’t changed. Ask whoever runs your HushOS server to look into it.'
+                        : notCarried
+                          ? 'One item in this folder can’t take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes.'
+                          : 'The rotation could not finish. Try again.',
                 );
             // Everything applied: continue past the batch; otherwise start over so parents come first.
             cursor = applied === work.nodes.length ? work.nextCursor : null;

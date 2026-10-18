@@ -200,7 +200,7 @@ export function createAreaLedger() {
      * chain lists; another family's listing is only a warning
      * (`foreignListings`). An area no family opened resolves through none.
      */
-    function familyOf(workspaceId: string) {
+    function familyOf(workspaceId: string): string | undefined {
         const families = openedBy(workspaceId);
         return families.length === 1 ? families[0] : undefined;
     }
@@ -946,6 +946,12 @@ export function createAreaLedger() {
                 throw error;
             }
         }
+        // A second walk of the node to the same target while the first is pending: the first's fresh
+        // key would be replaced under children already wrapped under it.
+        if (pendingNodeKeys.get(slot(workspaceId, node.id))?.epoch === targetEpoch) {
+            old.fill(0);
+            throw new CryptoError(ITEM_CHANGED);
+        }
         const fresh = generateKey();
         try {
             const parent = freshKeyParent(workspaceId, node);
@@ -1027,6 +1033,7 @@ export function createAreaLedger() {
 
     return {
         isArea,
+        familyOf,
         readVersion,
         writeVersion,
         unwritable,

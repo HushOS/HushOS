@@ -22,7 +22,7 @@ import { CONTENT_SUITE, openNodeKey, wrapNodeKey, wrapPreviousRootKey } from './
 import { sealLinkSecret } from './links';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
-import { KEY_CHANGE_PENDING, NOT_CARRIED } from './protocol';
+import { KEY_CHANGE_PENDING, NOT_CARRIED, SHARED_IN_FAMILY } from './protocol';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
 import { openAreaSelfGrant } from './workspace';
 import {
@@ -1963,6 +1963,83 @@ describe('the write version (F9)', () => {
         await expect(below(bob, 5, OTHER_WS.replace('d6d6d6d6', 'c7c7c7c7'))).resolves.toBeTruthy();
     });
 
+    test('a family walk re-seals no share or link the server lists, re-seals what nobody signed as the walker’s, and walks a node once per target', async () => {
+        const f = await family();
+        const r = await rotated(f);
+        const { alice, groupId, ws, area } = f;
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: r.rotation.selfGrant,
+        });
+        await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        const child = {
+            id: CHILD,
+            kind: 'folder' as const,
+            parentId: area.root.id,
+            parentKeyEpoch: 5,
+            keyEpoch: 1,
+            wrappedParentKeyEpoch: 1,
+            keyEnvelope: r.child.nodes[0]!.keyEnvelope,
+            metadataVersion: 1,
+            metadataEnvelope: r.child.nodes[0]!.metadataEnvelope,
+            metadataSigner: ALICE as string | null,
+            metadataSignature: r.child.nodes[0]!.metadataSignature as string | null,
+            versions: [],
+            shares: [] as CryptoRequests['driveRotateNodes']['nodes'][number]['shares'],
+            links: [] as CryptoRequests['driveRotateNodes']['nodes'][number]['links'],
+        };
+        const walk = (node: typeof child) =>
+            alice.call('driveRotateNodes', {
+                workspaceId: ws,
+                targetEpoch: 5,
+                granterUserId: ALICE,
+                signers: {},
+                group: { groupId, staged: null, writers: [] },
+                nodes: [node],
+            });
+        // A share the server lists, to a key of its choosing: the fresh key is sealed to nobody.
+        const shared = await walk({
+            ...child,
+            shares: [
+                {
+                    id: OTHER_WS,
+                    granteeUserId: BOB,
+                    granteePublicKey: f.bob.served.encryptionPublicKey,
+                    granteeKemPublicKey: f.bob.served.kemPublicKey,
+                },
+            ],
+        });
+        expect(shared.nodes[0]).toEqual({ id: CHILD, error: SHARED_IN_FAMILY });
+        const linked = await walk({
+            ...child,
+            links: [{ id: OTHER_WS, hasPassword: false, secretEnvelope: null }],
+        });
+        expect(linked.nodes[0]).toEqual({ id: CHILD, error: SHARED_IN_FAMILY });
+        await expect(
+            alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [CHILD] }),
+        ).resolves.toEqual({ committed: 0 });
+        // Its metadata stripped of its signer: re-sealed as Alice's (decision D6), never kept as hers.
+        const unsigned = (await walk({ ...child, metadataSigner: null, metadataSignature: null }))
+            .nodes[0]!;
+        if (unsigned.error !== undefined) throw new Error(unsigned.error);
+        expect(unsigned.metadataSignature).not.toBeNull();
+        expect(unsigned.metadataRekey).toBeNull();
+        await alice.call('driveRotateDrop', { workspaceId: ws, nodeIds: [CHILD] });
+        // The honest node walks, once: a second walk to the same target while it is pending is refused.
+        expect((await walk(child)).nodes[0]!.error).toBeUndefined();
+        expect((await walk(child)).nodes[0]).toEqual({
+            id: CHILD,
+            error: 'This item changed since it was opened. Refresh and retry.',
+        });
+        await expect(
+            alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [CHILD] }),
+        ).resolves.toEqual({ committed: 1 });
+    });
+
     test('design 2.10 (F14): a key a walk made before the folder’s next roster landed takes no write', async () => {
         const f = await family();
         const r = await rotated(f);
@@ -2466,6 +2543,15 @@ describe('group verdicts', () => {
             metadata: 'verified',
             via: f.groupId,
         });
+        // The family is the one the folder was opened under, never the caller's word for it.
+        await expect(
+            f.alice.call('groupVerify', {
+                groupId: crypto.randomUUID(),
+                workspaceId: f.ws,
+                writers: [],
+                nodes: [],
+            }),
+        ).rejects.toThrow(/not one of this family’s/);
         await expect(
             verify(writer({ pinned: await writerPinOf(f.bob) }, f.bob.served)),
         ).resolves.toMatchObject({ metadata: 'verified', via: null });
@@ -2531,8 +2617,10 @@ describe('group verdicts', () => {
             shares: [],
             links: [],
         });
-        const walk = (writers: GroupWriter[], metadataSignature = bobs.metadataSignature) =>
-            f.alice.call('driveRotateNodes', {
+        // Each walk starts over, the last one's batch dropped (a node is walked once per target).
+        const walk = async (writers: GroupWriter[], metadataSignature = bobs.metadataSignature) => {
+            await f.alice.call('driveRotateDrop', { workspaceId: f.ws, nodeIds: [CHILD] });
+            return f.alice.call('driveRotateNodes', {
                 workspaceId: f.ws,
                 targetEpoch: 7,
                 granterUserId: ALICE,
@@ -2540,6 +2628,7 @@ describe('group verdicts', () => {
                 group: { groupId: f.groupId, staged: null, writers },
                 nodes: [node(metadataSignature)],
             });
+        };
         const aliceKey = decode(f.alice.served.signingPublicKey, 32);
         const ctx = {
             workspaceId: f.ws,
@@ -3799,6 +3888,35 @@ describe('copying in a family folder (1c step 7)', () => {
         await expect(
             copy({ groupId: crypto.randomUUID(), staged: null, writers: [] }),
         ).rejects.toThrow(/not one of this family’s/);
+        // A re-keyed source served without its key epoch: its columns are the walker's, never judged.
+        await expect(
+            alice.call('driveCopyFile', {
+                workspaceId: ws,
+                signers: {},
+                source: {
+                    ...source,
+                    keyEpoch: undefined,
+                    rekey: {
+                        origin: {
+                            envelope: source.contentKeyEnvelope,
+                            signerId: BOB,
+                            signature: source.signature!,
+                            keyEnvelope: source.contentKeyEnvelope,
+                        },
+                        signature: source.signature!,
+                    },
+                },
+                node: {
+                    id: COPY,
+                    parentId: area.root.id,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 4,
+                    metadata: folder('notes (copy).txt'),
+                },
+                versionId: COPY_VERSION,
+                group: { groupId, staged: null, writers: [bobWriter] },
+            }),
+        ).rejects.toThrow(/couldn’t check who wrote this/);
         // Alice never compared Bob's words: the family's member list vouches, so the copy is hers.
         const aliceKey = decode(alice.served.signingPublicKey, 32);
         const vouched = await copy({ groupId, staged: null, writers: [bobWriter] });

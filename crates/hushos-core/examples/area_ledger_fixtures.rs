@@ -4,12 +4,18 @@
 //! open (`packages/crypto/src/area-ledger-fixtures.test.ts`), the mirror of
 //! `packages/crypto/scripts/area-ledger-fixtures.ts`. Writes
 //! `packages/crypto/src/__fixtures__/core-area-ledger.json`; each scenario's
-//! stated outcomes are checked before anything is written.
+//! stated outcomes are checked before anything is written. Also the nodes this
+//! core walked (`rotations`, `tests/common/rotations.rs`), each read back here
+//! as its case declares before it is written, for the web to read.
 
 #[path = "../tests/common/area_ledger.rs"]
 mod area_ledger;
 #[path = "../tests/common/groups.rs"]
 mod groups;
+#[path = "../tests/common/rekeyed.rs"]
+mod rekeyed;
+#[path = "../tests/common/rotations.rs"]
+mod rotations;
 
 use area_ledger::*;
 use serde_json::{json, Value};
@@ -31,8 +37,13 @@ fn main() {
     }
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/crypto/src/__fixtures__/core-area-ledger.json");
-    let document =
-        json!({ "generatedBy": "crates/hushos-core/examples/area_ledger_fixtures.rs", "scenarios": runs });
+    // A family folder's walk, node by node: each node walked here, read here, for the web to read.
+    let rotations = rotations::rotation_fixture();
+    let document = json!({
+        "generatedBy": "crates/hushos-core/examples/area_ledger_fixtures.rs",
+        "scenarios": runs,
+        "rotations": rotations,
+    });
     fs::write(&out, serde_json::to_string_pretty(&document).unwrap() + "\n").expect("written");
     println!("wrote packages/crypto/src/__fixtures__/core-area-ledger.json");
 }
