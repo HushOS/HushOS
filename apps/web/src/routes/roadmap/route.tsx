@@ -281,7 +281,9 @@ function RoadmapPage() {
                                 aria-hidden="true"
                                 className={cn(
                                     node,
-                                    'top-2.5 size-5 border-2 bg-card',
+                                    // Centred on the section's cover: 96px wide on phones (33px tall at
+                                    // 32x11 dots), 112px beside the rail from md (38.5px tall).
+                                    'top-[6.5px] size-5 border-2 bg-card md:top-[9.25px]',
                                     section.status === 'now'
                                         ? 'border-primary'
                                         : PLANNED.includes(section.status)
