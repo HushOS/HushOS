@@ -24,7 +24,7 @@ import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
-import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
+import { currenciesOf, personalPairs, priceOf, tiersOf, twoMonthsFree } from '@/lib/plans';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -181,6 +181,8 @@ function BillingPage() {
         fallback: currencies[0] ?? 'usd',
     });
     const tiers = tiersOf(plans ?? []);
+    // Said beside a yearly price only while every plan's year is at most ten of its months.
+    const saving = twoMonthsFree(personalPairs(plans ?? [], currency));
     const intervals = new Set((plans ?? []).map((plan) => plan.interval));
     const [period, setPeriod] = useState<'month' | 'year'>(
         live?.recurringInterval === 'year' ? 'year' : 'month',
@@ -474,7 +476,7 @@ function BillingPage() {
                                             key={tier.key}
                                             name={tier.name}
                                             size={formatQuota(tier.quotaBytes)}
-                                            price={`${priceLine(plan, currency)}${plan.interval === 'year' ? ' · More than 2 months free' : ''}`}
+                                            price={`${priceLine(plan, currency)}${plan.interval === 'year' && saving ? ' · 2 months free' : ''}`}
                                             recommended={tier.recommended && !current}
                                             current={current}
                                             footer={

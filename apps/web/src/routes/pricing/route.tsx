@@ -28,20 +28,23 @@ import { rememberReturn } from '@/lib/return-to';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
+    formatMoney,
     formatQuota,
     localeHintQueryOptions,
 } from '@/lib/queries';
 import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
-import type { Plan } from '@hushos/billing/api';
+import type { Catalogue, Plan } from '@hushos/billing/api';
 import {
     currenciesOf,
     FAMILY_POOL_LINE,
     familyOffers,
-    formatPrice,
+    familyPairs,
+    personalPairs,
     priceOf,
     pricingLede,
     TAX_LINE,
     tiersOf,
+    twoMonthsFree,
     yearlyPrice,
     yearsByMonth,
     type FamilyOffer,
@@ -99,7 +102,11 @@ export const Route = createFileRoute('/pricing')({
     head: ({ loaderData }) => {
         if (!loaderData) return {};
         const { origin, catalogue, currency } = loaderData;
-        const faq = faqFor(familyOffers(catalogue, 'month', currency), currency);
+        const faq = faqFor(
+            familyOffers(catalogue, 'month', currency),
+            currency,
+            savesTwoMonths(catalogue, currency),
+        );
         const description = `Start free with ${formatQuota(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
         return {
             meta: [
@@ -176,6 +183,13 @@ export const Route = createFileRoute('/pricing')({
     component: PricingPage,
 });
 
+/* "2 months free", for the toggle and the questions: true of every personal and family plan here. */
+const savesTwoMonths = (catalogue: Pick<Catalogue, 'plans' | 'families'>, currency: string) =>
+    twoMonthsFree([
+        ...personalPairs(catalogue.plans, currency),
+        ...familyPairs(catalogue.families, currency),
+    ]);
+
 /* The lowest monthly price in the page's currency, for the description tag. */
 function cheapest(plans: Plan[], currency: string) {
     const monthly = plans.filter((plan) => plan.interval === 'month');
@@ -184,9 +198,9 @@ function cheapest(plans: Plan[], currency: string) {
               priceOf(a, currency).amount <= priceOf(b, currency).amount ? a : b,
           )
         : plans[0];
-    if (!plan) return formatPrice(0, currency);
+    if (!plan) return formatMoney(0, currency);
     const price = priceOf(plan, currency);
-    return formatPrice(price.amount, price.currency);
+    return formatMoney(price.amount, price.currency);
 }
 
 type Interval = 'month' | 'year';
@@ -233,7 +247,7 @@ function PricingPage() {
     const { hasSession } = Route.useRouteContext();
     const navigate = useNavigate();
     const amount = (plan: Plan) => priceOf(plan, currency);
-    const money = (minor: number, code = currency) => formatPrice(minor, code);
+    const money = (minor: number, code = currency) => formatMoney(minor, code);
     const search = Route.useSearch();
     const audience: Audience = search.for === 'business' ? 'business' : 'personal';
     const setAudience = (value: Audience) =>
@@ -251,9 +265,11 @@ function PricingPage() {
     const free = formatQuota(catalogue.freeQuotaBytes);
     // Every year by its month, or every year by the year, across both rows of cards.
     const byMonth = yearsByMonth(catalogue, currency);
+    // "2 months free" beside Yearly only while it is true of every plan in this currency.
+    const saving = savesTwoMonths(catalogue, currency);
     // Only where the server serves families and sells plans: it lists none otherwise.
     const family = familyOffers(catalogue, interval, currency, byMonth);
-    const questions = faqFor(familyOffers(catalogue, 'month', currency), currency);
+    const questions = faqFor(familyOffers(catalogue, 'month', currency), currency, saving);
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
     const live =
@@ -445,9 +461,11 @@ function PricingPage() {
                                             label: (
                                                 <>
                                                     Yearly
-                                                    <span className="font-semibold text-primary">
-                                                        More than 2 months free
-                                                    </span>
+                                                    {saving && (
+                                                        <span className="font-semibold text-primary">
+                                                            2 months free
+                                                        </span>
+                                                    )}
                                                 </>
                                             ),
                                         },
@@ -710,9 +728,11 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                             <span className="text-sm leading-snug text-muted-foreground">
                                 {offer.billed}
                             </span>
-                            <span className="text-sm leading-snug text-muted-foreground">
-                                {offer.extra}
-                            </span>
+                            {offer.extra && (
+                                <span className="text-sm leading-snug text-muted-foreground">
+                                    {offer.extra}
+                                </span>
+                            )}
                         </div>
                     </li>
                 ))}

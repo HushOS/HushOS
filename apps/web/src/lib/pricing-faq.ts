@@ -1,4 +1,5 @@
-import { familyPrice, formatPrice, type FamilyOffer } from '@/lib/plans';
+import { formatMoney } from '@/lib/format';
+import { familyPrice, type FamilyOffer } from '@/lib/plans';
 
 /* The pricing page's questions: the visible FAQ and the FAQPage markup in its head. */
 export type Question = { q: string; a: string };
@@ -13,7 +14,7 @@ const selfHosting: Question = {
     a: 'Yes. HushOS is open source under the AGPL-3.0. Run your own copy with Docker Compose and give everyone as much space as you like. These plans are only for the service we run.',
 };
 
-const middle: Question[] = [
+const middle = (twoMonths: boolean): Question[] => [
     {
         q: 'Who bills me?',
         a: 'Polar, our merchant of record. Polar takes the payment, works out sales tax or VAT for your country at checkout, and sends the invoices. Your card details never reach HushOS.',
@@ -24,7 +25,7 @@ const middle: Question[] = [
     },
     {
         q: 'Can I switch between monthly and yearly?',
-        a: 'Yes. Choose the one you want and the difference is charged, or credited, to your saved card straight away. Paying yearly gets you more than two months free.',
+        a: `Yes. Choose the one you want and the difference is charged, or credited, to your saved card straight away.${twoMonths ? ' Paying yearly gets you two months free.' : ''}`,
     },
 ];
 
@@ -45,21 +46,26 @@ function poolsLine(family: readonly FamilyOffer[]) {
  * members included and the most a family can have are the same on every tier,
  * as is the price of a member after that.
  */
-export function faqFor(family: readonly FamilyOffer[], currency = 'usd'): Question[] {
+export function faqFor(
+    family: readonly FamilyOffer[],
+    currency = 'usd',
+    // Whether "two months free" is true of this catalogue (twoMonthsFree); said only then.
+    twoMonths = true,
+): Question[] {
     const first = family[0];
-    if (!first) return [paidPlans, ...middle, selfHosting];
+    if (!first) return [paidPlans, ...middle(twoMonths), selfHosting];
     const { includedMembers, maxMembers } = first.plan;
     const price = familyPrice(first.plan, currency);
     const perMonth = first.plan.interval === 'month';
     const extra = price
-        ? ` Each member after that is ${formatPrice(price.perMember, price.currency)} ${perMonth ? 'a month' : 'a year'}, up to ${maxMembers}.`
+        ? ` Each member after that is ${formatMoney(price.perMember, price.currency)} ${perMonth ? 'a month' : 'a year'}, up to ${maxMembers}.`
         : ` A family can have up to ${maxMembers} members.`;
     return [
         {
             q: paidPlans.q,
             a: `On a personal plan, more storage. On a family plan, family folders with storage for its members to share. Every plan protects your files the same way: your password never leaves your device and your keys are made on it.`,
         },
-        ...middle,
+        ...middle(twoMonths),
         {
             q: 'What is a family plan?',
             a: `One plan with ${includedMembers} members included.${extra} It gives family folders that every member can open, end-to-end encrypted. ${poolsLine(family)}; that storage is for family folders, and each member’s own files stay on their own plan, Free included. Family folders are on the web for now.`,

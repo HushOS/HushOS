@@ -3,6 +3,9 @@ import { describe, expect, test } from 'vitest';
 import {
     currenciesOf,
     familyOffers,
+    familyPairs,
+    personalPairs,
+    twoMonthsFree,
     priceOf,
     pricingLede,
     tiersOf,
@@ -189,24 +192,25 @@ describe('familyOffers', () => {
         ]);
     });
 
-    test('shows a yearly tier as its whole month, billed yearly, and its member price per year', () => {
-        expect(offers('year', 'usd').map(({ price, billed }) => [price, billed])).toEqual([
-            ['$8 a month', 'Billed $96 yearly.'],
-            ['$16 a month', 'Billed $192 yearly.'],
-            ['$24 a month', 'Billed $288 yearly.'],
+    test('shows a yearly tier as its whole month, then every yearly figure in one sentence', () => {
+        expect(
+            offers('year', 'usd').map(({ price, billed, extra }) => [price, billed, extra]),
+        ).toEqual([
+            ['$8 a month', 'Billed $96 yearly, plus $15 for each extra member.', null],
+            ['$16 a month', 'Billed $192 yearly, plus $15 for each extra member.', null],
+            ['$24 a month', 'Billed $288 yearly, plus $15 for each extra member.', null],
         ]);
+        // ₹590 a year doesn't split into whole months, so it stays a yearly figure.
         expect(offers('year', 'inr').map(({ price, billed }) => [price, billed])).toEqual([
-            ['₹325 a month', 'Billed ₹3,900 yearly.'],
-            ['₹650 a month', 'Billed ₹7,800 yearly.'],
-            ['₹1,150 a month', 'Billed ₹13,800 yearly.'],
+            ['₹325 a month', 'Billed ₹3,900 yearly, plus ₹590 for each extra member.'],
+            ['₹650 a month', 'Billed ₹7,800 yearly, plus ₹590 for each extra member.'],
+            ['₹1,150 a month', 'Billed ₹13,800 yearly, plus ₹590 for each extra member.'],
         ]);
         expect(offers('year', 'gbp').map((offer) => offer.price)).toEqual([
             '£6 a month',
             '£12 a month',
             '£18 a month',
         ]);
-        expect(offers('year', 'usd')[1]?.extra).toBe('Each extra member is $15 a year.');
-        expect(offers('year', 'inr')[1]?.extra).toBe('Each extra member is ₹590 a year.');
         expect(offers('year', 'usd')[1]?.plan.id).toBe('pro-year');
     });
 
@@ -218,10 +222,12 @@ describe('familyOffers', () => {
                 ? { ...plan, prices: { ...plan.prices, inr: { base: 399000, perMember: 59000 } } }
                 : plan,
         );
-        expect(offers('year', 'inr', odd).map(({ price, billed }) => [price, billed])).toEqual([
-            ['₹3,990 a year', 'Billed yearly.'],
-            ['₹7,800 a year', 'Billed yearly.'],
-            ['₹13,800 a year', 'Billed yearly.'],
+        expect(
+            offers('year', 'inr', odd).map(({ price, billed, extra }) => [price, billed, extra]),
+        ).toEqual([
+            ['₹3,990 a year', 'Billed yearly.', 'Each extra member is ₹590 a year.'],
+            ['₹7,800 a year', 'Billed yearly.', 'Each extra member is ₹590 a year.'],
+            ['₹13,800 a year', 'Billed yearly.', 'Each extra member is ₹590 a year.'],
         ]);
         // Decided per currency: the dollar prices all split.
         expect(offers('year', 'usd', odd)[0]?.price).toBe('$8 a month');
@@ -261,16 +267,20 @@ describe('pricingLede', () => {
 
 describe('yearlyPrice', () => {
     test('by the month only when the year splits into twelve whole units of its currency', () => {
-        expect(yearlyPrice(390000, 'inr')).toEqual({
+        expect(yearlyPrice(390000, 'inr', true)).toEqual({
+            byMonth: true,
             price: '₹325 a month',
             billed: 'Billed ₹3,900 yearly.',
             line: '₹325 a month, billed ₹3,900 yearly.',
         });
-        expect(yearlyPrice(4800, 'usd').price).toBe('$4 a month');
+        expect(yearlyPrice(4800, 'usd', true).price).toBe('$4 a month');
+        // The page decided against months (another year in the catalogue doesn't split).
+        expect(yearlyPrice(4800, 'usd', false).price).toBe('$48 a year');
         // A unit either side of a whole month, and ten months of $5: the year alone, no cents.
         for (const amount of [4799, 4801, 5000])
-            expect(yearlyPrice(amount, 'usd').price).toMatch(/^\$[\d.,]+ a year$/);
-        expect(yearlyPrice(5000, 'usd')).toEqual({
+            expect(yearlyPrice(amount, 'usd', true).price).toMatch(/^\$[\d.,]+ a year$/);
+        expect(yearlyPrice(5000, 'usd', true)).toEqual({
+            byMonth: false,
             price: '$50 a year',
             billed: 'Billed yearly.',
             line: '$50 a year.',
@@ -296,5 +306,48 @@ describe('yearsByMonth', () => {
         expect(yearsByMonth({ plans: [yearly(4800)], families: odd }, 'usd')).toBe(false);
         // A monthly price never needs to split: $4.99 a month is shown as it is.
         expect(yearsByMonth({ plans: [monthly], families: [] }, 'usd')).toBe(true);
+    });
+});
+
+describe('twoMonthsFree', () => {
+    const tier = (name: string, month: number, year: number) => [
+        plan({ id: `${name}-m`, name: `${name} (monthly)`, amount: month, prices: { usd: month } }),
+        plan({
+            id: `${name}-y`,
+            name: `${name} (yearly)`,
+            interval: 'year',
+            amount: year,
+            prices: { usd: year },
+        }),
+    ];
+
+    test('holds for the prices on sale: every year at most ten months, family members included', () => {
+        for (const currency of ['usd', 'eur', 'gbp', 'inr'])
+            expect(twoMonthsFree(familyPairs(families, currency)), currency).toBe(true);
+    });
+
+    test('a year at exactly ten months still saves two; one unit more, on any tier, says nothing', () => {
+        expect(twoMonthsFree(personalPairs(tier('plus', 500, 5000), 'usd'))).toBe(true);
+        expect(twoMonthsFree(personalPairs(tier('plus', 500, 5001), 'usd'))).toBe(false);
+        // Ten months of a family's extra member, plus one cent.
+        const dear = families.map((candidate) =>
+            candidate.id === 'max-year'
+                ? { ...candidate, prices: { usd: { base: 28800, perMember: 1501 } } }
+                : candidate,
+        );
+        expect(twoMonthsFree(familyPairs(dear, 'usd'))).toBe(false);
+        expect(twoMonthsFree(familyPairs(dear, 'gbp'))).toBe(true);
+    });
+
+    test('says nothing where no tier is priced both ways', () => {
+        expect(twoMonthsFree([])).toBe(false);
+        expect(
+            twoMonthsFree(
+                familyPairs(
+                    families.filter((p) => p.interval === 'month'),
+                    'usd',
+                ),
+            ),
+        ).toBe(false);
     });
 });

@@ -1,6 +1,6 @@
 import type { Catalogue, FamilyPlan, Plan } from '@hushos/billing/api';
 import { DEFAULT_CURRENCY } from '@hushos/billing/protocol';
-import { formatMoney, formatQuota, PRICE_LOCALE } from '@/lib/format';
+import { formatMoney, formatQuota } from '@/lib/format';
 
 export type Tier = {
     key: string;
@@ -54,10 +54,6 @@ export function tiersOf(plans: Plan[]) {
     return [...tiers.values()];
 }
 
-/* A price in minor units as the pricing page writes it, in its fixed locale. */
-export const formatPrice = (minor: number, currency: string) =>
-    formatMoney(minor, currency, PRICE_LOCALE);
-
 /* Whether a yearly price in minor units splits into twelve whole units of its currency. */
 export const splitsIntoMonths = (amount: number) => amount % 1200 === 0;
 
@@ -78,23 +74,68 @@ export function yearsByMonth(catalogue: Pick<Catalogue, 'plans' | 'families'>, c
 
 /*
  * A yearly price as a card shows it: by the month ("₹325 a month", "Billed ₹3,900 yearly.")
- * when `byMonth` (see yearsByMonth) and the year splits into whole months, otherwise by the
- * year alone ("₹3,990 a year", "Billed yearly."), never a month with cents in it. `line` is
- * the planner's one sentence.
+ * when `byMonth` (yearsByMonth, decided once for the page) and the year splits into whole
+ * months, otherwise by the year alone ("₹3,990 a year", "Billed yearly."), never a month with
+ * cents in it. `line` is the planner's one sentence.
  */
-export function yearlyPrice(amount: number, currency: string, byMonth = true) {
-    const money = (minor: number) => formatPrice(minor, currency);
+export function yearlyPrice(amount: number, currency: string, byMonth: boolean) {
+    const money = (minor: number) => formatMoney(minor, currency);
     return byMonth && splitsIntoMonths(amount)
         ? {
+              byMonth: true,
               price: `${money(amount / 12)} a month`,
               billed: `Billed ${money(amount)} yearly.`,
               line: `${money(amount / 12)} a month, billed ${money(amount)} yearly.`,
           }
         : {
+              byMonth: false,
               price: `${money(amount)} a year`,
               billed: 'Billed yearly.',
               line: `${money(amount)} a year.`,
           };
+}
+
+/*
+ * Whether "2 months free" is true of every plan priced both ways, in `currency`: each yearly
+ * price is at most ten months of its monthly one (personal and family bases, and a family's
+ * extra member). A catalogue with a year dearer than that, or none priced both ways, gets no
+ * saving label at all. Each pair is one tier's monthly and yearly price.
+ */
+export function twoMonthsFree(pairs: readonly { month?: number; year?: number }[]) {
+    const both = pairs.filter(
+        (pair): pair is { month: number; year: number } =>
+            pair.month !== undefined && pair.year !== undefined,
+    );
+    return both.length > 0 && both.every((pair) => pair.year <= pair.month * 10);
+}
+
+/* The monthly and yearly price pairs of the personal tiers, in `currency`. */
+export function personalPairs(plans: readonly Plan[], currency: string) {
+    return tiersOf([...plans]).map((tier) => ({
+        month: tier.month && priceOf(tier.month, currency).amount,
+        year: tier.year && priceOf(tier.year, currency).amount,
+    }));
+}
+
+/* The monthly and yearly price pairs of the family tiers (base and extra member), in `currency`. */
+export function familyPairs(plans: readonly FamilyPlan[], currency: string) {
+    const sizes = [...new Set(plans.map((plan) => plan.quotaBytes))];
+    return sizes.flatMap((quotaBytes) => {
+        const of = (interval: 'month' | 'year') => {
+            const plan = plans.find(
+                (candidate) =>
+                    candidate.quotaBytes === quotaBytes && candidate.interval === interval,
+            );
+            const price = plan && familyPrice(plan, currency);
+            return price && price.currency === currency ? price : undefined;
+        };
+        const month = of('month');
+        const year = of('year');
+        return [
+            { month: month?.base, year: year?.base },
+            { month: month?.perMember, year: year?.perMember },
+        ];
+    });
 }
 
 /* Said beside every family price (lib/family-billing.ts explains why). */
@@ -120,10 +161,16 @@ export type FamilyOffer = {
     storage: string;
     /* "$20 a month", or a yearly plan as yearlyPrice writes it: "$16 a month". */
     price: string;
-    /* "Billed monthly. $192 a year if you pay yearly." or "Billed $192 yearly." */
+    /*
+     * "Billed monthly. $192 a year if you pay yearly.", or by the month "Billed $192 yearly,
+     * plus $15 for each extra member.", so every figure after the month is a yearly one.
+     */
     billed: string;
-    /* "Each extra member is $1.50 a month." The members included are said once, above the tiers. */
-    extra: string;
+    /*
+     * "Each extra member is $1.50 a month." ("$15 a year" on a yearly plan shown by the year),
+     * or null where `billed` says it. The members included are said once, above the tiers.
+     */
+    extra: string | null;
 };
 
 /*
@@ -147,24 +194,27 @@ export function familyOffers(
         const plan = both.find((candidate) => candidate.interval === interval) ?? both[0];
         const price = plan && familyPrice(plan, currency);
         if (!plan || !price) return [];
-        const money = (minor: number) => formatPrice(minor, price.currency);
+        const money = (minor: number) => formatMoney(minor, price.currency);
         const yearly = both.find((candidate) => candidate.interval === 'year');
         const yearlyBase = yearly && familyPrice(yearly, price.currency);
         const per = plan.interval === 'year' ? 'a year' : 'a month';
         const byYear =
             plan.interval === 'year' ? yearlyPrice(price.base, price.currency, byMonth) : null;
+        const extra = money(price.perMember);
         return [
             {
                 plan,
                 name: familyTierName(plan),
                 storage: formatQuota(plan.quotaBytes),
                 price: byYear ? byYear.price : `${money(price.base)} a month`,
-                billed: byYear
-                    ? byYear.billed
-                    : yearlyBase && yearlyBase.currency === price.currency
-                      ? `Billed monthly. ${money(yearlyBase.base)} a year if you pay yearly.`
-                      : 'Billed monthly.',
-                extra: `Each extra member is ${money(price.perMember)} ${per}.`,
+                billed: byYear?.byMonth
+                    ? `Billed ${money(price.base)} yearly, plus ${extra} for each extra member.`
+                    : byYear
+                      ? byYear.billed
+                      : yearlyBase && yearlyBase.currency === price.currency
+                        ? `Billed monthly. ${money(yearlyBase.base)} a year if you pay yearly.`
+                        : 'Billed monthly.',
+                extra: byYear?.byMonth ? null : `Each extra member is ${extra} ${per}.`,
             },
         ];
     });
