@@ -252,20 +252,24 @@ function tokenClass(style: Record<string, string> | undefined) {
     if (!name) {
         name = `rt-t${tokenClasses.size}`;
         if (!tokenSheet) {
-            const element = document.createElement('style');
-            document.head.append(element);
-            tokenSheet = element.sheet;
+            tokenSheet = new CSSStyleSheet();
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, tokenSheet];
         }
-        tokenSheet?.insertRule(`.${name}{${rule}}`, tokenSheet.cssRules.length);
+        tokenSheet.insertRule(`.${name}{${rule}}`, tokenSheet.cssRules.length);
         tokenClasses.set(rule, name);
     }
     return name;
 }
 
+/*
+ * Every block ends on a line break of its own. In preserved white space a
+ * text's final newline draws no line, so a block whose last line is blank
+ * would otherwise lose that line and every number after it would be one off.
+ */
 const PlainBlock = memo(function PlainBlock({ lines }: { lines: readonly string[] }) {
     return (
         <span className="rt-block" style={blockStyle(lines.length)}>
-            {lines.join('\n')}
+            {`${lines.join('\n')}\n`}
         </span>
     );
 });
@@ -275,7 +279,6 @@ const ColouredBlock = memo(function ColouredBlock({ lines }: { lines: ColouredLi
         <span className="rt-block" style={blockStyle(lines.length)}>
             {lines.map((tokens, index) => (
                 <Fragment key={index}>
-                    {index > 0 && '\n'}
                     <span className="line">
                         {tokens.map((token, at) => (
                             <span key={at} className={tokenClass(token.htmlStyle)}>
@@ -283,6 +286,7 @@ const ColouredBlock = memo(function ColouredBlock({ lines }: { lines: ColouredLi
                             </span>
                         ))}
                     </span>
+                    {'\n'}
                 </Fragment>
             ))}
         </span>
@@ -298,7 +302,7 @@ export function CodeView({
 }: {
     text: string;
     language: string | null;
-    /* What counts against the colouring limit when that isn't the text shown: the file a JSON layout came from. */
+    /* What counts against the colouring limit and ceiling when that isn't the text shown: the file a JSON layout came from. */
     size?: number;
     /* A 1-based line to mark in the gutter and scroll to, such as where a JSON file stops being valid. */
     markLine?: number | null;
@@ -306,7 +310,7 @@ export function CodeView({
     const [asked, setAsked] = useState(false);
     const colourable = canHighlight(language);
     const large = colourable && size > HIGHLIGHT_LIMIT;
-    const tooLarge = large && text.length > COLOUR_CEILING;
+    const tooLarge = large && size > COLOUR_CEILING;
     const colour = colourable && (!large || (asked && !tooLarge));
     const lines = useMemo(() => text.split('\n'), [text]);
     const plain = useMemo(() => {
@@ -395,10 +399,10 @@ const Gutter = memo(function Gutter({
                         <span ref={marked} className="rt-mark">
                             {markLine}
                         </span>
-                        {markLine < end && `\n${numbers(markLine + 1, end)}`}
+                        {`\n${markLine < end ? `${numbers(markLine + 1, end)}\n` : ''}`}
                     </>
                 ) : (
-                    numbers(start, end)
+                    `${numbers(start, end)}\n`
                 )}
             </span>,
         );

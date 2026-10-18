@@ -206,8 +206,11 @@ const THEMES = { light: 'github-light-default', dark: 'github-dark-default' } as
 /* One line's tokens, each carrying both themes' colours as `--shiki-light` and `--shiki-dark`. */
 export type ColouredLine = ThemedToken[];
 
-/* Lines tokenised per call; small enough that one block of dense TSX stays near 50ms. */
+/* Lines and characters tokenised per call, whichever comes first; one block of dense TSX stays near 50ms. */
 const BLOCK_LINES = 64;
+const BLOCK_CHARS = 4_000;
+/* A line longer than this (minified code) is left plain, as VS Code does, rather than holding the tab. */
+const LONG_LINE = 10_000;
 /* How long a slice of work runs before the page gets a turn. */
 const SLICE_MS = 24;
 
@@ -230,15 +233,25 @@ export async function colourLines(
     let state: GrammarState | undefined;
     let slice: ColouredLine[] = [];
     let started = performance.now();
-    for (let start = 0; start < lines.length; start += BLOCK_LINES) {
+    for (let start = 0; start < lines.length;) {
         if (cancelled()) return;
-        const block = lines.slice(start, start + BLOCK_LINES);
+        let end = start;
+        let chars = 0;
+        while (
+            end < lines.length &&
+            end - start < BLOCK_LINES &&
+            (end === start || chars < BLOCK_CHARS)
+        )
+            chars += lines[end++]!.length;
+        const block = lines.slice(start, end);
+        start = end;
         const result = instance.codeToTokens(block.join('\n'), {
             lang: language,
             themes: THEMES,
             defaultColor: false,
             cssVariablePrefix: '--shiki-',
             grammarState: state,
+            tokenizeMaxLineLength: LONG_LINE,
         });
         state = result.grammarState;
         // Should the highlighter ever split a block differently, it stays plain rather than shifting lines.

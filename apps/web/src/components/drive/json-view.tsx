@@ -1,4 +1,4 @@
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { defaultRangeExtractor, type Range, useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from 'cn';
 import { ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
 import {
@@ -15,7 +15,13 @@ import { CopyCheckIcon } from '@/components/copy-button';
 import { CodeView } from '@/components/drive/rich-text';
 import { Opening } from '@/components/drive/viewer-parts';
 import { Button } from '@/components/ui/button';
-import { type JsonInspection, type JsonProblem, jsonPath, type PathSegment } from '@/lib/json';
+import {
+    type JsonInspection,
+    type JsonLayout,
+    type JsonProblem,
+    jsonPath,
+    type PathSegment,
+} from '@/lib/json';
 import { inspect, inspectNow, preloadJsonWorker } from '@/lib/json-inspect';
 import { cue } from '@/lib/sounds';
 import '@/components/drive/rich-text.css';
@@ -35,8 +41,15 @@ import '@/components/drive/rich-text.css';
  * around 4 MB.
  */
 const TREE_MAX_NODES = 200_000;
+/*
+ * Past this depth the file opens as text only: the parse's reviver recurses
+ * once per level, and a few thousand levels exhaust the stack.
+ */
+const TREE_MAX_DEPTH = 500;
 /* A string longer than this shows its start, with Show all. */
 const STRING_PREVIEW = 160;
+/* Show all stops here; Text has the rest. */
+const STRING_WHOLE = 100_000;
 
 type Mode = 'tree' | 'text';
 const MODE_KEY = 'hushos-json-view';
@@ -80,10 +93,9 @@ function useInspection(text: string) {
 export function JsonView({ text, name }: { text: string; name: string }) {
     const inspection = useInspection(text);
     if (!inspection) return <Opening />;
-    if (!inspection.ok) return <InvalidJson text={text} problem={inspection.problem} />;
-    return (
-        <ValidJson text={text} name={name} pretty={inspection.pretty} nodes={inspection.nodes} />
-    );
+    if (!inspection.ok)
+        return <InvalidJson text={text} problem={inspection.problem} layout={inspection.layout} />;
+    return <ValidJson text={text} name={name} layout={inspection} />;
 }
 
 /* The sheet at reading width, its own scroller under a bar that stays put. */
@@ -97,47 +109,75 @@ function Panel({ children }: { children: ReactNode }) {
     );
 }
 
-function InvalidJson({ text, problem }: { text: string; problem: JsonProblem }) {
+const number = (value: number) => value.toLocaleString('en-GB');
+
+/*
+ * The file as written with the line that breaks it marked, or, when its lines
+ * are too long to draw (a minified file), laid out with the problem's place
+ * marked in the layout.
+ */
+function InvalidJson({
+    text,
+    problem,
+    layout,
+}: {
+    text: string;
+    problem: JsonProblem;
+    layout: { text: string; line: number | null } | null;
+}) {
     return (
         <Panel>
             <p className="shrink-0 border-b border-rule px-4 py-2.5 text-[13px] wrap-anywhere sm:px-6">
                 This isn’t valid JSON: {problem.reason}
                 {problem.line !== null &&
-                    ` (line ${problem.line}${problem.column !== null ? `, column ${problem.column}` : ''})`}
+                    ` (line ${number(problem.line)}${problem.column !== null ? `, column ${number(problem.column)}` : ''})`}
+                {layout && '. Its lines are too long to show as written, so it’s laid out.'}
             </p>
             <div className="min-h-0 flex-1 overflow-auto">
-                <CodeView text={text} language="json" markLine={problem.line} />
+                <CodeView
+                    text={layout ? layout.text : text}
+                    language="json"
+                    size={text.length}
+                    markLine={layout ? layout.line : problem.line}
+                />
             </div>
         </Panel>
     );
 }
 
-function ValidJson({
-    text,
-    name,
-    pretty,
-    nodes,
-}: {
-    text: string;
-    name: string;
-    pretty: string;
-    nodes: number;
-}) {
-    const treeFits = nodes <= TREE_MAX_NODES;
+function ValidJson({ text, name, layout }: { text: string; name: string; layout: JsonLayout }) {
     const [mode, setMode] = useState<Mode>(storedMode);
-    const showing: Mode = treeFits ? mode : 'text';
+    const allowed = layout.nodes <= TREE_MAX_NODES && layout.depth <= TREE_MAX_DEPTH;
     // Each view is built the first time it shows and kept, so switching back is instant
     // and a file coloured on request stays coloured.
-    const [built, setBuilt] = useState<Record<Mode, boolean>>({
-        tree: showing === 'tree',
-        text: showing === 'text',
-    });
+    const [built, setBuilt] = useState<Record<Mode, boolean>>(() => ({
+        tree: allowed && mode === 'tree',
+        text: !allowed || mode === 'text',
+    }));
     const tree = useTree(text, built.tree);
-    const choose = (next: Mode) => {
+    const treeFits = allowed && !tree.failed;
+    const showing: Mode = treeFits ? mode : 'text';
+    const show = useCallback((next: Mode, remember: boolean) => {
         setMode(next);
-        storeMode(next);
+        if (remember) storeMode(next);
         setBuilt((current) => ({ ...current, [next]: true }));
-    };
+    }, []);
+    // Find in the page can't see rows the tree hasn't drawn, so ⌘F or Ctrl+F turns to Text,
+    // where every line is searchable, and the browser's find bar opens over it.
+    useEffect(() => {
+        if (showing !== 'tree') return;
+        const onKeyDown = (event: globalThis.KeyboardEvent) => {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f')
+                show('text', false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [showing, show]);
+    const why = !allowed
+        ? layout.nodes > TREE_MAX_NODES
+            ? 'This file is too large for the tree view.'
+            : 'This file nests too deeply for the tree view.'
+        : 'The tree view couldn’t open this file.';
     return (
         <Panel>
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-rule px-2 py-2 sm:px-3">
@@ -149,7 +189,7 @@ function ValidJson({
                                 key={value}
                                 type="button"
                                 aria-pressed={showing === value}
-                                onClick={() => choose(value)}
+                                onClick={() => show(value, true)}
                                 className={cn(
                                     'h-8 cursor-pointer rounded-sm px-3 text-[13px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:h-10',
                                     showing === value
@@ -162,20 +202,23 @@ function ValidJson({
                         ))}
                     </fieldset>
                 ) : (
-                    <p className="px-2 py-1.5 text-[13px] text-muted-foreground sm:px-3">
-                        This file is too large for the tree view.
-                    </p>
+                    <p className="px-2 py-1.5 text-[13px] text-muted-foreground sm:px-3">{why}</p>
                 )}
                 {showing === 'tree' && <TreeActions tree={tree} />}
             </div>
+            {showing === 'tree' && layout.duplicates && (
+                <p className="shrink-0 border-b border-rule px-4 py-2 text-[13px] text-muted-foreground sm:px-6">
+                    This file repeats some keys; the tree shows the last value.
+                </p>
+            )}
             {built.tree && treeFits && (
                 <TreeView tree={tree} label={name} hidden={showing !== 'tree'} />
             )}
-            {built.text && (
+            {(built.text || showing === 'text') && (
                 <div className="min-h-0 flex-1 overflow-auto" hidden={showing !== 'text'}>
                     {/* Always laid out: that takes milliseconds in the worker and drawn in blocks costs
                         little, where a large minified file left as one line can't even be drawn. */}
-                    <CodeView text={pretty} language="json" size={text.length} />
+                    <CodeView text={layout.pretty} language="json" size={text.length} />
                 </div>
             )}
         </Panel>
@@ -320,9 +363,20 @@ function flatten(root: unknown, openness: Openness): Row[] {
 type TreeState = ReturnType<typeof useTree>;
 
 function useTree(text: string, enabled: boolean) {
-    const root = useMemo(() => (enabled ? parseForTree(text) : undefined), [text, enabled]);
+    // A file the parse still can't take (a stack an engine runs out of) falls back to Text.
+    const { root, failed } = useMemo(() => {
+        if (!enabled) return { root: undefined, failed: false };
+        try {
+            return { root: parseForTree(text), failed: false };
+        } catch {
+            return { root: undefined, failed: true };
+        }
+    }, [text, enabled]);
     const [openness, setOpenness] = useState<Openness>({ base: 'depth', flipped: new Set() });
-    const rows = useMemo(() => (enabled ? flatten(root, openness) : []), [root, openness, enabled]);
+    const rows = useMemo(
+        () => (enabled && !failed ? flatten(root, openness) : []),
+        [root, openness, enabled, failed],
+    );
     // By index: opening or closing a row changes only the rows after it.
     const [active, setActive] = useState(0);
     const [shownWhole, setShownWhole] = useState<ReadonlySet<string>>(new Set());
@@ -353,6 +407,7 @@ function useTree(text: string, enabled: boolean) {
         [rows],
     );
     return {
+        failed,
         rows,
         active: Math.min(active, Math.max(0, rows.length - 1)),
         setActive,
@@ -441,12 +496,24 @@ function TreeView({ tree, label, hidden }: { tree: TreeState; label: string; hid
     const base = useId();
     const rowHeight = useCoarsePointer() ? 44 : 28;
     const { rows, active, setActive, toggle, toggleWhole, shownWhole } = tree;
+    const getItemKey = useCallback((index: number) => rows[index]?.id ?? index, [rows]);
+    // The active row is always drawn, so aria-activedescendant never names a missing element.
+    const rangeExtractor = useCallback(
+        (range: Range) => {
+            const indexes = defaultRangeExtractor(range);
+            if (active < range.count && !indexes.includes(active))
+                return [...indexes, active].sort((a, b) => a - b);
+            return indexes;
+        },
+        [active],
+    );
     // oxlint-disable-next-line react/incompatible-library -- no React Compiler here; the virtualizer re-renders through its own state
     const virtualizer = useVirtualizer({
         count: rows.length,
         getScrollElement: () => scroller.current,
         estimateSize: () => rowHeight,
-        getItemKey: (index) => rows[index]?.id ?? index,
+        getItemKey,
+        rangeExtractor,
         overscan: 12,
         paddingStart: 8,
         paddingEnd: 8,
@@ -524,9 +591,9 @@ function TreeView({ tree, label, hidden }: { tree: TreeState; label: string; hid
                             active={item.index === active}
                             whole={shownWhole.has(row.id)}
                             measure={virtualizer.measureElement}
-                            onPick={(index) => {
+                            onPick={(index, open) => {
                                 setActive(index);
-                                if (expandable(row)) toggle(row.id);
+                                if (open && expandable(row)) toggle(row.id);
                                 element.current?.focus({ preventScroll: true });
                             }}
                             onWhole={(id) => {
@@ -555,8 +622,8 @@ function keyText(key: PathSegment) {
 }
 
 /* The start of a long string, never cut through the middle of an emoji. */
-function preview(value: string) {
-    let end = STRING_PREVIEW;
+function preview(value: string, length = STRING_PREVIEW) {
+    let end = length;
     const code = value.charCodeAt(end - 1);
     if (code >= 0xd800 && code <= 0xdbff) end--;
     return value.slice(0, end);
@@ -609,7 +676,8 @@ function TreeRow({
     active: boolean;
     whole: boolean;
     measure: (node: Element | null) => void;
-    onPick: (index: number) => void;
+    /* Choosing a row; `open` when it should also open or close (its triangle, a double click). */
+    onPick: (index: number, open: boolean) => void;
     onWhole: (id: string) => void;
 }) {
     const long = truncated(row);
@@ -625,24 +693,37 @@ function TreeRow({
             aria-setsize={row.setSize}
             aria-posinset={row.pos}
             aria-expanded={expandable(row) ? row.open : undefined}
-            aria-selected={active}
+            aria-selected={active || undefined}
             aria-label={spoken(row)}
             data-active={active ? '' : undefined}
-            onClick={() => onPick(index)}
+            onClick={() => onPick(index, false)}
+            onDoubleClick={() => onPick(index, true)}
             className="jv-row absolute top-0 left-0 flex min-h-7 w-full cursor-default items-start gap-1 py-1 pr-3 hover:bg-muted/60 pointer-coarse:min-h-11 pointer-coarse:py-3"
             style={{
                 transform: `translateY(${start}px)`,
                 paddingLeft: `${0.5 + (row.level - 1)}rem`,
             }}
         >
-            <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-                {expandable(row) && (
+            {expandable(row) ? (
+                // The triangle opens and closes; the rest of the row only chooses it. Its target
+                // runs the row's full height.
+                // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- Right, Left and Enter on the tree do this from the keyboard
+                <span
+                    className="-my-1 flex w-5 shrink-0 cursor-pointer items-center justify-center self-stretch text-muted-foreground hover:text-foreground pointer-coarse:-my-3 pointer-coarse:w-8"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onPick(index, true);
+                    }}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                >
                     <ChevronRightIcon
                         className={cn('size-3.5', row.open && 'rotate-90')}
                         aria-hidden="true"
                     />
-                )}
-            </span>
+                </span>
+            ) : (
+                <span className="w-5 shrink-0 pointer-coarse:w-8" />
+            )}
             {row.key !== null && (
                 <span
                     className={cn(
@@ -690,7 +771,15 @@ function Value({ row, whole }: { row: Row; whole: boolean }) {
             if (whole)
                 return (
                     <span className="jv-string min-w-0 whitespace-pre-wrap wrap-anywhere">
-                        {`"${value}"`}
+                        {value.length > STRING_WHOLE
+                            ? `"${preview(value, STRING_WHOLE)}…"`
+                            : `"${value}"`}
+                        {value.length > STRING_WHOLE && (
+                            <span className="font-sans text-muted-foreground">
+                                {' '}
+                                The rest is in Text.
+                            </span>
+                        )}
                     </span>
                 );
             const long = value.length > STRING_PREVIEW;

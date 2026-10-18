@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { describeParseError, formatJson, inspectJson, jsonPath } from '@/lib/json';
 
 /* What this engine's JSON.parse throws for `text`. */
@@ -50,13 +50,22 @@ describe('describeParseError', () => {
             reason: "expected ',' or '}' after property value in object",
             line: 3,
             column: 5,
+            offset: 13,
         });
         const safari = new SyntaxError('JSON Parse error: Unexpected identifier "tru"');
         expect(describeParseError(safari, '[1,\n tru]')).toEqual({
             reason: 'unexpected identifier "tru"',
             line: 2,
             column: 5,
+            offset: 8,
         });
+    });
+
+    it("drops Chrome's offset from a reason that ends 'after JSON at position'", () => {
+        const text = '{"a": 1} x';
+        const problem = describeParseError(thrown(text), text);
+        expect(problem).toMatchObject({ line: 1, column: 10 });
+        expect(problem.reason).not.toMatch(/position|line \d/);
     });
 });
 
@@ -79,6 +88,22 @@ describe('formatJson', () => {
         expect(formatJson('{"a":[1,2,{}],"b":"x,y"}').nodes).toBe(6);
         expect(formatJson('[]').nodes).toBe(1);
     });
+
+    it('measures nesting, an empty container included', () => {
+        expect(formatJson('[1]').depth).toBe(1);
+        expect(formatJson('{"a":[[]]}').depth).toBe(3);
+        expect(formatJson('"x"').depth).toBe(0);
+        const deep = `${'['.repeat(3000)}${']'.repeat(3000)}`;
+        expect(formatJson(deep).depth).toBe(3000);
+    });
+
+    it('notices a key repeated within one object, and only within one', () => {
+        expect(formatJson('{"a":1,"a":2}').duplicates).toBe(true);
+        expect(formatJson('{"a":1,"b":{"a":2}}').duplicates).toBe(false);
+        expect(formatJson('[{"a":1},{"a":2}]').duplicates).toBe(false);
+        // A value that happens to equal a key is not a key.
+        expect(formatJson('{"a":"a","b":["a"]}').duplicates).toBe(false);
+    });
 });
 
 describe('inspectJson', () => {
@@ -87,7 +112,36 @@ describe('inspectJson', () => {
             ok: false,
             problem: { line: 1, column: 9 },
         });
-        expect(inspectJson('[1]')).toEqual({ ok: true, pretty: '[\n  1\n]', nodes: 2 });
+        expect(inspectJson('[1]')).toEqual({
+            ok: true,
+            pretty: '[\n  1\n]',
+            nodes: 2,
+            depth: 1,
+            duplicates: false,
+        });
+    });
+
+    it('lays out an invalid file whose line is too long to draw, and marks the problem in the layout', () => {
+        const items = Array.from({ length: 2000 }, (_, i) => `{"id":${i}}`);
+        items.splice(1500, 0, '{"id":tru}');
+        const text = `{"items":[${items.join(',')}]}`;
+        const result = inspectJson(text);
+        if (result.ok || !result.layout) throw new Error('expected a laid-out invalid file');
+        expect(result.problem.line).toBe(1);
+        const marked = result.layout.text.split('\n')[result.layout.line! - 1];
+        expect(marked).toContain('tru');
+        // A file with short lines is shown as written.
+        expect(inspectJson('{\n"a": tru\n}')).toMatchObject({ ok: false, layout: null });
+    });
+
+    it('treats running out of stack on valid JSON as deep, not invalid', () => {
+        // Safari's parser recurses where Chrome's doesn't; this is what it throws.
+        const parse = vi.spyOn(JSON, 'parse').mockImplementation(() => {
+            throw new RangeError('Maximum call stack size exceeded.');
+        });
+        expect(inspectJson('[[[1]]]')).toMatchObject({ ok: true, depth: 3 });
+        expect(inspectJson('[[[1]]')).toMatchObject({ ok: false });
+        parse.mockRestore();
     });
 });
 
