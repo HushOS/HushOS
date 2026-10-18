@@ -53,6 +53,7 @@ import {
     TAX_LINE,
     TAX_ON_CHARGES,
     tierMoves,
+    upgradeWaiting,
     type FamilyBilling,
     type FamilyBillingFull,
     type FamilyGlance,
@@ -317,6 +318,19 @@ function PlanTop(props: Inner) {
                             {payerYou
                                 ? 'To keep the plan, resume it in Manage payment and invoices, under Billing.'
                                 : `${payerName ?? 'The person who pays for it'} can resume it before then.`}
+                        </AlertDescription>
+                    </Alert>
+                </div>
+            );
+        if (upgradeWaiting(live) && payerYou)
+            return (
+                <div className="px-5 sm:px-8" data-plan-notice="upgrade-waiting">
+                    <Alert variant="warning">
+                        <AlertDescription>
+                            Your bank hasn’t confirmed the charge for{' '}
+                            {tierName({ name: live.productName })} yet. It starts once it does:
+                            confirm it in Manage payment and invoices. Until then the family keeps
+                            the storage it has.
                         </AlertDescription>
                     </Alert>
                 </div>

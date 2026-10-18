@@ -80,14 +80,15 @@ export function quoteUnitsChange(input: {
 }
 
 /*
- * About what Polar charges at once for moving a family to a bigger tier with
- * `invoice` proration, before tax: the difference between the two plans at
- * `units` places (the base, and the per-member rate past those included), for
- * the part of the period left, by the second and truncated to the minor unit.
- * Polar credits the old plan's unused time and charges the new plan's on
- * separate lines, each rounded on its own, so the order can differ from this
- * by a minor unit either way: the page says "about". A move to a smaller tier
- * waits for the renewal and costs nothing now.
+ * About what Polar charges at once for moving a family to a bigger tier of the
+ * same billing period with `invoice` proration, before tax. The period does
+ * not restart (spike 8, T2): Polar charges each price of the new plan (the
+ * base, and the members past those included) for the part of the period left
+ * and credits each of the old plan's, by the second, every line rounded to the
+ * nearest minor unit (a plan change's lines round; a raise's truncate). T2:
+ * 3000 against 2000 with 0.98961 of the period left was 990 net. The page
+ * still says "about": tax, and Polar's exact second, come on top. A move to a
+ * smaller tier waits for the renewal and costs nothing now.
  */
 export function quoteTierChange(input: {
     from: { base: number; perMember: number; includedMembers: number };
@@ -97,15 +98,20 @@ export function quoteTierChange(input: {
     periodEnd: Date;
     now?: Date;
 }) {
-    const price = (plan: typeof input.from) =>
-        BigInt(plan.base) +
-        BigInt(plan.perMember) * BigInt(Math.max(0, input.units - plan.includedMembers));
-    const difference = price(input.to) - price(input.from);
-    const total = Math.floor((input.periodEnd.getTime() - input.periodStart.getTime()) / 1000);
-    if (difference <= 0n || total <= 0) return 0;
+    const total = BigInt(
+        Math.floor((input.periodEnd.getTime() - input.periodStart.getTime()) / 1000),
+    );
+    if (total <= 0n) return 0;
     const now = (input.now ?? new Date()).getTime();
-    const left = Math.min(total, Math.max(0, Math.floor((input.periodEnd.getTime() - now) / 1000)));
-    return Number((difference * BigInt(left)) / BigInt(total));
+    const left = BigInt(
+        Math.min(Number(total), Math.max(0, Math.floor((input.periodEnd.getTime() - now) / 1000))),
+    );
+    // One line, prorated and rounded half up to the minor unit.
+    const line = (amount: number) => (BigInt(amount) * left * 2n + total) / (2n * total);
+    const lines = (plan: typeof input.from) =>
+        line(plan.base) + line(plan.perMember * Math.max(0, input.units - plan.includedMembers));
+    const charge = lines(input.to) - lines(input.from);
+    return charge > 0n ? Number(charge) : 0;
 }
 
 const GIB = 1024n ** 3n;

@@ -82,7 +82,8 @@ export function statusOf(error: unknown) {
 
 /* Every recurring product marked as a HushOS plan, archived ones included. */
 export type CatalogueProduct = Plan & { archived: boolean };
-export type FamilyCatalogueProduct = FamilyPlan & { archived: boolean };
+/* `createdAt` picks one of two products for the same tier and period; neither leaves the server. */
+export type FamilyCatalogueProduct = FamilyPlan & { archived: boolean; createdAt: string };
 type Catalogues = { plans: CatalogueProduct[]; families: FamilyCatalogueProduct[] };
 
 let catalogue: { at: number; value: Catalogues } | undefined;
@@ -229,6 +230,7 @@ export function readFamilyProduct(product: models.Product): FamilyCatalogueProdu
         maxMembers: FAMILY_MAX_MEMBERS,
         quotaBytes: quotaBytes.toString(),
         archived: product.is_archived,
+        createdAt: String(product.created_at ?? ''),
     };
 }
 
@@ -252,6 +254,21 @@ async function loadCatalogue(): Promise<Catalogues> {
             Number(BigInt(a.quotaBytes) - BigInt(b.quotaBytes)) ||
             a.interval.localeCompare(b.interval),
     );
+    const offered = offeredFamilies(families);
+    for (const family of families)
+        if (
+            family.tier !== null &&
+            !family.archived &&
+            !offered.includes(family) &&
+            offered.some(
+                (other) => other.tier === family.tier && other.interval === family.interval,
+            )
+        )
+            log.warn({
+                message:
+                    'Two family products for one tier and billing period: the newest is offered',
+                billing: { product: family.id, tier: family.tier, interval: family.interval },
+            });
     return { plans, families };
 }
 
@@ -284,14 +301,30 @@ export async function getFamilyCatalogue() {
 }
 
 /*
- * The family plans a page offers: not archived, and once any tier is on sale,
- * only the tiers. The single Family plan from before them is then never shown
- * beside them, whether or not the operator has archived it yet; anyone on it
- * keeps it, read from the full catalogue.
+ * The family plans a page offers: none archived; one product per tier and
+ * billing period, the newest by its creation when two share them (an operator
+ * made another; the older still serves its subscribers); and the single Family
+ * plan from before the tiers only for a billing period no tier is offered in,
+ * so it never shows beside them. Anyone on a plan not offered keeps it, read
+ * from the full catalogue. Catalogue order is kept.
  */
 export function offeredFamilies<T extends FamilyCatalogueProduct>(families: readonly T[]) {
     const live = families.filter((family) => !family.archived);
-    return live.some((family) => family.tier !== null)
-        ? live.filter((family) => family.tier !== null)
-        : live;
+    const newest = new Map<string, T>();
+    for (const family of live) {
+        if (family.tier === null) continue;
+        const key = `${family.tier}:${family.interval}`;
+        const seen = newest.get(key);
+        if (
+            !seen ||
+            family.createdAt > seen.createdAt ||
+            (family.createdAt === seen.createdAt && family.id > seen.id)
+        )
+            newest.set(key, family);
+    }
+    const tiered = new Set([...newest.values()].map((family) => family.interval));
+    const kept = new Set(newest.values());
+    return live.filter((family) =>
+        family.tier === null ? !tiered.has(family.interval) : kept.has(family),
+    );
 }

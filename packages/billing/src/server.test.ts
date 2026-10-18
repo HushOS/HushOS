@@ -172,11 +172,10 @@ const polar = {
     /* Runs once as Polar takes the next product change: an admission landing mid-flight. */
     beforeProductChange: null as (() => Promise<void>) | null,
     /*
-     * Whether Polar's one pending update holds a single scheduled change, so a
-     * new one replaces the other (unconfirmed in the sandbox; by default the
-     * fake merges a product move and a cut, as the model's nullable fields suggest).
+     * A Polar that answers 200 to a scheduled product change and keeps none of it: a
+     * pending update HushOS can never see settle, to prove re-issues don't repeat.
      */
-    pendingHoldsOne: false,
+    ignoresMoves: false,
     orders: [] as {
         id: string;
         subscription_id: string;
@@ -520,6 +519,9 @@ const fakeClient = {
                 subscription.pending_update = null;
                 return structuredClone(subscription);
             }
+            // Spike 8, T1: a product change and units in one call are refused.
+            if (typeof body.product_id === 'string' && typeof body.units === 'number')
+                throw new PolarClientError(422, { error: 'HTTPValidationError' });
             // A product change keeps `units` (unit to unit, spike 1); a plan set to end refuses it.
             if (typeof body.product_id === 'string') {
                 if (subscription.cancel_at_period_end)
@@ -527,11 +529,11 @@ const fakeClient = {
                 const hook = polar.beforeProductChange;
                 polar.beforeProductChange = null;
                 await hook?.();
+                // T1: a scheduled change overwrites only its own part of the pending update.
                 if (body.proration_behavior === 'next_period') {
+                    if (polar.ignoresMoves) return structuredClone(subscription);
                     subscription.pending_update = {
-                        units: polar.pendingHoldsOne
-                            ? null
-                            : (subscription.pending_update?.units ?? null),
+                        units: subscription.pending_update?.units ?? null,
                         product_id: body.product_id,
                         applies_at: subscription.current_period_end,
                     };
@@ -546,7 +548,7 @@ const fakeClient = {
                         created_at: new Date().toISOString(),
                     });
                 if (polar.raiseRefusal) throw new PolarClientError(402, polar.raiseRefusal);
-                // An immediate change deletes the pending update, as a raise does.
+                // T1: an immediate product change drops the whole pending update.
                 subscription.product_id = body.product_id;
                 subscription.amount = planAmount(
                     body.product_id,
@@ -571,17 +573,26 @@ const fakeClient = {
                     await hook?.();
                     subscription.pending_update = {
                         units: body.units,
-                        product_id: polar.pendingHoldsOne
-                            ? null
-                            : (subscription.pending_update?.product_id ?? null),
+                        product_id: subscription.pending_update?.product_id ?? null,
                         applies_at: subscription.current_period_end,
                     };
                     return structuredClone(subscription);
                 }
                 const raise = body.units > (subscription.units ?? 0);
+                // T1: an immediate raise drops only the pending units; a scheduled move survives.
+                const dropUnits = () => {
+                    const product = subscription.pending_update?.product_id ?? null;
+                    subscription.pending_update = product
+                        ? {
+                              units: null,
+                              product_id: product,
+                              applies_at: subscription.current_period_end,
+                          }
+                        : null;
+                };
                 if (raise && polar.raiseLeavesOrder) {
                     subscription.units = body.units;
-                    subscription.pending_update = null;
+                    dropUnits();
                     polar.orders.push({
                         id: `order_${polar.orders.length + 1}`,
                         subscription_id: id,
@@ -593,7 +604,7 @@ const fakeClient = {
                 if (raise && polar.raiseRefusal)
                     throw new PolarClientError(402, polar.raiseRefusal);
                 subscription.units = body.units;
-                subscription.pending_update = null;
+                dropUnits();
                 return structuredClone(subscription);
             }
             if (typeof body.cancel_at_period_end === 'boolean')
@@ -697,7 +708,7 @@ beforeEach(async () => {
     polar.beforeCut = null;
     polar.ordersFail = false;
     polar.beforeProductChange = null;
-    polar.pendingHoldsOne = false;
+    polar.ignoresMoves = false;
     polar.orders = [];
     billing.setCutRetryQueue(undefined);
     polar.calls = [];
@@ -732,6 +743,63 @@ describe('catalogue', () => {
             MAX_FAMILY,
         ]);
         expect(catalogue.families[0]).not.toHaveProperty('archived');
+    });
+
+    test('a family product with a tier key HushOS does not know is dropped', async () => {
+        const { readFamilyProduct } = await import('./provider');
+        const mega = polar.products.find((candidate) => candidate.name === 'Family Mega (monthly)');
+        expect(mega?.metadata).toMatchObject({ hushos_tier: 'mega' });
+        expect(readFamilyProduct(mega as never)).toBeNull();
+        // The same product with a known key reads.
+        expect(
+            readFamilyProduct({
+                ...mega,
+                metadata: { ...mega!.metadata, hushos_tier: 'max' },
+            } as never),
+        ).toMatchObject({ tier: 'max' });
+        expect((await billing.listCatalogue()).families.map((family) => family.name)).not.toContain(
+            'Family Mega (monthly)',
+        );
+    });
+
+    test('two products for one tier and period: the newest is offered, whatever the order', async () => {
+        const { offeredFamilies, readFamilyProduct } = await import('./provider');
+        const read = (id: string, createdAt: string, newId = id) => ({
+            ...readFamilyProduct(polar.products.find((candidate) => candidate.id === id) as never)!,
+            id: newId,
+            createdAt,
+        });
+        const older = read(PLUS, '2026-10-01T00:00:00Z');
+        const newer = read(PLUS, '2026-10-18T00:00:00Z', 'plus-again');
+        const max = read(MAX_FAMILY, '2026-10-01T00:00:00Z');
+        expect(offeredFamilies([older, newer, max])).toEqual([newer, max]);
+        expect(offeredFamilies([newer, older, max])).toEqual([newer, max]);
+        // The same moment: the larger id, so every server picks the same one.
+        const twin = { ...older, id: 'zzz' };
+        expect(offeredFamilies([twin, older])).toEqual([twin]);
+        expect(offeredFamilies([older, twin])).toEqual([twin]);
+        // An archived newer one leaves the older on sale.
+        expect(offeredFamilies([older, { ...newer, archived: true }])).toEqual([older]);
+    });
+
+    test('the single plan is hidden only in a billing period a tier is offered in', async () => {
+        const { offeredFamilies, readFamilyProduct } = await import('./provider');
+        const single = readFamilyProduct(
+            polar.products.find((candidate) => candidate.id === FAMILY) as never,
+        )!;
+        const singleYearly = { ...single, id: 'family-yearly', interval: 'year' as const };
+        const read = (id: string) =>
+            readFamilyProduct(polar.products.find((candidate) => candidate.id === id) as never)!;
+        // Monthly tiers only: the yearly single plan stays on sale; the monthly one goes.
+        expect(offeredFamilies([single, singleYearly, read(PLUS), read(MAX_FAMILY)])).toEqual([
+            singleYearly,
+            read(PLUS),
+            read(MAX_FAMILY),
+        ]);
+        expect(offeredFamilies([single, singleYearly, read(PRO_YEARLY)])).toEqual([
+            single,
+            read(PRO_YEARLY),
+        ]);
     });
 
     test('the single plan is offered only while no tier is, and never once archived', async () => {
@@ -1542,16 +1610,21 @@ describe('tier quotes', () => {
     const quote = (from: typeof pro, to: typeof pro, units: number, now: Date) =>
         billing.quoteTierChange({ from, to, units, periodStart: start, periodEnd: end, now });
 
-    test('an upgrade charges the difference for the time left, truncated', () => {
+    test('an upgrade charges the difference for the time left, each line rounded to the cent', () => {
         expect(quote(pro, max, 4, start)).toBe(1000);
         expect(quote(pro, max, 7, at(0.5))).toBe(500);
-        // A third left: 333.33 truncates to 333; two thirds, 666.67 to 666, never up.
+        // Spike 8, T2: 0.98961 of the period left was 2969 charged less 1979 credited, 990.
+        expect(quote(pro, max, 4, at(0.98961))).toBe(990);
+        // Two thirds: 2000 charged less 1333.33 credited, rounded to 1333: 667, not 666.
+        expect(quote(pro, max, 4, at(2 / 3))).toBe(667);
+        // A third: 1000 less 666.67, rounded to 667: 333.
         expect(quote(pro, max, 4, at(1 / 3))).toBe(333);
-        expect(quote(pro, max, 4, at(2 / 3))).toBe(666);
         // Places carry over at the same per-member rate: seven places cost no more to move.
         expect(quote(pro, max, 7, start)).toBe(quote(pro, max, 4, start));
         // A different rate counts only the places past those included.
         expect(quote(pro, { ...max, perMember: 200 }, 7, start)).toBe(1000 + 3 * 50);
+        // Each line rounds on its own: 3 × 150 × 1/3 is 150 exactly, 3000 × 1/3 is 1000.
+        expect(quote({ ...pro, base: 1001 }, max, 4, at(1 / 3))).toBe(1000 - 334);
     });
 
     test('a downgrade costs nothing now, and nothing is left past the period', () => {
@@ -2448,7 +2521,7 @@ describe('family tiers', () => {
         expect(await live(groupId)).toMatchObject({ units: 5, paidUnits: 5 });
     });
 
-    test('an admission that buys a place keeps a scheduled downgrade, which Polar dropped with the raise', async () => {
+    test('an admission that buys a place keeps a scheduled downgrade, and nothing is sent again', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({
             product: PRO_FAMILY,
             units: 4,
@@ -2462,9 +2535,9 @@ describe('family tiers', () => {
         });
         polar.calls = [];
         expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'ok' });
+        // The raise drops only Polar's pending units (T1): the move to Family Plus survives.
         expect(updates()).toEqual([
             `subscriptions.update:${subscription.id}:${JSON.stringify({ units: 5, proration_behavior: 'invoice' })}`,
-            `subscriptions.update:${subscription.id}:${JSON.stringify({ product_id: PLUS, proration_behavior: 'next_period' })}`,
         ]);
         expect(subscription).toMatchObject({
             product_id: PRO_FAMILY,
@@ -2474,16 +2547,13 @@ describe('family tiers', () => {
         expect(await seatLimit(groupId)).toBe(5);
     });
 
-    test('a move Polar refuses to take back is queued, and the retry puts it in place', async () => {
-        const { payer, groupId, subscription } = await familyOnPlan({
-            product: PRO_FAMILY,
-            units: 4,
-            members: 3,
-        });
+    test('a move Polar lost is re-issued by reconcile; a refusal is queued and the retry puts it in place', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
         await billing.changeGroupPlan(payer, groupId, PLUS);
         const queued: string[] = [];
         billing.setCutRetryQueue(async (id) => queued.push(id));
-        // The raise deletes the move at Polar; asking for it again fails once.
+        // Lost at Polar (support cleared it, say); asking for it again fails once.
+        subscription.pending_update = null;
         const update = fakeClient.subscriptions.update.bind(fakeClient.subscriptions);
         let failures = 1;
         fakeClient.subscriptions.update = async (id, body) => {
@@ -2492,7 +2562,7 @@ describe('family tiers', () => {
             return update(id, body);
         };
         try {
-            expect(await billing.setGroupUnits(payer, groupId, 5)).toMatchObject({ url: null });
+            await billing.reconcileGroup(groupId);
         } finally {
             fakeClient.subscriptions.update = update;
         }
@@ -2519,33 +2589,85 @@ describe('family tiers', () => {
         expect((await billing.changeGroupPlan(payer, groupId, PRO_FAMILY)).when).toBe('kept');
         expect(subscription.pending_update).toMatchObject({ units: 6, product_id: null });
         expect(await live(groupId)).toMatchObject({ intendedProductId: null, intendedUnits: 6 });
-        // An upgrade deletes the pending update too; the cut comes back, at the new tier.
+        // An upgrade drops the whole pending update (T1); the cut comes back, at the new tier.
+        await billing.changeGroupPlan(payer, groupId, PLUS);
         await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        // The upgrade replaced the move to Family Plus: that is not asked for again.
         expect(subscription).toMatchObject({
             product_id: MAX_FAMILY,
             units: 8,
-            pending_update: { units: 6 },
+            pending_update: { units: 6, product_id: null },
         });
+        expect((await live(groupId))?.intendedProductId).toBeNull();
         expect(await seatLimit(groupId)).toBe(6);
     });
 
-    test('where Polar holds one scheduled change at a time, re-asking stops after one try each', async () => {
-        polar.pendingHoldsOne = true;
+    test('a renewal is billed at what the payer chose, and reconciles settle with no further writes', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({
             product: PRO_FAMILY,
             units: 8,
         });
         await billing.setGroupUnits(payer, groupId, 6);
-        polar.calls = [];
         await billing.changeGroupPlan(payer, groupId, PLUS);
-        // The move, the cut asked for again, the move asked for again: then it stops.
-        expect(updates()).toHaveLength(3);
-        expect(subscription.pending_update).toMatchObject({ product_id: PLUS, units: null });
-        // Both stay recorded, so each reconcile asks again, and each stops as quickly.
-        expect(await live(groupId)).toMatchObject({ intendedProductId: PLUS, intendedUnits: 6 });
+        const renewal = () =>
+            planAmount(
+                subscription.pending_update?.product_id ?? subscription.product_id,
+                subscription.pending_update?.units ?? subscription.units ?? 0,
+                'usd',
+            );
+        // Family Plus at six places, not Family Pro at eight (2600) nor either one alone.
+        expect(renewal()).toBe(1000 + 2 * 150);
+        // Polar loses all of it (the dashboard, support): one reconcile puts back both parts...
+        subscription.pending_update = null;
         polar.calls = [];
         await billing.reconcileGroup(groupId);
-        expect(updates().length).toBeLessThanOrEqual(3);
+        expect(updates()).toEqual([
+            `subscriptions.update:${subscription.id}:${JSON.stringify({ product_id: PLUS, proration_behavior: 'next_period' })}`,
+            `subscriptions.update:${subscription.id}:${JSON.stringify({ units: 6, proration_behavior: 'next_period' })}`,
+        ]);
+        expect(renewal()).toBe(1300);
+        // ...and the deliveries those writes cause, and any later, send nothing.
+        polar.calls = [];
+        for (let delivery = 0; delivery < 3; delivery++)
+            await billing.handleWebhook(
+                await signedWebhook({
+                    type: 'subscription.updated',
+                    data: { id: subscription.id, customer: { external_id: `group:${groupId}` } },
+                }),
+            );
+        expect(
+            polar.calls.filter((call) => call.startsWith('customers.getStateExternal')),
+        ).toHaveLength(3);
+        expect(updates()).toEqual([]);
+        expect(renewal()).toBe(1300);
+    });
+
+    test('a pending update that never settles is re-issued once per guard window, never per delivery', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
+        polar.ignoresMoves = true;
+        await billing.changeGroupPlan(payer, groupId, PLUS);
+        expect(subscription.pending_update ?? null).toBeNull();
+        const delivery = async () =>
+            billing.handleWebhook(
+                await signedWebhook({
+                    type: 'customer.state_changed',
+                    data: { id: 'cus_team', external_id: `group:${groupId}`, type: 'team' },
+                }),
+            );
+        polar.calls = [];
+        // The first delivery re-issues; that write's own deliveries, and more, write nothing.
+        for (let index = 0; index < 4; index++) await delivery();
+        expect(updates()).toHaveLength(1);
+        // Past the guard the next reconcile asks once more.
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(new Date().getTime() + 16 * 60_000);
+        try {
+            polar.calls = [];
+            await delivery();
+            await delivery();
+            expect(updates()).toHaveLength(1);
+        } finally {
+            clock.mockRestore();
+        }
     });
 
     test('the plan is changed by its payer only, and an upgrade needs them in the family', async () => {
@@ -2625,7 +2747,7 @@ describe('family tiers', () => {
             url: expect.stringContaining(payer.id),
         });
         expect(await pool(groupId)).toBe(PLUS_POOL);
-        // Polar took the change but its order waits for the bank: the portal, and the pool it bought.
+        // Polar took the change but its order waits for the bank: the portal, and no bigger pool.
         polar.raiseRefusal = null;
         polar.raiseLeavesOrder = true;
         expect(await billing.changeGroupPlan(payer, groupId, MAX_FAMILY)).toMatchObject({
@@ -2633,5 +2755,110 @@ describe('family tiers', () => {
             when: 'now',
         });
         expect(subscription.product_id).toBe(MAX_FAMILY);
+        expect(await pool(groupId)).toBe(PLUS_POOL);
+    });
+
+    test('an unpaid upgrade keeps the tier, pool and places paid for until its order is paid', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({
+            product: PRO_FAMILY,
+            units: 5,
+        });
+        polar.raiseLeavesOrder = true;
+        const result = await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        polar.raiseLeavesOrder = false;
+        expect(result).toMatchObject({
+            confirmPayment: true,
+            url: expect.stringContaining(payer.id),
+        });
+        expect(subscription.product_id).toBe(MAX_FAMILY);
+        expect(await pool(groupId)).toBe(FAMILY_POOL);
+        expect(await live(groupId)).toMatchObject({
+            productId: MAX_FAMILY,
+            paidProductId: PRO_FAMILY,
+            paidQuotaBytes: FAMILY_POOL,
+            paidUnits: 5,
+        });
+        expect((await priced(Promise.resolve(result.billing))).subscription?.paidProductId).toBe(
+            PRO_FAMILY,
+        );
+        // A delivery while it waits changes nothing.
+        await billing.reconcileGroup(groupId);
+        expect(await pool(groupId)).toBe(FAMILY_POOL);
+        // Paid: the bigger pool now.
+        for (const order of polar.orders) order.status = 'paid';
+        await billing.reconcileGroup(groupId);
+        expect(await pool(groupId)).toBe(MAX_POOL);
+        expect(await live(groupId)).toMatchObject({ paidProductId: MAX_FAMILY, paidUnits: 5 });
+    });
+
+    test('a second upgrade is refused while the first waits for the bank; a downgrade is not', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS });
+        polar.raiseLeavesOrder = true;
+        await billing.changeGroupPlan(payer, groupId, PRO_FAMILY);
+        polar.raiseLeavesOrder = false;
+        polar.calls = [];
+        await expect(billing.changeGroupPlan(payer, groupId, MAX_FAMILY)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringMatching(/hasn’t confirmed/),
+        });
+        expect(updates()).toEqual([]);
+        expect(subscription.product_id).toBe(PRO_FAMILY);
+        expect(await pool(groupId)).toBe(PLUS_POOL);
+    });
+
+    test('an upgrade left unpaid past seven days is reverted at the period end; the revert goes if it is paid', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS });
+        polar.raiseLeavesOrder = true;
+        await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        polar.raiseLeavesOrder = false;
+        // Six days: not yet.
+        polar.orders[0]!.created_at = new Date(Date.now() - 6 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update ?? null).toBeNull();
+        polar.orders[0]!.created_at = new Date(Date.now() - 8 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        // Renews on Family Plus, the tier paid for, never on the unpaid Family Max.
+        expect(subscription).toMatchObject({
+            product_id: MAX_FAMILY,
+            pending_update: { product_id: PLUS },
+        });
+        expect(await live(groupId)).toMatchObject({
+            intendedProductId: PLUS,
+            intendedProductStale: true,
+        });
+        expect(await pool(groupId)).toBe(PLUS_POOL);
+        // Paid after all: the revert is withdrawn and Family Max is the family's.
+        polar.orders[0]!.status = 'paid';
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update ?? null).toBeNull();
+        expect(await live(groupId)).toMatchObject({
+            intendedProductId: null,
+            paidProductId: MAX_FAMILY,
+        });
+        expect(await pool(groupId)).toBe(MAX_POOL);
+    });
+
+    test('an admission’s unpaid place stays unpaid when an upgrade lands beside it', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({
+            product: PRO_FAMILY,
+            units: 4,
+            members: 3,
+        });
+        // A fifth place is bought while the upgrade is on its way, and its order waits.
+        polar.beforeProductChange = async () => {
+            polar.raiseLeavesOrder = true;
+            await setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'accepted',
+            });
+            expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+            polar.raiseLeavesOrder = false;
+        };
+        await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        expect(subscription).toMatchObject({ product_id: MAX_FAMILY, units: 5 });
+        expect(await live(groupId)).toMatchObject({ units: 5, paidUnits: 4 });
+        expect(await seatLimit(groupId)).toBe(4);
+        expect(await pool(groupId)).toBe(FAMILY_POOL);
     });
 });

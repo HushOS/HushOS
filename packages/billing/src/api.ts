@@ -91,6 +91,11 @@ export type FamilyBillingDetail = {
         pendingUnits: number | null;
         /* A smaller tier the family moves to at the period's end (a plan change at renewal). */
         pendingProductId: string | null;
+        /*
+         * The tier paid for. Another than `productId` while an upgrade's charge waits for the
+         * bank: until it is paid the family keeps this tier's pool (`storage` is that pool).
+         */
+        paidProductId: string;
         includedMembers: number;
         quotaBytes: string;
         /* With the end, what a raise is prorated over: the web quotes it with `quoteUnitsChange`. */

@@ -1189,6 +1189,7 @@ test.describe('family plans, with the billing summary stubbed', () => {
             paidUnits: 8,
             pendingUnits: null,
             pendingProductId: null,
+            paidProductId: 'pro-month',
             includedMembers: 4,
             quotaBytes: String(2 * 1024 ** 4),
             currentPeriodStart: new Date(Date.now() - 11 * DAY).toISOString(),

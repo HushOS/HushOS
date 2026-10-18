@@ -204,6 +204,9 @@ export function renewalAmount(summary: FamilyBillingFull, units: number, plan?: 
     return { amount: price.base + price.perMember * billable, currency: live.currency };
 }
 
+/* An upgrade whose charge the bank hasn't confirmed: the family keeps the tier it paid for. */
+export const upgradeWaiting = (live: FamilySubscription) => live.paidProductId !== live.productId;
+
 /* The smaller tier the family moves to at the period's end, if one is scheduled. */
 export function pendingTier(summary: FamilyBillingFull): FamilyPlan | undefined {
     const id = summary.subscription?.pendingProductId;
@@ -337,8 +340,14 @@ export function familyActions(
     const live = state.subscription;
     return {
         choosePlan: false,
-        // The server refuses a move while the bank holds a renewal; the card comes first.
-        changePlan: changeable && !state.overdue && tierMoves(summary).length > 0,
+        // The server refuses a move while the bank holds a renewal; the card comes first. Nor
+        // does anything stack on a charge the bank hasn't confirmed, places or an upgrade.
+        changePlan:
+            changeable &&
+            !state.overdue &&
+            !upgradeWaiting(live) &&
+            live.paidUnits >= live.units &&
+            tierMoves(summary).length > 0,
         keepTier: changeable && !state.overdue && live.pendingProductId !== null,
         addPlaces: changeable && addRange(summary) !== null,
         removePlaces:

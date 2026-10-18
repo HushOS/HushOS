@@ -77,6 +77,7 @@ function summary(
                   paidUnits,
                   pendingUnits,
                   pendingProductId: null,
+                  paidProductId: FAMILY,
                   includedMembers: 6,
                   quotaBytes: plan.quotaBytes,
                   currentPeriodStart: start.toISOString(),
@@ -356,6 +357,7 @@ function onTier(
     overrides: Parameters<typeof summary>[0] & {
         usedBytes?: bigint;
         pendingProductId?: string | null;
+        paidProductId?: string;
         currency?: string;
     } = {},
 ): FamilyBillingFull {
@@ -373,6 +375,7 @@ function onTier(
             includedMembers: 4,
             quotaBytes: on.quotaBytes,
             pendingProductId: overrides.pendingProductId ?? null,
+            paidProductId: overrides.paidProductId ?? productId,
         },
         storage: { usedBytes: String(overrides.usedBytes ?? 0n), quotaBytes: on.quotaBytes },
     };
@@ -473,5 +476,13 @@ describe('tierMoves', () => {
             familyActions(onTier('pro-month', { pendingProductId: 'plus-month' }), organizer)
                 .keepTier,
         ).toBe(true);
+        // Nothing stacks on a charge the bank hasn't confirmed: an upgrade, or places.
+        expect(
+            familyActions(onTier('max-month', { paidProductId: 'pro-month' }), organizer)
+                .changePlan,
+        ).toBe(false);
+        expect(
+            familyActions(onTier('pro-month', { units: 6, paidUnits: 5 }), organizer).changePlan,
+        ).toBe(false);
     });
 });

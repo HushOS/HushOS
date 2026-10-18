@@ -67,7 +67,9 @@ export async function listCatalogue(): Promise<Catalogue> {
         plans: products
             .filter((product) => !product.archived)
             .map(({ archived: _archived, ...plan }) => plan),
-        families: offeredFamilies(families).map(({ archived: _archived, ...family }) => family),
+        families: offeredFamilies(families).map(
+            ({ archived: _archived, createdAt: _createdAt, ...family }) => family,
+        ),
     };
 }
 

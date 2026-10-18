@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "b8c1b9ff-aec7-4ade-a1c8-2db15d2e647e",
+    "id": "d71836f9-7b56-430e-818d-28a8d75ee0af",
     "prevIds": ["b2b2b243-cb3c-4c68-b2af-08c7a14f3a6e"],
     "ddl": [
         {
@@ -5787,6 +5787,58 @@
             "generated": null,
             "identity": null,
             "name": "intended_product_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "boolean",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "false",
+            "generated": null,
+            "identity": null,
+            "name": "intended_product_stale",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "paid_product_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "bigint",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "paid_quota_bytes",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "reissued_at",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

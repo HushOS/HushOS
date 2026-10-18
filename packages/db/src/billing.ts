@@ -437,10 +437,26 @@ export async function setIntendedUnits(
  * The smaller tier HushOS asked Polar to move the plan to at the period's
  * end, or null once nothing is due (the move applied, or was withdrawn).
  */
-export async function setIntendedProduct(subscriptionId: string, productId: string | null) {
+export async function setIntendedProduct(
+    subscriptionId: string,
+    productId: string | null,
+    stale = false,
+) {
     await db
         .update(groupBillingSubscriptions)
-        .set({ intendedProductId: productId, updatedAt: new Date() })
+        .set({
+            intendedProductId: productId,
+            intendedProductStale: productId !== null && stale,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Notes that HushOS just asked Polar again for the pending update (the reconcile guard). */
+export async function markReissued(subscriptionId: string, at = new Date(Date.now())) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ reissuedAt: at, updatedAt: at })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
@@ -533,6 +549,9 @@ export async function applyGroupState(input: {
                     ...values,
                     // A subscription first seen with an order unpaid has paid for nothing yet.
                     paidUnits: paid === null ? 0 : Math.min(paid, subscription.units),
+                    // Its pool is the checkout's, paid with it.
+                    paidProductId: subscription.productId,
+                    paidQuotaBytes: subscription.quotaBytes,
                 })
                 .onConflictDoUpdate({
                     target: groupBillingSubscriptions.id,
@@ -542,6 +561,19 @@ export async function applyGroupState(input: {
                             paid === null
                                 ? sql`least(${groupBillingSubscriptions.paidUnits}, ${subscription.units})`
                                 : Math.min(paid, subscription.units),
+                        /*
+                         * The tier paid for moves with the places: to the product once nothing
+                         * waits, else only down (a smaller tier at a renewal still unpaid). An
+                         * upgrade awaiting the bank keeps the tier and pool paid before it.
+                         */
+                        paidProductId:
+                            paid === null
+                                ? sql`case when ${subscription.quotaBytes.toString()}::bigint <= coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}) then ${subscription.productId}::text else coalesce(${groupBillingSubscriptions.paidProductId}, ${groupBillingSubscriptions.productId}) end`
+                                : subscription.productId,
+                        paidQuotaBytes:
+                            paid === null
+                                ? sql`least(coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}), ${subscription.quotaBytes.toString()}::bigint)`
+                                : subscription.quotaBytes,
                         updatedAt: now,
                     },
                 });
@@ -581,7 +613,8 @@ export async function applyGroupState(input: {
             .set({ seatLimit: plan ? seatLimitOf(plan) : null, updatedAt: now })
             .where(eq(groups.id, input.groupId));
         const pool = {
-            quotaBytes: plan ? plan.quotaBytes : 0n,
+            // The pool paid for: an upgrade waiting for the bank gives nothing yet.
+            quotaBytes: plan ? (plan.paidQuotaBytes ?? plan.quotaBytes) : 0n,
             expiresAt: plan ? new Date(plan.currentPeriodEnd.getTime() + input.graceMs) : null,
         };
         await tx

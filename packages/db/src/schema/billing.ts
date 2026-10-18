@@ -155,6 +155,21 @@ export const groupBillingSubscriptions = pgTable(
          */
         pendingProductId: text('pending_product_id'),
         intendedProductId: text('intended_product_id'),
+        /* The move above is the stale rule's (an upgrade unpaid past STALE_RAISE_DAYS), not the payer's. */
+        intendedProductStale: boolean('intended_product_stale').notNull().default(false),
+        /*
+         * The tier and pool paid for, as `paid_units` is for places: the product's once no
+         * order of the subscription waits for payment, else the last paid (never above the
+         * product's pool). An upgrade awaiting the bank gives nothing until its order is
+         * paid; the pool Drive reads is this. Null on rows from before it: the product's.
+         */
+        paidProductId: text('paid_product_id'),
+        paidQuotaBytes: bigint('paid_quota_bytes', { mode: 'bigint' }),
+        /*
+         * When HushOS last asked Polar again for a cut or a tier move. A reconcile skips the
+         * re-issue for a while after, so the webhook a re-issue causes never causes another.
+         */
+        reissuedAt: timestamp('reissued_at', { withTimezone: true }),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
