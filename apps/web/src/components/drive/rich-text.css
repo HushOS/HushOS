@@ -20,6 +20,18 @@
     user-select: none;
     border-right: 1px solid var(--rule);
     font-variant-numeric: tabular-nums;
+    white-space: pre;
+}
+/* The line a JSON file stops being valid on: the danger ink on its soft fill, and bold, so it isn't colour alone. */
+.rt-gutter .rt-mark {
+    display: inline-block;
+    box-sizing: content-box;
+    width: 100%;
+    margin: 0 -0.75rem 0 -1.25rem;
+    padding: 0 0.75rem 0 1.25rem;
+    background: var(--destructive-soft);
+    color: var(--destructive);
+    font-weight: 700;
 }
 .rt-source {
     overflow-x: auto;
@@ -33,6 +45,17 @@
     line-height: inherit;
     background: transparent !important;
     white-space: pre;
+}
+/*
+ * A block of lines. The line height is set outright: in the source the block
+ * sits inside <code>, whose smaller text would otherwise shorten every line
+ * and pull the code away from its line numbers.
+ */
+.rt-block {
+    display: block;
+    min-height: 1.2rem;
+    line-height: 1.2rem;
+    content-visibility: auto;
 }
 .rt-plain {
     white-space: pre-wrap;
@@ -215,4 +238,41 @@
 .rt-image-host {
     font-family: var(--font-mono);
     opacity: 0.7;
+}
+
+/*
+ * The JSON tree, in the highlighter's JSON colours (github-light-default and
+ * github-dark-default) so it reads like the same file as the Text view.
+ */
+.jv {
+    --jv-key: light-dark(#116329, #7ee787);
+    --jv-string: light-dark(#0a3069, #a5d6ff);
+    --jv-constant: light-dark(#0550ae, #79c0ff);
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+}
+.jv-row[data-active] {
+    background: var(--muted);
+}
+.jv:focus-visible .jv-row[data-active] {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+}
+.jv-key {
+    color: var(--jv-key);
+}
+.jv-string {
+    color: var(--jv-string);
+}
+.jv-number {
+    color: var(--jv-constant);
+}
+.jv-boolean {
+    color: var(--jv-constant);
+    font-weight: 600;
+}
+.jv-null {
+    color: var(--muted-foreground);
+    font-style: italic;
 }

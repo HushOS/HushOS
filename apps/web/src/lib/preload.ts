@@ -23,6 +23,7 @@ export function preloadViewers() {
                 () => import('@/components/drive/pdf-viewer').then((m) => m.preloadPdf()),
                 () => import('@/components/drive/office-viewer').then((m) => m.preloadOffice()),
                 () => import('@/components/drive/rich-text'),
+                () => import('@/components/drive/json-view').then((m) => m.preloadJsonView()),
                 () => import('@/lib/highlight').then((m) => m.preloadGrammars()),
                 () => import('@/lib/thumbnails').then((m) => m.preloadThumbnailer()),
             ];

@@ -113,7 +113,8 @@ test('previews render each kind on the device: Markdown as a document, code high
     await openPreviewVia(page, 'ArrowLeft', 'notes.md');
     await openPreviewVia(page, 'ArrowLeft', 'module.ts');
     await expect(dialog(page).locator('.shiki span').first()).toBeVisible();
-    await expect(dialog(page).locator('.rt-gutter li')).toHaveCount(4);
+    // One number per line: the gutter is text now, drawn in blocks like the code beside it.
+    await expect(dialog(page).locator('.rt-gutter')).toHaveText(/^\s*1\s+2\s+3\s+4\s*$/);
 
     await openPreviewVia(page, 'ArrowRight', 'notes.md');
     await closePreview(page);

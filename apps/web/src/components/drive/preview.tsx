@@ -28,6 +28,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { formatBytes, formatWhen, nodeSize } from '@/lib/drive';
 import { languageFor } from '@/lib/highlight';
 import {
+    isJsonFile,
     looksLikeText,
     openReader,
     PREVIEW_LIMITS,
@@ -60,6 +61,13 @@ const CodeView = lazy(() =>
 const MarkdownView = lazy(() =>
     import('@/components/drive/rich-text').then((m) => ({ default: m.MarkdownView })),
 );
+const JsonView = lazy(() =>
+    import('@/components/drive/json-view').then((m) => ({ default: m.JsonView })),
+);
+
+/* A control inside the viewer that moves with the arrow keys itself (the JSON tree) keeps them. */
+const ownsArrows = (target: EventTarget | null) =>
+    target instanceof Element && target.closest('[role="tree"]') !== null;
 
 /* An earlier version open in the viewer: when it was replaced, how long it stays, and Restore. */
 export type ViewerVersion = {
@@ -94,8 +102,12 @@ export function Preview({
     const previous = !version && index > 0 ? files[index - 1] : undefined;
     const next = !version && index >= 0 && index < files.length - 1 ? files[index + 1] : undefined;
     const open = current !== null;
-    useHotkey('ArrowLeft', () => previous && onChange(previous), { enabled: open });
-    useHotkey('ArrowRight', () => next && onChange(next), { enabled: open });
+    useHotkey('ArrowLeft', (event) => !ownsArrows(event.target) && previous && onChange(previous), {
+        enabled: open,
+    });
+    useHotkey('ArrowRight', (event) => !ownsArrows(event.target) && next && onChange(next), {
+        enabled: open,
+    });
     // Formatted | Source, offered by the renderer and kept per file.
     const [offered, setOffered] = useState(false);
     const [sourceFor, setSourceFor] = useState<string | null>(null);
@@ -112,7 +124,11 @@ export function Preview({
                 className="inset-0 top-0 left-0 flex h-dvh max-h-none w-dvw max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 bg-background p-0 text-base shadow-none transition-none *:min-w-0 sm:max-w-none sm:p-0"
                 onKeyDown={(event) => {
                     // The dialog holds focus, so the arrows are handled here as well.
-                    if ((event.target as HTMLElement).tagName === 'INPUT') return;
+                    if (
+                        (event.target as HTMLElement).tagName === 'INPUT' ||
+                        ownsArrows(event.target)
+                    )
+                        return;
                     if (event.key === 'ArrowLeft' && previous) onChange(previous);
                     else if (event.key === 'ArrowRight' && next) onChange(next);
                     else return;
@@ -607,6 +623,12 @@ function TextFrame({
     const language = kind === 'markdown' ? 'markdown' : languageFor(node.name);
     if (!text.trim())
         return <Notice icon={<FileMark node={node} size="large" />} title={viewerWords.nothing} />;
+    if (kind === 'text' && !truncated && isJsonFile(node.name, node.metadata?.mime))
+        return (
+            <Suspense fallback={<Opening />}>
+                <JsonView text={text} name={node.name} />
+            </Suspense>
+        );
     return (
         // A document is a sheet lying on the desk, at reading width; long lines scroll inside it.
         <div className="min-h-0 flex-1 overflow-auto px-3 py-4 sm:px-6 sm:py-8">

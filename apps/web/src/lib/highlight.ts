@@ -1,5 +1,5 @@
 import type { Root } from 'hast';
-import type { HighlighterCore, LanguageRegistration } from 'shiki/core';
+import type { GrammarState, HighlighterCore, LanguageRegistration, ThemedToken } from 'shiki/core';
 
 /*
  * Syntax highlighting for the viewer, loaded the first time a file needs it and
@@ -150,7 +150,18 @@ export function languageFor(name: string): string | null {
     return BY_EXTENSION[extension] ?? null;
 }
 
+/*
+ * Text up to this size is coloured as it opens. Past it a file shows plain and
+ * is coloured only when the person asks, since colouring a file this size takes
+ * seconds (TSX runs at about 100 KB a second on a fast laptop, JSON at 2 MB).
+ */
 export const HIGHLIGHT_LIMIT = 512 * 1024;
+/*
+ * Past this, colouring isn't offered at all: a coloured file keeps one element
+ * per token, about 300,000 for each MB, and past 4 MB the tab's memory and
+ * every restyle become the problem rather than the wait.
+ */
+export const COLOUR_CEILING = 4 * 1024 * 1024;
 
 let core: Promise<HighlighterCore> | null = null;
 const loaded = new Set<string>();
@@ -190,6 +201,75 @@ async function ensureLanguage(language: string) {
     await pending;
 }
 
+const THEMES = { light: 'github-light-default', dark: 'github-dark-default' } as const;
+
+/* One line's tokens, each carrying both themes' colours as `--shiki-light` and `--shiki-dark`. */
+export type ColouredLine = ThemedToken[];
+
+/* Lines and characters tokenised per call, whichever comes first; one block of dense TSX stays near 50ms. */
+const BLOCK_LINES = 64;
+const BLOCK_CHARS = 4_000;
+/* A line longer than this (minified code) is left plain, as VS Code does, rather than holding the tab. */
+const LONG_LINE = 10_000;
+/* How long a slice of work runs before the page gets a turn. */
+const SLICE_MS = 24;
+
+/*
+ * Colours lines a block at a time, carrying the grammar's state from one block
+ * to the next so the result is the same as colouring the text in one go, and
+ * hands the page back every few dozen milliseconds. A large file colours from
+ * the top with the tab still answering, instead of freezing it until the end.
+ * `onSlice` gets each slice's lines in order; `cancelled` stops the work early.
+ */
+export async function colourLines(
+    lines: readonly string[],
+    language: string,
+    onSlice: (coloured: ColouredLine[]) => void,
+    cancelled: () => boolean,
+) {
+    if (!LANGUAGES[language]) throw new Error(`No grammar for ${language}.`);
+    await ensureLanguage(language);
+    const instance = await highlighter();
+    let state: GrammarState | undefined;
+    let slice: ColouredLine[] = [];
+    let started = performance.now();
+    for (let start = 0; start < lines.length;) {
+        if (cancelled()) return;
+        let end = start;
+        let chars = 0;
+        while (
+            end < lines.length &&
+            end - start < BLOCK_LINES &&
+            (end === start || chars < BLOCK_CHARS)
+        )
+            chars += lines[end++]!.length;
+        const block = lines.slice(start, end);
+        start = end;
+        const result = instance.codeToTokens(block.join('\n'), {
+            lang: language,
+            themes: THEMES,
+            defaultColor: false,
+            cssVariablePrefix: '--shiki-',
+            grammarState: state,
+            tokenizeMaxLineLength: LONG_LINE,
+        });
+        state = result.grammarState;
+        // Should the highlighter ever split a block differently, it stays plain rather than shifting lines.
+        const tokens =
+            result.tokens.length === block.length
+                ? result.tokens
+                : block.map((line) => [{ content: line, offset: 0 }]);
+        for (const line of tokens) slice.push(line);
+        if (performance.now() - started >= SLICE_MS) {
+            onSlice(slice);
+            slice = [];
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            started = performance.now();
+        }
+    }
+    if (!cancelled() && slice.length) onSlice(slice);
+}
+
 /*
  * Highlights code to a syntax tree with both themes in place: each token
  * carries `--shiki-light` and `--shiki-dark`, and the stylesheet picks one with
@@ -201,7 +281,7 @@ export async function highlight(code: string, language: string): Promise<Root> {
     const instance = await highlighter();
     return instance.codeToHast(code, {
         lang: language,
-        themes: { light: 'github-light-default', dark: 'github-dark-default' },
+        themes: THEMES,
         defaultColor: false,
         cssVariablePrefix: '--shiki-',
     });
