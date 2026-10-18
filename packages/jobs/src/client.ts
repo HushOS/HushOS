@@ -134,7 +134,13 @@ export function getJobClient() {
     return client;
 }
 
-export async function enqueue<N extends QueueName>(name: N, data: JobPayloads[N]) {
+export async function enqueue<N extends QueueName>(
+    name: N,
+    data: JobPayloads[N],
+    options: { startAfterSeconds?: number } = {},
+) {
     const boss = await getJobClient();
-    return boss.send(name, data);
+    return options.startAfterSeconds
+        ? boss.send(name, data, { startAfter: options.startAfterSeconds })
+        : boss.send(name, data);
 }

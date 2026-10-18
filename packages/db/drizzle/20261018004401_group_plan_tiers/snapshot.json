@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "d71836f9-7b56-430e-818d-28a8d75ee0af",
+    "id": "3d2ddbe5-d7e0-4868-ab26-2ef070f9c221",
     "prevIds": ["b2b2b243-cb3c-4c68-b2af-08c7a14f3a6e"],
     "ddl": [
         {
@@ -5839,6 +5839,19 @@
             "generated": null,
             "identity": null,
             "name": "reissued_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "reissued_state",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

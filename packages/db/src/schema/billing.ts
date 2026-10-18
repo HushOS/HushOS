@@ -170,6 +170,8 @@ export const groupBillingSubscriptions = pgTable(
          * re-issue for a while after, so the webhook a re-issue causes never causes another.
          */
         reissuedAt: timestamp('reissued_at', { withTimezone: true }),
+        /* What that re-issue asked for: only the same request is held back, never a new one. */
+        reissuedState: text('reissued_state'),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),

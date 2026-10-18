@@ -279,6 +279,12 @@ export type GroupSubscriptionSnapshot = {
     pendingUnits: number | null;
     /* The product a pending update moves the plan to at the period's end (a smaller tier). */
     pendingProductId: string | null;
+    /*
+     * Whether the product's tier is paid for: judged by the newest order for that product
+     * (an upgrade's own order), not by the subscription's others. When false the tier and
+     * pool paid before stay, or a smaller tier counts at once. Absent: by `paidUnits`.
+     */
+    tierPaid?: boolean;
     includedMembers: number;
     /* The pool the plan gives the group; a family's is fixed. */
     quotaBytes: bigint;
@@ -452,12 +458,25 @@ export async function setIntendedProduct(
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* Notes that HushOS just asked Polar again for the pending update (the reconcile guard). */
-export async function markReissued(subscriptionId: string, at = new Date(Date.now())) {
+/* Notes what HushOS just asked Polar for again, and when (the reconcile guard). */
+export async function markReissued(
+    subscriptionId: string,
+    state: string,
+    at = new Date(Date.now()),
+) {
     await db
         .update(groupBillingSubscriptions)
-        .set({ reissuedAt: at, updatedAt: at })
+        .set({ reissuedAt: at, reissuedState: state, updatedAt: at })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* One group subscription's row, live or not: what it had paid for before a change. */
+export async function getGroupSubscription(subscriptionId: string) {
+    const [row] = await db
+        .select()
+        .from(groupBillingSubscriptions)
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+    return row ?? null;
 }
 
 /* Live group subscriptions with a cut or a tier move HushOS still means to have at Polar. */
@@ -549,9 +568,9 @@ export async function applyGroupState(input: {
                     ...values,
                     // A subscription first seen with an order unpaid has paid for nothing yet.
                     paidUnits: paid === null ? 0 : Math.min(paid, subscription.units),
-                    // Its pool is the checkout's, paid with it.
+                    // Its pool is the checkout's once paid; first seen unpaid, none yet.
                     paidProductId: subscription.productId,
-                    paidQuotaBytes: subscription.quotaBytes,
+                    paidQuotaBytes: paid !== null ? subscription.quotaBytes : 0n,
                 })
                 .onConflictDoUpdate({
                     target: groupBillingSubscriptions.id,
@@ -566,14 +585,12 @@ export async function applyGroupState(input: {
                          * waits, else only down (a smaller tier at a renewal still unpaid). An
                          * upgrade awaiting the bank keeps the tier and pool paid before it.
                          */
-                        paidProductId:
-                            paid === null
-                                ? sql`case when ${subscription.quotaBytes.toString()}::bigint <= coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}) then ${subscription.productId}::text else coalesce(${groupBillingSubscriptions.paidProductId}, ${groupBillingSubscriptions.productId}) end`
-                                : subscription.productId,
-                        paidQuotaBytes:
-                            paid === null
-                                ? sql`least(coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}), ${subscription.quotaBytes.toString()}::bigint)`
-                                : subscription.quotaBytes,
+                        paidProductId: !(subscription.tierPaid ?? paid !== null)
+                            ? sql`case when ${subscription.quotaBytes.toString()}::bigint <= coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}) then ${subscription.productId}::text else coalesce(${groupBillingSubscriptions.paidProductId}, ${groupBillingSubscriptions.productId}) end`
+                            : subscription.productId,
+                        paidQuotaBytes: !(subscription.tierPaid ?? paid !== null)
+                            ? sql`least(coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}), ${subscription.quotaBytes.toString()}::bigint)`
+                            : subscription.quotaBytes,
                         updatedAt: now,
                     },
                 });

@@ -240,24 +240,44 @@ describe('tier moves', () => {
         expect((await billing.getLiveGroupSubscription(groupId))?.paidProductId).toBe('prod_max');
     });
 
-    test('a re-issue is stamped, and a stale move is marked as the stale rule’s', async () => {
+    test('a plan first seen with an order unpaid has no pool yet, as it has no places', async () => {
         const { userId } = await createTestAccount();
-        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
-        await apply(groupId, [plan({ units: 6 })]);
-        const at = new Date('2026-10-18T06:00:00Z');
-        await billing.markReissued('sub_family', at);
-        await billing.setIntendedProduct('sub_family', 'prod_plus', true);
+        const { groupId, areaIds } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan({ units: 4, paidUnits: null, quotaBytes: 2048n * GIB })]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(0n);
+        expect(await seatLimit(groupId)).toBe(1);
+        // Its order paid: the pool and the places.
+        await apply(groupId, [plan({ units: 4, quotaBytes: 2048n * GIB })]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(2048n * GIB);
+        expect(await seatLimit(groupId)).toBe(4);
+    });
+
+    test('a tier judged paid by its own order counts though another order waits', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan({ units: 4, productId: 'prod_pro', quotaBytes: 2048n * GIB })]);
+        // An admission's raise waits (places not paid), the upgrade's own order is paid.
+        await apply(groupId, [
+            plan({
+                units: 5,
+                paidUnits: null,
+                tierPaid: true,
+                productId: 'prod_max',
+                quotaBytes: 4096n * GIB,
+            }),
+        ]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(4096n * GIB);
         expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
-            reissuedAt: at,
-            intendedProductId: 'prod_plus',
-            intendedProductStale: true,
+            paidProductId: 'prod_max',
+            paidUnits: 4,
         });
-        // Cleared, it is nobody's.
-        await billing.setIntendedProduct('sub_family', null, true);
-        expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
-            intendedProductId: null,
-            intendedProductStale: false,
-        });
+        // And the reverse: places paid, the upgrade's order not.
+        await apply(groupId, [plan({ units: 5, productId: 'prod_pro', quotaBytes: 2048n * GIB })]);
+        await apply(groupId, [
+            plan({ units: 5, tierPaid: false, productId: 'prod_max', quotaBytes: 4096n * GIB }),
+        ]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(2048n * GIB);
+        expect((await billing.getLiveGroupSubscription(groupId))?.paidUnits).toBe(5);
     });
 
     test('a recorded move outlives a rewrite from Polar, is listed for re-issue, and clears', async () => {

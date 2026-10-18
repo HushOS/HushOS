@@ -614,7 +614,9 @@ const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
  * A family's scheduled cut that Polar lost to a raise and could not be put back
  * at once goes to the worker's retry queue (pg-boss, with backoff).
  */
-billing.setCutRetryQueue((groupId) => enqueue(queues.billingReissueCut, { groupId }));
+billing.setCutRetryQueue((groupId, startAfterSeconds) =>
+    enqueue(queues.billingReissueCut, { groupId }, { startAfterSeconds }),
+);
 
 /* The routes' own GROUPS_ENABLED check, behind the edge's. */
 function groupsGate() {

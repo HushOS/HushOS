@@ -88,7 +88,11 @@ if (billingEnabled()) {
         },
     );
     // The daily reconcile re-issues a family's lost cut too; a failure there is queued here.
-    setCutRetryQueue((groupId) => boss.send(queues.billingReissueCut, { groupId }));
+    setCutRetryQueue((groupId, startAfterSeconds) =>
+        startAfterSeconds
+            ? boss.send(queues.billingReissueCut, { groupId }, { startAfter: startAfterSeconds })
+            : boss.send(queues.billingReissueCut, { groupId }),
+    );
     await boss.work<JobPayloads[typeof queues.billingReissueCut]>(
         queues.billingReissueCut,
         { batchSize: 1, pollingIntervalSeconds: 30 },
