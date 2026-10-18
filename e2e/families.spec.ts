@@ -1138,27 +1138,29 @@ test.describe('family plans, with the billing summary stubbed', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     const DAY = 24 * 60 * 60 * 1000;
     const family = 'Ekström family';
+    // The three tiers as seed.ts makes them: four included, then 1.50 a member; a year is ten months.
+    const tier = (key: string, label: string, gib: number, usd: number, interval: string) => {
+        const times = interval === 'year' ? 10 : 1;
+        return {
+            id: `${key}-${interval}`,
+            name: `Family ${label} (${interval === 'year' ? 'yearly' : 'monthly'})`,
+            description: null,
+            interval,
+            tier: key,
+            recommended: key === 'pro',
+            prices: { usd: { base: usd * times, perMember: 150 * times } },
+            includedMembers: 4,
+            maxMembers: 20,
+            quotaBytes: String(gib * 1024 ** 3),
+        };
+    };
     const plans = [
-        {
-            id: 'plan-month',
-            name: 'Family (monthly)',
-            description: null,
-            interval: 'month',
-            prices: { usd: { base: 1500, perMember: 200 } },
-            includedMembers: 6,
-            maxMembers: 20,
-            quotaBytes: String(2 * 1024 ** 4),
-        },
-        {
-            id: 'plan-year',
-            name: 'Family (yearly)',
-            description: null,
-            interval: 'year',
-            prices: { usd: { base: 15000, perMember: 2000 } },
-            includedMembers: 6,
-            maxMembers: 20,
-            quotaBytes: String(2 * 1024 ** 4),
-        },
+        tier('plus', 'Plus', 800, 1000, 'month'),
+        tier('plus', 'Plus', 800, 1000, 'year'),
+        tier('pro', 'Pro', 2048, 2000, 'month'),
+        tier('pro', 'Pro', 2048, 2000, 'year'),
+        tier('max', 'Max', 4096, 3000, 'month'),
+        tier('max', 'Max', 4096, 3000, 'year'),
     ];
     const none = {
         enabled: true,
@@ -1171,31 +1173,32 @@ test.describe('family plans, with the billing summary stubbed', () => {
         seats: { used: 1, limit: 1 },
         nextPlace: null,
     };
-    // Nineteen of thirty days left: a raise of two is 253.33, charged 253 (twice 126 is 252).
-    const live = (overrides: Record<string, unknown> = {}) => ({
+    // Twenty of thirty-one days left: a raise of two is 193.55, charged 193 (twice 96 is 192).
+    const live = (overrides: Record<string, unknown> = {}, usedGib = 300) => ({
         ...none,
         payer: { userId: 'payer', you: true },
         subscription: {
             id: 'sub',
-            productId: 'plan-month',
-            productName: 'Family (monthly)',
+            productId: 'pro-month',
+            productName: 'Family Pro (monthly)',
             status: 'active',
             recurringInterval: 'month',
-            amount: 1900,
+            amount: 2600,
             currency: 'usd',
             units: 8,
             paidUnits: 8,
             pendingUnits: null,
-            includedMembers: 6,
+            pendingProductId: null,
+            includedMembers: 4,
             quotaBytes: String(2 * 1024 ** 4),
             currentPeriodStart: new Date(Date.now() - 11 * DAY).toISOString(),
-            currentPeriodEnd: new Date(Date.now() + 19 * DAY).toISOString(),
+            currentPeriodEnd: new Date(Date.now() + 20 * DAY).toISOString(),
             cancelAtPeriodEnd: false,
             ...overrides,
         },
-        storage: { usedBytes: String(300 * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
+        storage: { usedBytes: String(usedGib * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
         seats: { used: 1, limit: 8 },
-        nextPlace: { amount: 126, currency: 'usd' },
+        nextPlace: { amount: 96, currency: 'usd' },
     });
     let maya: Person;
     let groupId: string;
@@ -1244,13 +1247,26 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(choose).toContainText(
             `${family} needs a plan before you can invite anyone or make family folders.`,
         );
-        await expect(choose).toContainText('$15 a month');
+        // The three tiers, smallest first, the toggle above them.
+        const cards = choose.locator('[data-plan]');
+        await expect(cards).toHaveCount(3);
+        await expect(cards.nth(0)).toContainText('$10 a month');
+        await expect(cards.nth(1)).toContainText('$20 a month');
+        await expect(cards.nth(2)).toContainText('$30 a month');
         await expect(choose).toContainText('Plus tax where it applies; Polar adds it at checkout.');
-        await expect(choose).toContainText('For up to 6 members, sharing 2 TB.');
-        await expect(choose).toContainText('Then $2 a month for each member after that, up to 20.');
-        await choose.getByRole('button', { name: 'Yearly' }).click();
-        await expect(choose).toContainText('$150 a year · 2 months free');
-        await expect(choose.getByRole('button', { name: 'Choose Family' })).toBeEnabled();
+        await expect(cards.nth(0)).toContainText('For up to 4 members, sharing 800 GB.');
+        await expect(cards.nth(1)).toContainText('For up to 4 members, sharing 2 TB.');
+        await expect(cards.nth(2)).toContainText('For up to 4 members, sharing 4 TB.');
+        await expect(cards.nth(1)).toContainText(
+            'Then $1.50 a month for each member after that, up to 20.',
+        );
+        await choose.getByRole('button', { name: /^Yearly/ }).click();
+        await expect(cards.nth(1)).toContainText('$200 a year');
+        await expect(cards.nth(1)).toContainText(
+            'Then $15 a year for each member after that, up to 20.',
+        );
+        for (const name of ['Choose Family Plus', 'Choose Family Pro', 'Choose Family Max'])
+            await expect(choose.getByRole('button', { name, exact: true })).toBeEnabled();
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
         await expect(maya.page.locator('[data-family-plan]')).toHaveCount(0);
 
@@ -1266,9 +1282,9 @@ test.describe('family plans, with the billing summary stubbed', () => {
     test('a live plan the person pays for: the facts, places quoted as Polar charges them, and every control', async () => {
         await show(live());
         const billing = maya.page.locator('[data-family-plan="billing"]');
-        await expect(billing).toContainText('Family · 2 TB', { timeout: 60_000 });
-        await expect(billing).toContainText('$19 a month · renews');
-        await expect(billing).toContainText('1 of 8 taken · 6 included');
+        await expect(billing).toContainText('Family Pro · 2 TB', { timeout: 60_000 });
+        await expect(billing).toContainText('$26 a month · renews');
+        await expect(billing).toContainText('1 of 8 taken · 4 included');
         // The header reads the same paid limit, not the family row's default.
         await expect(maya.page.getByText('1 of 8 places taken.')).toBeVisible();
         await expect(billing).toContainText('300 GB of 2 TB used');
@@ -1277,6 +1293,7 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toBeVisible();
         for (const name of [
             'Manage payment and invoices',
+            'Change plan',
             'Remove places at renewal',
             'Cancel plan',
         ])
@@ -1284,14 +1301,46 @@ test.describe('family plans, with the billing summary stubbed', () => {
 
         await billing.getByRole('button', { name: 'Add places' }).click();
         const dialog = maya.page.getByRole('dialog', { name: 'Add places' });
-        await expect(dialog).toContainText('Each place past the 6 included is $2 a month.');
-        await expect(dialog).toContainText('Charged now$1.26');
+        await expect(dialog).toContainText('Each place past the 4 included is $1.50 a month.');
+        await expect(dialog).toContainText('Charged now$0.96');
         await dialog.getByRole('button', { name: 'More' }).click();
         // Truncated once over the raise, not per place.
-        await expect(dialog).toContainText('Charged now$2.53');
-        await expect(dialog).toContainText('Then$23 a month');
+        await expect(dialog).toContainText('Charged now$1.93');
+        await expect(dialog).toContainText('Then$29 a month');
         await expect(dialog.getByRole('button', { name: 'Add 2 places' })).toBeVisible();
         await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+        // Change plan: the other monthly tiers, a bigger one now, a smaller one at the renewal.
+        await billing.getByRole('button', { name: 'Change plan' }).click();
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+        await expect(change.locator('[data-tier-option]')).toHaveText([
+            /Family Plus · 800 GB\$16 a month/,
+            /Family Pro · 2 TB\s*Your plan/,
+            /Family Max · 4 TB\$36 a month/,
+        ]);
+        // Twenty of thirty-one days of the 10.00 difference: 6.4516, about 6.45.
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        await expect(change).toContainText('Then$36 a month from');
+        await expect(change.getByRole('button', { name: 'Change to Family Max' })).toBeEnabled();
+        await change.getByText('Family Plus · 800 GB').click();
+        await expect(change).toContainText('Until thenFamily Pro · 2 TB');
+        await expect(change.getByRole('button', { name: /^Change on / })).toBeEnabled();
+        await change.getByRole('button', { name: 'Cancel' }).click();
+        // Folders holding more than Family Plus's 800 GB: how much to free, and no button.
+        await show(live({}, 900));
+        await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+        await change.getByText('Family Plus · 800 GB').click();
+        await expect(change.locator('[data-tier-over]')).toContainText(
+            'The family folders hold 900 GB, more than Family Plus’s 800 GB. Free at least 100 GB before changing to it.',
+        );
+        await expect(change.getByRole('button', { name: /^Change on / })).toBeDisabled();
+        await change.getByRole('button', { name: 'Cancel' }).click();
+        // A move to a smaller tier waiting for the renewal: said on the card, and it can be kept.
+        await show(live({ pendingProductId: 'plus-month' }));
+        await expect(billing).toContainText('Changes to Family Plus · 800 GB on', {
+            timeout: 60_000,
+        });
+        await expect(billing.getByRole('button', { name: 'Keep Family Pro' })).toBeVisible();
 
         await show(live(), `/app/s/${groupId}`);
         await expect(maya.page.getByRole('button', { name: 'New family folder' })).toBeVisible({
@@ -1310,7 +1359,7 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(
             billing.getByRole('button', { name: 'Manage payment and invoices' }),
         ).toBeVisible();
-        for (const name of ['Add places', 'Remove places at renewal', 'Cancel plan'])
+        for (const name of ['Add places', 'Change plan', 'Remove places at renewal', 'Cancel plan'])
             await expect(billing.getByRole('button', { name })).toHaveCount(0);
 
         await show({
@@ -1349,11 +1398,11 @@ test.describe('family plans, with the billing summary stubbed', () => {
             enabled: true,
             view: 'member',
             hasPlan: true,
-            planName: 'Family (monthly)',
+            planName: 'Family Pro (monthly)',
             storage: { usedBytes: String(300 * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
         });
         const glance = maya.page.locator('[data-family-plan="glance"]');
-        await expect(glance).toContainText('Family · 2 TB', { timeout: 60_000 });
+        await expect(glance).toContainText('Family Pro · 2 TB', { timeout: 60_000 });
         await expect(glance).toContainText('300 GB of 2 TB used');
         await expect(maya.page.getByText('Next charge')).toHaveCount(0);
         await expect(maya.page.getByRole('button', { name: 'Add places' })).toHaveCount(0);

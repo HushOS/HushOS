@@ -8,6 +8,7 @@ import {
     DEFAULT_CURRENCY,
     FAMILY_MAX_MEMBERS,
     MAX_MEMBERS_PER_RAISE,
+    quoteTierChange,
     quoteUnitsChange,
 } from '@hushos/billing/protocol';
 import { queryOptions } from '@tanstack/react-query';
@@ -188,30 +189,107 @@ export function quoteAdd(summary: FamilyBillingFull, add: number, now = new Date
 }
 
 /*
- * What a renewal with `units` places charges at list price: the base and the
- * per-member rate for each place past those included. The same price list
- * the raise is quoted from, so the two never disagree; a discount Polar
- * applies comes off both, which the page says ("Before any discount").
+ * What a period with `units` places charges at list price: the base and the
+ * per-member rate for each place past those included, on the family's plan or
+ * on `plan` (a tier it may move to). The same price list the raise is quoted
+ * from, so the two never disagree; a discount Polar applies comes off both,
+ * which the page says ("Before any discount").
  */
-export function renewalAmount(summary: FamilyBillingFull, units: number) {
+export function renewalAmount(summary: FamilyBillingFull, units: number, plan?: FamilyPlan) {
     const live = summary.subscription;
-    const price = livePrice(summary);
-    if (!live || !price) return null;
-    const billable = Math.max(0, units - live.includedMembers);
-    return { amount: price.base + price.perMember * billable, currency: price.currency };
+    const on = plan ?? currentPlan(summary);
+    const price = live?.currency && on ? on.prices[live.currency] : undefined;
+    if (!live?.currency || !on || !price) return null;
+    const billable = Math.max(0, units - on.includedMembers);
+    return { amount: price.base + price.perMember * billable, currency: live.currency };
 }
 
-/* The next charge: on the period's end, for the places the family keeps. None once it is ending. */
+/* The smaller tier the family moves to at the period's end, if one is scheduled. */
+export function pendingTier(summary: FamilyBillingFull): FamilyPlan | undefined {
+    const id = summary.subscription?.pendingProductId;
+    return id ? summary.plans.find((plan) => plan.id === id) : undefined;
+}
+
+/*
+ * The next charge: on the period's end, for the places the family keeps, at
+ * the tier it moves to if one is scheduled. None once it is ending.
+ */
 export function nextCharge(summary: FamilyBillingFull) {
     const live = summary.subscription;
     if (!live || live.cancelAtPeriodEnd) return null;
-    const amount = renewalAmount(summary, live.pendingUnits ?? live.units);
+    const amount = renewalAmount(summary, live.pendingUnits ?? live.units, pendingTier(summary));
     return amount ? { ...amount, on: live.currentPeriodEnd } : null;
+}
+
+/*
+ * A tier the payer may move the family to: the others billed the same way
+ * (monthly or yearly) and priced in the family's currency, smallest pool
+ * first, with what each move means, as the server's changeGroupPlan does it.
+ * A bigger pool is `up`: charged now, about `now` (Polar rounds its two lines
+ * on their own), then `renews` each period from the renewal. A smaller one is
+ * `down`: `renews` from the renewal, nothing now and nothing refunded, and only
+ * once the family folders fit: `over` is how much more they hold than its
+ * pool (0 when they fit), which the server refuses too.
+ */
+export type TierMove = {
+    plan: FamilyPlan;
+    direction: 'up' | 'down';
+    now: { amount: number; currency: string } | null;
+    renews: { amount: number; currency: string } | null;
+    over: bigint;
+};
+
+export function tierMoves(summary: FamilyBillingFull, now = new Date()): TierMove[] {
+    const live = summary.subscription;
+    const current = currentPlan(summary);
+    const currency = live?.currency;
+    if (!live || !current || !currency) return [];
+    const from = current.prices[currency];
+    if (!from) return [];
+    const used = BigInt(summary.storage?.usedBytes ?? '0');
+    const renewalUnits = live.pendingUnits ?? live.units;
+    return summary.plans
+        .filter(
+            (plan) =>
+                plan.id !== current.id &&
+                plan.interval === current.interval &&
+                plan.quotaBytes !== current.quotaBytes &&
+                currency in plan.prices &&
+                live.units >= plan.includedMembers,
+        )
+        .map((plan) => {
+            const to = plan.prices[currency]!;
+            const pool = BigInt(plan.quotaBytes);
+            const up = pool > BigInt(current.quotaBytes);
+            return {
+                plan,
+                direction: up ? ('up' as const) : ('down' as const),
+                now: up
+                    ? {
+                          amount: quoteTierChange({
+                              from: { ...from, includedMembers: current.includedMembers },
+                              to: { ...to, includedMembers: plan.includedMembers },
+                              units: live.units,
+                              periodStart: new Date(live.currentPeriodStart),
+                              periodEnd: new Date(live.currentPeriodEnd),
+                              now,
+                          }),
+                          currency,
+                      }
+                    : null,
+                renews: renewalAmount(summary, renewalUnits, plan),
+                over: !up && used > pool ? used - pool : 0n,
+            };
+        });
 }
 
 export type FamilyActions = {
     /* Polar's checkout: a `billing` holder, when nobody else is the payer. */
     choosePlan: boolean;
+    /* Move to another tier: the payer, while the plan renews and its last payment went through. */
+    changePlan: boolean;
+    /* Withdraw a move to a smaller tier scheduled for the renewal. */
+    keepTier: boolean;
     addPlaces: boolean;
     removePlaces: boolean;
     /* Withdraw a scheduled cut: free, and the places stay. */
@@ -224,6 +302,8 @@ export type FamilyActions = {
 
 const nothing: FamilyActions = {
     choosePlan: false,
+    changePlan: false,
+    keepTier: false,
     addPlaces: false,
     removePlaces: false,
     keepPlaces: false,
@@ -257,6 +337,9 @@ export function familyActions(
     const live = state.subscription;
     return {
         choosePlan: false,
+        // The server refuses a move while the bank holds a renewal; the card comes first.
+        changePlan: changeable && !state.overdue && tierMoves(summary).length > 0,
+        keepTier: changeable && !state.overdue && live.pendingProductId !== null,
         addPlaces: changeable && addRange(summary) !== null,
         removePlaces:
             changeable &&

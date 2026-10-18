@@ -1214,6 +1214,19 @@ export const apiApp = new Elysia({ prefix: '/api' })
             ),
     )
     .post(
+        '/billing/groups/:id/plan',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ productId: t.String({ minLength: 1, maxLength: 100 }) }),
+        },
+        async ({ request, sessionToken, params, body }) =>
+            billing.changeGroupPlan(
+                await billingMutation(request, sessionToken),
+                params.id,
+                body.productId,
+            ),
+    )
+    .post(
         '/billing/groups/:id/portal',
         { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
         async ({ request, sessionToken, params }) =>

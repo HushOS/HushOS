@@ -14,6 +14,7 @@ import {
     billingEnabled,
     getCatalogue,
     getFamilyCatalogue,
+    offeredFamilies,
     polar,
     statusOf,
     unavailable,
@@ -30,6 +31,7 @@ export {
     type BillingUser,
 } from './provider';
 export {
+    changeGroupPlan,
     createGroupPortalSession,
     ensureGroupSeat,
     familyHasPlan,
@@ -40,10 +42,13 @@ export {
     reissueCut,
     setCutRetryQueue,
     setGroupUnits,
+    spaceOf,
     startGroupCheckout,
     syncGroup,
+    type PlanChange,
     type SeatResult,
 } from './groups';
+export { quoteTierChange } from './protocol';
 
 const WEBHOOK_MAX_BYTES = 256 * 1024;
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -62,9 +67,7 @@ export async function listCatalogue(): Promise<Catalogue> {
         plans: products
             .filter((product) => !product.archived)
             .map(({ archived: _archived, ...plan }) => plan),
-        families: families
-            .filter((family) => !family.archived)
-            .map(({ archived: _archived, ...family }) => family),
+        families: offeredFamilies(families).map(({ archived: _archived, ...family }) => family),
     };
 }
 

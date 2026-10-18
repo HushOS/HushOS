@@ -21,6 +21,7 @@ export const groupBillingApi: GroupBillingApi = {
     checkout: (groupId, productId, currency) =>
         unwrap(group(groupId).checkout.post({ productId, currency })),
     setUnits: (groupId, units) => unwrap(group(groupId).units.post({ units })),
+    changePlan: (groupId, productId) => unwrap(group(groupId).plan.post({ productId })),
     portal: (groupId) => unwrap(group(groupId).portal.post({})),
     sync: (groupId) => unwrap(group(groupId).sync.post({})),
 };

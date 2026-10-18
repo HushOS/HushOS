@@ -39,6 +39,7 @@ Status: research, 15 October 2026; the card-free sandbox runs of 17 October are 
 4. **Billing handover completes only once the new payer has added a card**; until then the old payer stays the payer, and is told so.
 5. **A payer's account cannot be deleted** until they hand billing over or cancel the group plan.
 6. **A Business pool grows with each paid member** (`quota_bytes_per_member`); a Family pool is fixed per plan.
+7. **Three family tiers replace the single Family plan** (owner, 2026-10-18): Family Plus 800 GB, Pro 2 TB and Max 4 TB at 10, 20 and 30 USD a month, four members included, then 1.50 USD a member a month on every tier, up to 20 (EUR at parity, GBP at 0.8, INR 399, 799 and 1,399 rupees and 59 a member; a year is ten months). A bigger tier starts now with `invoice` proration; a smaller one at the renewal with `next_period`, which needs a recorded move re-issued after any raise, as cuts are. The 15 USD, six-included, 2.00-a-member figures in sections 6 and 8 are the experiments' placeholders, not prices.
 
 Experiments E5 (refund maths) and the refund half of E4 are no longer needed; the others still confirm Polar's behaviour before groups-design 3.5 is built.
 
@@ -207,7 +208,7 @@ The calculator moves money, so `AGENTS.md` requires a Vitest suite beside it. It
 
 ## 5. Recommended design
 
-**Products.** Four products: Family (monthly), Family (yearly), Business (monthly) and Business (yearly), seeded by `seed.ts`.
+**Products.** Family Plus, Family Pro and Family Max, each monthly and yearly, and Business (monthly) and Business (yearly), seeded by `seed.ts`. Each family tier carries `hushos_tier`.
 
 - `recurring_interval`: `month` or `year`.
 - Per currency (`usd`, `eur`, `gbp`, `inr`):

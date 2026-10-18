@@ -1,6 +1,6 @@
 import type { FamilyPlan, Plan } from '@hushos/billing/api';
 import { describe, expect, test } from 'vitest';
-import { currenciesOf, familyOffer, priceOf, pricingLede, tiersOf } from './plans';
+import { currenciesOf, familyOffers, priceOf, pricingLede, tiersOf } from './plans';
 
 function plan(overrides: Partial<Plan> & { id: string }): Plan {
     return {
@@ -77,70 +77,136 @@ describe('tiersOf', () => {
     });
 });
 
-/* Production's Family plans: yearly is ten times monthly, 2 TB for 6, up to 20. */
-function family(interval: 'month' | 'year'): FamilyPlan {
+/*
+ * The family tiers as seed.ts makes them (owner, 2026-10-18): Plus 800 GB, Pro
+ * 2 TB, Max 4 TB; four members included, then 1.50 a member (1.20 GBP, 59 INR);
+ * EUR at parity, GBP at 0.8, INR on the personal ratio; a year is ten months.
+ * In the server's order: by pool, monthly before yearly.
+ */
+const base = {
+    plus: { usd: 1000, eur: 1000, gbp: 800, inr: 39900 },
+    pro: { usd: 2000, eur: 2000, gbp: 1600, inr: 79900 },
+    max: { usd: 3000, eur: 3000, gbp: 2400, inr: 139900 },
+};
+const perMember = { usd: 150, eur: 150, gbp: 120, inr: 5900 };
+const pools = { plus: 800, pro: 2048, max: 4096 };
+function family(tier: keyof typeof base, interval: 'month' | 'year'): FamilyPlan {
     const times = interval === 'year' ? 10 : 1;
+    const label = { plus: 'Plus', pro: 'Pro', max: 'Max' }[tier];
     return {
-        id: `family-${interval}`,
-        name: interval === 'year' ? 'Family (yearly)' : 'Family (monthly)',
+        id: `${tier}-${interval}`,
+        name: `Family ${label} (${interval === 'year' ? 'yearly' : 'monthly'})`,
         description: null,
         interval,
-        prices: {
-            usd: { base: 1500 * times, perMember: 200 * times },
-            eur: { base: 1500 * times, perMember: 200 * times },
-            gbp: { base: 1200 * times, perMember: 200 * times },
-            inr: { base: 59900 * times, perMember: 7900 * times },
-        },
-        includedMembers: 6,
+        tier,
+        recommended: tier === 'pro',
+        prices: Object.fromEntries(
+            Object.entries(base[tier]).map(([currency, amount]) => [
+                currency,
+                {
+                    base: amount * times,
+                    perMember: perMember[currency as keyof typeof perMember] * times,
+                },
+            ]),
+        ),
+        includedMembers: 4,
         maxMembers: 20,
-        quotaBytes: String(2 * 1024 ** 4),
+        quotaBytes: String(pools[tier] * 1024 ** 3),
     };
 }
-const families = [family('month'), family('year')];
+const families = (['plus', 'pro', 'max'] as const).flatMap((tier) => [
+    family(tier, 'month'),
+    family(tier, 'year'),
+]);
+const offers = (interval: 'month' | 'year', currency: string, list = families) =>
+    familyOffers({ enabled: true, families: list }, interval, currency);
 
-describe('familyOffer', () => {
-    test('offers nothing where the server lists no family plan (families off)', () => {
-        expect(familyOffer({ enabled: true, families: [] }, 'month', 'usd')).toBeNull();
-        expect(familyOffer({ enabled: true, families: [] }, 'year', 'usd')).toBeNull();
+describe('familyOffers', () => {
+    test('offers nothing where the server lists no family plan, or with billing off', () => {
+        expect(offers('month', 'usd', [])).toEqual([]);
+        expect(familyOffers({ enabled: false, families }, 'month', 'usd')).toEqual([]);
     });
 
-    test('offers nothing with billing off, whatever plans came with it', () => {
-        expect(familyOffer({ enabled: false, families }, 'month', 'usd')).toBeNull();
+    test('offers the three tiers, smallest first, monthly in the visitor’s currency', () => {
+        expect(
+            offers('month', 'gbp').map(({ name, storage, price, billed, size, extra }) => ({
+                name,
+                storage,
+                price,
+                billed,
+                size,
+                extra,
+            })),
+        ).toEqual([
+            {
+                name: 'Family Plus',
+                storage: '800 GB',
+                price: '£8 a month',
+                billed: 'Billed monthly. £80 a year if you pay yearly.',
+                size: 'For up to 4 members, sharing 800 GB.',
+                extra: 'Then £1.20 a month for each member after that, up to 20.',
+            },
+            {
+                name: 'Family Pro',
+                storage: '2 TB',
+                price: '£16 a month',
+                billed: 'Billed monthly. £160 a year if you pay yearly.',
+                size: 'For up to 4 members, sharing 2 TB.',
+                extra: 'Then £1.20 a month for each member after that, up to 20.',
+            },
+            {
+                name: 'Family Max',
+                storage: '4 TB',
+                price: '£24 a month',
+                billed: 'Billed monthly. £240 a year if you pay yearly.',
+                size: 'For up to 4 members, sharing 4 TB.',
+                extra: 'Then £1.20 a month for each member after that, up to 20.',
+            },
+        ]);
+        expect(offers('month', 'inr').map((offer) => offer.price)).toEqual([
+            '₹399 a month',
+            '₹799 a month',
+            '₹1,399 a month',
+        ]);
+        expect(offers('month', 'inr')[0]?.extra).toBe(
+            'Then ₹59 a month for each member after that, up to 20.',
+        );
+        expect(offers('month', 'eur').map((offer) => offer.price)).toEqual([
+            '€10 a month',
+            '€20 a month',
+            '€30 a month',
+        ]);
     });
 
-    test('prices the monthly plan in the visitor’s currency', () => {
-        expect(familyOffer({ enabled: true, families }, 'month', 'gbp')).toMatchObject({
-            plan: { id: 'family-month' },
-            price: '£12 a month',
-            billed: 'Billed monthly. £120 a year if you pay yearly.',
-            size: 'For up to 6 members, sharing 2 TB.',
-            pool: 'The 2 TB is for family folders; each member’s own files stay on their own plan, Free included.',
-            extra: 'Then £2 a month for each member after that, up to 20.',
-        });
-        const inr = familyOffer({ enabled: true, families }, 'month', 'inr');
-        expect(inr?.price).toBe('₹599 a month');
-        expect(inr?.extra).toBe('Then ₹79 a month for each member after that, up to 20.');
-    });
-
-    test('shows the yearly plan as a month, billed yearly, and its member price per year', () => {
-        expect(familyOffer({ enabled: true, families }, 'year', 'usd')).toMatchObject({
-            plan: { id: 'family-year' },
-            price: '$12.50 a month',
-            billed: 'Billed $150 yearly.',
-            extra: 'Then $20 a year for each member after that, up to 20.',
-        });
+    test('shows a yearly tier as its month, billed yearly, and its member price per year', () => {
+        expect(offers('year', 'usd').map(({ price, billed }) => [price, billed])).toEqual([
+            ['$8.33 a month', 'Billed $100 yearly.'],
+            ['$16.67 a month', 'Billed $200 yearly.'],
+            ['$25 a month', 'Billed $300 yearly.'],
+        ]);
+        expect(offers('year', 'usd')[1]?.extra).toBe(
+            'Then $15 a year for each member after that, up to 20.',
+        );
+        expect(offers('year', 'usd')[1]?.plan.id).toBe('pro-year');
     });
 
     test('falls back to the default currency, never a price in a currency it lacks', () => {
-        const offer = familyOffer({ enabled: true, families }, 'month', 'jpy');
-        expect(offer?.price).toBe('$15 a month');
-        expect(offer?.billed).toBe('Billed monthly. $150 a year if you pay yearly.');
+        expect(offers('month', 'jpy').map((offer) => offer.price)).toEqual([
+            '$10 a month',
+            '$20 a month',
+            '$30 a month',
+        ]);
     });
 
-    test('offers the other interval when only one is on sale', () => {
-        const offer = familyOffer({ enabled: true, families: [family('month')] }, 'year', 'usd');
-        expect(offer?.plan.id).toBe('family-month');
-        expect(offer?.billed).toBe('Billed monthly.');
+    test('a tier with only one interval on sale still shows, at that interval', () => {
+        const list = families.filter((plan) => plan.id !== 'max-year');
+        const yearly = offers('year', 'usd', list);
+        expect(yearly.map((offer) => offer.plan.id)).toEqual([
+            'plus-year',
+            'pro-year',
+            'max-month',
+        ]);
+        expect(yearly[2]?.billed).toBe('Billed monthly.');
     });
 });
 
@@ -148,9 +214,9 @@ describe('pricingLede', () => {
     test('keeps "nothing else" only while no family plan is shown', () => {
         const off =
             'Every plan protects your files the same way. Paid plans add space, and nothing else.';
-        expect(pricingLede(familyOffer({ enabled: true, families: [] }, 'month', 'usd'))).toBe(off);
-        expect(pricingLede(familyOffer({ enabled: false, families }, 'month', 'usd'))).toBe(off);
-        expect(pricingLede(familyOffer({ enabled: true, families }, 'month', 'usd'))).toBe(
+        expect(pricingLede(offers('month', 'usd', []))).toBe(off);
+        expect(pricingLede(familyOffers({ enabled: false, families }, 'month', 'usd'))).toBe(off);
+        expect(pricingLede(offers('month', 'usd'))).toBe(
             'Every plan protects your files the same way. Paid plans add space; a family plan adds folders you share with up to 20 members.',
         );
     });

@@ -277,6 +277,8 @@ export type GroupSubscriptionSnapshot = {
      */
     paidUnits: number | null;
     pendingUnits: number | null;
+    /* The product a pending update moves the plan to at the period's end (a smaller tier). */
+    pendingProductId: string | null;
     includedMembers: number;
     /* The pool the plan gives the group; a family's is fixed. */
     quotaBytes: bigint;
@@ -431,7 +433,18 @@ export async function setIntendedUnits(
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* Live group subscriptions with a cut HushOS still means to have at Polar. */
+/*
+ * The smaller tier HushOS asked Polar to move the plan to at the period's
+ * end, or null once nothing is due (the move applied, or was withdrawn).
+ */
+export async function setIntendedProduct(subscriptionId: string, productId: string | null) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ intendedProductId: productId, updatedAt: new Date() })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Live group subscriptions with a cut or a tier move HushOS still means to have at Polar. */
 export async function listIntendedCuts() {
     return db
         .select({
@@ -442,7 +455,7 @@ export async function listIntendedCuts() {
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                sql`${groupBillingSubscriptions.intendedUnits} is not null`,
+                sql`(${groupBillingSubscriptions.intendedUnits} is not null or ${groupBillingSubscriptions.intendedProductId} is not null)`,
             ),
         );
 }
@@ -503,6 +516,7 @@ export async function applyGroupState(input: {
                 currency: subscription.currency,
                 units: subscription.units,
                 pendingUnits: subscription.pendingUnits,
+                pendingProductId: subscription.pendingProductId,
                 includedMembers: subscription.includedMembers,
                 quotaBytes: subscription.quotaBytes,
                 currentPeriodStart: subscription.currentPeriodStart,

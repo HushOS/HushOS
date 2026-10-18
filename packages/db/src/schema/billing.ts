@@ -148,6 +148,13 @@ export const groupBillingSubscriptions = pgTable(
          * STALE_RAISE_DAYS), not the payer's: it is withdrawn if the raise is paid.
          */
         intendedStale: boolean('intended_stale').notNull().default(false),
+        /*
+         * A smaller tier the plan moves to at the period's end (`pending_update.product_id`),
+         * and the one HushOS last asked for: kept like `intended_units`, because a raise
+         * deletes the whole pending update at Polar and the move must be asked for again.
+         */
+        pendingProductId: text('pending_product_id'),
+        intendedProductId: text('intended_product_id'),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
