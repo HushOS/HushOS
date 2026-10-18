@@ -1,0 +1,21 @@
+DESIGN.md
+  s_c56e31c87cddde::t_614210b870f234 384
+apps/web/src/routes/roadmap/route.tsx
+  s_c56e31c87cddde::t_2e230244136fb3 2,93-116,118-126,128-196,201-220,228,246-290,292-311,313-326
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c374be8b973d717279768ad846de4b665e9d6c3",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
