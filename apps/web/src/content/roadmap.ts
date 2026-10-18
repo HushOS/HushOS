@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-18';
+export const updated = '2026-10-19';
 
 export const sections: RoadmapSection[] = [
     {
@@ -179,6 +179,21 @@ export const sections: RoadmapSection[] = [
                 title: 'Numbered releases',
                 body: 'One version number for the whole of HushOS, starting at 1.0.0, with a changelog and matching image tags, so a self-hosted server can follow a release instead of the latest build.',
             },
+            {
+                id: 'companies',
+                status: 'now',
+                area: 'Teams',
+                title: 'HushOS for companies',
+                body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket. Admins of a company plan will be able to open the company’s folders, through a key the company holds.',
+                links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
+            },
+            {
+                id: 'desktop-apps',
+                status: 'now',
+                area: 'Apps',
+                title: 'Desktop apps',
+                body: 'HushOS in your computer’s file manager, the way it is in the Files app on a phone.',
+            },
         ],
     },
     {
@@ -202,27 +217,12 @@ export const sections: RoadmapSection[] = [
         summary: 'Planned, not promised. What comes first depends on what people need.',
         items: [
             {
-                id: 'companies',
-                status: 'later',
-                area: 'Teams',
-                title: 'HushOS for companies',
-                body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket. Admins of a company plan would be able to open the company’s folders, through a key the company holds.',
-                links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
-            },
-            {
                 id: 'notes-documents',
                 status: 'later',
                 area: 'Drive',
                 title: 'Notes and documents',
                 body: 'Write notes and documents in HushOS itself, kept under the same keys as your files. This is new writing, apart from editing the files you already have.',
                 links: [{ kind: 'blog', slug: 'hushos-1-0', label: 'Where it fits' }],
-            },
-            {
-                id: 'desktop-apps',
-                status: 'later',
-                area: 'Apps',
-                title: 'Desktop apps',
-                body: 'HushOS in your computer’s file manager, the way it is in the Files app on a phone.',
             },
             {
                 id: 'messages',
