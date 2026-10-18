@@ -1,0 +1,25 @@
+docs/self-hosting.md
+  s_c56e31c87cddde::t_b19a509ad56c2d 554
+packages/billing/scripts/seed.ts
+  s_c56e31c87cddde::t_2c60bc2c4708a6 12,15,79
+packages/billing/src/seed-prices.test.ts
+  s_c56e31c87cddde::t_1f20b5c7eea039 5,7,20-33,77-78,80,82,97-157
+packages/billing/src/seed-prices.ts
+  s_c56e31c87cddde::t_73d28284196d42 1,10-12,108-110,120-121,136-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "608c14ea6fa782fb78f74c7471771d36c6c8c17b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
