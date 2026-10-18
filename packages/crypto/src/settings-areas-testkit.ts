@@ -109,6 +109,8 @@ export async function documentOf(spec: Json = {}): Promise<string> {
     if (spec.groups === undefined) groups = { [f.groupId]: await groupPinAtHead() };
     else if ('rawGroups' in spec.groups) groups = spec.groups.rawGroups;
     else groups = { [f.groupId]: spec.groups.raw };
+    // A contact name the server served with an unpaired surrogate, as JSON.stringify escapes it.
+    if (spec.loneSurrogateName) (contacts as Json)[f.p[1]!.userId].name = 'Person 2 \ud800';
     return JSON.stringify({ version: spec.version ?? 2, contacts, groups });
 }
 
@@ -141,7 +143,12 @@ async function sealStep(step: Json) {
     const f = await family();
     const userId = f.p[0]!.userId;
     const made = await createSettingsKey(step.key === 'other-root' ? otherRoot() : ROOT, userId);
-    const envelope: Json = await sealRaw(made.key, userId, 5, await documentOf(step.document));
+    const envelope: Json = await sealRaw(
+        made.key,
+        userId,
+        step.settingsVersion ?? 5,
+        await documentOf(step.document),
+    );
     if (step.tamper) {
         const bytes = decode(envelope.ciphertext);
         bytes[3]! ^= 1;

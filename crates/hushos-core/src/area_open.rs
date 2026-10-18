@@ -288,12 +288,14 @@ impl AreaLedger {
         // The self-grant only at the latest version both the chain and the server name, and listed.
         let from_self = area.self_grant.as_ref().and_then(|own| {
             let v = own.workspace_key_version;
-            if own.workspace_id != workspace_id || v < latest || v < served || v > listed.len() as u64 {
+            // An index past usize (a 32-bit target) is past every listed version.
+            let index = usize::try_from(v.wrapping_sub(1)).unwrap_or(usize::MAX);
+            if own.workspace_id != workspace_id || v < latest || v < served || index >= listed.len() {
                 return None;
             }
             let key = self_grant_open(&root, &user_id, &group_id, own).ok()?;
             let commitment = area_key_commitment(&key).ok()?;
-            (listed.get((v - 1) as usize) == Some(&commitment)).then_some((key, v))
+            (listed.get(index) == Some(&commitment)).then_some((key, v))
         });
         let (key, version, from) = match (from_self, area.grant) {
             (Some((key, version)), _) => (key, version, AreaKeyFrom::SelfGrant),

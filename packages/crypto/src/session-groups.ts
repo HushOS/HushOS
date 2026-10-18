@@ -1495,8 +1495,9 @@ export function createGroupSession(host: GroupHost) {
     function useSettings(
         userId: string,
         settings: { groups?: unknown; contacts?: unknown } | null,
+        settingsVersion = 0,
     ) {
-        settingsPins = settingsMarks(settingsPins, userId, settings);
+        settingsPins = settingsMarks(settingsPins, userId, settings, settingsVersion);
     }
     /* This account's contact pin of `userId`, from the settings it last opened; null without one. */
     function contactPin(userId: string): ContactPin | null {

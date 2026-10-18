@@ -1601,8 +1601,8 @@ fn roster_call_session_kind(value: &Value) -> Option<Value> {
  * twins read the same bytes), read as the ledger reads it, with each of
  * `users` (at most 8) and `groups` (at most 8) probed: the contact pin found
  * and the group pin's verdict (refusal words dropped). Skipped: text either
- * twin's JSON parser reads its own way (escaped surrogates, numbers past an
- * f64, more than 64 brackets). Invariants: a pin found under a probe names
+ * twin's JSON parser reads its own way (numbers past an f64, more than 64
+ * brackets; escaped lone surrogates are repaired alike before parsing). Invariants: a pin found under a probe names
  * it in any case; one an admission takes holds every key part.
  */
 pub fn settings_fits(text: &str) -> bool {
@@ -1638,9 +1638,7 @@ pub fn settings_fits(text: &str) -> bool {
             _ => {}
         }
     }
-    let lower = text.to_ascii_lowercase();
-    let surrogate = (8..=0xf).any(|n| lower.contains(&format!("\\ud{n:x}")));
-    number_ok(&token) && brackets <= 64 && !surrogate
+    number_ok(&token) && brackets <= 64
 }
 
 fn settings_kind(value: &Value) -> Option<Value> {

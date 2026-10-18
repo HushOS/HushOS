@@ -2029,8 +2029,8 @@ async function rosterCallSessionKind(value: Doc): Promise<Verdict | undefined> {
 
 /*
  * Text both JSON parsers read alike (the core's settings_fits): numbers of at
- * most 200 digits with an exponent of at most two, at most 64 brackets, no
- * escaped surrogate.
+ * most 200 digits with an exponent of at most two, at most 64 brackets
+ * (escaped lone surrogates are repaired alike before parsing).
  */
 export function settingsFits(text: string) {
     const numberOk = (token: string) => {
@@ -2059,8 +2059,7 @@ export function settingsFits(text: string) {
         if (c === '"') inString = true;
         else if (c === '{' || c === '[') brackets++;
     }
-    const surrogate = /\\ud[89a-f]/.test(text.toLowerCase());
-    return numberOk(token) && brackets <= 64 && !surrogate;
+    return numberOk(token) && brackets <= 64;
 }
 
 /* A settings document's plaintext read as the worker reads it, probed (the core's settings kind). */

@@ -340,6 +340,11 @@ pub(crate) struct Settings {
     /* The contacts object's members in document order: the only pins a roster call or join code reads. */
     pub(crate) contacts: Vec<(String, serde_json::Value)>,
     pub(crate) opened: bool,
+    /*
+     * The highest settings version opened in this unlock (0: none opened): a document below it is
+     * an older copy the server served again, and would drop pins (refused, OLDER_SETTINGS).
+     */
+    pub(crate) settings_version: u64,
 }
 
 /* A family's settings pin as held: the raw JSON a document carried, or one the fixtures handed in typed. */
@@ -1892,7 +1897,7 @@ impl AreaLedger {
         filed.sort_by(|a, b| a.0.cmp(&b.0));
         let opened = pins.is_some();
         let pins = pins.unwrap_or_default().into_iter().map(|(id, pin)| (id, HeldPin::Typed(pin))).collect();
-        self.set_settings(&user_id, opened, pins, filed, None)
+        self.set_settings(&user_id, opened, 0, pins, filed, None)
     }
 
     /*
@@ -1904,6 +1909,7 @@ impl AreaLedger {
         &self,
         user_id: &str,
         opened: bool,
+        settings_version: u64,
         pins: HashMap<String, HeldPin>,
         contacts: Vec<(String, serde_json::Value)>,
         session: Option<(u64, &[u8])>,
@@ -1918,10 +1924,13 @@ impl AreaLedger {
             }
         }
         let held = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(user_id));
-        if !opened && held.is_some_and(|held| held.opened) {
+        // Settings that opened never give way to none, nor to a document older than one opened,
+        // whichever of two overlapping reads lands last (decided here, under the lock).
+        if held.is_some_and(|held| held.opened && (!opened || settings_version < held.settings_version)) {
             return Err(refused(OLDER_SETTINGS));
         }
-        state.settings = Some(Settings { user_id: user_id.to_lowercase(), opened, pins, contacts });
+        state.settings =
+            Some(Settings { user_id: user_id.to_lowercase(), opened, pins, contacts, settings_version });
         Ok(())
     }
 

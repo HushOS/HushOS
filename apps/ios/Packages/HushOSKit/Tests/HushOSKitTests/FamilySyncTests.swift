@@ -120,6 +120,27 @@ extension OnFakeDrive {
             #expect(!server.requested(route23, method: "PUT"))
         }
 
+        /*
+         * A grant envelope and a granter key that don't decode (a server's junk) are no reason to stop:
+         * the stored self-grant still opens the folder, as on the web. Fails if a decode error aborts
+         * the folder before the ledger is asked.
+         */
+        @Test func aGrantThatDoesNotDecodeStillLetsTheSelfGrantOpenTheFolder() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(server.selfGrant != nil)
+            first.done()
+
+            server.malformedGrant = true
+            let later = try await family.phone(server, records: first.records)
+            defer { later.done() }
+            guard case .accepted(let view) = await later.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let area = try #require(view.areas.first)
+            #expect(area.name == "Photos" && area.openable)
+        }
+
         /* The break-check's other half: with the granter gone and no self-grant stored, nothing of the folder opens. */
         @Test func aFolderWhoseGranterIsGoneAndNoSelfGrantDoesNotOpen() async throws {
             let family = try FamilyFixture()
@@ -500,6 +521,8 @@ final class FamilyServer: @unchecked Sendable {
     var granterGone = false
     /* The member's self-grant as route 23 stored it, served back on route 25. */
     var selfGrant: [String: Any]?
+    /* Route 25's grant envelope and route 6's granter key as something that doesn't decode. */
+    var malformedGrant = false
     private var requests: [(method: String, path: String)] = []
     private let settingsKey: Data
     private let settingsKeyEnvelope: SettingsKeyEnvelope
@@ -606,6 +629,10 @@ final class FamilyServer: @unchecked Sendable {
         case ("GET", "/api/groups/\(f.groupId)/identities"):
             var creator = identity(f.creator)
             if lock.withLock({ granterGone }) { creator["identity"] = NSNull() }
+            if lock.withLock({ malformedGrant }), var keys = creator["identity"] as? [String: Any] {
+                keys["mlDsaPublicKey"] = "not base64url!"
+                creator["identity"] = keys
+            }
             return (200, ["identities": [creator, identity(f.member)].sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
         case ("PUT", "/api/groups/\(f.groupId)/areas/\(f.workspaceId)/self-grant"):
             let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
@@ -620,7 +647,8 @@ final class FamilyServer: @unchecked Sendable {
                 ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
                     "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": 1, "changeSeq": 2, "root": json(f.root), "rotation": NSNull(),
                     "grant": ["workspaceKeyVersion": 1, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId, "rosterVersion": 2,
-                              "rosterDigest": rosterDigest(statement: f.r2.statement), "envelope": base64urlEncode(bytes: f.grant)],
+                              "rosterDigest": rosterDigest(statement: f.r2.statement),
+                              "envelope": lock.withLock { malformedGrant } ? "not base64url!" : base64urlEncode(bytes: f.grant)],
                     "selfGrant": (lock.withLock { selfGrant } as Any?) ?? NSNull(),
                 ]]],
             ]])

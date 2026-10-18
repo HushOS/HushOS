@@ -23,6 +23,8 @@ export type SettingsMarks = {
     contacts: Record<string, ContactPin>;
     /* Whether they came from a settings document that opened, not from "none". */
     opened: boolean;
+    /* The highest settings version opened in this unlock (0: none): an older copy served again is refused. */
+    settingsVersion: number;
 };
 
 /*
@@ -35,18 +37,27 @@ export function refuseDowngrade(held: SettingsMarks | null, userId: string) {
     if (held?.userId === userId && held.opened) throw new CryptoError(OLDER_SETTINGS);
 }
 
-/* The marks after `settings` (null: none stored), or refused as a downgrade. */
+/*
+ * The marks after `settings` (null: none stored) opened at `settingsVersion`,
+ * or refused as a downgrade: none after settings that opened, or a document
+ * older than the highest one opened in this unlock (a server serving 6, then
+ * 5, would drop the pins 6 added).
+ */
 export function settingsMarks(
     held: SettingsMarks | null,
     userId: string,
     settings: { groups?: unknown; contacts?: unknown } | null,
+    settingsVersion = 0,
 ): SettingsMarks {
     if (settings === null) refuseDowngrade(held, userId);
+    else if (held?.userId === userId && held.opened && settingsVersion < held.settingsVersion)
+        throw new CryptoError(OLDER_SETTINGS);
     return {
         userId,
         pins: { ...(settings?.groups as Record<string, GroupPin> | undefined) },
         contacts: { ...(settings?.contacts as Record<string, ContactPin> | undefined) },
         opened: settings !== null,
+        settingsVersion: settings === null ? 0 : settingsVersion,
     };
 }
 
@@ -84,7 +95,7 @@ export function settingsPinOf(marks: SettingsMarks, groupId: string): GroupPin |
  */
 export async function settingsOpenFor(
     groups: {
-        useSettings(userId: string, settings: Settings | null): void;
+        useSettings(userId: string, settings: Settings | null, settingsVersion?: number): void;
         legacySettings(userId: string): void;
     },
     input: {
@@ -102,6 +113,6 @@ export async function settingsOpenFor(
     }
     const settings = await openSettings(input.settingsKey, userId, envelope);
     if (envelope.version !== 2) groups.legacySettings(userId);
-    else groups.useSettings(userId, settings);
+    else groups.useSettings(userId, settings, envelope.settingsVersion);
     return settings;
 }

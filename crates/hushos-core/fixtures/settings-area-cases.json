@@ -288,6 +288,44 @@
             }
         },
         {
+            "name": "an-older-document-after-a-newer-one",
+            "steps": [
+                { "settingsVersion": 6 },
+                { "settingsVersion": 5, "document": { "contacts": [] } }
+            ],
+            "expected": {
+                "steps": [
+                    "opened",
+                    {
+                        "refused": "The server sent older settings than this device has opened, so nothing was changed."
+                    }
+                ],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "the-same-document-read-again-then-a-later-one",
+            "steps": [{}, {}, { "settingsVersion": 6, "document": { "contacts": [] } }],
+            "expected": {
+                "steps": ["opened", "opened", "opened"],
+                "accept": "accepted",
+                "admit": { "refused": "Check their words first." },
+                "join": { "status": "not-pinned" }
+            }
+        },
+        {
+            "name": "a-lone-surrogate-in-a-contact-name",
+            "steps": [{ "document": { "loneSurrogateName": true } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
             "name": "a-settings-key-of-another-root",
             "steps": [{ "key": "other-root" }],
             "expected": {

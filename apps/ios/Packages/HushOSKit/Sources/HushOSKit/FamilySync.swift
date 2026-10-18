@@ -416,17 +416,30 @@ public actor FamilySync {
                     continue
                 }
                 var grant: ServedAreaGrant?
-                // Without this account's identity at the grant's key version, the grant cannot open: the self-grant may.
-                if let row = area.grant, let holder = try? await vault.identityEnvelope(atKeyVersion: row.granteeKeyVersion) {
-                    // The granter's keys only when route 6 serves their identity: an account gone serves none.
-                    let granter = memberIdentity(row.granterUserId, in: groupId)
-                    grant = ServedAreaGrant(
-                        envelope: try base64urlDecode(value: row.envelope), workspaceKeyVersion: row.workspaceKeyVersion,
-                        granteeKeyVersion: row.granteeKeyVersion, granterUserId: row.granterUserId, rosterVersion: row.rosterVersion,
-                        rosterDigest: row.rosterDigest, granterMlDsaPublicKey: try granter.map { try base64urlDecode(value: $0.identity.mlDsaPublicKey) },
-                        granterHistory: granter.map { SignerHistory(served: $0.identity.served, links: $0.links) },
-                        holder: holder
-                    )
+                // Without this account's identity at the grant's key version the grant cannot open, and a
+                // grant or granter key that doesn't decode opens nothing either: the self-grant still may, as on
+                // the web. No answer while the identity history is read leaves things as they were.
+                if let row = area.grant, let envelope = try? base64urlDecode(value: row.envelope) {
+                    var holder: IdentityEnvelope?
+                    do {
+                        holder = try await vault.identityEnvelope(atKeyVersion: row.granteeKeyVersion)
+                    } catch where Self.unanswered(error) {
+                        throw error
+                    } catch {
+                        holder = nil
+                    }
+                    if let holder {
+                        // The granter's keys only when route 6 serves their identity: an account gone serves none.
+                        let granter = memberIdentity(row.granterUserId, in: groupId)
+                        grant = ServedAreaGrant(
+                            envelope: envelope, workspaceKeyVersion: row.workspaceKeyVersion,
+                            granteeKeyVersion: row.granteeKeyVersion, granterUserId: row.granterUserId, rosterVersion: row.rosterVersion,
+                            rosterDigest: row.rosterDigest,
+                            granterMlDsaPublicKey: granter.flatMap { try? base64urlDecode(value: $0.identity.mlDsaPublicKey) },
+                            granterHistory: granter.map { SignerHistory(served: $0.identity.served, links: $0.links) },
+                            holder: holder
+                        )
+                    }
                 }
                 let opened = try ledger.openFamilyArea(
                     groupId: groupId,
@@ -452,6 +465,9 @@ public actor FamilySync {
                 }
                 folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: area.root != nil)
             } catch let error as GroupsAPIError where error.isNotMember {
+                throw error
+            } catch where Self.unanswered(error) {
+                // No answer (the identity history): nothing was refused, so the sync leaves things as they were.
                 throw error
             } catch {
                 // The row says "Couldn't check this folder's keys", as the web's does; nothing of it opens.

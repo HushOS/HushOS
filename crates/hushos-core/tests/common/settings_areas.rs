@@ -126,7 +126,12 @@ pub fn document(spec: &Value) -> String {
             None => json!({ f.group_id.clone(): groups["raw"].clone() }),
         },
     };
-    format!(r#"{{"version":{version},"contacts":{contacts},"groups":{groups}}}"#)
+    let text = format!(r#"{{"version":{version},"contacts":{contacts},"groups":{groups}}}"#);
+    // A contact name the server served with an unpaired surrogate, as JSON escapes it.
+    if spec.get("loneSurrogateName") == Some(&json!(true)) {
+        return text.replacen(r#""name":"Person 2""#, r#""name":"Person 2 \ud800""#, 1);
+    }
+    text
 }
 
 /* A step's envelopes, sealed by this core as person 1's device would be served them (None: not served). */
@@ -134,7 +139,13 @@ fn seal_step(step: &Value) -> Value {
     let user = family().p[0].user_id.clone();
     let key_root = if step["key"] == json!("other-root") { other_root() } else { root() };
     let made = settings_key_create(user.clone(), key_root).unwrap();
-    let mut envelope = settings_seal_raw(&user, &made.key.to_vec(), 5, &document(&step["document"])).unwrap();
+    let mut envelope = settings_seal_raw(
+        &user,
+        &made.key.to_vec(),
+        step["settingsVersion"].as_u64().unwrap_or(5),
+        &document(&step["document"]),
+    )
+    .unwrap();
     if step["tamper"] == json!(true) {
         let mut bytes = base64url_decode(envelope.ciphertext.clone()).unwrap();
         bytes[3] ^= 1;

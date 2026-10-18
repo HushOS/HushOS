@@ -171,7 +171,25 @@ async function account(userId: string) {
         }
         return opened;
     };
-    return { ...(await device()), root, identity, served: publicIdentity(identity), device };
+    /*
+     * A fresh device that has read only `envelope`, an earlier copy of the settings: within one
+     * unlock a document older than one opened is refused, so it must be the first one read.
+     */
+    const deviceAt = async (envelope: SettingsEnvelope): Promise<Device> => {
+        const unlocked = await deviceOf(userId, root);
+        await unlocked.call('identityOpen', { userId, identity, history: [] });
+        await unlocked.call('settingsKeyOpen', { userId, settingsKey: settings.key! });
+        await unlocked.call('settingsOpen', { userId, envelope });
+        return { ...unlocked, userId, settings };
+    };
+    return {
+        ...(await device()),
+        root,
+        identity,
+        served: publicIdentity(identity),
+        device,
+        deviceAt,
+    };
 }
 type Account = Awaited<ReturnType<typeof account>>;
 
@@ -1433,8 +1451,7 @@ describe('the write version (F9)', () => {
         const servedBefore = server.served();
         await rotated(f);
         for (const order of ['later first', 'older first'] as const) {
-            const device = await bob.device();
-            await device.call('settingsOpen', { userId: BOB, envelope: before.envelope });
+            const device = await bob.deviceAt(before.envelope);
             const accept = (served: ServedChain) =>
                 device.call('groupAccept', {
                     userId: BOB,
@@ -1486,8 +1503,7 @@ describe('the write version (F9)', () => {
         if (rival.outboxId === null) throw new Error('nothing staged');
         await alice.call('groupDrop', { outboxId: rival.outboxId });
         await rotated(f);
-        const device = await bob.device();
-        await device.call('settingsOpen', { userId: BOB, envelope: before.envelope });
+        const device = await bob.deviceAt(before.envelope);
         const accept = (served: ServedChain) =>
             device.call('groupAccept', {
                 userId: BOB,
@@ -1517,8 +1533,7 @@ describe('the write version (F9)', () => {
         const servedBefore = server.served();
         await rotated(f);
         // A second device of Bob's, opened on those older settings, as both runs began.
-        const device = await bob.device();
-        await device.call('settingsOpen', { userId: BOB, envelope: before.envelope });
+        const device = await bob.deviceAt(before.envelope);
         const accept = (served: ServedChain) =>
             device.call('groupAccept', {
                 userId: BOB,

@@ -197,6 +197,7 @@ impl<'de> de::Deserialize<'de> for Top {
 pub(crate) fn read_document(plaintext: &[u8]) -> CoreResult<SettingsReading> {
     let text = String::from_utf8_lossy(plaintext);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let text = &*without_lone_surrogates(text);
     let unsupported = || input(UNSUPPORTED_DOCUMENT);
     let mut parser = serde_json::Deserializer::from_str(text);
     let top: Top = de::Deserialize::deserialize(&mut parser).map_err(|_| unsupported())?;
@@ -216,6 +217,66 @@ pub(crate) fn read_document(plaintext: &[u8]) -> CoreResult<SettingsReading> {
         _ => HashMap::new(),
     };
     Ok(SettingsReading { pins, contacts })
+}
+
+/*
+ * The text with every unpaired `\uD800`..`\uDFFF` escape inside a string written as `\uFFFD`
+ * (the twin of the web's withoutLoneSurrogates): JSON.parse takes them, serde_json refuses
+ * them, and a contact's name the server served can hold one. No field trust reads is outside
+ * ASCII, so a name differs only in a replacement character. Text outside strings is untouched.
+ */
+pub(crate) fn without_lone_surrogates(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("\\u") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let surrogate = |hex: &str| u16::from_str_radix(hex, 16).ok().filter(|n| (0xd800..=0xdfff).contains(n));
+    let escape_at = |at: usize| -> Option<u16> {
+        let bytes = text.as_bytes();
+        if bytes.get(at) != Some(&b'\\') || bytes.get(at + 1) != Some(&b'u') {
+            return None;
+        }
+        let hex = text.get(at + 2..at + 6)?;
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        surrogate(hex)
+    };
+    let (mut out, mut in_string, mut at) = (String::with_capacity(text.len()), false, 0);
+    let bytes = text.as_bytes();
+    while at < bytes.len() {
+        let b = bytes[at];
+        if !in_string {
+            in_string = b == b'"';
+        } else if b == b'"' {
+            in_string = false;
+        } else if b == b'\\' {
+            match escape_at(at) {
+                Some(0xd800..=0xdbff)
+                    if escape_at(at + 6).is_some_and(|low| (0xdc00..=0xdfff).contains(&low)) =>
+                {
+                    out.push_str(&text[at..at + 12]);
+                    at += 12;
+                    continue;
+                }
+                Some(_) => {
+                    out.push_str("\\ufffd");
+                    at += 6;
+                    continue;
+                }
+                None => {
+                    // Any other escape: the backslash and the character it escapes, kept as they are.
+                    let next = text[at + 1..].chars().next().map_or(0, char::len_utf8);
+                    out.push_str(&text[at..at + 1 + next]);
+                    at += 1 + next;
+                    continue;
+                }
+            }
+        }
+        let ch = text[at..].chars().next().unwrap();
+        out.push(ch);
+        at += ch.len_utf8();
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /* A contact pin as the worker reads one: its `userId`, and each field it compares only when it is a string. */
@@ -325,7 +386,10 @@ impl AreaLedger {
     ///   `CoreError::Sealed`; a field that is not canonical base64url is
     ///   `Invalid key encoding.`), the document read (`Unsupported settings
     ///   document.`), then, under the lock, still the account and root it was
-    ///   opened under (`NOT_THIS_ACCOUNT`: unlock again and read again).
+    ///   opened under (`NOT_THIS_ACCOUNT`: unlock again and read again), and
+    ///   not below the highest settings version opened in this unlock (an
+    ///   older copy served again would drop pins: refused, as none is, and
+    ///   whichever of two overlapping reads lands last).
     ///
     /// A malformed group pin refuses only its family's acceptance, as the
     /// worker refuses it; a malformed contact pin is no pin.
@@ -366,7 +430,7 @@ impl AreaLedger {
         };
         let Some(envelope) = settings_envelope else {
             let (_, generation, root) = unlocked()?;
-            return self.set_settings(&user_id, false, HashMap::new(), vec![], Some((generation, &root)));
+            return self.set_settings(&user_id, false, 0, HashMap::new(), vec![], Some((generation, &root)));
         };
         if !(1..=2).contains(&envelope.version)
             || !(1..=MAX_SAFE_INTEGER).contains(&envelope.settings_version)
@@ -389,7 +453,14 @@ impl AreaLedger {
             }
         });
         let pins = reading.pins.into_iter().map(|(id, pin)| (id, HeldPin::Raw(pin))).collect();
-        self.set_settings(&user_id, true, pins, reading.contacts, Some((generation, &root)))
+        self.set_settings(
+            &user_id,
+            true,
+            envelope.settings_version,
+            pins,
+            reading.contacts,
+            Some((generation, &root)),
+        )
     }
 }
 
@@ -461,8 +532,12 @@ mod tests {
     }
 
     fn sealed(root: &[u8], json: &str) -> (SettingsKeyEnvelope, SettingsEnvelope) {
+        sealed_at(root, json, 3)
+    }
+
+    fn sealed_at(root: &[u8], json: &str, version: u64) -> (SettingsKeyEnvelope, SettingsEnvelope) {
         let made = settings_key_create(USER.into(), root.to_vec()).unwrap();
-        let document = settings_seal(USER.into(), made.key.to_vec(), 3, json.into()).unwrap();
+        let document = settings_seal(USER.into(), made.key.to_vec(), version, json.into()).unwrap();
         (made.envelope, document)
     }
 
@@ -553,6 +628,21 @@ mod tests {
     }
 
     #[test]
+    fn lone_surrogates_in_strings_read_as_replacement_characters_as_on_the_web() {
+        let fixed = |text: &str| without_lone_surrogates(text).into_owned();
+        assert_eq!(fixed(r#"{"n":"a\ud800b"}"#), r#"{"n":"a\ufffdb"}"#);
+        assert_eq!(fixed(r#"{"n":"\uDC00"}"#), r#"{"n":"\ufffd"}"#);
+        assert_eq!(fixed(r#"{"n":"\ud83d\ude00"}"#), r#"{"n":"\ud83d\ude00"}"#, "a pair is kept");
+        assert_eq!(fixed(r#"{"n":"\ud83d\u0041"}"#), r#"{"n":"\ufffd\u0041"}"#);
+        assert_eq!(fixed(r#"{"n":"\\ud800"}"#), r#"{"n":"\\ud800"}"#, "an escaped backslash is no escape");
+        assert_eq!(fixed(r#"{"n":"é\ud800"}"#), r#"{"n":"é\ufffd"}"#);
+        let doc =
+            format!(r#"{{"version":2,"contacts":{{"{OTHER}":{{"userId":"{OTHER}","name":"Ana \ud800"}}}}}}"#);
+        let reading = read_document(doc.as_bytes()).unwrap();
+        assert_eq!(reading.contacts[0].1["name"], "Ana \u{fffd}");
+    }
+
+    #[test]
     fn served_envelopes_open_only_under_this_account_s_root() {
         let (ledger, root) = ledger();
         let doc = format!(r#"{{"version":2,"contacts":{{"{OTHER}":{}}}}}"#, pin(OTHER, "k"));
@@ -624,6 +714,41 @@ mod tests {
         let older = Err(input(crate::area_ledger::OLDER_SETTINGS));
         assert_eq!(ledger.use_settings_envelope(USER.into(), None, None), older);
         assert_eq!(ledger.use_settings_envelope(USER.into(), None, Some(legacy)), older);
+    }
+
+    #[test]
+    fn an_older_document_never_replaces_a_newer_one_opened_in_this_unlock() {
+        let (ledger, root) = ledger();
+        let with = format!(r#"{{"version":2,"contacts":{{"{OTHER}":{}}}}}"#, pin(OTHER, "k"));
+        let (key, six) = sealed_at(&root, &with, 6);
+        ledger.use_settings_envelope(USER.into(), Some(key), Some(six.clone())).unwrap();
+        // Version 5 without the pin, served after 6: refused, and the pin stays.
+        let (key5, five) = sealed_at(&root, r#"{"version":2,"contacts":{}}"#, 5);
+        let older = Err(input(crate::area_ledger::OLDER_SETTINGS));
+        assert_eq!(ledger.use_settings_envelope(USER.into(), Some(key5.clone()), Some(five.clone())), older);
+        assert!(ledger.contact_pin(OTHER).is_some());
+        // The same version read again, and a later one, are taken.
+        let (key6, again) = sealed_at(&root, &with, 6);
+        ledger.use_settings_envelope(USER.into(), Some(key6), Some(again)).unwrap();
+        let (key7, seven) = sealed_at(&root, r#"{"version":2,"contacts":{}}"#, 7);
+        ledger.use_settings_envelope(USER.into(), Some(key7), Some(seven)).unwrap();
+        assert!(ledger.contact_pin(OTHER).is_none());
+        // Two reads overlapping: 6 lands while 5 is being opened; 5 landing last is refused.
+        let (ledger, root) = self::ledger();
+        let (key6, six) = sealed_at(&root, &with, 6);
+        let once = std::cell::Cell::new(false);
+        AFTER_OPENING_SETTINGS.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |ledger| {
+                if !once.replace(true) {
+                    ledger.use_settings_envelope(USER.into(), Some(key6.clone()), Some(six.clone())).unwrap();
+                }
+            }))
+        });
+        let (key5, five) = sealed_at(&root, r#"{"version":2,"contacts":{}}"#, 5);
+        let raced = ledger.use_settings_envelope(USER.into(), Some(key5), Some(five));
+        AFTER_OPENING_SETTINGS.with(|hook| *hook.borrow_mut() = None);
+        assert_eq!(raced, older);
+        assert!(ledger.contact_pin(OTHER).is_some(), "the newer document's pin stays");
     }
 
     #[test]
