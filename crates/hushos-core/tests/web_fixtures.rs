@@ -92,21 +92,15 @@ fn a_family_self_grant_the_web_rewrapped_for_a_rotation_opens_as_the_family_s_un
     let (user, group) = (s(area, "userId"), s(area, "groupId"));
     let (old_root, new_root) = (b(area, "accountKey"), b(area, "newRoot"));
     let (grant, rewrapped) = (grant_of(&area["grant"]), grant_of(&area["rewrapped"]));
-    assert_eq!(
-        area_self_grant_open(user.clone(), group.clone(), old_root.clone(), grant.clone()).unwrap(),
-        b(area, "areaKey")
-    );
+    assert_eq!(area_self_grant_open(&old_root, &user, &group, &grant).unwrap(), b(area, "areaKey"));
     assert_eq!(
         (rewrapped.key_version, rewrapped.workspace_key_version, &rewrapped.workspace_id),
         (3, grant.workspace_key_version, &grant.workspace_id)
     );
-    assert_eq!(
-        area_self_grant_open(user.clone(), group.clone(), new_root.clone(), rewrapped.clone()).unwrap(),
-        b(area, "areaKey")
-    );
+    assert_eq!(area_self_grant_open(&new_root, &user, &group, &rewrapped).unwrap(), b(area, "areaKey"));
     // Still bound to the family: neither the personal opener nor the old root opens it.
     assert!(workspace_open(user.clone(), new_root.clone(), rewrapped.clone()).is_err());
-    assert!(area_self_grant_open(user.clone(), group, old_root.clone(), rewrapped).is_err());
+    assert!(area_self_grant_open(&old_root, &user, &group, &rewrapped).is_err());
     // The core's personal rewrap refuses the web's self-grant rather than rewrapping it wrongly.
     assert!(workspace_grant_rewrap(user, old_root, new_root, grant, 3).is_err());
 }
