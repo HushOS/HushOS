@@ -1,6 +1,5 @@
 import type { CryptoResults, JoinMark, RosterFork, ServedChain } from '@hushos/crypto';
 import { HOLDS_UNREADABLE, NOT_SHOWN } from '@hushos/crypto/join-session';
-import type { ContactPin } from '@hushos/crypto/contacts';
 import type { GroupContext } from './context';
 import { afterAccept, fetchServed, syncGroup, syncLocked, type SyncResult } from './sync';
 
@@ -397,18 +396,14 @@ const NOT_SYNCED = /Check the family’s member list first|not in the family’s
  * The admin's side: the join code to read to `userId`, over this device's
  * committed chain, for the roster that let them in (the one the newcomer's
  * screen works out too). A committed chain that does not have them yet (the
- * sync after "Let them in" did not finish) is synced once first. With `pin`,
- * `pinMatches` says whether their entry on that roster is the pinned keys.
+ * sync after "Let them in" did not finish) is synced once first. `pinMatches`
+ * says whether their entry on that roster is the keys of this account's
+ * contact pin of them, from the settings the worker opened (null: none).
  */
-export async function memberJoinCode(
-    ctx: GroupContext,
-    groupId: string,
-    userId: string,
-    pin: ContactPin | null = null,
-) {
+export async function memberJoinCode(ctx: GroupContext, groupId: string, userId: string) {
     const code = async () => {
         const { served } = await fetchServed(ctx, groupId, 0);
-        return ctx.rpc('groupJoinCode', { groupId, userId, rosters: served.rosters, pin });
+        return ctx.rpc('groupJoinCode', { groupId, userId, rosters: served.rosters });
     };
     try {
         return await code();

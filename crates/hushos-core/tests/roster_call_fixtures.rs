@@ -1,0 +1,50 @@
+//! Roster calls (groups 1d, Core 5a) against the web: the web's bodies,
+//! join codes and outbox entries (`fixtures/web-roster-calls.json`, written by
+//! `packages/crypto/scripts/roster-call-fixtures.ts`) read through this core
+//! to the same outcomes, this core's own document built and checked
+//! (`tests/common/roster_calls.rs`), and the outbox answer table
+//! (`fixtures/outbox-steps.json`) held to `outbox_step`.
+
+mod common;
+
+use common::roster_calls::{check, fixture, step_name};
+use hushos_core::outbox_step;
+use serde_json::Value;
+
+fn read(name: &str) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(name);
+    serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("JSON")
+}
+
+#[test]
+fn the_web_s_roster_calls_read_here_as_the_web_declared() {
+    check(&read("web-roster-calls.json"));
+}
+
+#[test]
+fn this_core_s_roster_calls_say_what_they_declare() {
+    let doc = fixture();
+    // And this core reads its own document as it reads the web's.
+    check(&doc);
+}
+
+#[test]
+fn the_outbox_answer_table_is_the_shared_one() {
+    let table = read("outbox-steps.json");
+    for case in table["cases"].as_array().unwrap() {
+        let status = case["status"].as_u64().unwrap() as u16;
+        let code = case["code"].as_str().map(str::to_string);
+        assert_eq!(step_name(outbox_step(status, code)), case["step"].as_str().unwrap(), "{case}");
+    }
+}
+
+#[test]
+fn a_manager_s_device_over_time_never_resends_other_bytes_or_builds_while_locked() {
+    use common::roster_calls::{session_run, session_step};
+    let doc = read("roster-call-sessions.json");
+    for scenario in doc["scenarios"].as_array().unwrap() {
+        let steps: Vec<Value> =
+            scenario["steps"].as_array().unwrap().iter().map(|step| session_step(step).unwrap()).collect();
+        assert_eq!(Value::Array(session_run(&steps)), scenario["expected"], "{}", scenario["name"]);
+    }
+}

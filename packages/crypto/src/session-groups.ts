@@ -326,7 +326,12 @@ export type AreaRotationInput = {
 };
 
 export type GroupStageOp =
-    | { kind: 'admit'; userId: string; pin: ContactPin; served: ServedIdentity; roles: GroupRole[] }
+    /*
+     * The newcomer's contact pin is the one in the settings this worker last
+     * opened (settingsOpen), never the caller's: only keys whose words this
+     * account checked are let in (the core's admit_body).
+     */
+    | { kind: 'admit'; userId: string; served: ServedIdentity; roles: GroupRole[] }
     | { kind: 'remove'; userId: string; rotations: AreaRotationInput[] }
     | { kind: 'markLeft'; userIds: string[]; rotations: AreaRotationInput[] }
     | { kind: 'roles'; userId: string; roles: GroupRole[] }
@@ -558,14 +563,14 @@ export type GroupRequests = {
      * The join code an admin reads to a newcomer: over the committed chain,
      * the roster at which `userId`'s entry last became active. `rosters` is
      * route 5 from version 1; only those whose digest is the committed chain's
-     * at their version are read. With `pin` (the admin's contact pin of them),
-     * whether their entry on that roster names exactly the pinned keys.
+     * at their version are read. `pinMatches`: whether their entry on that
+     * roster names exactly the keys of this account's contact pin of them, from
+     * the settings this worker last opened (null without one).
      */
     groupJoinCode: {
         groupId: string;
         userId: string;
         rosters: SignedStatementWire[];
-        pin?: ContactPin | null;
     };
     groupTrustAs: {
         groupId: string;
@@ -625,6 +630,11 @@ export type GroupStaged = {
     needsCheck: string[];
     /* Workspace documents that did not open and were replaced by an empty one of their kind. */
     replaced: ReplacedDocument[];
+    /* An admission's newcomer and the fingerprint of the contact pin it was built from (the outbox's `admits`). */
+    admits: { userId: string; fingerprint: string } | null;
+    /* The head the call was built on and its own roster, by digest: whether a kept call landed, or never can. */
+    previousRosterDigest: string;
+    rosterDigest: string;
 };
 export type ReplacedDocument = { workspaceId: string; kind: string };
 export type GroupResults = {
@@ -1276,6 +1286,13 @@ async function openOrReplace(
 const NO_CHAIN = 'Check the family’s member list first.';
 const NO_SEED = 'Open the family’s key first.';
 const NOT_OPENED = 'Open every family folder first.';
+/* A role change that would leave nobody active holding `billing`, as the core's ORGANIZER_FIRST. */
+const ORGANIZER_FIRST = 'Make someone else the organizer first.';
+/* The core's NOT_MANAGER, NOT_CHECKED, UNCHANGED and SELF_TAKE. */
+const NOT_MANAGER = 'Only someone who manages the family can change its members.';
+const NOT_CHECKED = 'Check their words first.';
+const UNCHANGED = 'That doesn’t change their roles.';
+const SELF_TAKE = 'Ask another manager to take this role from you.';
 /*
  * The roster format this worker writes (docs/groups-design.md 2.10): format
  * 2, from a family's first roster and on an older family's next one. Every
@@ -1453,6 +1470,8 @@ export function createGroupSession(host: GroupHost) {
     let settingsPins: {
         userId: string;
         pins: Record<string, GroupPin>;
+        /* The same document's contact pins: the only pins an admission or a join code reads. */
+        contacts: Record<string, ContactPin>;
         /* Whether they came from a settings document that opened, not from "none". */
         opened: boolean;
     } | null = null;
@@ -1477,9 +1496,35 @@ export function createGroupSession(host: GroupHost) {
      * being joined again onto another history (decision D7). The client keeps
      * the same rule across unlocks (its settings document mark).
      */
-    function useSettings(userId: string, settings: { groups?: Record<string, GroupPin> } | null) {
+    function useSettings(
+        userId: string,
+        settings: {
+            groups?: Record<string, GroupPin>;
+            contacts?: Record<string, ContactPin>;
+        } | null,
+    ) {
         if (settings === null) refuseDowngrade(userId);
-        settingsPins = { userId, pins: { ...settings?.groups }, opened: settings !== null };
+        settingsPins = {
+            userId,
+            pins: { ...settings?.groups },
+            contacts: { ...settings?.contacts },
+            opened: settings !== null,
+        };
+    }
+    /* This account's contact pin of `userId`, from the settings it last opened; null without one. */
+    function contactPin(userId: string): ContactPin | null {
+        let account: string;
+        try {
+            // The open identity's account (open through a password change, which closes the root).
+            account = host.identity().userId;
+        } catch {
+            return null;
+        }
+        if (!settingsPins || settingsPins.userId !== account) return null;
+        const wanted = userId.toLowerCase();
+        for (const [key, pin] of Object.entries(settingsPins.contacts))
+            if (key.toLowerCase() === wanted && pin.userId.toLowerCase() === wanted) return pin;
+        return null;
     }
     function refuseDowngrade(userId: string) {
         if (settingsPins?.userId === userId && settingsPins.opened)
@@ -2740,6 +2785,9 @@ export function createGroupSession(host: GroupHost) {
             for (const member of op.members) kems[member.userId] = member.served.kemPublicKey;
         const me = host.identity();
         const next = chain.roster.rosterVersion + 1;
+        // Only a holder of `members` changes the member list: refused before any key is asked for.
+        if (!activeWith(rosterEntry(chain.roster, me.userId), 'members'))
+            throw new CryptoError(NOT_MANAGER);
         const seed = seeds.get(seedSlot(groupId, chain.groupKeyVersion));
         if (!seed) throw new CryptoError(NO_SEED);
         let members = chain.roster.members.map((member) => ({
@@ -2757,13 +2805,17 @@ export function createGroupSession(host: GroupHost) {
         };
         let rotations: AreaRotationInput[] = [];
         let newArea: { workspaceId: string; idSeed: string; name: string } | null = null;
+        let admits: { userId: string; fingerprint: string } | null = null;
         const needsCheck: string[] = [];
         const folded: string[] = [];
         switch (op.kind) {
             case 'admit': {
                 if (activeWith(entryOf(op.userId)))
                     throw new CryptoError('This person is in the family already.');
-                const entry = await newRosterEntry(op.pin, op.served, {
+                const pin = contactPin(op.userId);
+                if (!pin) throw new CryptoError(NOT_CHECKED);
+                admits = { userId: op.userId, fingerprint: pin.fingerprint };
+                const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,
                     rosterVersion: next,
                 });
@@ -2782,9 +2834,29 @@ export function createGroupSession(host: GroupHost) {
                 for (const userId of op.userIds) put({ ...active(userId), status: 'left' });
                 rotations = op.rotations;
                 break;
-            case 'roles':
-                put({ ...active(op.userId), roles: [...op.roles] });
+            case 'roles': {
+                const before = active(op.userId);
+                const sorted = (roles: readonly string[]) => [...new Set(roles)].sort().join();
+                if (sorted(before.roles) === sorted(op.roles)) throw new CryptoError(UNCHANGED);
+                // The succession must be signed by someone who keeps `members`: never oneself.
+                if (
+                    op.userId === me.userId &&
+                    before.roles.includes('members') &&
+                    !op.roles.includes('members')
+                )
+                    throw new CryptoError(SELF_TAKE);
+                // Someone active keeps `billing`: the server refuses a family without an organizer.
+                if (
+                    before.roles.includes('billing') &&
+                    !op.roles.includes('billing') &&
+                    !members.some(
+                        (member) => member.userId !== op.userId && activeWith(member, 'billing'),
+                    )
+                )
+                    throw new CryptoError(ORGANIZER_FIRST);
+                put({ ...before, roles: [...op.roles] });
                 break;
+            }
             case 'foldIn':
                 for (const member of op.members) {
                     const result = await foldInEntry(
@@ -2856,6 +2928,10 @@ export function createGroupSession(host: GroupHost) {
                 ...(op.kind === 'retire' ? { retireAreas: [op.workspaceId] } : {}),
             });
             signer = await signerFor(chain, roster, op);
+            // An admission grants every live folder's key: each must be open here before anything is signed.
+            if (op.kind === 'admit')
+                for (const workspaceId of Object.keys(chain.areaKeys).sort())
+                    if (!chain.retiredAreas.includes(workspaceId)) currentArea(chain, workspaceId);
             pair = await groupKeyPair(seed);
             const signed = await signRoster(roster, pair, signer.keys);
             signer.zero();
@@ -2937,6 +3013,9 @@ export function createGroupSession(host: GroupHost) {
                         : null,
                 needsCheck,
                 replaced: parts.replaced,
+                admits,
+                previousRosterDigest: chain.rosterDigest,
+                rosterDigest: stagedChain.rosterDigest,
             };
         } finally {
             signer?.zero();
@@ -3164,9 +3243,23 @@ export function createGroupSession(host: GroupHost) {
         input: GroupRequests['groupGrants'],
     ): Promise<GroupResults['groupGrants']> {
         const chain = committed(input.groupId);
-        const kems = Object.fromEntries(input.missing.map((at) => [at.userId, at.kemPublicKey]));
+        // Folder and person ids lowercase (the core's grants_body), each owed grant once.
+        const seen = new Set<string>();
+        const missing = input.missing
+            .map((at) => ({
+                ...at,
+                workspaceId: at.workspaceId.toLowerCase(),
+                userId: at.userId.toLowerCase(),
+            }))
+            .filter((at) => {
+                const key = `${at.workspaceId}:${at.userId}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        const kems = Object.fromEntries(missing.map((at) => [at.userId, at.kemPublicKey]));
         const grants: GrantWire[] = [];
-        for (const at of input.missing) {
+        for (const at of missing) {
             const member = rosterEntry(chain.roster, at.userId);
             if (!activeWith(member))
                 throw new CryptoError('Areas are granted only to active members.');
@@ -3311,7 +3404,7 @@ export function createGroupSession(host: GroupHost) {
         return {
             rosterVersion: version,
             code: await codeAt(chain, version),
-            pinMatches: input.pin ? entryIsPin(entry, input.pin) : null,
+            pinMatches: ((pin) => (pin ? entryIsPin(entry, pin) : null))(contactPin(input.userId)),
         };
     }
 

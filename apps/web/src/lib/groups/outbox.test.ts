@@ -75,6 +75,18 @@ describe('sending', () => {
         expect(await h.store.outbox(USER, GROUP)).toEqual([]);
     });
 
+    test('an entry the shared reader does not take is never sent: dropped, and said lost (fail closed)', async () => {
+        const h = harness();
+        await synced(h);
+        const broken = { ...entry(), route: { kind: 'join' } } as unknown as OutboxEntry;
+        expect(await sendChainCall(h.ctx, broken)).toMatchObject({
+            status: 'refused',
+            code: 'lost',
+        });
+        expect(h.server.sent).toEqual([]);
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
     test.each([
         ['no answer at all', noAnswer()],
         ['503 unavailable', refusal(503, 'unavailable')],
@@ -341,7 +353,6 @@ describe('admissions', () => {
     const admit = {
         kind: 'admit' as const,
         userId: NEWCOMER,
-        pin: { fingerprint: 'fp-checked' } as never,
         served: {} as never,
         roles: [],
     };
@@ -370,7 +381,7 @@ describe('admissions', () => {
     test('“Let them in” signs the admission and sends it there and then, holding the lock', async () => {
         const h = harness();
         await checked(h);
-        const outcome = await letIn(h.ctx, GROUP, admit);
+        const outcome = await letIn(h.ctx, GROUP, admit, 'fp-checked');
         if (outcome.status !== 'sent') throw new Error(outcome.status);
         expect(outcome.outcome.status).toBe('landed');
         expect(h.server.sent).toEqual([
@@ -385,12 +396,12 @@ describe('admissions', () => {
         const first = harness({ store });
         await checked(first);
         first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
-        const kept = await letIn(first.ctx, GROUP, admit);
+        const kept = await letIn(first.ctx, GROUP, admit, 'fp-checked');
         if (kept.status !== 'sent') throw new Error(kept.status);
         expect(kept.outcome.status).toBe('pending');
         const again = harness({ store });
         await checked(again);
-        const resent = await letIn(again.ctx, GROUP, admit);
+        const resent = await letIn(again.ctx, GROUP, admit, 'fp-checked');
         expect(resent).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
         expect(again.calls('groupStage')).toEqual([]);
         expect(again.server.sent.map((at) => at.body)).toEqual([JSON.stringify(kept.entry.body)]);
@@ -401,20 +412,20 @@ describe('admissions', () => {
         const first = harness({ store });
         await checked(first);
         first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
-        const kept = await letIn(first.ctx, GROUP, admit);
+        const kept = await letIn(first.ctx, GROUP, admit, 'fp-checked');
         if (kept.status !== 'sent') throw new Error(kept.status);
         expect(kept.entry.admits).toEqual({ userId: NEWCOMER, fingerprint: 'fp-checked' });
         // The newcomer's account changed; the admin checked their new words.
         const again = harness({ store });
         await checked(again, 'fp-new');
-        const rechecked = { ...admit, pin: { fingerprint: 'fp-new' } as never };
-        const refused = await letIn(again.ctx, GROUP, rechecked);
+        const rechecked = admit;
+        const refused = await letIn(again.ctx, GROUP, rechecked, 'fp-new');
         expect(refused).toEqual({ status: 'kept-other-keys', entry: kept.entry });
         expect(again.server.sent).toEqual([]);
         expect(again.calls('groupStage')).toEqual([]);
         await dropKeptAdmission(again.ctx, kept.entry);
         expect(await store.outbox(USER, GROUP)).toEqual([]);
-        const fresh = await letIn(again.ctx, GROUP, rechecked);
+        const fresh = await letIn(again.ctx, GROUP, rechecked, 'fp-new');
         expect(fresh).toMatchObject({
             status: 'sent',
             entry: { admits: { fingerprint: 'fp-new' } },
@@ -433,7 +444,9 @@ describe('admissions', () => {
             groupId: GROUP,
             envelope: `sealed:${JSON.stringify(old)}`,
         });
-        expect(await letIn(h.ctx, GROUP, admit)).toMatchObject({ status: 'kept-other-keys' });
+        expect(await letIn(h.ctx, GROUP, admit, 'fp-checked')).toMatchObject({
+            status: 'kept-other-keys',
+        });
         expect(h.server.sent).toEqual([]);
     });
 
@@ -442,7 +455,7 @@ describe('admissions', () => {
         const first = harness({ store });
         await checked(first);
         first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
-        const kept = await letIn(first.ctx, GROUP, admit);
+        const kept = await letIn(first.ctx, GROUP, admit, 'fp-checked');
         if (kept.status !== 'sent') throw new Error(kept.status);
         expect(kept.outcome.status).toBe('pending');
         const sentBefore = first.server.sent.length;
@@ -467,13 +480,13 @@ describe('admissions', () => {
         const h = harness();
         await checked(h);
         h.server.script.push(refusal(409, 'stale'));
-        const lost = await letIn(h.ctx, GROUP, admit);
+        const lost = await letIn(h.ctx, GROUP, admit, 'fp-checked');
         expect(lost).toMatchObject({ status: 'sent', outcome: { status: 'stale' } });
         expect(h.server.sent).toHaveLength(1);
         expect((await loadOutbox(h.ctx, GROUP)).entries).toEqual([]);
         h.server.head = 6;
         await checked(h);
-        const resigned = await letIn(h.ctx, GROUP, admit);
+        const resigned = await letIn(h.ctx, GROUP, admit, 'fp-checked');
         expect(resigned).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
         expect(h.calls('groupStage')).toHaveLength(2);
         expect(h.server.sent).toHaveLength(2);
@@ -515,7 +528,7 @@ describe('admissions', () => {
         const h = harness();
         await checked(h);
         const held = await heldBack(h);
-        const outcome = await letIn(h.ctx, GROUP, admit);
+        const outcome = await letIn(h.ctx, GROUP, admit, 'fp-checked');
         if (outcome.status !== 'sent') throw new Error(outcome.status);
         expect(outcome.outcome.status).toBe('landed');
         expect(h.server.sent.map((at) => at.body)).not.toContain(JSON.stringify(held.body));

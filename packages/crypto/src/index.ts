@@ -51,6 +51,14 @@ export { checkId, deriveId, newId, type GroupIdKind, type IdKind } from './ids';
 export type { ContactPin, Settings, SettingsEnvelope, SettingsKeyEnvelope } from './contacts';
 export type { PinnedKeys, ServedKeys, SuccessionLink } from './identity';
 export { fingerprint, keyDigest, publicKeyBytes } from './fingerprint';
+export {
+    outboxStep,
+    readOutboxEntry,
+    type OutboxHold,
+    type OutboxRead,
+    type OutboxRoute,
+    type OutboxStep,
+} from './outbox';
 export type {
     GroupKind,
     GroupPublicKey,

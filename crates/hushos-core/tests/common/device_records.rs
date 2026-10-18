@@ -473,7 +473,7 @@ pub fn ledger_of(p: &Person, account_root: Vec<u8>) -> Arc<AreaLedger> {
 
 fn use_settings(ledger: &AreaLedger, p: &Person, pin: &Value) {
     let pins = if pin.is_null() { HashMap::new() } else { [(GROUP.to_string(), pin_from(pin))].into() };
-    ledger.use_settings(p.user_id.clone(), Some(pins)).unwrap();
+    ledger.use_settings(p.user_id.clone(), Some(pins), Default::default()).unwrap();
 }
 
 /*

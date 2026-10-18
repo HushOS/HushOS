@@ -6,7 +6,7 @@ import { createFamily, stageChange } from './outbox';
 import { removeMember } from './removal';
 import { BOB, familyServer } from './server-testkit';
 import { syncGroup } from './sync';
-import { bytes, pinOf } from './worker-testkit';
+import { bytes } from './worker-testkit';
 
 /*
  * Deleting a family folder (groups design 2.10), against the real crypto
@@ -34,7 +34,6 @@ async function withPhotos() {
         await stageChange(ctx, groupId, {
             kind: 'admit',
             userId: BOB,
-            pin: { ...(await pinOf(bob)), userId: BOB },
             served: bob.served,
             roles: [],
         }),

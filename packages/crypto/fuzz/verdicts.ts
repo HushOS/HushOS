@@ -94,11 +94,24 @@ import {
 } from '../src/join-testkit';
 import { drawPositions } from '../src/join-session';
 import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
+import { readOutboxEntry } from '../src/outbox';
+import {
+    JUNK,
+    committedSession,
+    familyJson,
+    family as rosterFamily,
+    joinCodeWith,
+    run as runRosterCall,
+    sessionRun,
+    sessionStep as rosterSessionStep,
+    verdict as rosterVerdict,
+} from '../src/roster-calls-testkit';
 import {
     chain,
     core,
     coreJoin,
     coreLedger,
+    coreRosterCalls,
     groups,
     people,
     shareGrantee,
@@ -1083,6 +1096,14 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
             return joinDrawsKind(value);
         case 'join_session':
             return joinSessionKind(value);
+        case 'outbox_entry':
+            return outboxEntryKind(value);
+        case 'member_join_code':
+            return memberJoinCodeKind(value);
+        case 'roster_call':
+            return rosterCallKind(value);
+        case 'roster_call_session':
+            return rosterCallSessionKind(value);
         default:
             return undefined;
     }
@@ -1867,4 +1888,134 @@ async function areaLedger(value: Doc): Promise<Verdict | undefined> {
                 'a key envelope the ledger made opens to its key',
             );
     return { ok: true, out: { outcomes } };
+}
+
+/*
+ * An outbox entry's JSON (`entry`, any value) read for the roster-call
+ * family, kept under `id`, with the admin's pin of an admission's person and
+ * the committed head's roster digests (the core's outbox_entry kind).
+ */
+function outboxEntryKind(value: Doc): Verdict | undefined {
+    if (value.entry === undefined) return undefined;
+    let pin: { userId: string; fingerprint: string } | null = null;
+    if (value.pin !== undefined && value.pin !== null) {
+        if (!isObject(value.pin)) return undefined;
+        const userId = text(value.pin, 'userId');
+        const fingerprint = text(value.pin, 'fingerprint');
+        if (userId === undefined || fingerprint === undefined) return undefined;
+        pin = { userId, fingerprint };
+    }
+    const id = optionalText(value, 'id');
+    if (id === undefined) return undefined;
+    let head: string[] | null = null;
+    if (value.head !== undefined && value.head !== null) {
+        if (!Array.isArray(value.head) || !value.head.every((at) => typeof at === 'string'))
+            return undefined;
+        head = value.head as string[];
+    }
+    const read = readOutboxEntry(value.entry, coreRosterCalls().family.groupId, pin, {
+        ...(id === null ? {} : { id }),
+        head,
+    });
+    if (read === null) return ok({ status: 'lost' });
+    if (read.status === 'hold')
+        return ok({ status: 'hold', route: read.route, reason: read.reason });
+    if (read.status === 'landed' || read.status === 'superseded')
+        return ok({ status: read.status, route: read.route });
+    const kept = (value.entry as Doc).body;
+    if (typeof kept === 'string')
+        invariant(read.body === kept, 'a resend of other bytes than the ones kept');
+    return ok({ status: 'send', route: read.route });
+}
+
+/* The admin's join code over the core's roster-call family (the core's member_join_code kind). */
+async function memberJoinCodeKind(value: Doc): Promise<Verdict | undefined> {
+    const doc = coreRosterCalls();
+    const who = number(value, 'who');
+    if (who === undefined || who < 1 || who > 6) return undefined;
+    let keys: number | null = null;
+    if (value.keys !== undefined && value.keys !== null) {
+        const at = unsigned(value.keys);
+        if (at === undefined || at < 1 || at > 5) return undefined;
+        keys = at;
+    }
+    const picks = value.rosters;
+    if (!Array.isArray(picks) || picks.length > 16) return undefined;
+    const rosters = [];
+    for (const pick of picks) {
+        const at = unsigned(pick);
+        if (at === undefined || at > 7) return undefined;
+        rosters.push(at === 7 ? JUNK : doc.family.rosters[at]);
+    }
+    const filed: [number, number][] = who <= 5 && keys !== null ? [[who, keys]] : [];
+    const outcome = (await joinCodeWith(
+        await committedSession(doc, filed),
+        doc,
+        who,
+        rosters,
+    )) as Json;
+    if (outcome.status === 'code') {
+        invariant(outcome.rosterVersion >= 1 && outcome.rosterVersion <= 7, 'a code past the head');
+        invariant(keys === who, 'a code for keys someone else pinned');
+    }
+    if (outcome.status === 'refused') return refused;
+    return ok(outcome);
+}
+
+const ROSTER_CALL_KINDS = ['admit', 'grant', 'take', 'handover', 'stepDown'];
+const SERVED_FIELDS = [
+    'encryptionPublicKey',
+    'signingPublicKey',
+    'mlDsaPublicKey',
+    'kemPublicKey',
+    'keysSignature',
+];
+
+/* One roster call by person 1 of the roster-call family (the core's roster_call kind). */
+async function rosterCallKind(value: Doc): Promise<Verdict | undefined> {
+    const op = value.op;
+    if (!isObject(op)) return undefined;
+    const kind = text(op, 'kind');
+    if (kind === undefined || !ROSTER_CALL_KINDS.includes(kind)) return undefined;
+    const person = (key: string) => {
+        const n = number(op, key);
+        return n !== undefined && n >= 1 && n <= 5 ? n : undefined;
+    };
+    const clean: Json = { kind };
+    if (kind !== 'stepDown') {
+        const who = person('who');
+        if (who === undefined) return undefined;
+        clean.who = who;
+    }
+    if (kind === 'admit') {
+        const roles = op.roles;
+        if (!Array.isArray(roles) || roles.length > 3) return undefined;
+        if (!roles.every((role) => ['members', 'billing', 'guardian'].includes(role as string)))
+            return undefined;
+        clean.roles = roles;
+        if (op.served !== undefined && op.served !== null) {
+            if (!isObject(op.served)) return undefined;
+            for (const [key, field] of Object.entries(op.served)) {
+                const fits =
+                    key === 'keyVersion'
+                        ? unsigned(field) !== undefined
+                        : SERVED_FIELDS.includes(key) && typeof field === 'string';
+                if (!fits) return undefined;
+            }
+            clean.served = op.served;
+        }
+    }
+    const result = await runRosterCall(clean);
+    if ('refused' in result) return refused;
+    const doc = { family: familyJson(await rosterFamily()) };
+    return ok(await rosterVerdict(doc, result.route, result.body));
+}
+
+/* A manager's device over time (the core's roster_call_session kind). */
+async function rosterCallSessionKind(value: Doc): Promise<Verdict | undefined> {
+    const steps = value.steps;
+    if (!Array.isArray(steps) || steps.length > 12) return undefined;
+    const clean = steps.map((step) => rosterSessionStep(step as Json));
+    if (clean.some((step) => step === null)) return undefined;
+    return ok(await sessionRun(clean as Json[]));
 }

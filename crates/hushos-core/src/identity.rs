@@ -575,6 +575,60 @@ pub fn identity_create(
     Ok(identity)
 }
 
+/// A version 2 envelope wrapping exactly these keys under `account_key`, for
+/// the shared fixtures, whose people have fixed keys: what `identity_create`
+/// makes from fresh ones. Never in an app build.
+#[cfg(feature = "fixtures")]
+#[doc(hidden)]
+pub fn identity_wrap(
+    user_id: String,
+    account_key: Vec<u8>,
+    keys: &IdentityKeys,
+) -> CoreResult<IdentityEnvelope> {
+    let account_key = Zeroizing::new(account_key);
+    let (Some(kem_public_key), Some(ml_dsa_public_key)) = (&keys.kem_public_key, &keys.ml_dsa_public_key)
+    else {
+        return Err(input("Unsupported identity envelope."));
+    };
+    let salt = random(32);
+    let key_version = keys.key_version;
+    let wrap = |purpose: &str, private: &[u8], public_key: &str| {
+        wrap_half(&account_key, &salt, &user_id, key_version, purpose, private, public_key)
+    };
+    let (encryption_nonce, encrypted_encryption) =
+        wrap(ENCRYPTION_PURPOSE, &keys.encryption_private_key, &keys.encryption_public_key)?;
+    let (signing_nonce, encrypted_signing) =
+        wrap(SIGNING_PURPOSE, &keys.signing_seed, &keys.signing_public_key)?;
+    let (kem_nonce, encrypted_kem) = wrap(KEM_PURPOSE, &keys.kem_seed, kem_public_key)?;
+    let (ml_dsa_nonce, encrypted_ml_dsa) = wrap(ML_DSA_PURPOSE, &keys.ml_dsa_seed, ml_dsa_public_key)?;
+    let mut identity = IdentityEnvelope {
+        version: 2,
+        key_version,
+        wrapping_salt: encode(&salt),
+        encryption_public_key: keys.encryption_public_key.clone(),
+        encryption_private_key_nonce: encryption_nonce,
+        encrypted_encryption_private_key: encrypted_encryption,
+        signing_public_key: keys.signing_public_key.clone(),
+        signing_seed_nonce: signing_nonce,
+        encrypted_signing_seed: encrypted_signing,
+        kem: Some(IdentityKem {
+            public_key: kem_public_key.clone(),
+            seed_nonce: kem_nonce,
+            encrypted_seed: encrypted_kem,
+            signature: None,
+        }),
+        ml_dsa: Some(IdentityMlDsa {
+            public_key: ml_dsa_public_key.clone(),
+            seed_nonce: ml_dsa_nonce,
+            encrypted_seed: encrypted_ml_dsa,
+        }),
+        keys_signature: None,
+    };
+    let signature = sign_hybrid(&keys.signing_seed, &keys.ml_dsa_seed, &keys_message(&user_id, &identity)?)?;
+    identity.keys_signature = Some(encode(&signature));
+    Ok(identity)
+}
+
 /// The upgrade of a version 1 identity to version 2 (docs/identity-pq-design.md
 /// 2): the same X25519, Ed25519 and ML-KEM keys and the same key version, plus
 /// a fresh ML-DSA key (opened again before it is used) and the keys statement

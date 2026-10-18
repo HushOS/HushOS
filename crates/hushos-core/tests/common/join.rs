@@ -252,7 +252,9 @@ fn record_through(through: usize) -> String {
     let f = family();
     let ledger = ledger_of(&f.p2, root());
     let pin = pin_of(&f.main, 2, &[&f.p1, &f.p2]);
-    ledger.use_settings(f.p2.user_id.clone(), Some([(GROUP.to_string(), pin)].into())).unwrap();
+    ledger
+        .use_settings(f.p2.user_id.clone(), Some([(GROUP.to_string(), pin)].into()), Default::default())
+        .unwrap();
     let served = ServedChain {
         after: 0,
         first_keys: f.main.key(1),
@@ -370,7 +372,7 @@ fn settings_of(ledger: &AreaLedger, doc: &Value, which: &str) {
         "not-open" => return,
         other => panic!("settings {other}"),
     };
-    ledger.use_settings(user, Some(pins)).unwrap();
+    ledger.use_settings(user, Some(pins), Default::default()).unwrap();
 }
 
 pub fn fork_json(of: ForkOf, version: u64, sides: &[MarkSide]) -> Value {

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { rosterDigest } from '@hushos/crypto/groups';
@@ -16,7 +17,13 @@ import {
 } from '@hushos/db';
 import { areaKeyCommitment, areaRootCommitment } from '../../crypto/src/area-keys';
 import { acceptStoredChain, storedRecord } from '@hushos/crypto/group-trust/server';
-import { history, mlDsaKeysOf, tombstoneAt } from '../../crypto/src/group-testkit';
+import {
+    history,
+    mlDsaKeysOf,
+    person,
+    tombstoneAt,
+    type Person,
+} from '../../crypto/src/group-testkit';
 import { db } from '../../db/src/client';
 import {
     accountIdentityHistory,
@@ -30,7 +37,9 @@ import {
     groupKeySuccessions,
     groupMemberships,
     groupRosters,
+    personalWorkspaces,
     users,
+    workspaceStorage,
     workspaceDocuments,
     workspaceKeys,
     workspaces,
@@ -40,6 +49,7 @@ import {
     insertLegacyLink,
     insertLegacyShare,
     resetDatabase,
+    storeTestIdentity,
 } from '../../db/test/helpers';
 import {
     ADDRESS,
@@ -71,6 +81,8 @@ import {
 import * as driveServer from '@hushos/drive/server';
 import * as groups from './server';
 import type * as DriveProtocol from '@hushos/drive/protocol';
+import type { GroupRole } from '@hushos/crypto/groups';
+import type { SignedStatementWire } from './api';
 
 /*
  * As if clients had shipped more document kinds than `tags`: a rotation must
@@ -3216,4 +3228,207 @@ describe('roster format 2 and deleting a family folder (route 30, groups design 
                 .where(eq(driveRotations.workspaceId, fam.areaId)),
         ).toEqual([]);
     });
+});
+
+/*
+ * Groups 1d, Core 5a: the bodies each twin's roster call builder made (the
+ * Rust core's AreaLedger::admit_body, roles_body and handover_body; the web
+ * worker's groupStage) land on these routes as built. Both fixtures sign the
+ * same family (persons 1 to 5 of the group test kit, a group id derived under
+ * person 1): it is stored here route by route as clients would have sent it,
+ * then each body is posted, and posted again as the outbox resends it after an
+ * unknown outcome, which answers as a replay.
+ */
+describe('roster calls the phones and the web build (Core 5a)', () => {
+    const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
+    const documents = {
+        core: read('../../crypto/src/__fixtures__/core-roster-calls.json'),
+        web: read('../../../crates/hushos-core/fixtures/web-roster-calls.json'),
+    };
+
+    /* Persons 1 to 5 as accounts with the fixtures' fixed ids and their real identities. */
+    async function people() {
+        const out: Person[] = [];
+        for (const n of [1, 2, 3, 4, 5]) {
+            const who = await person(n);
+            const email = `person${n}-${randomUUID()}@hushos.test`;
+            await db.insert(users).values({
+                id: who.userId,
+                name: `Person ${n}`,
+                email,
+                normalizedEmail: email,
+                emailVerifiedAt: new Date(),
+            });
+            const [workspace] = await db
+                .insert(workspaces)
+                .values({ ownerKind: 'personal' })
+                .returning({ id: workspaces.id });
+            await db
+                .insert(personalWorkspaces)
+                .values({ userId: who.userId, workspaceId: workspace!.id });
+            await db
+                .insert(workspaceStorage)
+                .values({ workspaceId: workspace!.id, baseQuotaBytes: 1_073_741_824n });
+            await storeTestIdentity(who.userId, who.served);
+            out.push(Object.assign(who, { email }));
+        }
+        return out as (Person & { email: string })[];
+    }
+
+    async function invited(
+        groupId: string,
+        by: string,
+        to: { userId: string; email: string },
+        roles: GroupRole[],
+    ) {
+        const token = randomBytes(32).toString('base64url');
+        const created = await groupsRepository.createInvitation({
+            groupId,
+            email: to.email,
+            normalizedEmail: to.email,
+            tokenHash: createHash('sha256').update(token).digest(),
+            roles,
+            invitedBy: by,
+            expiresAt: new Date(Date.now() + 86_400_000),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        await groups.acceptInvitation(to.userId, token, ADDRESS);
+    }
+
+    /* The family of `doc` stored as its clients sent it: rosters 1 to 5, persons 4 and 5 waiting. */
+    async function stored(doc: Record<string, any>) {
+        const p = await people();
+        const [p1, p2, p3, p4, p5] = p as [
+            Person & { email: string },
+            ...(Person & { email: string })[],
+        ];
+        const family = doc.family;
+        const rosters = family.rosters as SignedStatementWire[];
+        const at = async (version: number) => ({
+            rosterVersion: version,
+            rosterDigest: await rosterDigest(
+                Buffer.from(rosters[version - 1]!.statement, 'base64url'),
+            ),
+        });
+        const [a1, a2, a3] = family.areas as { workspaceId: string; idSeed: string }[];
+        const groupId: string = family.groupId;
+        await groups.createGroup(p1.userId, {
+            id: groupId,
+            idSeed: family.groupIdSeed,
+            kind: 'family',
+            name: 'The Fixture Family',
+            groupKey: family.firstKeys,
+            roster: rosters[0]!,
+            keySeal: { envelope: (await sealWire(groupId, p1, p1, await at(1), 1)).envelope },
+            area: {
+                workspaceId: a1!.workspaceId,
+                idSeed: a1!.idSeed,
+                root: await rootWire(a1!.workspaceId, p1),
+                selfGrant: selfGrant(a1!.workspaceId),
+                grant: {
+                    envelope: (await grantWire(groupId, a1!.workspaceId, 1, p1, p1, await at(1)))
+                        .envelope,
+                },
+            },
+        });
+        await invited(groupId, p1.userId, p2!, []);
+        await groups.admit(p1.userId, groupId, p2!.userId, {
+            expectedRevision: 1,
+            roster: rosters[1]!,
+            grants: [await grantWire(groupId, a1!.workspaceId, 1, p1, p2!, await at(2))],
+        });
+        await invited(groupId, p1.userId, p3!, ['members']);
+        await groups.admit(p1.userId, groupId, p3!.userId, {
+            expectedRevision: 2,
+            roster: rosters[2]!,
+            grants: [await grantWire(groupId, a1!.workspaceId, 1, p1, p3!, await at(3))],
+            keySeal: await sealWire(groupId, p1, p3!, await at(3), 1),
+        });
+        await groups.createArea(p1.userId, groupId, {
+            expectedRevision: 3,
+            roster: rosters[3]!,
+            area: {
+                workspaceId: a2!.workspaceId,
+                idSeed: a2!.idSeed,
+                root: await rootWire(a2!.workspaceId, p1),
+                selfGrant: selfGrant(a2!.workspaceId),
+            },
+            grants: await Promise.all(
+                [p1, p2!, p3!].map(async (to) =>
+                    grantWire(groupId, a2!.workspaceId, 1, p1, to, await at(4)),
+                ),
+            ),
+        });
+        await groups.deleteArea(p1.userId, groupId, a2!.workspaceId, {
+            expectedRevision: 4,
+            roster: rosters[4]!,
+        });
+        await groups.createArea(p1.userId, groupId, {
+            expectedRevision: 5,
+            roster: rosters[5]!,
+            area: {
+                workspaceId: a3!.workspaceId,
+                idSeed: a3!.idSeed,
+                root: await rootWire(a3!.workspaceId, p1),
+                selfGrant: selfGrant(a3!.workspaceId),
+            },
+            grants: await Promise.all(
+                [p1, p2!, p3!].map(async (to) =>
+                    grantWire(groupId, a3!.workspaceId, 1, p1, to, await at(6)),
+                ),
+            ),
+        });
+        // A3's key replaced (route 24): every family folder a newcomer is owed is not at version 1.
+        await groups.rotateArea(p1.userId, groupId, a3!.workspaceId, {
+            expectedRevision: 6,
+            roster: rosters[6]!,
+            rotation: await rotationWire(a3!.workspaceId, p1, 1),
+            grants: await Promise.all(
+                [p1, p2!, p3!].map(async (to) =>
+                    grantWire(groupId, a3!.workspaceId, 2, p1, to, await at(7)),
+                ),
+            ),
+        });
+        await invited(groupId, p1.userId, p4!, []);
+        await invited(groupId, p1.userId, p5!, ['members']);
+        expect(await head(groupId)).toMatchObject({ revision: 7, rosterVersion: 7 });
+        return { groupId, p1 };
+    }
+
+    for (const [twin, doc] of Object.entries(documents))
+        for (const call of (doc.calls as Record<string, any>[]).filter((c) => c.body !== null))
+            test(`the ${twin}'s ${call.name} lands, and its resend is a replay`, async () => {
+                const { groupId, p1 } = await stored(doc);
+                const send = () => post(p1.userId, groupId, call);
+                expect(await send()).toMatchObject({ version: 8, replayed: false });
+                expect(await send()).toMatchObject({ version: 8, replayed: true });
+                expect(await head(groupId)).toMatchObject({
+                    rosterVersion: 8,
+                    groupKeyVersion: call.expected.groupKeyVersion,
+                });
+            });
+
+    /* A call posted on its route: admissions on 17, role changes on 18. */
+    function post(userId: string, groupId: string, call: Record<string, any>) {
+        const route = call.expected.route as { kind: 'admit' | 'member'; userId: string };
+        return route.kind === 'admit'
+            ? groups.admit(userId, groupId, route.userId, call.body)
+            : groups.patchMember(userId, groupId, route.userId, call.body);
+    }
+
+    for (const [twin, doc] of Object.entries(documents))
+        test(`two of the ${twin}'s calls built on one head (two devices): the first lands, the second is stale`, async () => {
+            const { groupId, p1 } = await stored(doc);
+            const named = (name: string) =>
+                doc.calls.find((c: Record<string, any>) => c.name === name);
+            expect(await post(p1.userId, groupId, named('admit-member'))).toMatchObject({
+                version: 8,
+                replayed: false,
+            });
+            expect(await refusal(post(p1.userId, groupId, named('grant-members')))).toMatchObject({
+                code: 'stale',
+                status: 409,
+            });
+            expect(await head(groupId)).toMatchObject({ rosterVersion: 8 });
+        });
 });

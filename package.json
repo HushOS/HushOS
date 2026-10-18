@@ -26,7 +26,7 @@
         "fuzz:rust": "bun packages/crypto/fuzz/run.ts rust",
         "fuzz:js": "bun packages/crypto/fuzz/run.ts js",
         "fuzz:diff": "bun run --cwd packages/crypto fuzz:diff",
-        "fixtures:groups": "bun run --cwd packages/crypto fixtures:groups && cargo run -q -p hushos-core --example group_fixtures && cargo run -q -p hushos-core --example area_ledger_fixtures && cargo run -q -p hushos-core --example join_fixtures",
+        "fixtures:groups": "bun run --cwd packages/crypto fixtures:groups && cargo run -q -p hushos-core --example group_fixtures && cargo run -q -p hushos-core --example area_ledger_fixtures && cargo run -q -p hushos-core --example join_fixtures && cargo run -q -p hushos-core --example roster_call_fixtures",
         "core:apple": "apps/ios/scripts/build-core.sh",
         "core:android": "apps/android/scripts/build-core.sh",
         "ios:project": "cd apps/ios && xcodegen generate --quiet",

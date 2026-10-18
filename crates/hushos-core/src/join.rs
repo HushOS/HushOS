@@ -760,7 +760,7 @@ impl AreaLedger {
     /// ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
     /// // Settings first, as for any acceptance.
     /// assert!(ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None).is_err());
-    /// ledger.use_settings(user, Some(Default::default()))?;
+    /// ledger.use_settings(user, Some(Default::default()), Default::default())?;
     /// let JoinPreview::Code { roster_version, code, session } =
     ///     ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None)?
     /// else {
@@ -859,7 +859,7 @@ impl AreaLedger {
     /// # let me = OwnIdentities { user_id: user.clone(), identities };
     /// # let ledger = AreaLedger::new();
     /// # ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root.clone())?;
-    /// # ledger.use_settings(user.clone(), Some(Default::default()))?;
+    /// # ledger.use_settings(user.clone(), Some(Default::default()), Default::default())?;
     /// // A family whose one member previews their own admission, at roster 1.
     /// let preview = |holds| ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), holds);
     /// let JoinPreview::Code { session, .. } = preview(None)? else { panic!("a code") };
@@ -878,7 +878,7 @@ impl AreaLedger {
     /// // kept escalation brings it back on the next preview.
     /// ledger.clear();
     /// ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
-    /// ledger.use_settings(user, Some(Default::default()))?;
+    /// ledger.use_settings(user, Some(Default::default()), Default::default())?;
     /// assert!(check(session.clone(), read_out.clone()).is_err(), "a showing from before the lock");
     /// let JoinPreview::Code { session, .. } = preview(Some(kept))? else { panic!("a code") };
     /// assert_eq!(session.hidden().iter().map(|at| session.code()[*at as usize].clone()).collect::<Vec<_>>(), read_out);
@@ -1018,7 +1018,7 @@ impl AreaLedger {
     /// # let me = OwnIdentities { user_id: user.clone(), identities };
     /// # let ledger = AreaLedger::new();
     /// # ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
-    /// # ledger.use_settings(user, Some(Default::default()))?;
+    /// # ledger.use_settings(user, Some(Default::default()), Default::default())?;
     /// // A family whose one member previews their own admission, at roster 1.
     /// let JoinPreview::Code { session, .. } = ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None)? else {
     ///     panic!("a code")
@@ -1112,7 +1112,7 @@ impl AreaLedger {
     /// # let me = OwnIdentities { user_id: user.clone(), identities };
     /// # let ledger = AreaLedger::new();
     /// # ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
-    /// # ledger.use_settings(user, Some(Default::default()))?;
+    /// # ledger.use_settings(user, Some(Default::default()), Default::default())?;
     /// // A family whose one member previews their own admission, at roster 1.
     /// let JoinPreview::Code { session, .. } = ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None)? else {
     ///     panic!("a code")
@@ -1369,7 +1369,11 @@ mod tests {
 
     fn settings(ledger: &AreaLedger, user_id: &str, pin: Option<GroupPin>) {
         ledger
-            .use_settings(user_id.into(), Some(pin.into_iter().map(|pin| (GROUP.to_string(), pin)).collect()))
+            .use_settings(
+                user_id.into(),
+                Some(pin.into_iter().map(|pin| (GROUP.to_string(), pin)).collect()),
+                Default::default(),
+            )
             .unwrap();
     }
 

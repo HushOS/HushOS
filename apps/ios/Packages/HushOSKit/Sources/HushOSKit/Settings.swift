@@ -105,6 +105,31 @@ struct Settings {
         return out
     }
 
+    /*
+     * The contact pins the ledger admits over and reads join codes against (`AreaLedger.useSettings`
+     * with `contacts`, as the web worker takes the settings document's): the version 3 pins (both
+     * lattice digests) filed under their own user id, by that id. Any other pin trusts nothing a
+     * roster call needs, and one filed under another person would make the ledger refuse them all.
+     */
+    var verifiedContacts: [String: VerifiedPin] {
+        var out: [String: VerifiedPin] = [:]
+        for (id, pin) in contacts {
+            guard id.lowercased() == pin.userId.lowercased(),
+                  let mlDsa = pin.mlDsaPublicKeyHash, let kem = pin.kemPublicKeyHash else { continue }
+            out[pin.userId.lowercased()] = VerifiedPin(
+                userId: pin.userId.lowercased(),
+                keyVersion: pin.keyVersion ?? 1,
+                encryptionPublicKey: pin.encryptionPublicKey,
+                signingPublicKey: pin.signingPublicKey,
+                mlDsaPublicKeyHash: mlDsa,
+                kemPublicKeyHash: kem,
+                fingerprint: pin.fingerprint,
+                trustedVia: pin.trustedVia
+            )
+        }
+        return out
+    }
+
     /* A pin written over what was there: known fields replaced, unknown ones kept. */
     mutating func setPin(_ pin: ContactPin) {
         var contacts = rawContacts

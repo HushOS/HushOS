@@ -5,4 +5,5 @@ pub mod device_records;
 pub mod groups;
 pub mod join;
 pub mod rekeyed;
+pub mod roster_calls;
 pub mod rotations;

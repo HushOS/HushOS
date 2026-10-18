@@ -1,4 +1,3 @@
-import type { ContactPin } from '@hushos/crypto/contacts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -174,9 +173,9 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
      * other keys): otherwise no code, and a warning.
      */
     async function showCode(message = '') {
-        const { settings } = await readSettingsForWrite(userId);
-        const pin = (settings.contacts[person.userId] ?? null) as unknown as ContactPin | null;
-        const { code, pinMatches } = await memberJoinCode(ctx, groupId, person.userId, pin);
+        // The worker compares with the contact pin in the settings it opened, never one passed in.
+        await readSettingsForWrite(userId);
+        const { code, pinMatches } = await memberJoinCode(ctx, groupId, person.userId);
         if (pinMatches !== true)
             throw new Error(
                 `${first} is in ${family}, but not with the keys you checked. Don’t compare a join code with them yet: ask whether their account changed, and check their words again.`,
@@ -213,13 +212,18 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 const { settings } = await readSettingsForWrite(userId);
                 const pin = settings.contacts[person.userId];
                 if (!pin) throw new Error(`Check ${first}’s words first.`);
-                const staged = await letIn(ctx, groupId, {
-                    kind: 'admit',
-                    userId: person.userId,
-                    pin: pin as unknown as ContactPin,
-                    served: fresh.identity,
-                    roles: fresh.roles,
-                });
+                // The worker admits over the contact pin in the settings it just opened.
+                const staged = await letIn(
+                    ctx,
+                    groupId,
+                    {
+                        kind: 'admit',
+                        userId: person.userId,
+                        served: fresh.identity,
+                        roles: fresh.roles,
+                    },
+                    pin.fingerprint,
+                );
                 if (staged.status === 'kept-other-keys') {
                     setKeptOther(staged.entry);
                     return;

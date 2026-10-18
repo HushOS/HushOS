@@ -1901,12 +1901,15 @@ pub(crate) mod tests {
     }
 
     /* A group's history being written, as a holder's client signs it. */
+    #[derive(Clone)]
     pub(crate) struct History {
         pub(crate) rosters: Vec<SignedGroupStatement>,
         pub(crate) statements: Vec<Roster>,
         pub(crate) successions: Vec<SignedGroupStatement>,
         pub(crate) seeds: Vec<Vec<u8>>,
         pub(crate) kind: GroupKind,
+        /* The format rosters are signed in (1 unless a test asks for 2: tombstones, root commitments). */
+        pub(crate) format: u8,
     }
 
     impl History {
@@ -1921,6 +1924,7 @@ pub(crate) mod tests {
                 successions: vec![],
                 seeds: vec![group_seed_at(1)],
                 kind,
+                format: 1,
             }
         }
 
@@ -2018,7 +2022,7 @@ pub(crate) mod tests {
                         signer_user_id: signer.user_id.clone(),
                         members,
                         areas: areas.clone(),
-                        format: 1,
+                        format: self.format,
                     }
                 }
                 _ => {
@@ -2034,7 +2038,7 @@ pub(crate) mod tests {
                         signer_user_id: signer.user_id.clone(),
                         members,
                         areas: areas.clone(),
-                        format: 1,
+                        format: self.format,
                     }
                 }
             };

@@ -41,17 +41,20 @@ extension Vault {
     }
 
     /*
-     * The settings document's family pins, as the ledger takes its marks from them: none when the
-     * server holds no settings, the version 1 form (which opens nowhere) as legacy settings, and
-     * otherwise every pin that reads. The ledger refuses none after settings that opened.
+     * The settings document's family pins, as the ledger takes its marks from them, and its contact
+     * pins, the only ones a roster call or join code reads (as the web worker takes the document it
+     * opened): none when the server holds no settings, the version 1 form (which opens nowhere) as
+     * legacy settings, and otherwise every pin that reads. The ledger refuses none after settings
+     * that opened. Until the ledger opens the settings itself (Core 5a's residual), this app is
+     * trusted to pass the document it opened.
      */
     func useForFamilies(_ settings: Settings) throws {
         if settings.version == 0 {
-            try areaLedger.useSettings(userId: session.userId, pins: nil)
+            try areaLedger.useSettings(userId: session.userId, pins: nil, contacts: [:])
         } else if settings.envelopeVersion == 1 {
             try areaLedger.legacySettings(userId: session.userId)
         } else {
-            try areaLedger.useSettings(userId: session.userId, pins: settings.groupPins)
+            try areaLedger.useSettings(userId: session.userId, pins: settings.groupPins, contacts: settings.verifiedContacts)
         }
     }
 

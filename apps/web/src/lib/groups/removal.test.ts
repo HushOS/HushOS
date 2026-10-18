@@ -7,7 +7,7 @@ import { createFamily, stageChange } from './outbox';
 import { foldIn, removeMember, repairPreviousRoots, replaceKeys, runDue } from './removal';
 import { ALICE, BOB, CAROL, familyServer } from './server-testkit';
 import { syncGroup } from './sync';
-import { pinOf, bytes } from './worker-testkit';
+import { bytes } from './worker-testkit';
 import { refusal } from './test-harness';
 
 /*
@@ -38,7 +38,6 @@ async function family(options: { bobRoles?: ('members' | 'billing')[]; carol?: b
         const staged = await stageChange(ctx, groupId, {
             kind: 'admit',
             userId,
-            pin: { ...(await pinOf(who)), userId },
             served: who.served,
             roles,
         });

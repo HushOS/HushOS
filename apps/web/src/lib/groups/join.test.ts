@@ -189,13 +189,19 @@ async function invitedFamily() {
         },
         /* Alice signs Bob's admission ("Let them in", before it reaches the server). */
         admit: async (roles: ('billing' | 'guardian' | 'members')[] = []) => {
+            // Alice checked Bob's words: his pin saved in her settings, which her worker opens again.
+            const { settings, version } = await aliceDevice.settings.read();
+            await aliceDevice.settings.write(version, {
+                ...settings,
+                contacts: { ...settings.contacts, [BOB]: await pinOf(bob) },
+            });
+            await aliceDevice.settings.read();
             admitted = await aliceDevice.call('groupStage', {
                 groupId,
                 expectedRevision: 1,
                 op: {
                     kind: 'admit',
                     userId: BOB,
-                    pin: await pinOf(bob),
                     served: bob.served,
                     roles,
                 },

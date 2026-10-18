@@ -108,6 +108,8 @@ type AccountSettings = {
     version: number;
     envelope: SettingsEnvelope | null;
     groups: Record<string, GroupPin>;
+    /* The people whose words this account checked: the worker admits only over these pins. */
+    contacts?: Record<string, ContactPin>;
 };
 type Device = {
     userId: string;
@@ -129,9 +131,24 @@ async function saveSettings(device: Device) {
     const { envelope } = await device.call('settingsSeal', {
         userId,
         settingsVersion,
-        settings: { version: 2, contacts: {}, groups: { ...settings.groups } },
+        settings: {
+            version: 2,
+            contacts: { ...settings.contacts },
+            groups: { ...settings.groups },
+        },
     });
     Object.assign(settings, { version: settingsVersion, envelope });
+}
+
+/* The account's words check of `people`: their pins saved in its settings, opened again by the worker. */
+async function checkWords(
+    device: Device,
+    ...people: { userId: string; served: Account['served'] }[]
+) {
+    device.settings.contacts ??= {};
+    for (const who of people) device.settings.contacts[who.userId] = await pinOf(who);
+    await saveSettings(device);
+    await loadSettings(device);
 }
 
 /* An account with its own root, identity and settings, unlocked on one device. */
@@ -326,13 +343,13 @@ async function family(bobRoles: GroupRole[] = []) {
     };
     await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [rootListing] });
 
+    await checkWords(alice, bob);
     const admit = await alice.call('groupStage', {
         groupId,
         expectedRevision: 1,
         op: {
             kind: 'admit',
             userId: BOB,
-            pin: await pinOf(bob),
             served: bob.served,
             roles: bobRoles,
         },
@@ -838,13 +855,13 @@ describe('who may vouch for a family’s first keys', () => {
 describe('the join code a newcomer compares (groupJoinPreview)', () => {
     /* Alice signs Carol's admission on top of the committed chain (version 2, Bob a member). */
     async function admitCarol(f: Family, carol: Account, roles: GroupRole[] = []) {
+        await checkWords(f.alice, carol);
         const staged = await f.alice.call('groupStage', {
             groupId: f.groupId,
             expectedRevision: 2,
             op: {
                 kind: 'admit',
                 userId: CAROL,
-                pin: await pinOf(carol),
                 served: carol.served,
                 roles,
             },
@@ -892,27 +909,24 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
             rosterVersion: 3,
             code: admitted.joinCode!.code,
         });
-        // Alice's screen works out the same code from her committed chain.
-        await expect(
-            alice.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters }),
-        ).resolves.toEqual({ rosterVersion: 3, code: admitted.joinCode!.code, pinMatches: null });
-        // With Alice's pin of Carol: her entry on that roster is the pinned keys; Bob's pin is not.
-        await expect(
-            alice.call('groupJoinCode', {
-                groupId,
-                userId: CAROL,
-                rosters: server.rosters,
-                pin: await pinOf(carol),
-            }),
-        ).resolves.toMatchObject({ pinMatches: true });
-        await expect(
-            alice.call('groupJoinCode', {
-                groupId,
-                userId: CAROL,
-                rosters: server.rosters,
-                pin: { ...(await pinOf(f.bob)), userId: CAROL },
-            }),
-        ).resolves.toMatchObject({ pinMatches: false });
+        // Alice's screen works out the same code from her committed chain, compared with the
+        // contact pin of Carol in the settings her worker opened: none, Carol's, or Bob's keys.
+        const joinCode = () =>
+            alice.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters });
+        delete alice.settings.contacts![CAROL];
+        await saveSettings(alice);
+        await loadSettings(alice);
+        await expect(joinCode()).resolves.toEqual({
+            rosterVersion: 3,
+            code: admitted.joinCode!.code,
+            pinMatches: null,
+        });
+        await checkWords(alice, carol);
+        await expect(joinCode()).resolves.toMatchObject({ pinMatches: true });
+        alice.settings.contacts![CAROL] = { ...(await pinOf(f.bob)), userId: CAROL };
+        await saveSettings(alice);
+        await loadSettings(alice);
+        await expect(joinCode()).resolves.toMatchObject({ pinMatches: false });
         // Nothing was committed or marked on Carol's side: no chain and no fork to forget, and
         // nothing opens, trusts or shows a code through what the preview verified.
         await expect(carol.call('groupForget', { groupId })).resolves.toEqual({ forgotten: false });
@@ -1095,13 +1109,13 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
             sealerMlDsaPublicKey: alice.served.mlDsaPublicKey,
         });
         const carol = await account(CAROL);
+        await checkWords(alice, carol);
         const admitted = await alice.call('groupStage', {
             groupId,
             expectedRevision: 3,
             op: {
                 kind: 'admit',
                 userId: CAROL,
-                pin: await pinOf(carol),
                 served: carol.served,
                 roles: [],
             },
@@ -1121,7 +1135,7 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
         });
         await expect(
             alice.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters }),
-        ).resolves.toEqual({ rosterVersion: 4, code: admitted.joinCode!.code, pinMatches: null });
+        ).resolves.toEqual({ rosterVersion: 4, code: admitted.joinCode!.code, pinMatches: true });
         if (shown.status !== 'code') throw new Error(shown.status);
         await expect(
             carol.call('groupAccept', {
@@ -1169,13 +1183,13 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
             selfGrant: removal.body.rotations![0]!.selfGrant,
         });
         const readmit = async (roles: GroupRole[]) => {
+            await checkWords(alice, bob);
             const staged = await alice.call('groupStage', {
                 groupId,
                 expectedRevision: 3,
                 op: {
                     kind: 'admit',
                     userId: BOB,
-                    pin: await pinOf(bob),
                     served: bob.served,
                     roles,
                 },
@@ -1237,7 +1251,7 @@ describe('staged chains', () => {
                 userId: BOB,
                 rosters: [...server.served().rosters, loser.body.roster],
             }),
-        ).resolves.toEqual({ rosterVersion: 2, code: f.admit.joinCode!.code, pinMatches: null });
+        ).resolves.toEqual({ rosterVersion: 2, code: f.admit.joinCode!.code, pinMatches: true });
         const cacheOf = async (record: string) =>
             (
                 (await openDeviceRecord(alice.root, ALICE, groupId, 'chains', record)) as {
@@ -1457,13 +1471,13 @@ describe('the write version (F9)', () => {
         const before = { record: f.marks.bob.record, envelope: bob.settings.envelope! };
         const servedBefore = server.served();
         // Alice signs two rosters at version 3: Carol's admission (never stored), then the rotation.
+        await checkWords(alice, carol);
         const rival = await alice.call('groupStage', {
             groupId,
             expectedRevision: 2,
             op: {
                 kind: 'admit',
                 userId: CAROL,
-                pin: await pinOf(carol),
                 served: carol.served,
                 roles: [],
             },
@@ -2613,13 +2627,13 @@ describe('the write version (F9)', () => {
         await f.sync(f.alice, f.marks.alice);
         // The deleted folder's key was asked for, and the admission refused, before this.
         const carol = await account(CAROL);
+        await checkWords(f.alice, carol);
         const admit = await f.alice.call('groupStage', {
             groupId: f.groupId,
             expectedRevision: 3,
             op: {
                 kind: 'admit',
                 userId: CAROL,
-                pin: await pinOf(carol),
                 served: carol.served,
                 roles: [],
             },
@@ -2628,6 +2642,31 @@ describe('the write version (F9)', () => {
         if (admit.outboxId === null) throw new Error('nothing staged');
         expect(admit.body.grants ?? []).toEqual([]);
         expect(parseRoster(decode(admit.body.roster.statement)).rosterVersion).toBe(4);
+    });
+
+    test('the organizer lets go of billing only once someone else active holds it', async () => {
+        const f = await family();
+        const stage = (userId: string, roles: GroupRole[], expectedRevision: number) =>
+            f.alice.call('groupStage', {
+                groupId: f.groupId,
+                expectedRevision,
+                op: { kind: 'roles', userId, roles },
+                kems: { [BOB]: f.bob.served.kemPublicKey },
+            });
+        await expect(stage(ALICE, ['members'], 2)).rejects.toThrow(
+            'Make someone else the organizer first.',
+        );
+        const handed = await stage(BOB, ['billing'], 2);
+        if (handed.outboxId === null) throw new Error('nothing staged');
+        await f.alice.call('groupDrop', { outboxId: handed.outboxId });
+        f.server.store(handed.body);
+        await f.sync(f.alice, f.marks.alice);
+        const down = await stage(ALICE, ['members'], 3);
+        if (down.outboxId === null) throw new Error('nothing staged');
+        const roster = parseRoster(decode(down.body.roster.statement));
+        expect(roster.members.find((member) => member.userId === ALICE)?.roles).toEqual([
+            'members',
+        ]);
     });
 
     test('a family folder’s self-grant never opens as a personal workspace, even before the family loads', async () => {
@@ -3879,7 +3918,7 @@ describe('the device store and the lock', () => {
         await expect(writeAtRoot(LATER)).resolves.toBeTruthy();
         await expect(
             alice.call('groupJoinCode', { groupId, userId: BOB, rosters: f.server.rosters }),
-        ).resolves.toEqual({ rosterVersion: 2, code: f.admit.joinCode!.code, pinMatches: null });
+        ).resolves.toEqual({ rosterVersion: 2, code: f.admit.joinCode!.code, pinMatches: true });
     });
 
     test('a lock forgets the chains, seeds, staged secrets and area keys', async () => {

@@ -34,7 +34,7 @@
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "fixtures:core": "bun scripts/core-fixtures.ts",
-        "fixtures:groups": "bun scripts/group-fixtures.ts && bun scripts/area-ledger-fixtures.ts && bun scripts/join-fixtures.ts",
+        "fixtures:groups": "bun scripts/group-fixtures.ts && bun scripts/area-ledger-fixtures.ts && bun scripts/join-fixtures.ts && bun scripts/roster-call-fixtures.ts",
         "fuzz": "bun fuzz/run.ts",
         "fuzz:seeds": "bun fuzz/seeds.ts",
         "fuzz:diff": "cargo build -q --locked --release --manifest-path ../../crates/hushos-core/fuzz/Cargo.toml --example verdicts && vitest run --config fuzz/vitest.config.ts"

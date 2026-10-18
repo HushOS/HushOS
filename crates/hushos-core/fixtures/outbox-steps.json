@@ -1,0 +1,180 @@
+{
+    "description": "What one answer to a roster call means for its outbox entry (F7, docs/groups-server.md 6): outbox_step in crates/hushos-core/src/roster_calls.rs and outboxStep in packages/crypto/src/outbox.ts must both give `step` for `status` and `code` (null: no code). Hand-written; both twins' tests read it.",
+    "cases": [
+        {
+            "status": 200,
+            "code": null,
+            "step": "landed"
+        },
+        {
+            "status": 201,
+            "code": null,
+            "step": "landed"
+        },
+        {
+            "status": 299,
+            "code": null,
+            "step": "landed"
+        },
+        {
+            "status": 0,
+            "code": null,
+            "step": "resend"
+        },
+        {
+            "status": 300,
+            "code": null,
+            "step": "resend"
+        },
+        {
+            "status": 400,
+            "code": null,
+            "step": "resend"
+        },
+        {
+            "status": 401,
+            "code": null,
+            "step": "resend"
+        },
+        {
+            "status": 401,
+            "code": "signed-out",
+            "step": "resend"
+        },
+        {
+            "status": 429,
+            "code": "rate-limited",
+            "step": "resend"
+        },
+        {
+            "status": 500,
+            "code": null,
+            "step": "resend"
+        },
+        {
+            "status": 500,
+            "code": "unavailable",
+            "step": "resend"
+        },
+        {
+            "status": 503,
+            "code": "unavailable",
+            "step": "resend"
+        },
+        {
+            "status": 409,
+            "code": "grants-due",
+            "step": "send-grants"
+        },
+        {
+            "status": 409,
+            "code": "rotating",
+            "step": "rebuild"
+        },
+        {
+            "status": 409,
+            "code": "epoch-stale",
+            "step": "rebuild"
+        },
+        {
+            "status": 409,
+            "code": "root-moved",
+            "step": "rebuild"
+        },
+        {
+            "status": 409,
+            "code": "document-stale",
+            "step": "rebuild"
+        },
+        {
+            "status": 409,
+            "code": "stale",
+            "step": "stale"
+        },
+        {
+            "status": 409,
+            "code": "members-changed",
+            "step": "membership-moved"
+        },
+        {
+            "status": 409,
+            "code": "left-due",
+            "step": "membership-moved"
+        },
+        {
+            "status": 403,
+            "code": "forbidden",
+            "step": "refused"
+        },
+        {
+            "status": 400,
+            "code": "invalid",
+            "step": "refused"
+        },
+        {
+            "status": 402,
+            "code": "seats",
+            "step": "refused"
+        },
+        {
+            "status": 409,
+            "code": "held",
+            "step": "refused"
+        },
+        {
+            "status": 409,
+            "code": "succession-due",
+            "step": "refused"
+        },
+        {
+            "status": 409,
+            "code": "not-pending",
+            "step": "refused"
+        },
+        {
+            "status": 409,
+            "code": "area-limit",
+            "step": "refused"
+        },
+        {
+            "status": 413,
+            "code": "too-large",
+            "step": "refused"
+        },
+        {
+            "status": 499,
+            "code": "anything",
+            "step": "refused"
+        },
+        {
+            "status": 404,
+            "code": "not-member",
+            "step": "wiped"
+        },
+        {
+            "status": 404,
+            "code": "not-found",
+            "step": "refused"
+        },
+        {
+            "status": 410,
+            "code": "not-member",
+            "step": "refused"
+        },
+        {
+            "status": 500,
+            "code": "not-member",
+            "step": "resend"
+        },
+        {
+            "status": 409,
+            "code": "stale-x",
+            "step": "refused"
+        },
+        {
+            "status": 509,
+            "code": "stale",
+            "step": "resend"
+        }
+    ]
+}

@@ -33,6 +33,11 @@ pub mod device_records;
 #[path = "../../tests/common/join.rs"]
 pub mod join;
 
+/// Roster calls, the admin's join code and outbox entries, run as the fixture tests run them.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/roster_calls.rs"]
+pub mod roster_calls;
+
 /// Runs `target` on `data` with every invariant asserted: what a fuzz target calls.
 pub fn check(target: &str, data: &[u8]) {
     targets::verdict(target, data).expect("a known target");
