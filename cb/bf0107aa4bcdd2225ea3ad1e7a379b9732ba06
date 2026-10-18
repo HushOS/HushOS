@@ -1,0 +1,23 @@
+DESIGN.md
+  s_c56e31c87cddde::t_2cd0b66c60951a 384
+apps/web/src/identities.css
+  s_c56e31c87cddde::t_8c60f85bb91121 185,188,203
+apps/web/src/routes/roadmap/route.tsx
+  s_c56e31c87cddde::t_efb19ac4b934ec 4-5,7-14,47-58,105-111,134-146,156-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cbbf0107aa4bcdd2225ea3ad1e7a379b9732ba06",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
