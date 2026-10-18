@@ -304,6 +304,50 @@ test('versions: uploading a name again keeps the earlier version, which opens, d
     await expect(dialog(page)).toHaveCount(0);
 });
 
+test('versions opened while a new version is still on its way catch up when it lands', async () => {
+    // The upload's last step is held on the wire, so Versions reads the list before the server
+    // has made the new version current.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let arrived!: () => void;
+    const held = new Promise<void>((resolve) => (arrived = resolve));
+    const complete = '**/api/drive/uploads/*/complete';
+    await page.route(complete, async (route) => {
+        arrived();
+        await released;
+        await route.continue();
+    });
+
+    const newer = join(mkdtempSync(join(tmpdir(), 'hushos-version-')), 'README');
+    writeFileSync(newer, 'a third README, so there is an earlier one again\n');
+    await page.locator('input[type=file]').first().setInputFiles([newer]);
+    await expect(dialog(page)).toContainText('“README” is already here');
+    await expect(dialog(page).getByRole('radio', { name: /Replace/ })).toBeChecked();
+    await dialog(page).getByRole('button', { name: 'Continue' }).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await held;
+
+    await row(page, 'README')
+        .locator('button')
+        .first()
+        .click({ ...grip, button: 'right' });
+    await page.getByRole('menuitem', { name: 'Versions' }).click();
+    await expect(dialog(page)).toContainText('Versions of “README”');
+    // The list as it stood before the new version landed: the previous test deleted the earlier one.
+    await expect(dialog(page).getByText(/No earlier version/)).toBeVisible();
+
+    release();
+    // The same dialog, never reopened, now shows the version the upload replaced.
+    await expect(dialog(page).getByText('Earlier version', { exact: true })).toBeVisible({
+        timeout: 30_000,
+    });
+    await expect(dialog(page).getByText(/No earlier version/)).toHaveCount(0);
+    await page.unroute(complete);
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0);
+    await expect(rows(page)).toHaveCount(8);
+});
+
 test('a taken name can also be kept under another name or skipped, once or for the whole drop', async () => {
     const input = page.locator('input[type=file]').first();
     // Keep both, with the suggested "(2)" name edited.
