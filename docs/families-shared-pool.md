@@ -375,3 +375,19 @@ Closed on 19 October: one family per account (final), the single view and no fam
 9. **Accounts already in several families:** confirm that the migration stops and an operator resolves them, rather than a migration that picks one family.
 10. **Self-hosted without billing:** confirm the one-family rule applies there too, with no pooling and no new setting.
 11. **The announcement:** confirm the pause line now and the correction on the day families return (7.6), and its wording.
+
+## Owner decisions (2026-10-19)
+
+All open questions are answered as recommended:
+
+1. Personal or family files moved into a company workspace: allowed by default, with a dialog saying the company's admins can open them.
+2. A personal subscriber who joins a family keeps their personal plan to the end of the paid period, and their own files stay on it until then; after that they draw from the family pool. No refund and no double charge.
+3. An invitee already in a family is refused when they accept, not only at "Let them in".
+4. No grace period after leaving or removal (nothing is ever deleted).
+5. Per-member limits come later.
+6. Managers see each member's usage in whole gigabytes, rounded up.
+7. Referral bonuses and operator grants don't add to the pool and come back when the person leaves.
+8. `pool-full` refuses an admission whose own files don't fit.
+9. The migration stops on any account in two families rather than picking one.
+10. The one-family rule applies on self-hosted servers without billing.
+11. When families return, the rewritten announcement is published (the old one is in drafts), rather than a correction.
