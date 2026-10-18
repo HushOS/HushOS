@@ -618,3 +618,17 @@ Each fails on a defect a person, operator or attacker would notice (AGENTS.md). 
 6. **Cover traffic:** frames every tick only while typing (this note) hides keystroke rhythm but not bursts. Constant-rate frames while a document is focused would hide bursts too, at roughly ten padded frames a second per person fanned out to everyone in the room. Worth the relay cost?
 7. **yrs on the phones:** inside `hushos-core` behind a cargo feature, so the Files extensions do not carry it, or always in? Decide after measuring its size.
 8. **"Edited together with" in Info:** list the session's participants beside a saved version? Without their signatures over the version it would be the saver's word, or the server's.
+
+## Owner decisions (2026-10-19)
+
+The open questions are answered as recommended, with one change:
+
+- **Hosted relay (1):** open to any self-hosted server, within per-origin limits.
+- **Autosave alone (2):** no; milestone 1's explicit save stays, and only shared sessions save themselves.
+- **Cap (3):** 25 people per document; MLS is revisited only if larger sessions are needed.
+- **Viewers (4):** shown to editors as "Viewing".
+- **Yjs state (5), changed:** store an encrypted Yjs state with a version when it is needed (for example, to merge offline edits exactly), rather than never. Keep it out of versions that don't need it.
+- **Constant-rate frames (6):** not at first; recorded as a residual, possibly an option later.
+- **yrs behind a build flag (7):** decided after measuring its size in the core.
+- **"Edited together with…" (8):** yes, worded as the saver's statement ("Saved by Maya, editing with Sam"), not a signed fact.
+- **Transport and relay:** WebSocket, a standalone Bun + Elysia relay at relay.hushos.com; a native document format `.hdoc` for notes and documents.
