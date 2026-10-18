@@ -83,12 +83,19 @@ struct NodeMenu: View {
         let role = store.role(of: item)
         let mine = role == .owner
         let canEdit = role != .viewer
-        if let select {
+        // A family folder, read only in this version: open it, send a copy, and Info. No Share or links, nothing that writes or keeps.
+        let family = store.isFamily(item)
+        if let select, !family {
             Section { Button("Select", systemImage: "checkmark.circle", action: select) }
         }
         Section {
             if mine { Button("Share", systemImage: "person.badge.plus") { action = .share(item) } }
-            if item.isFolder {
+            if family {
+                if !item.isFolder {
+                    Button("Open in…", systemImage: "arrow.up.forward.app") { OpenIn.present(item, store: store) }
+                    Button("Send a copy", systemImage: "square.and.arrow.up") { action = .sendCopy(item) }
+                }
+            } else if item.isFolder {
                 // A folder keeps every file inside it, and stays kept as they change; a folder shared with
                 // you too (its files list through the share, and go if the share stops).
                 if true {
@@ -141,25 +148,27 @@ struct NodeMenu: View {
                     }
                 }
             }
-            if !mine { Button("Save a copy to my files", systemImage: "plus.square.on.square") { Task { await store.saveCopy(item) } } }
+            if !mine && !family { Button("Save a copy to my files", systemImage: "plus.square.on.square") { Task { await store.saveCopy(item) } } }
         }
-        Section {
-            if canEdit {
-                Button("Rename", systemImage: "pencil") { Rename.ask(item, store: store) }
-                Button("Move", systemImage: "folder") { action = .move([item]) }
+        if !family {
+            Section {
+                if canEdit {
+                    Button("Rename", systemImage: "pencil") { Rename.ask(item, store: store) }
+                    Button("Move", systemImage: "folder") { action = .move([item]) }
+                }
+                Button("Copy", systemImage: "doc.on.doc") {
+                    store.copy([item])
+                    // In a folder the paste bar says it; elsewhere (Home, Search) nothing would.
+                    if select == nil { store.notify("Copied “\(item.name)”. Open a folder to paste.") }
+                }
+                if mine { Button("Tags", systemImage: "tag") { action = .tags(item) } }
             }
-            Button("Copy", systemImage: "doc.on.doc") {
-                store.copy([item])
-                // In a folder the paste bar says it; elsewhere (Home, Search) nothing would.
-                if select == nil { store.notify("Copied “\(item.name)”. Open a folder to paste.") }
-            }
-            if mine { Button("Tags", systemImage: "tag") { action = .tags(item) } }
         }
         Section {
             if !item.isFolder && canEdit { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }
             Button("Info", systemImage: "info.circle") { action = .info(item) }
         }
-        if !mine {
+        if !mine && !family {
             Section { Button("Report", systemImage: "flag") { action = .report(item) } }
         }
         if canEdit {

@@ -157,6 +157,56 @@ struct Settings {
         }
     }
 
+    /*
+     * Each family's cross-device mark (`groups`, as the web writes it; docs/groups-design.md 2.7):
+     * the pins that read, by family id. One that doesn't read is left out here and refused by
+     * `groupPin(_:)`, so it never passes for no mark at all for its own family.
+     */
+    var groupPins: [String: GroupPin] {
+        var out: [String: GroupPin] = [:]
+        for (id, _) in document["groups"] as? [String: Any] ?? [:] {
+            if let pin = try? groupPin(id) { out[id] = pin }
+        }
+        return out
+    }
+
+    /* The family's pin, nil when there is none; throws when one is there and doesn't read. */
+    func groupPin(_ groupId: String) throws -> GroupPin? {
+        let groups = document["groups"] as? [String: Any] ?? [:]
+        guard let value = groups[groupId] ?? groups.first(where: { $0.key.lowercased() == groupId.lowercased() })?.value else { return nil }
+        guard let raw = value as? [String: Any],
+              let first = raw["firstEd25519PublicKey"] as? String, let digest = raw["firstMlDsaPublicKeyDigest"] as? String,
+              let checkedAt = raw["checkedAt"] as? String, let keyVersion = (raw["keyVersion"] as? NSNumber)?.uint64Value,
+              let groupKeyDigest = raw["groupKeyDigest"] as? String, let rosterVersion = (raw["rosterVersion"] as? NSNumber)?.uint64Value,
+              let rosterDigest = raw["rosterDigest"] as? String, let areas = raw["areas"] as? [String: Any]
+        else { throw ContactError.message("Invalid group pin.") }
+        var marks: [String: UInt64] = [:]
+        for (workspaceId, version) in areas {
+            guard let version = (version as? NSNumber)?.uint64Value else { throw ContactError.message("Invalid group pin.") }
+            marks[workspaceId] = version
+        }
+        let pin = GroupPin(firstEd25519PublicKey: first, firstMlDsaPublicKeyDigest: digest, checkedAt: checkedAt, keyVersion: keyVersion,
+                           groupKeyDigest: groupKeyDigest, rosterVersion: rosterVersion, rosterDigest: rosterDigest, areas: marks)
+        // As the web's checkGroupPin: canonical keys and digests, versions in range, lowercase area ids.
+        return try groupPinCheck(groupId: groupId, pin: pin)
+    }
+
+    /* A family's pin written over what was there, exactly its fields (the web's checkGroupPin refuses any other). */
+    mutating func setGroupPin(_ groupId: String, _ pin: GroupPin) {
+        var groups = document["groups"] as? [String: Any] ?? [:]
+        var raw: [String: Any] = [:]
+        raw["firstEd25519PublicKey"] = pin.firstEd25519PublicKey
+        raw["firstMlDsaPublicKeyDigest"] = pin.firstMlDsaPublicKeyDigest
+        raw["checkedAt"] = pin.checkedAt
+        raw["keyVersion"] = NSNumber(value: pin.keyVersion)
+        raw["groupKeyDigest"] = pin.groupKeyDigest
+        raw["rosterVersion"] = NSNumber(value: pin.rosterVersion)
+        raw["rosterDigest"] = pin.rosterDigest
+        raw["areas"] = pin.areas.mapValues { NSNumber(value: $0) }
+        groups[groupId] = raw
+        document["groups"] = groups
+    }
+
     /* The document as sealed: compact, keys sorted, version 2 (read as 1 or 2; the only one that may hold version 3 pins). */
     func json() throws -> String {
         var out = document
@@ -252,6 +302,8 @@ extension Vault {
         settings.keyEnvelope = reply.key
         marks.record(userId: session.userId, version: reply.version)
         lastPins = settings.contacts
+        // The area ledger takes the families' marks from every settings read, as the web's worker does.
+        try? useForFamilies(settings)
         return settings
     }
 

@@ -30,6 +30,9 @@ public struct SessionUser: Codable, Sendable, Equatable {
 }
 
 public enum AuthError: Error, LocalizedError, Sendable, Equatable {
+    /* What a request that got no answer says: callers that must tell no answer from a refusal compare with it. */
+    public static let unreachable = "We couldn’t reach HushOS. Check your connection, then try again."
+
     case message(String)
     case wrongPassword
     case noSession
@@ -83,7 +86,7 @@ public enum Auth {
         do {
             (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         } catch {
-            throw AuthError.message("We couldn’t reach HushOS. Check your connection, then try again.")
+            throw AuthError.message(AuthError.unreachable)
         }
         let http = response as? HTTPURLResponse
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]

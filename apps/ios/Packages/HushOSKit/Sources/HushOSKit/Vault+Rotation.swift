@@ -143,6 +143,8 @@ extension Vault {
      */
     public func rotate(_ item: Opened, progress: @Sendable (Int) -> Void = { _ in }) async throws -> RotationOutcome {
         let ws = item.node.workspaceId
+        // A family folder's walk goes only through the area ledger (iOS 4): never this personal rotation.
+        try refuseFamilyWrite(ws)
         let rootId = item.id
         // Every record is checked as it was before it is signed again: without whom to trust, nothing starts.
         let trusted: TrustedSigners

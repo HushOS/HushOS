@@ -25,7 +25,7 @@ public struct AccountStore: Sendable {
      * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
      * node-to-parent index. The settings marks in `local` stay: they belong to no account's data and
      * are what catches a server handing an account older settings after it signs in again. */
-    static let accountFiles = ["offline", "transfers", "share-staging", "state", "local/files-parents.json"]
+    static let accountFiles = ["offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups"]
 
     private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
 

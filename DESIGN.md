@@ -363,7 +363,7 @@ The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing els
 - Don't put an ellipsis on a button except while it works.
 - Don't draw an actions row above a large title on the phones, or an avatar as the way into Account.
 - Don't show "Same as folder" on every phone row, or a setup nudge on Home.
-- Don't claim anything that is not built: account creation in the apps, families and inviting by email in the apps (the web has them, on servers that offer families), widgets, the share extension and transfer notifications are not built; Photos is not planned.
+- Don't claim anything that is not built: account creation in the apps, managing families, joining one and inviting by email in the apps (the web has them, on servers that offer families; the iOS app only opens a family's folders and members, read only), widgets, the share extension and transfer notifications are not built; Photos is not planned.
 
 ## Motion
 
@@ -439,6 +439,13 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Remove from family (asks once: "Remove Sam from Lindqvist family?", "Sam loses the family folders straight away. HushOS replaces their keys, which can take a few minutes.")
         - Leave family (on the family's page under "Technical details and leaving"; asks once: "You'll lose the family folders. Your own files stay yours."; where the server would refuse, disabled with the reason above it: "Make someone else the organizer first.", "Let someone else manage the family first."; "Leaving" with a spinner while it works)
         - Replace keys (a family folder's, under Technical details, for managers)
+    - Families (iOS, read only for now; the same words as the web where the web has them):
+        - Families (an Account section, a row per family, with "Shown differently" or "Couldn't check" on its row)
+        - "Finish joining Lindqvist family on the web" (a family this phone hasn't checked yet; "Waiting to join" with "Finish joining Lindqvist family on the web." while not let in)
+        - "Family folders are read only in this app for now. Make changes on the web." (any change refused in a family folder)
+        - "Open the family again, then try again." (a family folder opened before a check that no longer holds)
+        - "Everyone in Lindqvist family can open it." (Who can open, in Info and the viewer, for an item in a family folder)
+        - Checked: Verified by Lindqvist family (Info, as on the web, with no icon)
     - Family folders:
         - Family folders (a family's row under My files opens them; Members leads to the family's page)
         - New family folder

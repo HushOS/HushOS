@@ -92,6 +92,19 @@ struct FolderView: View {
 
     private var selectedItems: [Opened] { children.filter { selection.contains($0.id) } }
 
+    /* A family folder: read only in this version, so nothing here adds, pastes or selects for changes. */
+    private var readOnly: Bool { store.isFamilyFolder(folderId) }
+
+    @Environment(\.scenePhase) private var scenePhase
+
+    /* A problem stands in for the rows: always when there are none, and in a family folder whenever it has one (never "Nothing here yet"). */
+    private var problemShown: Bool {
+        guard let problem = store.folderProblems[folderId] else { return false }
+        if store.folders[folderId] == nil { return true }
+        if case .family = problem { return children.isEmpty }
+        return false
+    }
+
     /* The active tag when it is what empties the list: the folder has items, none carry it. */
     private var filteredOutTag: Tag? {
         guard let tagFilter, let items = store.folders[folderId], !items.isEmpty else { return nil }
@@ -177,7 +190,7 @@ struct FolderView: View {
         .safeAreaInset(edge: .bottom) {
             if selecting {
                 SelectBar(items: selectedItems, action: $action, moving: $movingMany) { endSelecting() }
-            } else if let clip = store.clipboard, let first = clip.items.first {
+            } else if !readOnly, let clip = store.clipboard, let first = clip.items.first {
                 PasteBar(
                     text: clip.items.count > 1 ? "Paste \(clip.items.count) items here" : "Paste “\(first.name)” here",
                     reason: store.pasteProblem(into: folderId),
@@ -200,7 +213,7 @@ struct FolderView: View {
         // A quick action for this folder: the + menu's action, once the push has settled (a sheet
         // asked for mid-push is dropped).
         .onChange(of: store.pendingAdd, initial: true) { _, pending in
-            guard let pending, pending.folder == folderId else { return }
+            guard let pending, pending.folder == folderId, !readOnly else { return }
             store.pendingAdd = nil
             Task {
                 try? await Task.sleep(for: .milliseconds(600))
@@ -221,9 +234,16 @@ struct FolderView: View {
             Task { searchFocused = true }
         }
         .task {
+            // A family folder checks its family again while browsing when the last check is a few minutes old.
+            if readOnly { await store.refreshFamilyIfStale(folder: folderId, maxAge: 180) }
             if store.folders[folderId] == nil { await store.refresh(folder: folderId) }
             if store.tags.tags.isEmpty { await store.refreshTags() }
             loaded = true
+        }
+        // Back in the foreground, a family folder checks its family again (at most once a minute).
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, readOnly else { return }
+            Task { await store.refreshFamilyIfStale(folder: folderId, maxAge: 60) }
         }
         // Rows dropped from under an open folder (a sign-in, a failed change) load again rather than leave a skeleton.
         .onChange(of: store.folders[folderId] == nil) { _, gone in
@@ -262,7 +282,7 @@ struct FolderView: View {
 
     /* Rows, or what stands in for them: loading, a failure, offline, empty, filtered out, no match. */
     @ViewBuilder private var content: some View {
-        if store.folders[folderId] == nil, store.folderProblems[folderId] != nil {
+        if problemShown {
             problemState.bareRow(top: Alpine.Space.s12)
         } else if store.folders[folderId] == nil {
             ForEach(0 ..< 6, id: \.self) { index in SkeletonRow(index: index).itemRow() }
@@ -275,7 +295,7 @@ struct FolderView: View {
 
     /* Tiles, or the same stand-ins: skeleton tiles while loading, the list's states otherwise. */
     @ViewBuilder private var grid: some View {
-        if store.folders[folderId] == nil, store.folderProblems[folderId] != nil {
+        if problemShown {
             problemState.padding(.top, Alpine.Space.s12)
         } else if store.folders[folderId] == nil {
             LazyVGrid(columns: Self.tileColumns, spacing: Self.tileGap) {
@@ -301,6 +321,10 @@ struct FolderView: View {
         case .notOnPhone:
             EmptyStateView(symbol: "icloud.slash", title: "Not opened on this phone yet",
                            message: "“\(title)” hasn’t been opened here before, so there’s nothing to show offline. It opens when you’re back online.")
+        case .family(let words):
+            EmptyStateView(symbol: "exclamationmark.triangle", title: "This folder couldn’t be opened", message: words) {
+                Button("Try again") { Task { await store.reopenFamilyFolder(folderId) } }.buttonStyle(PrimaryCapsuleStyle())
+            }
         case nil:
             EmptyView()
         }
@@ -312,6 +336,8 @@ struct FolderView: View {
                            message: "Search looks in “\(title)” and the folders inside it. Check the spelling, or try fewer words.")
         } else if let tag = filteredOutTag {
             EmptyStateView(title: "Nothing tagged \(tag.name)", message: "Nothing in this folder carries this tag.")
+        } else if readOnly {
+            EmptyStateView(symbol: "folder", title: "Nothing here yet")
         } else {
             EmptyStateView(symbol: "folder.badge.plus", title: "Nothing here yet",
                            message: "Use + to add files, or save to HushOS from the Files app.") {
@@ -402,7 +428,7 @@ struct FolderView: View {
                 .buttonStyle(.plain)
         } else {
             // A folder you can only view takes nothing new.
-            if store.known(folderId).map({ store.role(of: $0) != .viewer }) ?? true {
+            if !readOnly, store.known(folderId).map({ store.role(of: $0) != .viewer }) ?? true {
                 Menu { addItems } label: { HeaderIcon(symbol: "plus") }
                     .accessibilityLabel("Add")
             }
@@ -430,9 +456,11 @@ struct FolderView: View {
 
     /* Select, then list or grid, then the order with its direction spelled out, then the tags used here. */
     @ViewBuilder private var moreItems: some View {
-        Section {
-            Button("Select", systemImage: "checkmark.circle") { selecting = true }
-                .disabled(children.isEmpty)
+        if !readOnly {
+            Section {
+                Button("Select", systemImage: "checkmark.circle") { selecting = true }
+                    .disabled(children.isEmpty)
+            }
         }
         Section("View") {
             ForEach(FolderLayout.allCases, id: \.self) { choice in

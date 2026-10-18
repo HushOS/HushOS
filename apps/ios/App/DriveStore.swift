@@ -52,7 +52,8 @@ final class DriveStore {
     /* A key rotation in progress (after a link is turned off or someone is removed): listings wait for it. */
     private var rotation: Task<Void, Never>?
     /* Folders with nothing to show and a reason: the request failed, or the phone is offline and never listed them. */
-    enum FolderProblem { case failed, notOnPhone }
+    /* `family`: a family folder that can't be opened now (its family not accepted, or a refusal), in FamilyWords' words. */
+    enum FolderProblem: Equatable { case failed, notOnPhone, family(String) }
     var folderProblems: [String: FolderProblem] = [:]
     /* Every node of this drive the catalogue opened, by id: search across folders and the way up to a shared folder. */
     var catalogue: [String: Opened] = [:]
@@ -82,6 +83,26 @@ final class DriveStore {
     /* Rotations that couldn't run because whom to trust didn't load: run again once it does. */
     @ObservationIgnored private var rotationsWaiting: [String: Opened] = [:]
     @ObservationIgnored private var loadingSigners = false
+    /*
+     * Families (docs/groups-mobile-plan.md, iOS 1, read only): route 2's list (nil until it
+     * answers, or on a server without families), each family's sync on this phone, the members
+     * route 3 names, and which family each opened family folder belongs to. Family folder items
+     * carry the family's verdicts, not the personal trust set's.
+     */
+    var familyList: [GroupSummary]?
+    var familyStates: [String: FamilyState] = [:]
+    var familyDetails: [String: GroupDetail] = [:]
+    var familySyncing: Set<String> = []
+    /* Every family folder this session learned of, to its family: only grows (FamilySync.familyAreas), so a family that fails a sync stays read only. */
+    var familyAreaGroups: [String: String] = [:]
+    var familyVerdicts: [NodeRef: (node: NodeView, verdict: FamilyVerdict)] = [:]
+    /* Each family's last accepted view: still drawn under "Couldn't check" when only the answer is missing. */
+    var familyShown: [String: FamilyView] = [:]
+    /* Every family folder's top folder this session opened: only grows, so a later failed check never makes one writable-looking. */
+    var familyRoots: [String: String] = [:]
+    /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
+    @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
+    @ObservationIgnored var familiesSyncedAt: Date?
     var mounts: [ShareMount] = []
     var mountsError: String?
     var mountsLoaded = false
@@ -227,6 +248,9 @@ final class DriveStore {
     func adopt(_ next: Vault) async {
         guard next !== vault else { return }
         vault = next
+        // The new session's vault has its own area ledger: families are checked again under it.
+        familyVerdicts = [:]
+        familiesSyncedAt = nil
         BackgroundTransfers.shared.vault = next
         Task { await refreshSigners() }
         await sync()
@@ -397,11 +421,13 @@ final class DriveStore {
         return chain
     }
 
-    func isOwn(_ item: Opened) -> Bool { myWorkspace == nil || item.node.workspaceId == myWorkspace }
+    func isOwn(_ item: Opened) -> Bool { !isFamily(item) && (myWorkspace == nil || item.node.workspaceId == myWorkspace) }
 
     /* Whose an item is and what this account may do with it: its own, or someone else's it can edit or only view. */
     enum Role { case owner, editor, viewer }
     func role(of item: Opened) -> Role {
+        // Family folders are read only in this version: their writes go through the area ledger (iOS 2).
+        if isFamily(item) { return .viewer }
         if isOwn(item) { return .owner }
         // Shares are per workspace in practice; the widest one this account holds there decides.
         let roles = mounts.filter { $0.share.workspaceId == item.node.workspaceId }.map(\.share.role)
@@ -439,6 +465,8 @@ final class DriveStore {
             verdicts.reset()
             trust = next
         }
+        // Family marks rest on the same pins and identities: judged again, what is on screen first.
+        await rejudgeFamilies()
         if case .loaded = next, !rotationsWaiting.isEmpty {
             let waiting = Array(rotationsWaiting.values)
             rotationsWaiting = [:]
@@ -448,7 +476,9 @@ final class DriveStore {
 
     /* The Unverified mark an item carries, or nil: verified, or not known yet (still loading). */
     func provenance(of item: Opened) -> Provenance? {
-        verdicts.provenance(of: item.node, under: trust)
+        // A family folder's items are judged by the family's member list and this person's own checks (FamilySync).
+        if isFamily(item) { return familyVerdict(of: item)?.provenance }
+        return verdicts.provenance(of: item.node, under: trust)
     }
 
     /* An earlier version's mark, in the versions list and the viewer. */
@@ -594,7 +624,19 @@ final class DriveStore {
             folders[id] = children
             folderProblems[id] = nil
             for child in children { names[child.id] = child.name }
+            await judgeFamilyItems(children)
         } catch {
+            // A family folder's refusal is said in the families' words, never the generic failure.
+            if isFamilyFolder(id) {
+                if case DriveAPIError.transport = error {
+                    if folders[id] == nil { folderProblems[id] = .notOnPhone }
+                } else if !isSessionEnd(error) {
+                    folderProblems[id] = .family(FamilyWords.error(error))
+                } else {
+                    report(error)
+                }
+                return
+            }
             // A folder already on screen keeps its rows; one with nothing to show says why instead.
             if folders[id] == nil {
                 if case DriveAPIError.transport = error { folderProblems[id] = .notOnPhone } else if !isSessionEnd(error) { folderProblems[id] = .failed }

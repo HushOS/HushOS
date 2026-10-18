@@ -17,6 +17,7 @@ extension Vault {
     public func createFolder(in parentId: String, name: String, signing: Signing = .own) async throws -> Opened {
         _ = try await loadWorkspace()
         let parent = try await resolve(parentId)
+        try refuseFamilyWrite(parent.node.workspaceId)
         // Shared folders belong to the granter's workspace; an editor writes there.
         let workspace = Target(workspaceId: parent.node.workspaceId)
         guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
@@ -39,6 +40,7 @@ extension Vault {
 
     public func rename(_ nodeId: String, to name: String) async throws -> Opened {
         let item = try await resolve(nodeId)
+        try refuseFamilyWrite(item.node.workspaceId)
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified)
         let sealed = try metadataSeal(
@@ -70,6 +72,8 @@ extension Vault {
     public func move(_ nodeId: String, to parentId: String) async throws -> Opened {
         let item = try await resolve(nodeId)
         let parent = try await resolve(parentId)
+        try refuseFamilyWrite(item.node.workspaceId)
+        try refuseFamilyWrite(parent.node.workspaceId)
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let node = try await api.move(
             nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
@@ -88,8 +92,11 @@ extension Vault {
      */
     public func copy(_ nodeId: String, to parentId: String, name: String? = nil, progress: @Sendable (Int) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
+        // A family folder's records are judged by its member list, not the personal trust set a copy signs by.
+        try refuseFamilyWrite(source.node.workspaceId)
         let trusted = try await copySigners()
         let parent = try await resolve(parentId)
+        try refuseFamilyWrite(parent.node.workspaceId)
         _ = try await loadWorkspace()
         let workspace = Target(workspaceId: parent.node.workspaceId)
         guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
@@ -144,12 +151,14 @@ extension Vault {
 
     public func trash(_ nodeId: String) async throws {
         let item = try await resolve(nodeId)
+        try refuseFamilyWrite(item.node.workspaceId)
         _ = try await api.trash(nodeId: nodeId, workspaceId: item.node.workspaceId)
         forget(nodeId)
     }
 
     /* Back where it was, or under the root when its old folder is in the trash too. */
     public func restore(_ item: Opened, parentTrashed: Bool) async throws -> Opened {
+        try refuseFamilyWrite(item.node.workspaceId)
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         var toRoot: (UInt64, String)? = nil
         if parentTrashed {
@@ -181,6 +190,7 @@ extension Vault {
 
     public func restoreVersion(_ version: VersionListView, of nodeId: String) async throws -> Opened {
         let item = try await resolve(nodeId)
+        try refuseFamilyWrite(item.node.workspaceId)
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let node = try await api.restoreVersion(version.id, workspaceId: item.node.workspaceId)
         return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
@@ -214,6 +224,7 @@ extension Vault {
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
         let workspace: Target
         if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await resolve(parentId).node.workspaceId) }
+        try refuseFamilyWrite(workspace.workspaceId)
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let plaintextSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
         let modified = ISO8601DateFormatter().string(from: (attributes[.modificationDate] as? Date) ?? Date())
@@ -529,6 +540,7 @@ extension Vault {
     public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil,
                            progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
+        try refuseFamilyWrite(source.node.workspaceId)
         let trusted = try await copySigners()
         let metadata: Signing = .copy(trusted.metadata(of: source.node))
         if source.isFolder {

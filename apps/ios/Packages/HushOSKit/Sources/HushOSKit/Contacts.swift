@@ -303,6 +303,8 @@ extension Vault {
      * in suite 4, signed with both of this identity's signing keys, and the share joins the ledger.
      */
     public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> ShareView {
+        // Sharing is hidden in family folders (design 3.4): the server's list of shares there is no one's ledger.
+        try refuseFamilyWrite(item.node.workspaceId)
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         guard pin.verified else { throw ContactError.recheck(pin.displayName) }
         let contact = try await Auth.lookupContact(email: pin.email)

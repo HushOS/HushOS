@@ -168,6 +168,7 @@ struct FileViewer: View {
 
     /* Who can open it, on the foot's one line in ink; an open link adds the small link icon, as rows do. */
     private var access: Text {
+        if let family = store.family(of: current) { return Text("Everyone in \(family.name) can open it.").foregroundStyle(Alpine.inkMuted) }
         guard store.isOwn(current) else {
             let mount = store.mounts.first { $0.share.workspaceId == current.node.workspaceId }
             return Text(mount.map { "From \($0.share.granter.name.isEmpty ? $0.share.granter.email : $0.share.granter.name)" } ?? "Shared with you").foregroundStyle(Alpine.inkMuted)

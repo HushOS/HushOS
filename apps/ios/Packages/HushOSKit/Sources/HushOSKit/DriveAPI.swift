@@ -57,8 +57,8 @@ public final class DriveAPI: Sendable {
         session.origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"
     }
 
-    private func request(_ path: String, query: [URLQueryItem] = []) throws -> URLRequest {
-        guard var components = URLComponents(string: session.origin + "/api/drive" + path) else {
+    private func request(_ path: String, query: [URLQueryItem] = [], base: String = "/api/drive") throws -> URLRequest {
+        guard var components = URLComponents(string: session.origin + base + path) else {
             throw DriveAPIError.server(500, "Bad API path")
         }
         if !query.isEmpty { components.queryItems = query }
@@ -107,6 +107,19 @@ public final class DriveAPI: Sendable {
     func requestPublic(_ path: String, query: [URLQueryItem] = []) throws -> URLRequest { try request(path, query: query) }
     func mutationPublic(_ path: String, method: String = "POST", body: [String: Any]) throws -> URLRequest { try mutation(path, method: method, body: body) }
     func performPublic<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T { try await perform(request, as: type) }
+
+    /* A route outside `/api/drive` (the group routes), with the same cookie and headers. */
+    func apiRequest(_ path: String, query: [URLQueryItem] = []) throws -> URLRequest { try request(path, query: query, base: "/api") }
+
+    /* The status and body as they came, for callers that read the refusal's code themselves; no answer at all throws `transport`. */
+    func send(_ request: URLRequest) async throws -> (status: Int, data: Data) {
+        do {
+            let (data, response) = try await http.data(for: request)
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
+        } catch {
+            throw DriveAPIError.transport(error.localizedDescription)
+        }
+    }
 
     // MARK: Reads
 

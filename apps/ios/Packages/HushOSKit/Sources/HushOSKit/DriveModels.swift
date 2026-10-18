@@ -27,6 +27,24 @@ public struct VersionView: Codable, Sendable, Equatable, Hashable {
     /* The account that sealed the content-key envelope and its signature (base64url); null before signatures, absent on link routes. */
     public var signer: Signer? = nil
     public var signature: String? = nil
+    /* What a rotation kept of the version's writer (a family folder's walk); null when none did. */
+    public var rekey: RekeyView? = nil
+}
+
+/*
+ * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the envelope its writer
+ * signed (its origin), who the server says that writer is and their signature, the key that
+ * opens the origin wrapped under the node key, and the re-keyer's signature over the binding.
+ */
+public struct RekeyView: Codable, Sendable, Equatable, Hashable {
+    public struct Origin: Codable, Sendable, Equatable, Hashable {
+        public let envelope: String
+        public let signer: Signer?
+        public let signature: String
+        public let keyEnvelope: String
+    }
+    public let origin: Origin
+    public let signature: String
 }
 
 public struct NodeView: Codable, Sendable, Equatable, Hashable {
@@ -50,6 +68,12 @@ public struct NodeView: Codable, Sendable, Equatable, Hashable {
     /* The account that wrote the metadata envelope and its signature; null before signatures, absent on link routes. */
     public var metadataSigner: Signer? = nil
     public var metadataSignature: String? = nil
+    /* What a rotation kept of the metadata's writer, as on versions. */
+    public var metadataRekey: RekeyView? = nil
+    /* The key envelope before a running rotation reached the node, which a family folder's ledger keeps. */
+    public var prevKeyEnvelope: String? = nil
+    public var prevKeyEpoch: UInt64? = nil
+    public var prevParentKeyEpoch: UInt64? = nil
 
     public var isFolder: Bool { kind == "folder" }
 }

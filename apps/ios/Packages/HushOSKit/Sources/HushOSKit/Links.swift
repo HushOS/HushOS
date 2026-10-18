@@ -160,6 +160,8 @@ extension Vault {
 
     /* Mints a link for an item this account holds the key of, and returns the URL to hand out. */
     public func createLink(for item: Opened, password: String?, expiresAt: Date?) async throws -> (link: LinkView, url: URL) {
+        // Sharing is hidden in family folders (design 3.4): the server's list of shares there is no one's ledger.
+        try refuseFamilyWrite(item.node.workspaceId)
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let made = try mint(.link, in: item.node.workspaceId)
         let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, linkId: made.id)

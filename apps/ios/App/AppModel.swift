@@ -172,6 +172,8 @@ final class AppModel {
         // Everything of the account on this phone: kept and opened files, the mirror, the device key, searches.
         AccountStore.shared.wipe()
         TransferNotices.shared.clear()
+        // The families' sync and its ledger keys go with the session.
+        FamilySync.forget()
         lastEmail = ""
         user = nil
         vault = nil
@@ -187,6 +189,7 @@ final class AppModel {
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         AccountStore.shared.wipe()
         TransferNotices.shared.clear()
+        FamilySync.forget()
         user = nil
         vault = nil
         owner = nil

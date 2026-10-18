@@ -46,6 +46,7 @@ struct AccountView: View {
                 } header: {
                     sectionLabel("Plan and storage")
                 }
+                FamiliesSection()
                 Section {
                     Button { changingPassword = true } label: { row("key", "Change password", nil, chevron: true) }.alpineRow()
                     Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", "Gets you back in if you forget your password", chevron: true) }.alpineRow()
@@ -102,10 +103,14 @@ struct AccountView: View {
                     showingTrash = true
                 }
             }
-            .refreshable { await load() }
+            .refreshable {
+                await load()
+                await store.refreshFamilies()
+            }
             .task {
                 await store.refreshTrash()
                 await load()
+                await store.refreshFamilies()
             }
         }
     }

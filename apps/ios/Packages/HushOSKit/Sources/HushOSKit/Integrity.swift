@@ -41,13 +41,21 @@ public enum Provenance: Sendable, Equatable, Hashable {
     case unsigned
     /* The check could not run: whom this person trusts didn't load, or the check failed. Never shown as clean. */
     case unchecked
+    /* In a family folder: signed with keys other than the ones this person checked for the writer, and no signed chain joins them. */
+    case keyConflict(Writer)
+    /* In a family folder: written by someone who has since left the family (`family`, its name), never vouched for by it. */
+    case formerMember(Writer, family: String)
+    /* In a family folder: the family's mark, worded as the web words it (FamilyLines). */
+    case family(FamilyMark)
 
     /* Worst first, for a node whose metadata and current version say different things. */
     var rank: Int {
         switch self {
-        case .badSignature: 6
+        case .badSignature: 7
+        case .keyConflict: 6
         case .retiredKey: 5
-        case .unknownSigner: 4
+        case .unknownSigner, .formerMember: 4
+        case .family(let mark): mark.danger ? 6 : 4
         case .resealed: 3
         case .unsigned: 2
         case .unchecked: 1
@@ -75,6 +83,14 @@ public enum Provenance: Sendable, Equatable, Hashable {
             "HushOS can’t confirm who wrote this."
         case .unchecked:
             Self.couldNotCheck
+        case .keyConflict(.contact(let name)):
+            "\(name)’s keys don’t match the ones you checked. Check it’s them again."
+        case .keyConflict:
+            "Its writer’s keys don’t match the ones you checked. Check it’s them again."
+        case .formerMember(let writer, let family):
+            "Written by \(writer.phrase), who has left \(family)."
+        case .family(let mark):
+            mark.lines.joined(separator: " ")
         }
     }
 
