@@ -8,11 +8,11 @@ import {
     TIER_METADATA_KEY,
 } from '../src/protocol';
 import {
-    FAMILY_PER_MEMBER_YEAR_FACTOR,
     familyIncluded,
-    familyPerMember,
+    familyPrices,
     familyTiers,
     GIB,
+    personalPrices,
     seedPriceProblems,
     tiers,
 } from '../src/seed-prices';
@@ -35,7 +35,6 @@ const environment = process.env.POLAR_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'p
 if (!token) throw new Error('Set POLAR_ACCESS_TOKEN (needs products:read and products:write).');
 const update = process.argv.includes('--update');
 
-type Currency = models.PresentmentCurrency;
 const problems = seedPriceProblems();
 if (problems.length) throw new Error(problems.join('\n'));
 
@@ -77,14 +76,7 @@ for (const tier of tiers) {
             [QUOTA_METADATA_KEY]: tier.quota.toString(),
             [RECOMMENDED_METADATA_KEY]: tier.recommended ? 'true' : 'false',
         };
-        const creates = Object.entries(amounts).map(([currency, amount]) => ({
-            currency: currency as Currency,
-            create: {
-                amount_type: 'fixed',
-                price_amount: amount,
-                price_currency: currency as Currency,
-            } satisfies models.ProductPriceFixedCreate,
-        }));
+        const creates = personalPrices(amounts);
         const current = existing.get(name);
         if (!current) {
             const product = await polar.products.create({
@@ -134,37 +126,6 @@ for (const tier of tiers) {
  * they are what they are, are in src/seed-prices.ts.
  */
 const archiveLegacyFamily = process.argv.includes('--archive-legacy-family');
-const unitLabel = { en: { '=1': 'member', other: 'members' } };
-
-function familyPrices(tier: (typeof familyTiers)[number], interval: 'month' | 'year') {
-    // The base is the tier's price for the interval; a member past the included ones is ten months a year.
-    const factor = interval === 'month' ? 1 : FAMILY_PER_MEMBER_YEAR_FACTOR;
-    return Object.entries(tier[interval]).flatMap(([currency, amount]) => {
-        const perMember = familyPerMember[currency];
-        if (perMember === undefined) throw new Error(`Family has no per-member ${currency} price.`);
-        return [
-            {
-                amount_type: 'fixed',
-                price_currency: currency as Currency,
-                price_amount: amount,
-            } satisfies models.ProductPriceFixedCreate,
-            {
-                amount_type: 'unit_based',
-                price_currency: currency as Currency,
-                tiers: {
-                    type: 'graduated',
-                    tiers: [
-                        { bound: familyIncluded, unit_amount: 0 },
-                        { bound: null, unit_amount: perMember * factor },
-                    ],
-                },
-                minimum_units: familyIncluded,
-                unit_label: unitLabel,
-            } satisfies models.ProductPriceUnitBasedCreate,
-        ];
-    });
-}
-
 /* A live unit price that already says what `create` says: kept by id, as fixed prices are. */
 function sameUnitPrice(
     row: models.ProductPriceUnitBased,
