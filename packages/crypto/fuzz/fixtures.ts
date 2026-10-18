@@ -53,6 +53,14 @@ export const ledgerScenarios = () => read('crates/hushos-core/fixtures/area-ledg
 export const coreLedger = () => read('packages/crypto/src/__fixtures__/core-area-ledger.json');
 /* crates/hushos-core/fixtures/web-area-ledger.json: the same as this twin ran and walked them. */
 export const webLedger = () => read('crates/hushos-core/fixtures/web-area-ledger.json');
+/* packages/crypto/src/__fixtures__/core-join.json: the core's join previews, checks and consents. */
+export const coreJoin = () => read('packages/crypto/src/__fixtures__/core-join.json');
+/* crates/hushos-core/fixtures/web-join.json: the same as this twin ran them. */
+export const webJoin = () => read('crates/hushos-core/fixtures/web-join.json');
+/* crates/hushos-core/fixtures/join-check-cases.json: the typed-words cases both twins run. */
+export const joinCheckCases = () => read('crates/hushos-core/fixtures/join-check-cases.json');
+export const joinSessionScenarios = () =>
+    read('crates/hushos-core/fixtures/join-session-scenarios.json');
 
 type Served = {
     statement: string;

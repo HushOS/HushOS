@@ -275,7 +275,8 @@ fn wrapped_of(value: &Value) -> Option<Wrapped> {
 #[derive(Clone, Debug)]
 pub enum Step {
     Commit(String),
-    Uncommit(String),
+    /* The group, and whether it is the worker's uncommit after a fork. */
+    Uncommit(String, bool),
     Forget(String),
     OpenArea { group: String, version: u64, served: u64, key: String, id_seed: String },
     List { node: String, parent: String, envelope: Wrapped, prev: Option<Wrapped> },
@@ -292,6 +293,7 @@ pub enum Step {
     PersonalState,
     Foreign,
     KeyAt { node: String, epoch: u64 },
+    NodeKey(String),
     State,
 }
 
@@ -304,7 +306,14 @@ pub fn read_step(value: &Value) -> Option<Step> {
             let chain = field("chain").as_str()?;
             Step::Commit(CHAINS.iter().find(|c| **c == chain)?.to_string())
         }
-        "uncommit" => Step::Uncommit(group_of(object.get("group"))?),
+        "uncommit" => {
+            let fork = match object.get("fork") {
+                None => false,
+                Some(Value::Bool(fork)) => *fork,
+                Some(_) => return None,
+            };
+            Step::Uncommit(group_of(object.get("group"))?, fork)
+        }
         "forget" => Step::Forget(group_of(object.get("group"))?),
         "dropAllPending" => Step::DropAllPending,
         "personalState" => Step::PersonalState,
@@ -356,6 +365,7 @@ pub fn read_step(value: &Value) -> Option<Step> {
         }
         "writable" => Step::Writable(node_of(field("node"))?),
         "keyAt" => Step::KeyAt { node: node_of(field("node"))?, epoch: epoch_of(field("epoch"))? },
+        "nodeKey" => Step::NodeKey(node_of(field("node"))?),
         "rotate" => {
             let envelope = wrapped_of(field("served"))?;
             if envelope.previous_root {
@@ -595,8 +605,8 @@ impl Runner {
                 ledger.commit(Arc::clone(&chains()[name.as_str()]))?;
                 json!({})
             }
-            Step::Uncommit(group) => {
-                ledger.uncommit(group.clone(), false);
+            Step::Uncommit(group, fork) => {
+                ledger.uncommit(group.clone(), *fork);
                 json!({})
             }
             Step::Forget(group) => {
@@ -783,6 +793,11 @@ impl Runner {
                 let key = ledger.key_at_epoch(AREA.into(), id(node), *epoch);
                 json!({ "key": key.map(|k| self.name_of(&k)) })
             }
+            // What a cached read (metadata, a download) takes: the node's current key as held.
+            Step::NodeKey(node) => match ledger.node_key(AREA.into(), id(node)) {
+                Some(held) => json!({ "key": self.name_of(&held.key.to_vec()), "epoch": held.epoch }),
+                None => json!({ "none": true }),
+            },
             Step::State => {
                 let attempt = |read: CoreResult<Option<u64>>| match read {
                     Ok(version) => json!(version),

@@ -1,0 +1,231 @@
+{
+    "about": "The typed-words check of a join code (docs/groups-design.md 3.2): the Rust core's join_check and the web's joinCheck (packages/crypto/src/join-check.ts) must give each case's `expected`. `code` is the shared code unless a case names its own.",
+    "code": [
+        "abandon",
+        "ability",
+        "able",
+        "about",
+        "above",
+        "absent",
+        "absorb",
+        "abstract",
+        "absurd",
+        "abuse",
+        "access",
+        "accident"
+    ],
+    "cases": [
+        {
+            "name": "match-at-the-ends",
+            "hidden": [0, 11],
+            "typed": ["abandon", "accident"],
+            "expected": "match"
+        },
+        {
+            "name": "in-the-other-order",
+            "hidden": [0, 11],
+            "typed": ["accident", "abandon"],
+            "expected": "no-match"
+        },
+        {
+            "name": "one-word-wrong",
+            "hidden": [0, 11],
+            "typed": ["abandon", "access"],
+            "expected": "no-match"
+        },
+        {
+            "name": "any-case",
+            "hidden": [5, 6],
+            "typed": ["ABSENT", "Absorb"],
+            "expected": "match"
+        },
+        {
+            "name": "spaces-around",
+            "hidden": [5, 6],
+            "typed": [" absent ", "\tabsorb\n"],
+            "expected": "match"
+        },
+        {
+            "name": "javascript-spaces",
+            "hidden": [1, 2],
+            "typed": ["\ufeffability\u3000", "\u2028able\u00a0"],
+            "expected": "match"
+        },
+        {
+            "name": "not-a-javascript-space",
+            "hidden": [1, 2],
+            "typed": ["ability\u0085", "able"],
+            "expected": "no-match"
+        },
+        {
+            "name": "a-space-inside",
+            "hidden": [1, 2],
+            "typed": ["abi lity", "able"],
+            "expected": "no-match"
+        },
+        {
+            "name": "a-dotted-capital-is-no-i",
+            "hidden": [1, 2],
+            "typed": ["ab\u0130lity", "able"],
+            "expected": "no-match"
+        },
+        {
+            "name": "one-word",
+            "hidden": [5, 6],
+            "typed": ["absent"],
+            "expected": "incomplete"
+        },
+        {
+            "name": "three-words",
+            "hidden": [5, 6],
+            "typed": ["absent", "absorb", "abstract"],
+            "expected": "incomplete"
+        },
+        {
+            "name": "no-words",
+            "hidden": [5, 6],
+            "typed": [],
+            "expected": "incomplete"
+        },
+        {
+            "name": "a-blank-word",
+            "hidden": [5, 6],
+            "typed": ["absent", "  \t"],
+            "expected": "incomplete"
+        },
+        {
+            "name": "the-same-position-twice",
+            "hidden": [4, 4],
+            "typed": ["above", "above"],
+            "expected": {
+                "refused": "Invalid hidden positions."
+            }
+        },
+        {
+            "name": "out-of-order",
+            "hidden": [6, 5],
+            "typed": ["absorb", "absent"],
+            "expected": {
+                "refused": "Invalid hidden positions."
+            }
+        },
+        {
+            "name": "past-the-twelfth-word",
+            "hidden": [3, 12],
+            "typed": ["about", "x"],
+            "expected": {
+                "refused": "Invalid hidden positions."
+            }
+        },
+        {
+            "name": "one-position",
+            "hidden": [3],
+            "typed": ["about"],
+            "expected": {
+                "refused": "Invalid hidden positions."
+            }
+        },
+        {
+            "name": "three-positions",
+            "hidden": [1, 2, 3],
+            "typed": ["ability", "able", "about"],
+            "expected": {
+                "refused": "Invalid hidden positions."
+            }
+        },
+        {
+            "name": "positions-before-words",
+            "hidden": [4, 4],
+            "typed": [],
+            "expected": {
+                "refused": "Invalid hidden positions."
+            }
+        },
+        {
+            "name": "eleven-words",
+            "code": [
+                "abandon",
+                "ability",
+                "able",
+                "about",
+                "above",
+                "absent",
+                "absorb",
+                "abstract",
+                "absurd",
+                "abuse",
+                "access"
+            ],
+            "hidden": [1, 2],
+            "typed": ["ability", "able"],
+            "expected": {
+                "refused": "Invalid join code."
+            }
+        },
+        {
+            "name": "a-capital-in-the-code",
+            "code": [
+                "Abandon",
+                "ability",
+                "able",
+                "about",
+                "above",
+                "absent",
+                "absorb",
+                "abstract",
+                "absurd",
+                "abuse",
+                "access",
+                "accident"
+            ],
+            "hidden": [1, 2],
+            "typed": ["ability", "able"],
+            "expected": {
+                "refused": "Invalid join code."
+            }
+        },
+        {
+            "name": "a-word-too-long",
+            "code": [
+                "abandoned",
+                "ability",
+                "able",
+                "about",
+                "above",
+                "absent",
+                "absorb",
+                "abstract",
+                "absurd",
+                "abuse",
+                "access",
+                "accident"
+            ],
+            "hidden": [1, 2],
+            "typed": ["ability", "able"],
+            "expected": {
+                "refused": "Invalid join code."
+            }
+        },
+        {
+            "name": "the-code-before-positions",
+            "code": [
+                "abandon",
+                "ability",
+                "able",
+                "about",
+                "above",
+                "absent",
+                "absorb",
+                "abstract",
+                "absurd",
+                "abuse",
+                "access"
+            ],
+            "hidden": [4, 4],
+            "typed": ["above", "above"],
+            "expected": {
+                "refused": "Invalid join code."
+            }
+        }
+    ]
+}

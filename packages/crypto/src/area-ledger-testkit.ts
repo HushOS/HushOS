@@ -212,7 +212,9 @@ type Wrapped = {
 };
 export type Step =
     | { op: 'commit'; chain: ChainName }
-    | { op: 'uncommit' | 'forget'; group: string }
+    /* `fork`: the worker's uncommit after a fork (its `forked` set is the session's, not the ledger's). */
+    | { op: 'uncommit'; group: string; fork: boolean }
+    | { op: 'forget'; group: string }
     | {
           op: 'openArea';
           group: string;
@@ -245,6 +247,7 @@ export type Step =
     | { op: 'openPersonal'; version: number }
     | { op: 'personalCreate'; node: string; parentKeyEpoch: number; keyEpoch: number }
     | { op: 'keyAt'; node: string; epoch: number }
+    | { op: 'nodeKey'; node: string }
     | { op: 'state' };
 
 function wrappedOf(value: unknown): Wrapped | undefined {
@@ -267,10 +270,21 @@ export function readStep(value: unknown): Step | undefined {
             return (CHAINS as readonly string[]).includes(value.chain as string)
                 ? { op: 'commit', chain: value.chain as ChainName }
                 : undefined;
-        case 'uncommit':
+        case 'uncommit': {
+            const group = groupOf(value.group);
+            const fork =
+                value.fork === undefined
+                    ? false
+                    : typeof value.fork === 'boolean'
+                      ? value.fork
+                      : undefined;
+            return group === undefined || fork === undefined
+                ? undefined
+                : { op: 'uncommit', group, fork };
+        }
         case 'forget': {
             const group = groupOf(value.group);
-            return group === undefined ? undefined : { op: value.op, group };
+            return group === undefined ? undefined : { op: 'forget', group };
         }
         case 'requireWritable':
         case 'state':
@@ -329,10 +343,12 @@ export function readStep(value: unknown): Step | undefined {
             return { op: value.op, node, parent, parentKeyEpoch, keyEpoch };
         }
         case 'writable':
+        case 'nodeKey':
         case 'keyAt': {
             const node = nodeOf(value.node);
             if (!node) return undefined;
             if (value.op === 'writable') return { op: 'writable', node };
+            if (value.op === 'nodeKey') return { op: 'nodeKey', node };
             const epoch = epochOf(value.epoch);
             return epoch === undefined ? undefined : { op: 'keyAt', node, epoch };
         }
@@ -725,6 +741,11 @@ export async function runSteps(steps: Step[]) {
             case 'keyAt': {
                 const key = ledger.keyAtEpoch(AREA, id(step.node), step.epoch);
                 return { key: key ? nameOf(key) : null };
+            }
+            case 'nodeKey': {
+                // What a cached read (metadata, a download) takes: the node's current key as held.
+                const held = ledger.nodeKey(AREA, id(step.node));
+                return held ? { key: nameOf(held.key), epoch: held.epoch } : { none: true };
             }
             case 'state':
                 return {

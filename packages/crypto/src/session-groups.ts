@@ -15,7 +15,21 @@ import {
     wrapPreviousRootKey,
     type NodeMetadata,
 } from './drive';
+import { namesSide } from './consent-due';
 import { CryptoError } from './errors';
+import {
+    HOLDS_UNREADABLE,
+    NOT_SHOWN,
+    checkCode,
+    holdsValue,
+    newJoinFamily,
+    randomUint32,
+    restoreHolds,
+    showCode,
+    stillShown,
+    typedComplete,
+    type JoinFamily,
+} from './join-session';
 import { sameKeyDigest } from './fingerprint';
 import {
     acceptRosters,
@@ -68,6 +82,7 @@ import {
     openIdentitySigningKey,
     publicIdentity,
     verifyOwnIdentity,
+    verifySuccessionLink,
     SUCCESSION_CONSENT_BYTES,
     type IdentityEnvelope,
     type ServedKeys,
@@ -361,7 +376,12 @@ type GrantInput = {
 };
 
 /* Records the data layer keeps sealed in its own IndexedDB stores. */
-export type DeviceStore = 'outbox' | 'joins';
+/*
+ * The data layer's own store. `joins` (the compared code) and `holds` (the
+ * join's escalation) are this worker's alone, as `chains` is: a joins record
+ * the data layer could seal would commit a family nobody compared.
+ */
+export type DeviceStore = 'outbox';
 
 export type GroupRequests = {
     /*
@@ -401,7 +421,15 @@ export type GroupRequests = {
         served: ServedChain;
         record: string | null;
         checkedAt: string;
-        joining?: { joinMark: JoinMark } | null;
+        /*
+         * The joins record groupJoinCheck sealed on a match ("They match" with
+         * the two hidden words right), which only this worker writes: the
+         * compared code is the join mark, and its check time the pin's. Taken
+         * once per family and session (groupForget lets a join that was not
+         * kept run again), and only while the served chain still gives its
+         * code ('changed' otherwise).
+         */
+        joining?: { joinsRecord: string } | null;
         creating?: { stagedEnvelope: string } | null;
         /*
          * The record's device pin is a mark, its cache is left out: for a
@@ -410,22 +438,59 @@ export type GroupRequests = {
          * server cannot roll the device back by getting its cache refused.
          */
         withoutCache?: boolean;
+        /*
+         * A refusal of this attempt is retried by the caller (acceptFromRecord):
+         * the family stays committed under the chain this session holds, and
+         * only the last attempt's refusal uncommits it. A fork always does.
+         */
+        retried?: boolean;
     };
     /*
      * The join code a newcomer compares with the admin's screen (design 2.4,
      * 3.2): the served chain verified against this person's marks, or, with
      * none, from version 1 over the served first keys, and the code of the
      * roster at which this account's entry last became active (the one that
-     * admitted them). Nothing is committed, kept or marked, and a fork sets
-     * nothing: only groupAccept with this code as `joining.joinMark`, once the
-     * person said the two match, does.
+     * admitted them), shown with two hidden positions drawn from the crypto
+     * RNG, anew for each showing unless a wrong pair holds them
+     * (join-session.ts). Nothing else is committed, kept or marked, and a fork
+     * sets nothing: only groupAccept with the joins record a match sealed does.
      */
     groupJoinPreview: {
         userId: string;
         groupId: string;
         served: ServedChain;
         record: string | null;
+        /*
+         * The family's escalation the data layer kept (from groupJoinCheck),
+         * folded in first: pass it on the first showing after a reload or a
+         * lock. One that does not open here is refused with HOLDS_UNREADABLE.
+         */
+        holds?: string | null;
     };
+    /*
+     * "They match" (the core's join_check): `mark` must be a code this worker
+     * showed for the family and `typed` two words, before anything is
+     * verified; then the served chain is worked out again (another code is
+     * 'changed', with a showing of it, and the words are not checked); then
+     * the words against the code at its issued positions, with the family's
+     * escalation (join-session.ts). A match seals the joins record, checked at
+     * the settings pin's check time if the account has one, else `now`.
+     */
+    groupJoinCheck: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        mark: JoinMark;
+        /* The positions the page hid for `mark`: a showing this session still holds. */
+        hidden: [number, number];
+        /* The showing's `session`: one from before a lock is refused, whatever it hid. */
+        session: number;
+        typed: string[];
+        now: string;
+        holds?: string | null;
+    };
+
     /* Opens the group key's seal to this account (route 8), with the sealer's identity and links from route 6. */
     groupOpenSeal: {
         groupId: string;
@@ -509,7 +574,17 @@ export type GroupRequests = {
         contact: { email: string; name: string; pinnedAt: string };
     };
     /* The two consent halves of a link between two of this account's identities, signed by each. */
-    identityConsent: { userId: string; old: IdentityEnvelope; next: IdentityEnvelope };
+    /*
+     * `link` is the served link from `old` to `next`: it must name exactly
+     * their keys and carry the old identity's own version 2 signature, so no
+     * link a server made up gets consent (the core's succession_consent_sign).
+     */
+    identityConsent: {
+        userId: string;
+        link: SuccessionLink;
+        old: IdentityEnvelope;
+        next: IdentityEnvelope;
+    };
     groupForget: { groupId: string };
     groupStoreSeal: { userId: string; groupId: string; store: DeviceStore; value: unknown };
     groupStoreOpen: { userId: string; groupId: string; store: DeviceStore; envelope: string };
@@ -561,11 +636,43 @@ export type GroupResults = {
     };
     groupWords: { words: string[] };
     groupJoinPreview:
-        | { status: 'code'; rosterVersion: number; code: string[] }
+        /*
+         * `hidden`: the two positions to hide, the same for this code until a
+         * match. `session`: the worker session it was shown in, passed back
+         * with the check, so a showing from before a lock is not checked.
+         */
+        | {
+              status: 'code';
+              rosterVersion: number;
+              code: string[];
+              hidden: [number, number];
+              session: number;
+          }
         /* The served chain holds no active entry for this account at its head: not let in yet. */
         | { status: 'not-admitted' }
         | { status: 'fork'; fork: RosterFork }
         | { status: 'record-unreadable' };
+    groupJoinCheck:
+        /*
+         * Keep `joinsRecord` (the joins store), then groupAccept with it.
+         * `holds`, here and on a wrong pair, is the escalation to keep in place
+         * of the one kept before (null: delete it).
+         */
+        | { status: 'matched'; joinsRecord: string; holds: string | null }
+        | { status: 'wrong-words'; holds: string | null }
+        | { status: 'mismatch'; holds: string | null }
+        | { status: 'incomplete' }
+        | {
+              status: 'changed';
+              rosterVersion: number;
+              code: string[];
+              hidden: [number, number];
+              session: number;
+          }
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' };
+
     groupAccept:
         | {
               status: 'accepted';
@@ -583,7 +690,23 @@ export type GroupResults = {
          * root, after a master-key rotation): nothing was accepted. The caller
          * deletes it and accepts again without it, against the settings pin.
          */
-        | { status: 'record-unreadable' };
+        | { status: 'record-unreadable' }
+        /*
+         * A join: this account was let in again at a later roster and the chain
+         * still passes through the one compared with its code. Show this one;
+         * nothing was kept. (Another code at the roster compared is the fork.)
+         */
+        | {
+              status: 'changed';
+              rosterVersion: number;
+              code: string[];
+              hidden: [number, number];
+              session: number;
+          }
+        /* A join: no active entry for this account at the served head. */
+        | { status: 'not-admitted' }
+        /* A join: the joins record did not open (another account root, an earlier version's): delete it. */
+        | { status: 'join-unreadable' };
     groupOpenSeal: { groupKeyVersion: number };
     groupOpenArea: {
         version: number;
@@ -732,6 +855,8 @@ type RekeyedNode = {
 
 /* What the session lends this module: its unlocked root, open identity and Drive keys. */
 export type GroupHost = {
+    /* A 32-bit draw for the hidden join positions; the crypto RNG unless a test kit stands in for it. */
+    randomUint32?: () => number;
     /* The account, with a copy of its root the caller zeroes. */
     unlocked(): { userId: string; root: Uint8Array<ArrayBuffer>; keyVersion: number };
     /* The open version 2 identity and the earlier version 2 ones, as proven when opened. */
@@ -782,7 +907,7 @@ export type GroupHost = {
 const STORE_INFO = 'hushos/group/device-store/v1';
 const STORE_DOMAIN = 'hushos/group/device-store';
 const STORE_VERSION = 1;
-type Store = DeviceStore | 'chains' | 'staged';
+type Store = DeviceStore | 'chains' | 'staged' | 'joins' | 'holds';
 
 async function storeKey(root: Uint8Array<ArrayBuffer>) {
     const material = await crypto.subtle.importKey('raw', root, 'HKDF', false, ['deriveBits']);
@@ -1162,6 +1287,8 @@ const NOT_OPENED = 'Open every family folder first.';
  */
 const ROSTER_FORMAT = 2;
 const NOT_CHECKED_KEYS = 'Couldn’t check this folder’s keys. Reload to continue.';
+/* identityConsent's refusal for an identity that does not open here, as the core's succession_consent_sign words it. */
+const NOT_OWN_IDENTITY = 'This identity does not open on this account.';
 
 /* ------------------------------------------------------------------------- */
 /* The session                                                               */
@@ -1259,12 +1386,53 @@ export async function codeAt(chain: AcceptedRosters, version: number) {
     );
 }
 
+const USED_JOIN = 'This join code was already used to join. Compare it again.';
+const sameMark = (a: JoinMark, b: JoinMark) =>
+    a.rosterVersion === b.rosterVersion && a.code.join(' ') === b.code.join(' ');
+
+/* SHA-256 of a joins record as kept: which one joined a family. */
+async function recordDigest(record: string) {
+    return encode(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(record))),
+    );
+}
+
+/*
+ * A joins record's code and check time (`{v:3, groupId, joinMark, checkedAt}`),
+ * or null. Version 2 was sealed through the data layer (the earlier join.ts)
+ * and is refused: a join in flight compares the code once more.
+ */
+function joinsRead(groupId: string, value: unknown): { mark: JoinMark; checkedAt: string } | null {
+    if (typeof value !== 'object' || value === null) return null;
+    const record = value as Record<string, unknown>;
+    const mark = record.joinMark as Record<string, unknown> | null | undefined;
+    if (record.v !== 3 || record.groupId !== groupId || typeof mark !== 'object' || mark === null)
+        return null;
+    const { rosterVersion, code } = mark;
+    if (
+        !Array.isArray(code) ||
+        code.length !== 12 ||
+        !code.every((word) => typeof word === 'string' && /^[a-z]{3,8}$/.test(word)) ||
+        !Number.isSafeInteger(rosterVersion) ||
+        (rosterVersion as number) < 1 ||
+        typeof record.checkedAt !== 'string'
+    )
+        return null;
+    return {
+        mark: { rosterVersion: rosterVersion as number, code: [...(code as string[])] },
+        checkedAt: record.checkedAt,
+    };
+}
+
 export function createGroupSession(host: GroupHost) {
     /* Committed chains, from what the server served only. */
     const chains = new Map<string, AcceptedRosters>();
+    /* Each family's join escalation, and the joins records that already joined it this session. */
+    const joinFamilies = new Map<string, JoinFamily>();
+    const usedJoins = new Map<string, Set<string>>();
     /* Bumped by forget(): an acceptance commits only into the session it began in. */
     let generation = 0;
-    /* Groups whose last acceptance was a fork: roster verdicts are personal until it is sorted. */
+    /* Groups whose last acceptance was a fork: roster verdicts are personal until it is sorted, and their folders' keys are held back (area-ledger.ts heldBack). */
     const forked = new Set<string>();
     /* Group seeds by `${groupId}:${groupKeyVersion}`. */
     const seeds = new Map<string, Uint8Array>();
@@ -1388,6 +1556,8 @@ export function createGroupSession(host: GroupHost) {
         opened.delete(groupId);
         chains.delete(groupId);
         forked.delete(groupId);
+        // A join that committed and then could not be kept may run again; the hidden positions stay.
+        usedJoins.delete(groupId);
     }
     function forget() {
         for (const groupId of new Set([...chains.keys(), ...opened.keys()])) forgetGroup(groupId);
@@ -1401,6 +1571,8 @@ export function createGroupSession(host: GroupHost) {
         opened.clear();
         verified.clear();
         settingsPins = null;
+        joinFamilies.clear();
+        usedJoins.clear();
     }
 
     /* Every identity this account has had (version 2), as the open session proved them. */
@@ -1962,8 +2134,58 @@ export function createGroupSession(host: GroupHost) {
             throw new CryptoError('A family is either joined or created, not both.');
         // Joining always carries the join code the person compared: there is no joining without
         // it, so nothing accepts, views or keeps a chain over first keys nobody checked.
-        if (input.joining && !input.joining.joinMark)
+        if (input.joining && typeof input.joining.joinsRecord !== 'string')
             throw new CryptoError('Compare the join code first.');
+        if (!input.joining) return acceptRun(input, null, input.checkedAt);
+        // A join: the code compared, from the joins record only a match sealed (the core's
+        // accept_joining). After the record is opened and digested, checked and taken with no await
+        // between the two, so of two submissions of the same record at once only one runs; given
+        // back when nothing is committed.
+        const joinGroup = uuid(input.groupId, 'group id');
+        const opened = await openJoins(input.userId, joinGroup, input.joining.joinsRecord);
+        if (!opened) return { status: 'join-unreadable' };
+        const used = await recordDigest(input.joining.joinsRecord);
+        const taken = usedJoins.get(joinGroup) ?? new Set<string>();
+        if (taken.has(used)) throw new CryptoError(USED_JOIN);
+        usedJoins.set(joinGroup, taken.add(used));
+        let result: GroupResults['groupAccept'];
+        try {
+            result = await joinRun(input, joinGroup, opened);
+        } catch (error) {
+            usedJoins.get(joinGroup)?.delete(used);
+            throw error;
+        }
+        if (result.status !== 'accepted') usedJoins.get(joinGroup)?.delete(used);
+        return result;
+    }
+
+    /*
+     * The join after its record's checks: the admission again. This account let
+     * in again at a later roster, on a chain that still passes through the
+     * roster compared with its code, is 'changed'; anything else that differs
+     * (another code at that roster, a chain short of it) is acceptance's to
+     * answer with the compared code as its mark: the fork, or a refusal.
+     */
+    async function joinRun(
+        input: GroupRequests['groupAccept'],
+        joinGroup: string,
+        opened: { mark: JoinMark; checkedAt: string },
+    ): Promise<GroupResults['groupAccept']> {
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        const later =
+            now.mark.rosterVersion > opened.mark.rosterVersion &&
+            (await codeAt(now.chain, opened.mark.rosterVersion)).join(' ') ===
+                opened.mark.code.join(' ');
+        if (later) return showing(joinGroup, now.mark, 'changed');
+        return acceptRun(input, opened.mark, opened.checkedAt);
+    }
+
+    async function acceptRun(
+        input: GroupRequests['groupAccept'],
+        joinMark: JoinMark | null,
+        checkedAt: string,
+    ): Promise<GroupResults['groupAccept']> {
         // The session this run begins in: a lock or another account before it ends keeps nothing.
         const began = generation;
         const marked = await marksOf(input);
@@ -2013,7 +2235,7 @@ export function createGroupSession(host: GroupHost) {
         const held = ledger.floor(groupId);
         if (held && servedHead(input.served, cache) < held.roster.rosterVersion)
             throw new CryptoError(OLDER_CHAIN);
-        const sessionPin = held ? await pinAfter([], held, input.checkedAt) : null;
+        const sessionPin = held ? await pinAfter([], held, checkedAt) : null;
         // Served digests: a roster this device staged that the server now serves landed.
         const served = new Set(
             await Promise.all(
@@ -2038,13 +2260,15 @@ export function createGroupSession(host: GroupHost) {
                 mlDsaKeys: { ...input.served.signerKeys },
                 me: { userId, identities },
                 cache,
-                joinMark: input.joining?.joinMark ?? null,
+                joinMark,
             });
         } catch (error) {
             // Only under the session the run began in; a refusal on a forked group keeps the fork:
             // it is still the person's own marks' conflict.
             stillTheSession(began, userId);
-            uncommit(groupId, forked.has(groupId));
+            // An attempt the caller retries keeps what this session committed: the next attempt
+            // either commits over it or, refused too, uncommits it.
+            if (!input.retried) uncommit(groupId, forked.has(groupId));
             throw error;
         }
         if (chain.status === 'fork') {
@@ -2081,7 +2305,7 @@ export function createGroupSession(host: GroupHost) {
                 dropped.push(outboxId);
         for (const outboxId of dropped) dropStaged(outboxId);
         commit(chain);
-        const pin = await pinAfter(pins, chain, input.checkedAt);
+        const pin = await pinAfter(pins, chain, checkedAt);
         const unlocked = host.unlocked();
         try {
             return {
@@ -2101,14 +2325,22 @@ export function createGroupSession(host: GroupHost) {
     }
 
     /*
-     * The newcomer's join code, over what route 5 serves (groupJoinPreview):
-     * verified as acceptance would verify it, then nothing done with it. No
-     * commit, no uncommit, no fork set, no staged call dropped, no record or
-     * pin: the chain is dropped here, and the code is all that leaves.
+     * The newcomer's admission, over what route 5 serves: verified as
+     * acceptance would verify it, then nothing done with it. No commit, no
+     * uncommit, no fork set, no staged call dropped, no record or pin: the
+     * chain is dropped here, and the code is all that leaves.
      */
-    async function joinPreview(
-        input: GroupRequests['groupJoinPreview'],
-    ): Promise<GroupResults['groupJoinPreview']> {
+    async function admission(input: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+    }): Promise<
+        | { status: 'code'; mark: JoinMark; chain: AcceptedRosters }
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' }
+    > {
         const marked = await marksOf(input);
         if (!marked) return { status: 'record-unreadable' };
         const { groupId, userId, pins, cache, marks } = marked;
@@ -2130,7 +2362,134 @@ export function createGroupSession(host: GroupHost) {
         if (chain.status === 'fork') return { status: 'fork', fork: chain };
         const version = await admittedAt(chain.rosterDigests, input.served.rosters, userId);
         if (version === null) return { status: 'not-admitted' };
-        return { status: 'code', rosterVersion: version, code: await codeAt(chain, version) };
+        return {
+            status: 'code',
+            mark: { rosterVersion: version, code: await codeAt(chain, version) },
+            chain,
+        };
+    }
+
+    /* The family's escalation (join-session.ts), for this account's session. */
+    function joinFamily(groupId: string) {
+        let family = joinFamilies.get(groupId);
+        if (!family) joinFamilies.set(groupId, (family = newJoinFamily()));
+        return family;
+    }
+
+    /* One showing of `mark`: its positions, drawn only when the code was never shown. */
+    function showing<S extends 'code' | 'changed'>(groupId: string, mark: JoinMark, status: S) {
+        const hidden = showCode(joinFamily(groupId), mark, host.randomUint32 ?? randomUint32);
+        return {
+            status,
+            rosterVersion: mark.rosterVersion,
+            code: [...mark.code],
+            hidden,
+            session: generation,
+        };
+    }
+
+    /*
+     * Folds the escalation the data layer kept into this session's (only ever
+     * more held), under the unlocked account. One that does not open here is
+     * refused with HOLDS_UNREADABLE, the only answer the data layer deletes it on.
+     */
+    async function restoreFrom(groupId: string, holds: string | null | undefined) {
+        const { userId, root } = host.unlocked();
+        try {
+            if (holds === null || holds === undefined) return;
+            let value: unknown;
+            try {
+                value = await openDeviceRecord(root.slice(), userId, groupId, 'holds', holds);
+            } catch (error) {
+                if (error instanceof CryptoError) throw new CryptoError(HOLDS_UNREADABLE);
+                throw error;
+            }
+            restoreHolds(joinFamily(groupId), value);
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The family's escalation sealed for the data layer to keep, or null when nothing is held. */
+    async function exportHolds(groupId: string) {
+        const value = holdsValue(joinFamilies.get(groupId));
+        if (!value) return null;
+        const { userId, root } = host.unlocked();
+        try {
+            return await sealDeviceRecord(root, userId, groupId, 'holds', value);
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The newcomer's join code, over what route 5 serves (groupJoinPreview), and one showing of it. */
+    async function joinPreview(
+        input: GroupRequests['groupJoinPreview'],
+    ): Promise<GroupResults['groupJoinPreview']> {
+        const groupId = uuid(input.groupId, 'group id');
+        await restoreFrom(groupId, input.holds);
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        return showing(groupId, now.mark, 'code');
+    }
+
+    /* "They match" (groupJoinCheck), in the core's join_check order. */
+    async function joinCheckOf(
+        input: GroupRequests['groupJoinCheck'],
+    ): Promise<GroupResults['groupJoinCheck']> {
+        const groupId = uuid(input.groupId, 'group id');
+        const began = generation;
+        await restoreFrom(groupId, input.holds);
+        // Shown in this session (not before a lock, whatever a restore holds now) and not replaced.
+        if (
+            input.session !== began ||
+            !stillShown(joinFamilies.get(groupId), input.mark, input.hidden)
+        )
+            throw new CryptoError(NOT_SHOWN);
+        if (!typedComplete(input.typed)) return { status: 'incomplete' };
+        const now = await admission(input);
+        // A lock or another account while the chain was verified, or the showing replaced
+        // meanwhile: not a showing this session holds any more.
+        const family = joinFamilies.get(groupId);
+        if (generation !== began || !family || !stillShown(family, input.mark, input.hidden))
+            throw new CryptoError(NOT_SHOWN);
+        if (now.status !== 'code') return now;
+        if (!sameMark(now.mark, input.mark)) return showing(groupId, now.mark, 'changed');
+        const outcome = checkCode(family, now.mark, input.typed);
+        const holds = await exportHolds(groupId);
+        if (outcome !== 'match') return { status: outcome, holds };
+        // A rejoin keeps the date the family was first checked on this account.
+        const checkedAt = settingsPins?.pins[groupId]?.checkedAt ?? input.now;
+        const { userId, root } = host.unlocked();
+        try {
+            const joinsRecord = await sealDeviceRecord(root, userId, groupId, 'joins', {
+                v: 3,
+                groupId,
+                joinMark: now.mark,
+                checkedAt,
+            });
+            return { status: 'matched', joinsRecord, holds };
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The joins record's code and check time, or null when it does not open or is no version 3 record of this family's. */
+    async function openJoins(userIdIn: string, groupId: string, envelope: string) {
+        const { userId, root } = host.unlocked();
+        try {
+            if (userIdIn !== userId) throw new CryptoError('Unlock your account first.');
+            let value: unknown;
+            try {
+                value = await openDeviceRecord(root, userId, groupId, 'joins', envelope);
+            } catch (error) {
+                if (error instanceof CryptoError) return null;
+                throw error;
+            }
+            return joinsRead(groupId, value);
+        } finally {
+            root.fill(0);
+        }
     }
 
     async function openSeal(
@@ -2961,12 +3320,30 @@ export function createGroupSession(host: GroupHost) {
         try {
             const { old, next } = input;
             if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            if (ownIdentities().me.userId !== userId)
+                throw new CryptoError('Open your identity first.');
             if (old.version !== 2 || next.version !== 2 || next.keyVersion <= old.keyVersion)
                 throw new CryptoError('Only a link between two upgraded identities takes consent.');
             // Every key the consent names, not only the two that sign: each private half opens
-            // under this account and derives its public key, and each keys statement holds.
-            await verifyOwnIdentity(root, userId, old);
-            await verifyOwnIdentity(root, userId, next);
+            // under this account and derives its public key, and each keys statement holds. One
+            // refusal for any of it, the core's (consent.rs) too.
+            for (const envelope of [old, next])
+                try {
+                    await verifyOwnIdentity(root, userId, envelope);
+                } catch (error) {
+                    if (error instanceof CryptoError) throw new CryptoError(NOT_OWN_IDENTITY);
+                    throw error;
+                }
+            // The succession is the account's own: its old key signed exactly this step.
+            if (
+                !namesSide(old, input.link, 'old') ||
+                !namesSide(next, input.link, 'new') ||
+                !(await verifySuccessionLink(userId, input.link, {
+                    signingPublicKey: old.signingPublicKey,
+                    mlDsaPublicKey: old.mlDsa.publicKey,
+                }))
+            )
+                throw new CryptoError('This link is not one this account made.');
             // And the two are one step of this account's own history, as this session opened it.
             const { identities } = ownIdentities();
             const ordered = [...identities].sort((a, b) => a.keyVersion - b.keyVersion);
@@ -3020,7 +3397,7 @@ export function createGroupSession(host: GroupHost) {
     }
 
     async function storeSeal(input: GroupRequests['groupStoreSeal']) {
-        if (input.store !== 'outbox' && input.store !== 'joins')
+        if (input.store !== 'outbox')
             throw new CryptoError('This is not a family record this device keeps.');
         const { userId, root } = host.unlocked();
         try {
@@ -3039,7 +3416,7 @@ export function createGroupSession(host: GroupHost) {
         }
     }
     async function storeOpen(input: GroupRequests['groupStoreOpen']) {
-        if (input.store !== 'outbox' && input.store !== 'joins')
+        if (input.store !== 'outbox')
             throw new CryptoError('This is not a family record this device keeps.');
         const { userId, root } = host.unlocked();
         try {
@@ -3125,6 +3502,8 @@ export function createGroupSession(host: GroupHost) {
                 return accept(message.input);
             case 'groupJoinPreview':
                 return joinPreview(message.input);
+            case 'groupJoinCheck':
+                return joinCheckOf(message.input);
             case 'groupOpenSeal':
                 return openSeal(message.input);
             case 'groupOpenArea':

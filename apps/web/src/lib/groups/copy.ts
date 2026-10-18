@@ -2,6 +2,7 @@ import { keyChangeWords } from '@/lib/key-change-words';
 import { GroupApiError, NO_ANSWER } from './api';
 import type { GroupNotice } from './context';
 import type { SendOutcome } from './outbox';
+import { joinCheckMessage } from '@hushos/crypto/join-session';
 
 /*
  * What the families pages say when the server refuses something, when the
@@ -272,6 +273,12 @@ export function noticeTitle(notice: GroupNotice, family = 'The family') {
  * guesser could find them one at a time. The warning that HushOS may be
  * showing a different member list is kept for "They don't match".
  */
+/* After the family's first wrong pair: the calm line (the core's join_check_message says the same). */
 export function wrongWordsCopy(them: string) {
-    return `One of the words doesn’t match. Ask ${them} to read them again. If they still don’t match, choose They don’t match.`;
+    return joinCheckMessage(false, them);
+}
+
+/* After a wrong pair again: the alarm's first line. */
+export function mismatchCopy(them: string) {
+    return joinCheckMessage(true, them);
 }

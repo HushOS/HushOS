@@ -1244,6 +1244,385 @@
             ]
         },
         {
+            "name": "after a refusal nothing of the family's folder opens, cached or listed, until a member list is committed again",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "D",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "made:A@1",
+                    "expect": {
+                        "key": "k:2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "E",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 2,
+                    "key": "k:3",
+                    "under": "made:A@1",
+                    "prev": {
+                        "key": "k:4",
+                        "under": "made:A@1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": {
+                        "key": "k:3"
+                    }
+                },
+                {
+                    "op": "nodeKey",
+                    "node": "D",
+                    "expect": {
+                        "key": "k:2",
+                        "epoch": 1
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "E",
+                    "epoch": 1,
+                    "expect": {
+                        "key": "k:4"
+                    }
+                },
+                {
+                    "op": "uncommit",
+                    "expect": "ok"
+                },
+                {
+                    "op": "nodeKey",
+                    "node": "D",
+                    "expect": {
+                        "none": true
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "E",
+                    "epoch": 1,
+                    "expect": {
+                        "key": null
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "A",
+                    "epoch": 1,
+                    "expect": {
+                        "key": null
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "D",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "made:A@1",
+                    "expect": "no-chain"
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": "no-chain"
+                },
+                {
+                    "op": "writable",
+                    "node": "A",
+                    "expect": "no-chain"
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "not-checked"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "nodeKey",
+                    "node": "D",
+                    "expect": {
+                        "key": "k:2",
+                        "epoch": 1
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "E",
+                    "epoch": 1,
+                    "expect": {
+                        "key": "k:4"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "D",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "made:A@1",
+                    "expect": {
+                        "key": "k:2"
+                    }
+                },
+                {
+                    "op": "writable",
+                    "node": "A",
+                    "expect": {
+                        "key": "made:A@1",
+                        "epoch": 1
+                    }
+                }
+            ]
+        },
+        {
+            "name": "after a fork nothing of the family's folder opens either, until a member list is committed again",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "D",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "made:A@1",
+                    "expect": {
+                        "key": "k:2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "E",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 2,
+                    "key": "k:3",
+                    "under": "made:A@1",
+                    "prev": {
+                        "key": "k:4",
+                        "under": "made:A@1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": {
+                        "key": "k:3"
+                    }
+                },
+                {
+                    "op": "nodeKey",
+                    "node": "D",
+                    "expect": {
+                        "key": "k:2",
+                        "epoch": 1
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "E",
+                    "epoch": 1,
+                    "expect": {
+                        "key": "k:4"
+                    }
+                },
+                {
+                    "op": "uncommit",
+                    "expect": "ok",
+                    "fork": true
+                },
+                {
+                    "op": "nodeKey",
+                    "node": "D",
+                    "expect": {
+                        "none": true
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "E",
+                    "epoch": 1,
+                    "expect": {
+                        "key": null
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "A",
+                    "epoch": 1,
+                    "expect": {
+                        "key": null
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "D",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "made:A@1",
+                    "expect": "no-chain"
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": "no-chain"
+                },
+                {
+                    "op": "writable",
+                    "node": "A",
+                    "expect": "no-chain"
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "not-checked"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "nodeKey",
+                    "node": "D",
+                    "expect": {
+                        "key": "k:2",
+                        "epoch": 1
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "E",
+                    "epoch": 1,
+                    "expect": {
+                        "key": "k:4"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "D",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "made:A@1",
+                    "expect": {
+                        "key": "k:2"
+                    }
+                },
+                {
+                    "op": "writable",
+                    "node": "A",
+                    "expect": {
+                        "key": "made:A@1",
+                        "epoch": 1
+                    }
+                }
+            ]
+        },
+        {
             "name": "the next member list makes every key rooted at the earlier version read-only until the walk",
             "steps": [
                 {

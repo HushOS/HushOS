@@ -251,9 +251,9 @@ async function acceptOnce(
 ): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
     await ctx.settings.read();
     const row = await ctx.store.chain(ctx.userId, groupId);
-    const accept = async (after: number, withoutCache: boolean) => {
+    const accept = async (after: number, withoutCache: boolean, retried: boolean) => {
         const { served } = await fetchServed(ctx, groupId, after);
-        return ctx.rpc('groupAccept', {
+        const result = await ctx.rpc('groupAccept', {
             userId: ctx.userId,
             groupId,
             served,
@@ -261,7 +261,17 @@ async function acceptOnce(
             checkedAt: ctx.now().toISOString(),
             creating: options.creating ? { stagedEnvelope: options.creating } : null,
             ...(withoutCache ? { withoutCache } : {}),
+            // A refusal the ladder retries keeps the family committed (and its folders readable).
+            ...(retried ? { retried } : {}),
         });
+        // Only a join answers these, and a sync never joins.
+        if (
+            result.status === 'changed' ||
+            result.status === 'not-admitted' ||
+            result.status === 'join-unreadable'
+        )
+            throw new Error('The family could not be checked. Try again.');
+        return result;
     };
     // The order is the shared one (@hushos/crypto/record-acceptance, the core's accept_served):
     // continuing the record's cache, then from version 1 with it, then from version 1 without the

@@ -260,7 +260,9 @@ const ledgerStep = fc.oneof(
             'other-lists-personal',
         ),
     }),
-    fc.record({ op: fc.constantFrom('uncommit', 'forget'), group: ledgerGroup }),
+    fc.record({ op: fc.constant('forget'), group: ledgerGroup }),
+    fc.record({ op: fc.constant('uncommit'), group: ledgerGroup, fork: fc.boolean() }),
+    fc.record({ op: fc.constant('nodeKey'), node: ledgerNode }),
     fc.constantFrom(
         { op: 'requireWritable' },
         { op: 'state' },

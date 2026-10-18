@@ -27,25 +27,31 @@ import { NOT_THIS_ACCOUNT, NO_ACCOUNT, OLDER_CHAIN, OPEN_SETTINGS, SPLIT_CHAIN }
  * session overtook, OLDER_CHAIN or SPLIT_CHAIN), an account error (the
  * session forgotten or another account open meanwhile) and any error `rethrow`
  * names (the route's own answers) are the caller's, never retried here.
+ *
+ * `accept` is told whether a refusal of that attempt is retried here
+ * (`retried`): the worker then keeps the family committed under the chain it
+ * already holds, and only the last attempt's refusal (or a fork) uncommits it,
+ * so the family's folders are not held back between attempts.
  */
 export async function acceptFromRecord<T>(
     recordVersion: number | null,
-    accept: (after: number, withoutCache: boolean) => Promise<T>,
+    accept: (after: number, withoutCache: boolean, retried: boolean) => Promise<T>,
     rethrow: (error: unknown) => boolean = () => false,
 ): Promise<T> {
     const passes = (error: unknown) => accountError(error) || rethrow(error);
     try {
-        return await accept(recordVersion ?? 0, false);
+        // With a record a refusal here is always tried again (from version 1, then without the cache).
+        return await accept(recordVersion ?? 0, false, recordVersion !== null);
     } catch (error) {
         if (recordVersion === null || passes(error)) throw error;
         // Overtaken on the continuation: a reason to fetch from version 1, once. From version 1 it is the answer.
         if (recordVersion === 0 && lostRace(error)) throw error;
         try {
             if (recordVersion === 0) throw error;
-            return await accept(0, false);
+            return await accept(0, false, true);
         } catch (again) {
             if (lostRace(again) || passes(again)) throw again;
-            return await accept(0, true);
+            return await accept(0, true, false);
         }
     }
 }

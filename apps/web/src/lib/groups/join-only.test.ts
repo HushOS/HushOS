@@ -58,15 +58,16 @@ const FIRST_KEYS_SITES = [
     // Creation, inside the worker, over the group key it just made: the staged chain the
     // creating call seals and grants against (design 3.1).
     'packages/crypto/src/session-groups.ts › create: true',
-    // The worker's acceptance: a join carrying the compared join code where nothing marks the
-    // family, and the creating device's committed creation over served first keys equal to the
-    // seed it still holds; then the variable is passed on.
-    'packages/crypto/src/session-groups.ts › accept: true',
-    'packages/crypto/src/session-groups.ts › accept: true',
-    'packages/crypto/src/session-groups.ts › accept: (shorthand)',
-    // The join preview: verifies over the served first keys only to work out the code the person
-    // compares, and commits, keeps and marks nothing.
-    'packages/crypto/src/session-groups.ts › joinPreview: !marks',
+    // The worker's acceptance run (acceptRun, which accept and a join's joinRun call): a join
+    // carrying the compared join code where nothing marks the family, and the creating device's
+    // committed creation over served first keys equal to the seed it still holds; then the
+    // variable is passed on.
+    'packages/crypto/src/session-groups.ts › acceptRun: true',
+    'packages/crypto/src/session-groups.ts › acceptRun: true',
+    'packages/crypto/src/session-groups.ts › acceptRun: (shorthand)',
+    // The join's admission (preview, check, and the join's own re-check): verifies over the served
+    // first keys only to work out the code the person compares, and commits, keeps and marks nothing.
+    'packages/crypto/src/session-groups.ts › admission: !marks',
 ].sort();
 
 function modules(dir: string): string[] {

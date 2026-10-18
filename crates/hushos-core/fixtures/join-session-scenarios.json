@@ -1,0 +1,1369 @@
+{
+    "about": "Join sessions (groups 1d, Core 4): showings, checks, joins and the escalation, run step by step by the Rust core (crates/hushos-core/tests/common/join.rs) and the web worker (packages/crypto/src/join-testkit.ts) on person 2 of the join fixtures, with positions drawn from the fixtures' fixed draws, as an app drives them: it keeps the escalation each check hands back, and restores it once after a `lock` or a `relaunch` with `restore`, or an older one with `restore` from a step, on the next showing or check. `session` names the step whose showing a check is of (a show, or a changed answer), `matched` the check whose match a join takes, `record` a joins record (`own:<step>`, or one only an app or another family could have sealed). Each step's `expect` names the fields it must give (`hiddenOf`, `notHiddenOf`: that step's showing's positions); both twins must also give each other's full outcomes (the join fixture files).",
+    "now": "2026-10-18T12:00:00.000Z",
+    "scenarios": [
+        {
+            "name": "a-match-joins-once",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "matched",
+                        "checkedAt": "2026-10-18T12:00:00.000Z",
+                        "kept": false
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "This join code was already used to join. Compare it again."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "record": "own:1",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "This join code was already used to join. Compare it again."
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "record": "own:1",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "calm-then-the-alarm",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "mismatch",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "matched",
+                        "kept": false
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                }
+            ]
+        },
+        {
+            "name": "positions-stay-with-a-code-until-a-match",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5,
+                        "hiddenOf": 2
+                    }
+                }
+            ]
+        },
+        {
+            "name": "one-calm-try-per-family",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 2,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-code-held-before-a-match-on-another-stays-held",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 2,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "matched",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 4,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "another-code-served-is-changed-and-not-checked",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "changed",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 1,
+                    "words": "misheard",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-code-change-after-a-wrong-pair-keeps-the-alarm",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "changed",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 2,
+                    "words": "misheard",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-server-bouncing-between-two-codes",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "changed",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 1,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "changed",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 2,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 1
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 4,
+                    "words": "misheard",
+                    "served": {
+                        "history": "other",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "incomplete-before-anything-is-verified",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "blank",
+                    "served": {
+                        "history": "main",
+                        "through": 2,
+                        "cut": "bad-signature"
+                    },
+                    "expect": {
+                        "status": "incomplete"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-code-shown-elsewhere-is-not-this-one-s",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "check",
+                    "session": "elsewhere",
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Compare the join code again."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-later-readmission-is-a-new-code-to-compare",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "matched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "changed",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "another-code-at-the-roster-compared-is-the-fork",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "matched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "other",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "fork",
+                        "version": 2
+                    }
+                }
+            ]
+        },
+        {
+            "name": "the-escalation-kept-across-a-relaunch",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "holds",
+                    "expect": {
+                        "status": "kept"
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "restore": true,
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 5,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-lock-and-the-kept-escalation",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "lock",
+                    "restore": true,
+                    "expect": {
+                        "status": "locked"
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Compare the join code again."
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 4,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-relaunch-that-kept-nothing-is-a-new-tab",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "restore": false,
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 3,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "restoring-never-moves-positions-held-here",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "restore": false,
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "notHiddenOf": 0
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 4,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words"
+                    }
+                },
+                {
+                    "op": "restore",
+                    "from": 1,
+                    "expect": {
+                        "status": "restoring"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 4
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-showing-a-restored-escalation-replaced-is-stale",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "restore": false,
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "notHiddenOf": 0
+                    }
+                },
+                {
+                    "op": "restore",
+                    "from": 1,
+                    "expect": {
+                        "status": "restoring"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5,
+                        "hiddenOf": 3
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 4,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Compare the join code again."
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-stale-escalation-restored-before-a-preview-still-holds-what-it-held",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "wrong-words",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 2,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "mismatch",
+                        "kept": true
+                    }
+                },
+                {
+                    "op": "lock",
+                    "restore": false,
+                    "expect": {
+                        "status": "locked"
+                    }
+                },
+                {
+                    "op": "restore",
+                    "from": 1,
+                    "expect": {
+                        "status": "restoring"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 6,
+                    "words": "misheard",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "mismatch"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2,
+                        "hiddenOf": 0
+                    }
+                }
+            ]
+        },
+        {
+            "name": "no-joins-record-but-the-core-s",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "accept",
+                    "record": "outbox",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "join-unreadable"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "record": "other-family",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "join-unreadable"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "record": "earlier-version",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "join-unreadable"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "record": "newer-version",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "join-unreadable"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "no-join-without-a-match",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These group keys have not been checked: compare the join code first."
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 1,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "matched"
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These group keys have not been checked: compare the join code first."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-rejoin-keeps-its-first-check",
+            "settings": "pin-main-2",
+            "steps": [
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "check",
+                    "session": 0,
+                    "words": "right",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "matched",
+                        "checkedAt": "2026-10-15T00:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "checkedAt": "2026-10-15T00:00:00.000Z"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "nothing-held-nothing-kept",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "holds",
+                    "expect": {
+                        "status": "none"
+                    }
+                },
+                {
+                    "op": "show",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "code",
+                        "rosterVersion": 2
+                    }
+                },
+                {
+                    "op": "holds",
+                    "expect": {
+                        "status": "none"
+                    }
+                }
+            ]
+        }
+    ]
+}

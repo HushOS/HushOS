@@ -289,12 +289,14 @@ struct State {
     /* What the web's group session holds: committed chains by group, and areas opened per group. */
     chains: HashMap<String, Arc<AcceptedRosters>>,
     opened: HashMap<String, BTreeMap<String, OpenedArea>>,
-    /* Families whose last acceptance was the fork (uncommit with fork): read by personal keys alone. */
+    /* Families whose last acceptance was the fork (uncommit with fork): verdicts by personal keys alone; their folders' keys are held back (held_back). */
     forked: std::collections::HashSet<String>,
     /* The unlocked account: its user id and current signing public key (open_account). */
     account: Option<(String, Vec<u8>)>,
     /* The device store key, derived from the account root at open_account; wiped when dropped. */
     store_key: Option<Zeroizing<[u8; 32]>>,
+    /* The account root itself, for the identities' private halves (consent.rs); wiped when dropped. */
+    account_root: Option<Zeroizing<Vec<u8>>>,
     /* Bumped by open_account and clear: an acceptance commits only under the account it began with. */
     generation: u64,
     /* The settings document's group pins as last opened (use_settings), and whether it opened. */
@@ -305,6 +307,8 @@ struct State {
      * clear do, so a run that lost to a later commit can never take an older chain.
      */
     floors: HashMap<String, Arc<AcceptedRosters>>,
+    /* Joining (join.rs): the hidden positions issued per code, the family's wrong pair, the joins records used. */
+    joins: crate::join::JoinBook,
 }
 
 /* The settings the app last opened for the account: their group pins, or none when no document opened. */
@@ -353,6 +357,15 @@ impl State {
             .collect();
         groups.sort();
         groups
+    }
+
+    /*
+     * A family folder whose family has no chain committed here now: a refusal or a fork since it
+     * was opened (`uncommit`). None of its keys is handed out or used, held or listed, until a
+     * chain is committed again (the worker's `heldBack`); forgetting the family drops them.
+     */
+    fn held_back(&self, workspace_id: &str) -> bool {
+        self.opened_by(workspace_id).iter().any(|group_id| !self.chains.contains_key(group_id))
     }
 
     /* How many committed chains list the area. */
@@ -590,6 +603,8 @@ impl State {
         self.chains.remove(group_id);
         self.forked.remove(group_id);
         self.floors.remove(group_id);
+        // A join that committed and then could not be kept may run again; the hidden positions stay.
+        self.joins.forget(group_id);
     }
 
     /* The reader the app passes, held to the unlocked account: its id and its current signing key. */
@@ -703,16 +718,28 @@ impl State {
     }
 
     fn node_key(&self, workspace_id: &str, node_id: &str) -> Option<&Held> {
+        if self.held_back(workspace_id) {
+            return None;
+        }
         self.pool(workspace_id).get(&slot(workspace_id, node_id))
     }
 
+    /* The node's previous key as held, none while the family is held back. */
+    fn prev_node_key(&self, workspace_id: &str, node_id: &str) -> Option<&Held> {
+        if self.held_back(workspace_id) {
+            return None;
+        }
+        self.prev_pool(workspace_id).get(&slot(workspace_id, node_id))
+    }
+
     fn key_at_epoch(&self, workspace_id: &str, node_id: &str, epoch: u64) -> Option<Vec<u8>> {
+        // Through the held-back gates of node_key and prev_node_key.
         if let Some(current) = self.node_key(workspace_id, node_id) {
             if current.epoch == epoch {
                 return Some(current.key.to_vec());
             }
         }
-        let previous = self.prev_pool(workspace_id).get(&slot(workspace_id, node_id))?;
+        let previous = self.prev_node_key(workspace_id, node_id)?;
         (previous.epoch == epoch).then(|| previous.key.to_vec())
     }
 
@@ -727,6 +754,7 @@ impl State {
         parent_id: &str,
         parent_key_epoch: u64,
     ) -> CoreResult<(Zeroizing<Vec<u8>>, Option<u64>)> {
+        // Reached only behind a held-back gate: open_listed_node's, or require_writable's for writes.
         if parent_id == workspace_id {
             let workspace = self.workspace_keys.get(workspace_id).ok_or_else(|| refused(OPEN_DRIVE))?;
             let key = workspace.keys.get(&parent_key_epoch).ok_or_else(|| refused(OLDER_WORKSPACE_KEY))?;
@@ -764,6 +792,9 @@ impl State {
     }
 
     fn writable_node_key(&self, workspace_id: &str, node_id: &str) -> CoreResult<Option<&Held>> {
+        if self.held_back(workspace_id) {
+            return Err(refused(NO_CHAIN));
+        }
         let node = self.node_key(workspace_id, node_id);
         if node.is_some()
             && self.is_area(workspace_id)
@@ -857,6 +888,9 @@ impl State {
     /* ------------------------------------------------------------ */
 
     fn open_listed_node(&mut self, workspace_id: &str, node: &ServedNodeKey) -> CoreResult<Vec<u8>> {
+        if self.held_back(workspace_id) {
+            return Err(refused(NO_CHAIN));
+        }
         let at = slot(workspace_id, &node.node_id);
         let area_root = node.parent_id == workspace_id && self.is_area(workspace_id);
         // Another top-level node than the area's root: nothing in Drive goes there (wrap_key_for),
@@ -1181,6 +1215,8 @@ fn area_write_version_of(chain: &AcceptedRosters, workspace_id: &str) -> Option<
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct AreaLedger {
     state: Mutex<State>,
+    /* Draws standing in for the system CSPRNG, for the shared fixtures and the fuzz targets only (with_draws). */
+    draws: Option<Mutex<std::collections::VecDeque<u32>>>,
 }
 
 impl std::fmt::Debug for AreaLedger {
@@ -1203,9 +1239,13 @@ impl AreaLedger {
         Arc::new(AreaLedger::default())
     }
 
-    /// A refusal (`fork` false) or a fork (`fork` true) for the family: none of its areas is written
-    /// until a chain is committed again. After a fork, its records read by personal keys alone
-    /// ([`AreaLedger::record_verdict`]); a commit or forgetting the family clears it.
+    /// The last attempt of an acceptance refused (`fork` false) or a fork (`fork` true) for the
+    /// family: until a chain is committed again none of its folders is read or written. No key of
+    /// theirs is handed out or used: `open_listed_node` and `writable_node_key` refuse
+    /// (`Check the family’s member list first.`), `node_key` and `key_at_epoch` give none, and every
+    /// write is refused. The keys stay held, so the next commit reads on without the grants opened
+    /// again; forgetting the family drops them. A fork is remembered for
+    /// [`AreaLedger::record_verdict`] until a commit or forgetting the family clears it.
     pub fn uncommit(&self, group_id: String, fork: bool) {
         self.lock().uncommit(&group_id, fork);
     }
@@ -1240,6 +1280,7 @@ impl AreaLedger {
         }
         state.account = Some((user_id.to_lowercase(), signing_public_key));
         state.store_key = Some(store_key);
+        state.account_root = Some(Zeroizing::new(account_key.to_vec()));
         Ok(())
     }
 
@@ -1575,9 +1616,11 @@ impl AreaLedger {
     /// without an epoch), its origin judged as its writer's trust says and the
     /// re-keyer (the record's signer) as theirs. The family is the one the
     /// folder was opened under here: another `group_id` is refused
-    /// ([`NOT_THIS_FAMILYS`]). Without a committed chain the family reads as
+    /// ([`NOT_THIS_FAMILYS`]). Without a committed chain the verdict is
     /// unchecked, or, when its last acceptance was the fork
-    /// ([`AreaLedger::uncommit`]), by personal keys alone. `reader` must be the
+    /// ([`AreaLedger::uncommit`]), by personal keys alone; either way no key of
+    /// the family's folders is handed out then, so nothing new opens to be
+    /// judged until a chain is committed again. `reader` must be the
     /// unlocked account ([`AreaLedger::open_account`]). `cache` is the
     /// session's, shared across calls.
     ///
@@ -1819,6 +1862,47 @@ impl AreaLedger {
         self.lock().forked.contains(group_id)
     }
 
+    /* The unlocked account's root, as open_account held it; none while locked. */
+    pub(crate) fn account_root(&self) -> Option<Zeroizing<Vec<u8>>> {
+        self.lock().account_root.clone()
+    }
+
+    /* The join book, with the account it belongs to and the session's generation (join.rs). */
+    pub(crate) fn join_book<R>(&self, work: impl FnOnce(&mut crate::join::JoinBook, u64) -> R) -> R {
+        let mut state = self.lock();
+        let generation = state.generation;
+        work(&mut state.joins, generation)
+    }
+
+    /* A u32 from the system CSPRNG, or the next injected draw (with_draws). */
+    pub(crate) fn next_u32(&self) -> u32 {
+        use rand::RngCore as _;
+        match &self.draws {
+            None => rand::rngs::OsRng.next_u32(),
+            Some(draws) => draws
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .expect("the injected draws ran out"),
+        }
+    }
+
+    /// A ledger whose hidden join positions come from `draws` in order, in
+    /// place of the system CSPRNG: for the shared fixtures and the fuzz
+    /// targets, so both twins draw the same positions. Never exported to the
+    /// apps; a ledger that runs out of draws panics.
+    #[cfg(feature = "fixtures")]
+    #[doc(hidden)]
+    pub fn with_draws(draws: Vec<u32>) -> Arc<AreaLedger> {
+        Arc::new(AreaLedger { state: Mutex::default(), draws: Some(Mutex::new(draws.into())) })
+    }
+
+    /* Whether this session holds the family: a committed chain, or a fork (the worker's `marks` counts both). */
+    pub(crate) fn holds_family(&self, group_id: &str) -> bool {
+        let state = self.lock();
+        state.chains.contains_key(group_id) || state.forked.contains(group_id)
+    }
+
     /* The unlocked account as an acceptance runs for it: user id, signing key, store key and generation. */
     pub(crate) fn served_account(&self) -> Option<ServedAccount> {
         let state = self.lock();
@@ -1862,6 +1946,15 @@ impl AreaLedger {
         state.commit(chain)?;
         // The record is sealed under the key held now (a master-key rotation meanwhile included).
         Ok(store_key)
+    }
+
+    /* `NOT_THIS_ACCOUNT` unless the account and session an acceptance began in are still open (the worker's stillTheSession). */
+    pub(crate) fn still_the_session(&self, generation: u64) -> CoreResult<()> {
+        let state = self.lock();
+        if state.generation != generation || state.account.is_none() {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        Ok(())
     }
 
     /*

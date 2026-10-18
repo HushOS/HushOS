@@ -26,6 +26,7 @@ export type GroupOperation =
     | 'groupAccept'
     /* The join code a newcomer compares, over what route 5 serves: nothing kept. */
     | 'groupJoinPreview'
+    | 'groupJoinCheck'
     | 'groupOpenSeal'
     | 'groupOpenArea'
     | 'groupStage'
