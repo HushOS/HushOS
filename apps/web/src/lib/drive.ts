@@ -86,6 +86,7 @@ export const driveKeys = {
     open: (userId: string) => ['drive', 'open', userId] as const,
     folder: (folderId: string) => ['drive', 'folder', folderId] as const,
     trash: ['drive', 'trash'] as const,
+    versions: (nodeId: string) => ['drive', 'versions', nodeId] as const,
 };
 
 /* Opens the workspace in the worker and makes sure the root exists. */
