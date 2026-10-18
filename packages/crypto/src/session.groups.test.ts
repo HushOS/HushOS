@@ -2599,6 +2599,37 @@ describe('the write version (F9)', () => {
         ).rejects.toThrow();
     });
 
+    test('an admission after a folder was deleted grants only the live folders', async () => {
+        const f = await family();
+        const retired = await f.alice.call('groupStage', {
+            groupId: f.groupId,
+            expectedRevision: 2,
+            op: { kind: 'retire', workspaceId: f.ws },
+            kems: { [BOB]: f.bob.served.kemPublicKey },
+        });
+        if (retired.outboxId === null) throw new Error('nothing staged');
+        await f.alice.call('groupDrop', { outboxId: retired.outboxId });
+        f.server.store(retired.body);
+        await f.sync(f.alice, f.marks.alice);
+        // The deleted folder's key was asked for, and the admission refused, before this.
+        const carol = await account(CAROL);
+        const admit = await f.alice.call('groupStage', {
+            groupId: f.groupId,
+            expectedRevision: 3,
+            op: {
+                kind: 'admit',
+                userId: CAROL,
+                pin: await pinOf(carol),
+                served: carol.served,
+                roles: [],
+            },
+            kems: { [BOB]: f.bob.served.kemPublicKey },
+        });
+        if (admit.outboxId === null) throw new Error('nothing staged');
+        expect(admit.body.grants ?? []).toEqual([]);
+        expect(parseRoster(decode(admit.body.roster.statement)).rosterVersion).toBe(4);
+    });
+
     test('a family folder’s self-grant never opens as a personal workspace, even before the family loads', async () => {
         const f = await family();
         const fresh = await f.alice.device();
