@@ -1,13 +1,16 @@
 /*
  * The public roadmap (/roadmap), and the one place it is written: what has
  * shipped, what is being built, and what is planned. A pull request that
- * ships, starts, drops or changes something here updates this file and
- * `updated` in the same pull request (AGENTS.md).
+ * reaches hushos.com (merged and switched on), starts, drops or changes
+ * something here updates this file and `updated` in the same pull request
+ * (AGENTS.md).
  *
  * Every Shipped item says the month it reached hushos.com, and only what the
  * code does; Now, Next and Later never carry a date, because work ships when
  * it is ready. roadmap.test.ts holds the file to that.
  */
+
+import type { LinkProps } from '@tanstack/react-router';
 
 export type RoadmapArea = 'Drive' | 'Families' | 'Apps' | 'Messages' | 'Teams' | 'Platform';
 export type RoadmapStatus = 'shipped' | 'now' | 'next' | 'later';
@@ -18,7 +21,8 @@ export type RoadmapStatus = 'shipped' | 'now' | 'next' | 'later';
  */
 export type RoadmapLink =
     | { kind: 'blog'; slug: string; label: string }
-    | { kind: 'page'; to: string; label: string }
+    /* Typed by the router: a page that doesn't exist fails the typecheck. */
+    | { kind: 'page'; to: NonNullable<LinkProps['to']>; label: string }
     | { kind: 'docs'; path: string; label: string }
     | { kind: 'release'; tag: string; label: string };
 
@@ -58,15 +62,15 @@ export const sections: RoadmapSection[] = [
                 month: 'October 2026',
                 area: 'Platform',
                 title: 'Your devices',
-                body: 'See every browser signed in to your account, rename it, and sign it out with your password. You get an email when a device signs in or is removed.',
+                body: 'See every device signed in to your account, rename it, and sign it out with your password. You get an email when a new device signs in or a device is removed.',
             },
             {
                 id: 'post-quantum-signatures',
                 status: 'shipped',
                 month: 'October 2026',
                 area: 'Platform',
-                title: 'Post-quantum signatures',
-                body: 'Your identity, its key changes and every share are signed with ML-DSA-65 beside Ed25519, so a future quantum computer can’t forge them to move your contacts onto someone else’s keys.',
+                title: 'Post-quantum signatures on your identity',
+                body: 'Your identity, its key changes and every share between accounts are signed with ML-DSA-65 beside Ed25519, so a future quantum computer can’t forge them to move your contacts onto someone else’s keys. File and folder signatures stay Ed25519 for now.',
                 links: [
                     {
                         kind: 'docs',
@@ -90,7 +94,7 @@ export const sections: RoadmapSection[] = [
                 month: 'September 2026',
                 area: 'Drive',
                 title: 'Sharing and links',
-                body: 'Share a folder or file with people who can view or edit it, or send a link that needs no account, with an optional password and end date. Stopping a share or turning off a link replaces the keys beneath it.',
+                body: 'Share a folder or file with people who can view or edit it, or send a link that needs no account, with an optional password and end date. Stopping a share or turning off a link replaces the folder keys beneath it, so later changes are sealed to keys the removed person never had.',
             },
             {
                 id: 'post-quantum-sharing',
@@ -131,7 +135,7 @@ export const sections: RoadmapSection[] = [
                 month: 'September 2026',
                 area: 'Platform',
                 title: 'Run it yourself',
-                body: 'HushOS is open source. Run your own copy with Docker Compose, free, with as much space as your server has.',
+                body: 'HushOS is open source. Run your own copy with Docker Compose, free; you choose how much space each account gets.',
                 links: [
                     {
                         kind: 'docs',
@@ -159,7 +163,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Apps',
                 title: 'The iPhone and Android apps in the stores',
-                body: 'The apps are built: your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. They are on their way to the App Store and Google Play. You make your account on the web.',
+                body: 'The apps are built: your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. They are being prepared for the App Store and Google Play. You make your account on the web.',
             },
             {
                 id: 'families-on-phones',
@@ -187,7 +191,7 @@ export const sections: RoadmapSection[] = [
                 status: 'next',
                 area: 'Drive',
                 title: 'Editing in the browser',
-                body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each save is a new encrypted version.',
+                body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version.',
                 links: [{ kind: 'docs', path: 'docs/editing-design.md', label: 'Read the design' }],
             },
         ],
@@ -202,8 +206,16 @@ export const sections: RoadmapSection[] = [
                 status: 'later',
                 area: 'Teams',
                 title: 'HushOS for companies',
-                body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket.',
+                body: 'Folders that belong to the company, admins who add and remove people, with policies and an audit log, your own domain and single sign-on, and a choice of where files are kept, including your own storage bucket. Admins of a company plan would be able to open the company’s folders, through a key the company holds.',
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
+            },
+            {
+                id: 'notes-documents',
+                status: 'later',
+                area: 'Drive',
+                title: 'Notes and documents',
+                body: 'Write notes and documents in HushOS itself, kept under the same keys as your files. This is new writing, apart from editing the files you already have.',
+                links: [{ kind: 'blog', slug: 'hushos-1-0', label: 'Where it fits' }],
             },
             {
                 id: 'desktop-apps',

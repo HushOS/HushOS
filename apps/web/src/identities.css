@@ -386,7 +386,7 @@ h2:hover > .heading-anchor,
 [data-identity='roadmap'] article h3 {
     position: relative;
 }
-h3:hover > .heading-anchor {
+[data-identity='roadmap'] article h3:hover > .heading-anchor {
     opacity: 1;
 }
 

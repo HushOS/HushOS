@@ -53,9 +53,9 @@ function ItemLink({ link }: { link: RoadmapLink }) {
         );
     if (link.kind === 'page')
         return (
-            <a href={link.to} className={linkClass}>
+            <Link to={link.to} className={linkClass}>
                 {inside}
-            </a>
+            </Link>
         );
     const href =
         link.kind === 'docs'
