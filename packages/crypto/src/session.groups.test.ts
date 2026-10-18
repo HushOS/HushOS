@@ -24,10 +24,25 @@ import type { GroupPin } from './pins';
 import { FAMILY_SHARING, KEY_CHANGE_PENDING, NOT_CARRIED, SHARED_IN_FAMILY } from './protocol';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
 import { openAreaSelfGrant } from './workspace';
+import { createAreaLedger } from './area-ledger';
+import { chains, PERSONAL } from './area-ledger-testkit';
 import {
+    AREA,
+    AREA_SEED,
+    areaKeyAt,
+    GROUP,
+    OTHER_GROUP,
+    pattern,
+    rootKeyAt,
+} from './group-testkit';
+import {
+    createGroupSession,
     openDeviceRecord,
     sealDeviceRecord,
     type AreaRotationInput,
+    type GroupHost,
+    type GroupMessage,
+    type GroupResults,
     type GroupWriter,
     type RosterCallBody,
     type ServedChain,
@@ -4389,5 +4404,118 @@ describe('repairing a family folder’s previous key (route 28)', () => {
                 },
             }),
         ).toEqual({ status: 'cannot' });
+    });
+});
+
+/*
+ * A family's committed member list naming a folder that isn't its own: another family's folder
+ * opened here, or the account's own workspace. The ledger ignores the listing (area-ledger.ts);
+ * groupForeignListings only says so, for the family that lists it, and never for the family whose
+ * folder it is, which would tell the wrong family its member list is suspect.
+ */
+describe('folders a member list names that are not its family’s own (groupForeignListings)', () => {
+    async function sessionWithLedger() {
+        const catalog = await chains();
+        const ledger = createAreaLedger();
+        // The operation reads only the ledger; nothing else of the host is reached.
+        const session = createGroupSession({ ledger } as unknown as GroupHost);
+        const listed = async (groupId: string) =>
+            (await session.handle({
+                id: 1,
+                operation: 'groupForeignListings',
+                input: { groupId },
+            } as GroupMessage)) as GroupResults['groupForeignListings'];
+        // GROUP's own folder AREA, committed, opened and its top folder listed: writable here.
+        ledger.commit(catalog.get('f2-v1')!);
+        await ledger.openArea(GROUP, AREA, AREA_SEED, 1, areaKeyAt(AREA, 1).slice(), 1);
+        const root = '0e0e0e0e-0000-4000-8000-000000000001';
+        const at = {
+            workspaceId: AREA,
+            nodeId: root,
+            parentId: AREA,
+            parentKeyEpoch: 1,
+            keyEpoch: 1,
+        };
+        await ledger.openListedNode(AREA, {
+            id: root,
+            parentId: AREA,
+            parentKeyEpoch: 1,
+            keyEpoch: 1,
+            keyEnvelope: encode(await wrapNodeKey(rootKeyAt(AREA, 1), areaKeyAt(AREA, 1), at)),
+            prevKeyEnvelope: null,
+            prevKeyEpoch: null,
+            prevParentKeyEpoch: null,
+        });
+        return { catalog, ledger, listed };
+    }
+    /* What a ledger call answers, or why it refused: compared before and after the listing. */
+    const attempt = (read: () => unknown) => {
+        try {
+            return read() ?? 'ok';
+        } catch (error) {
+            return error instanceof Error ? error.message : 'refused';
+        }
+    };
+    const stateOf = (ledger: ReturnType<typeof createAreaLedger>, workspaceId: string) => ({
+        read: attempt(() => ledger.readVersion(workspaceId)),
+        write: attempt(() => ledger.writeVersion(workspaceId)),
+        writable: attempt(() => ledger.requireWritable(workspaceId)),
+    });
+
+    test('another family’s folder is said for the family that lists it, with its owner, never for the owner, and moves nothing of it', async () => {
+        const { catalog, ledger, listed } = await sessionWithLedger();
+        const before = stateOf(ledger, AREA);
+        expect(before).toEqual({ read: 1, write: 1, writable: 'ok' });
+        // OTHER_GROUP's member list also names AREA, as a manager of that family could sign it.
+        ledger.commit(catalog.get('other-f2-v1')!);
+        expect(await listed(OTHER_GROUP)).toEqual({
+            listings: [{ workspaceId: AREA, openedBy: GROUP }],
+        });
+        expect(await listed(GROUP)).toEqual({ listings: [] });
+        // Never a lock: GROUP's folder reads and writes as it did.
+        expect(stateOf(ledger, AREA)).toEqual(before);
+        // A family nobody committed here lists nothing.
+        expect(await listed(crypto.randomUUID())).toEqual({ listings: [] });
+    });
+
+    test('the account’s own workspace is said with no owner, for the listing family only, and stays the account’s', async () => {
+        const { catalog, ledger, listed } = await sessionWithLedger();
+        ledger.openPersonalWorkspace(PERSONAL, 1, pattern(32, 209));
+        const before = { personal: stateOf(ledger, PERSONAL), area: stateOf(ledger, AREA) };
+        expect(before.personal.writable).toBe('ok');
+        ledger.commit(catalog.get('other-lists-personal')!);
+        expect(await listed(OTHER_GROUP)).toEqual({
+            listings: [{ workspaceId: PERSONAL, openedBy: null }],
+        });
+        expect(await listed(GROUP)).toEqual({ listings: [] });
+        expect(ledger.isArea(PERSONAL)).toBe(false);
+        expect({ personal: stateOf(ledger, PERSONAL), area: stateOf(ledger, AREA) }).toEqual(
+            before,
+        );
+    });
+
+    test('forgetting the family whose folder it is takes the listing away with it', async () => {
+        const { catalog, ledger, listed } = await sessionWithLedger();
+        ledger.commit(catalog.get('other-f2-v1')!);
+        expect((await listed(OTHER_GROUP)).listings).toHaveLength(1);
+        ledger.forgetGroup(GROUP);
+        expect(await listed(OTHER_GROUP)).toEqual({ listings: [] });
+    });
+
+    test('a folder whose family has not opened it here is not known as anyone’s, so nothing is said (the known gap)', async () => {
+        // Both member lists committed, but GROUP never opened AREA on this device (its sync
+        // failed, or has not run): nothing says whose AREA is, so OTHER_GROUP's listing goes unsaid.
+        const catalog = await chains();
+        const ledger = createAreaLedger();
+        const session = createGroupSession({ ledger } as unknown as GroupHost);
+        ledger.commit(catalog.get('f2-v1')!);
+        ledger.commit(catalog.get('other-f2-v1')!);
+        expect(
+            await session.handle({
+                id: 1,
+                operation: 'groupForeignListings',
+                input: { groupId: OTHER_GROUP },
+            } as GroupMessage),
+        ).toEqual({ listings: [] });
     });
 });

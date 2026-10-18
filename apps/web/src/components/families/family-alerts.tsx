@@ -1,7 +1,7 @@
 import type { RosterFork } from '@hushos/crypto';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import type { GroupNotice } from '@/lib/groups/context';
-import { noticeCopy } from '@/lib/groups/copy';
+import { noticeCopy, noticeTitle } from '@/lib/groups/copy';
 
 const FROM: Record<string, string> = {
     pin: 'your account’s earlier check',
@@ -66,25 +66,28 @@ export function NoticeList({
     if (notices.length === 0) return null;
     return (
         <div className="flex flex-col gap-2">
-            {notices.map((notice, index) => (
-                <Alert
-                    key={`${notice.kind}-${index}`}
-                    variant={
-                        notice.kind === 'changes-lost' || notice.kind === 'admission-dropped'
-                            ? 'warning'
-                            : 'info'
-                    }
-                    data-notice={notice.kind}
-                >
-                    <AlertDescription>
-                        {noticeCopy(
-                            notice,
-                            'groupId' in notice ? nameOf?.(notice.groupId) : undefined,
-                            personOf,
-                        )}
-                    </AlertDescription>
-                </Alert>
-            ))}
+            {notices.map((notice, index) => {
+                const family = 'groupId' in notice ? nameOf?.(notice.groupId) : undefined;
+                const title = noticeTitle(notice, family);
+                return (
+                    <Alert
+                        key={`${notice.kind}-${index}`}
+                        variant={
+                            notice.kind === 'changes-lost' ||
+                            notice.kind === 'admission-dropped' ||
+                            notice.kind === 'foreign-listing'
+                                ? 'warning'
+                                : 'info'
+                        }
+                        data-notice={notice.kind}
+                    >
+                        {title && <AlertTitle>{title}</AlertTitle>}
+                        <AlertDescription>
+                            {noticeCopy(notice, family, personOf, nameOf)}
+                        </AlertDescription>
+                    </Alert>
+                );
+            })}
         </div>
     );
 }

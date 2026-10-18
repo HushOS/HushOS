@@ -531,6 +531,13 @@ export type GroupRequests = {
             prevParentKeyEpoch: number | null;
         };
     };
+    /*
+     * Folders this family's committed member list names that are not its own:
+     * one another family opened here, or the account's own workspace. The
+     * ledger ignores those listings for every decision (area-ledger.ts,
+     * `foreignListings`); this only says so, for the family's page.
+     */
+    groupForeignListings: { groupId: string };
 };
 
 export type GroupStaged = {
@@ -633,6 +640,8 @@ export type GroupResults = {
         | { status: 'repair'; previousRootKeyEnvelope: string }
         /* It does not open, and this device never held the old key. */
         | { status: 'cannot' };
+    /* `openedBy`: the family that opened the folder here, or null for the account's own workspace. */
+    groupForeignListings: { listings: { workspaceId: string; openedBy: string | null }[] };
 };
 
 /* Every group operation is listed in GROUP_OPERATIONS (protocol.ts), and nothing else is. */
@@ -3152,6 +3161,15 @@ export function createGroupSession(host: GroupHost) {
                 return storeOpen(message.input);
             case 'groupPreviousRoot':
                 return previousRoot(message.input);
+            case 'groupForeignListings': {
+                const groupId = uuid(message.input.groupId, 'group id');
+                return {
+                    listings: ledger
+                        .foreignListings()
+                        .filter((listing) => listing.groupId === groupId)
+                        .map(({ workspaceId, openedBy }) => ({ workspaceId, openedBy })),
+                };
+            }
         }
     }
 
