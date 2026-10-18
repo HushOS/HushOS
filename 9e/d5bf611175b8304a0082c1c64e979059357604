@@ -1,0 +1,31 @@
+DESIGN.md
+  s_c56e31c87cddde::t_0c0bb5e759c886 317
+apps/web/src/components/drive/file-list.tsx
+  s_c56e31c87cddde::t_fcda21661abb49 4,673-746
+apps/web/src/components/drive/folder-view.tsx
+  s_c56e31c87cddde::t_cff580c3fe2f05 16-17,23,219-222,495-497,979,1026,1035-1040,1049-1075,1081-1084,1091,1093,1102,1104,1198-1203,1210-1215,1221-1226
+apps/web/src/components/drive/home-view.tsx
+  s_c56e31c87cddde::t_4e6ff2a54f1f19 15,422,445,451-454,460-463,565-570,576-581,584-589
+apps/web/src/components/drive/search-view.tsx
+  s_c56e31c87cddde::t_98ce699aca6e37 1,10,56-57,102,105,110,135,154,160-165,168-173
+apps/web/src/components/drive/tag-view.tsx
+  s_c56e31c87cddde::t_431783d9d04d60 1,14,136-137,211-214,217-223,250,274-279,282-287
+apps/web/src/components/drive/trash-view.tsx
+  s_c56e31c87cddde::t_94e1b9d9547b97 442-448,524,527,530-533,536-539,549-565,596-597,621-628,635-640,645,653-658,661-666,681,713,836-852
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ed5bf611175b8304a0082c1c64e979059357604",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
