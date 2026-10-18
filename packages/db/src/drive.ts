@@ -3165,6 +3165,24 @@ export type CreateShare = {
 };
 
 /*
+ * Sharing is not offered in family folders (docs/groups-design.md 3.4): a walk
+ * re-seals only the shares and links in the walker's own sharing ledger, so
+ * another member's would be closed silently at the next removal, and both
+ * clients' walks refuse a family-folder node that has any. A group area takes
+ * no new share or link, and no new seal or expiry on one a server before this
+ * refusal let in; stopping one stays open. A workspace's owner never changes,
+ * so this needs no lock.
+ */
+async function inGroupArea(tx: Tx, workspaceId: string) {
+    const [row] = await tx
+        .select({ ownerKind: workspaces.ownerKind })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId));
+    return row?.ownerKind === 'group';
+}
+const familySharing = { status: 'family-sharing' as const };
+
+/*
  * A share or link sealed on a node moves the node's own change sequence to the
  * one its write drew: a rotation that read the node before it names the old
  * one and is refused (`stale` on the walk, `root-moved` on a group's roster
@@ -3184,6 +3202,7 @@ export async function createShare(input: CreateShare) {
     if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
         return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
+        if (await inGroupArea(tx, input.workspaceId)) return familySharing;
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
@@ -3375,6 +3394,7 @@ export async function resealShare(input: {
     if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
         return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
+        if (await inGroupArea(tx, input.workspaceId)) return familySharing;
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
         const [share] = await tx
             .select({
@@ -3481,6 +3501,7 @@ export type CreateLink = {
 /* A new link on a live node, sealed under the node's current key epoch. Several links per node are fine. */
 export async function createLink(input: CreateLink) {
     return db.transaction(async (tx) => {
+        if (await inGroupArea(tx, input.workspaceId)) return familySharing;
         // The workspace lock a rotation batch takes too: in a personal workspace as well, a link
         // made on one device and a rotation applied on another are ordered, never interleaved.
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
@@ -3559,6 +3580,7 @@ export async function updateLink(input: {
     expiresAt?: Date | null;
 }) {
     return db.transaction(async (tx) => {
+        if (await inGroupArea(tx, input.workspaceId)) return familySharing;
         // A new seal takes the workspace lock first, as a revocation and a rotation batch do.
         const changeSeq = input.seal ? await nextChangeSeq(tx, input.workspaceId) : null;
         const [link] = await tx

@@ -35,7 +35,12 @@ import {
     workspaceKeys,
     workspaces,
 } from '../../db/src/schema';
-import { closeDatabase, resetDatabase } from '../../db/test/helpers';
+import {
+    closeDatabase,
+    insertLegacyLink,
+    insertLegacyShare,
+    resetDatabase,
+} from '../../db/test/helpers';
 import {
     ADDRESS,
     ORGANIZER,
@@ -2317,14 +2322,17 @@ describe("repairing the root's previous envelope (route 28)", () => {
 });
 
 describe('the root a roster rotation re-keys (route 29)', () => {
-    /* The area root with a live share and link from the organizer, and one of each revoked. */
+    /*
+     * The area root with a live share and link from the organizer, and one of each revoked:
+     * rows a server before the family-sharing refusal could have stored, written directly.
+     */
     async function sharedRoot(fam: Family) {
         const [root] = await db
             .select()
             .from(driveNodes)
             .where(and(eq(driveNodes.workspaceId, fam.areaId), isNull(driveNodes.parentId)));
         const share = async (to: Member) => {
-            const result = await driveRepository.createShare({
+            const row = await insertLegacyShare({
                 workspaceId: fam.areaId,
                 nodeId: root!.id,
                 granterUserId: fam.organizer.userId,
@@ -2333,11 +2341,10 @@ describe('the root a roster rotation re-keys (route 29)', () => {
                 keyEpoch: root!.keyEpoch,
                 shareEnvelope: randomBytes(driveRepository.SHARE_ENVELOPE_BYTES),
             });
-            if (result.status !== 'ok') throw new Error(result.status);
-            return result.share.id;
+            return row.id;
         };
         const link = async (hasPassword: boolean) => {
-            const result = await driveRepository.createLink({
+            const row = await insertLegacyLink({
                 id: randomUUID(),
                 workspaceId: fam.areaId,
                 nodeId: root!.id,
@@ -2350,8 +2357,7 @@ describe('the root a roster rotation re-keys (route 29)', () => {
                 hasPassword,
                 expiresAt: null,
             });
-            if (result.status !== 'ok') throw new Error(result.status);
-            return result.link.id;
+            return row.id;
         };
         const outsider = await member();
         const former = await member();
@@ -2361,7 +2367,6 @@ describe('the root a roster rotation re-keys (route 29)', () => {
         const revokedLink = await link(false);
         await driveRepository.revokeShare(fam.areaId, revokedShare);
         await driveRepository.revokeLink(fam.areaId, revokedLink);
-        // As it stands now: each grant sealed on it moved its change sequence.
         const [now] = await db.select().from(driveNodes).where(eq(driveNodes.id, root!.id));
         return { root: now!, outsider, liveShare, revokedShare, liveLink, revokedLink };
     }
@@ -2557,73 +2562,59 @@ describe('the root a roster rotation re-keys (route 29)', () => {
         });
     });
 
-    test('a share or link sealed on the root after the read makes route 24 root-moved, and the grant stays live', async () => {
+    test('a share or link tried on the root after the read is refused and moves nothing, so the rotation from that read lands', async () => {
         const fam = await family();
         const { root, liveShare, liveLink } = await sharedRoot(fam);
-        const read = () => groups.areaRoot(fam.organizer.userId, fam.groupId, fam.areaId);
+        const before = await groups.areaRoot(fam.organizer.userId, fam.groupId, fam.areaId);
         const { rotation, rotated, grants } = await rotateDefaultArea(fam);
-        const send = async (served: Awaited<ReturnType<typeof read>>) =>
-            groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
-                ...rotated.call,
-                rotation: fromServed(rotation, served),
-                grants,
-            });
-        const live = async (id: string) => {
-            const [share] = await db.select().from(driveShares).where(eq(driveShares.id, id));
-            const [link] = await db.select().from(driveLinks).where(eq(driveLinks.id, id));
-            const row = share ?? link;
-            return { revokedAt: row!.revokedAt, keyEpoch: row!.keyEpoch };
-        };
-        const unchanged = async () => {
-            const [area] = await db.select().from(workspaces).where(eq(workspaces.id, fam.areaId));
-            expect(area!.workspaceKeyVersion).toBe(1);
-        };
-        // A share made after the read.
-        const before = await read();
         const late = await member();
-        const shared = await driveRepository.createShare({
-            workspaceId: fam.areaId,
-            nodeId: root.id,
-            granterUserId: fam.organizer.userId,
-            granteeUserId: late.userId,
-            role: 'viewer',
-            keyEpoch: root.keyEpoch,
-            shareEnvelope: randomBytes(driveRepository.SHARE_ENVELOPE_BYTES),
-        });
-        if (shared.status !== 'ok') throw new Error(shared.status);
-        expect(await refusal(send(before))).toMatchObject({ code: 'root-moved', status: 409 });
-        expect(await live(shared.share.id)).toEqual({ revokedAt: null, keyEpoch: root.keyEpoch });
-        await unchanged();
-        // A link made after the next read.
-        const again = await read();
-        const linked = await driveRepository.createLink({
-            id: randomUUID(),
-            workspaceId: fam.areaId,
-            nodeId: root.id,
-            granterUserId: fam.organizer.userId,
-            tokenHash: randomBytes(32),
-            keyEpoch: root.keyEpoch,
-            linkEnvelope: randomBytes(72),
-            linkSalt: randomBytes(16),
-            secretEnvelope: null,
-            hasPassword: false,
-            expiresAt: null,
-        });
-        if (linked.status !== 'ok') throw new Error(linked.status);
-        expect(await refusal(send(again))).toMatchObject({ code: 'root-moved', status: 409 });
-        expect(await live(linked.link.id)).toEqual({ revokedAt: null, keyEpoch: root.keyEpoch });
-        await unchanged();
-        // Read once more, the same roster lands, and every grant on the root is re-sealed.
-        const fresh = await read();
-        expect(fresh.shares.map((share) => share.id).sort()).toEqual(
-            [liveShare, shared.share.id].sort(),
+        expect(
+            await driveRepository.createShare({
+                workspaceId: fam.areaId,
+                nodeId: root.id,
+                granterUserId: fam.organizer.userId,
+                granteeUserId: late.userId,
+                role: 'viewer',
+                keyEpoch: root.keyEpoch,
+                shareEnvelope: randomBytes(driveRepository.SHARE_ENVELOPE_BYTES),
+            }),
+        ).toEqual({ status: 'family-sharing' });
+        expect(
+            await driveRepository.createLink({
+                id: randomUUID(),
+                workspaceId: fam.areaId,
+                nodeId: root.id,
+                granterUserId: fam.organizer.userId,
+                tokenHash: randomBytes(32),
+                keyEpoch: root.keyEpoch,
+                linkEnvelope: randomBytes(72),
+                linkSalt: randomBytes(16),
+                secretEnvelope: null,
+                hasPassword: false,
+                expiresAt: null,
+            }),
+        ).toEqual({ status: 'family-sharing' });
+        expect(
+            await groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                ...rotated.call,
+                rotation: fromServed(rotation, before),
+                grants,
+            }),
+        ).toMatchObject({ version: 2 });
+        // Only the grants it was served exist, and both are re-sealed at the target.
+        const shares = await db.select().from(driveShares).where(eq(driveShares.nodeId, root.id));
+        const links = await db.select().from(driveLinks).where(eq(driveLinks.nodeId, root.id));
+        expect(
+            [...shares, ...links]
+                .filter((row) => row.revokedAt === null)
+                .map((row) => [row.id, row.keyEpoch]),
+        ).toEqual(
+            expect.arrayContaining([
+                [liveShare, rotation.targetEpoch],
+                [liveLink, rotation.targetEpoch],
+            ]),
         );
-        expect(fresh.links.map((link) => link.id).sort()).toEqual(
-            [liveLink, linked.link.id].sort(),
-        );
-        expect(await send(fresh)).toMatchObject({ version: 2 });
-        for (const id of [liveShare, shared.share.id, liveLink, linked.link.id])
-            expect(await live(id)).toEqual({ revokedAt: null, keyEpoch: rotation.targetEpoch });
+        expect([...shares, ...links].filter((row) => row.revokedAt === null)).toHaveLength(2);
     });
 });
 

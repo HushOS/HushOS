@@ -9,8 +9,11 @@ import {
 } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../src/client';
+import type { CreateLink, CreateShare } from '../src/drive';
 import {
     accountIdentities,
+    driveLinks,
+    driveShares,
     groupMemberships,
     groupStorage,
     groups,
@@ -242,6 +245,21 @@ export async function createTestFamily(input: {
     }
     if (input.pooled) await db.insert(groupStorage).values({ groupId: id, quotaBytes: 0n });
     return { groupId: id, areaIds };
+}
+
+/*
+ * A share or link in a family folder as a server before the family-sharing
+ * refusal could have stored it (docs/groups-server.md 8): written directly,
+ * since the repository makes neither there any more. For what departures,
+ * revocations and rotations still do with such rows.
+ */
+export async function insertLegacyShare(input: CreateShare) {
+    const [row] = await db.insert(driveShares).values(input).returning();
+    return row!;
+}
+export async function insertLegacyLink(input: CreateLink) {
+    const [row] = await db.insert(driveLinks).values(input).returning();
+    return row!;
 }
 
 /* Someone in a test family: accepted (waiting to be let in), active or left, with roles. */

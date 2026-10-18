@@ -372,6 +372,22 @@ Stopping cuts the server off at once and then rotates keys. The owner's device g
 - Objects are never re-encrypted. The guarantee is that a former member gets nothing further from the API and, once any download URL they held has expired (fifteen minutes for shared content), nothing further from the store.
 - A password link made before this release cannot be re-sealed without its password and is stopped by the rotation; its owner makes a new one.
 
+### No sharing in family folders
+
+Family folders take no shares or links (docs/groups-design.md 3.4). The web never offered Share there, and the server now refuses to make a share or link in one, or to seal one again or change its password or expiry, with 409 `family-sharing`; stopping one still works. A server of an earlier release with families on (`GROUPS_ENABLED`, on by default) accepted them from any API client, though no HushOS app made them. The web and native apps refuse to re-key an item that has one, so a key change below the folder's top level stops (the web says "An item in this family folder has shares or links") until they are stopped. To find any (hushos.com, with families off, has none):
+
+```sql
+select 'share' as kind, s.id, s.workspace_id, s.node_id from drive_shares s
+  join workspaces w on w.id = s.workspace_id
+  where w.owner_kind = 'group' and s.revoked_at is null
+union all
+select 'link', l.id, l.workspace_id, l.node_id from drive_links l
+  join workspaces w on w.id = l.workspace_id
+  where w.owner_kind = 'group' and l.revoked_at is null;
+```
+
+Stop each through the API (`DELETE /api/drive/shares/:id` or `/api/drive/links/:id` with `{ workspaceId }`, as any member of the family), which also marks the folder due for a key change so whoever held it is cut off. Stopping them in SQL instead must set `rotation_due_at = coalesce(rotation_due_at, now())` on the folder's `workspaces` row too, or the recipient keeps a key that opens it.
+
 ## Operators and the management area
 
 Every account is a member. An operator is a member whose role was raised from the command line; no request can do it:

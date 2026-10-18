@@ -82,6 +82,14 @@ export const SHARED_IN_FAMILY =
     'This item has shares or links, which a family folder never has, so it was not re-keyed.';
 
 /*
+ * What the worker answers a share or link sealed in a family folder, and what
+ * the server answers one made or changed there (code `family-sharing`):
+ * sharing is not offered there until share records signed at family level
+ * exist (design 3.4).
+ */
+export const FAMILY_SHARING = 'Sharing isn’t available in family folders.';
+
+/*
  * What the crypto worker answers an acceptance that lost a race with a later
  * one this session already committed (a background sync finishing after the
  * foreground's): nothing of it is kept. The data layer reads the device

@@ -124,6 +124,7 @@ import { encode, decode, wrappingKey, checkProfile } from './keys';
 import {
     accountKeyContext,
     ENVELOPE_VERSION,
+    FAMILY_SHARING,
     KEY_STRETCHING,
     OPAQUE_IDENTIFIERS,
     type AccountKeyEnvelope,
@@ -1806,6 +1807,8 @@ export function createCryptoSession() {
             case 'driveSealShare': {
                 const { workspaceId, nodeId, keyEpoch, granterUserId, granteeUserId } =
                     message.input;
+                // Sharing is not offered in family folders (design 3.4): a walk would close it.
+                if (isArea(workspaceId)) throw new CryptoError(FAMILY_SHARING);
                 requireWritable(workspaceId);
                 if (!identityKey || identityKey.userId !== granterUserId)
                     throw new CryptoError('Open your identity first.');
@@ -1872,6 +1875,7 @@ export function createCryptoSession() {
             }
             case 'driveSealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
+                if (isArea(workspaceId)) throw new CryptoError(FAMILY_SHARING);
                 requireWritable(workspaceId);
                 const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
@@ -1991,6 +1995,7 @@ export function createCryptoSession() {
             }
             case 'driveResealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
+                if (isArea(workspaceId)) throw new CryptoError(FAMILY_SHARING);
                 requireWritable(workspaceId);
                 const node = writableNodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
