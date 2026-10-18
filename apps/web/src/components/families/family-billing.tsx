@@ -64,7 +64,7 @@ import {
 import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
-import { familyTierName as tierName } from '@/lib/plans';
+import { familyPairs, familyTierName as tierName, twoMonthsFree } from '@/lib/plans';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -431,6 +431,8 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
     const [period, setPeriod] = useState<'month' | 'year'>(
         intervals.has('month') ? 'month' : 'year',
     );
+    // Only while every tier's year is at most ten of its months, in this currency.
+    const saving = twoMonthsFree(familyPairs(plans, currency));
     const shown = plans.filter((plan) => plan.interval === period);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState('');
@@ -475,7 +477,7 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
                     label="Billed"
                     options={[
                         { value: 'month', label: 'Monthly' },
-                        { value: 'year', label: 'Yearly · 2 months free' },
+                        { value: 'year', label: saving ? 'Yearly · 2 months free' : 'Yearly' },
                     ]}
                     value={period}
                     onChange={setPeriod}

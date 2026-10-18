@@ -50,8 +50,7 @@ export const getOfferLandingServerFn = createServerFn()
 /* "20%" or "$5.00": the size of a discount, for a headline. */
 export function discountAmount(input: DiscountTerms | { percentOff: number }) {
     return 'type' in input && input.type === 'fixed'
-        ? // A fixed locale, so the server and every browser write it alike: "$5", "€5", "£5", not en-GB's "US$5".
-          formatMoney(input.amount, input.currency, 'en-US')
+        ? formatMoney(input.amount, input.currency)
         : `${input.percentOff}%`;
 }
 

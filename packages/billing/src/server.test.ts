@@ -65,7 +65,7 @@ const polar = {
         product(PRO, 'Pro (monthly)', 'month', { usd: 1000, inr: 79900 }, 500n * GIB, {
             hushos_recommended: 'true',
         }),
-        product(MAX, 'Max (yearly)', 'year', { usd: 15000 }, 1024n * GIB),
+        product(MAX, 'Max (yearly)', 'year', { usd: 14400 }, 1024n * GIB),
         product(
             '33333333-aaaa-4aaa-8aaa-333333333333',
             'Not a plan',
@@ -138,7 +138,7 @@ const polar = {
             'Family Pro (yearly)',
             'pro',
             FAMILY_POOL,
-            { usd: 20000, eur: 20000, gbp: 16000, inr: 799000 },
+            { usd: 19200, eur: 19200, gbp: 14400, inr: 780000 },
             { hushos_recommended: 'true' },
             'year',
         ),
@@ -261,7 +261,8 @@ function familyProduct(
 
 /*
  * A family tier as seed.ts makes it: four included, then 150 a member (1.50
- * USD, EUR; 1.20 GBP; 59 INR), ten times both on a yearly product.
+ * USD, EUR; 1.20 GBP; 59 INR), ten times that on a yearly product, whose base
+ * is passed at its own yearly price.
  */
 function tierProduct(
     id: string,
@@ -949,7 +950,7 @@ describe('catalogue', () => {
             gbp: { base: 800, perMember: 120 },
             inr: { base: 39900, perMember: 5900 },
         });
-        expect(families[2]?.prices.usd).toEqual({ base: 20000, perMember: 1500 });
+        expect(families[2]?.prices.usd).toEqual({ base: 19200, perMember: 1500 });
         // A tier is never offered as a person's plan.
         expect((await billing.listCatalogue()).plans.map((plan) => plan.name)).toEqual([
             'Pro (monthly)',

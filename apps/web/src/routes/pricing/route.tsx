@@ -28,20 +28,25 @@ import { rememberReturn } from '@/lib/return-to';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
-    formatQuota,
     formatMoney,
+    formatQuota,
     localeHintQueryOptions,
 } from '@/lib/queries';
 import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
-import type { Plan } from '@hushos/billing/api';
+import type { Catalogue, Plan } from '@hushos/billing/api';
 import {
     currenciesOf,
     FAMILY_POOL_LINE,
     familyOffers,
+    familyPairs,
+    personalPairs,
     priceOf,
     pricingLede,
     TAX_LINE,
     tiersOf,
+    twoMonthsFree,
+    yearlyPrice,
+    yearsByMonth,
     type FamilyOffer,
     type Tier,
 } from '@/lib/plans';
@@ -97,7 +102,11 @@ export const Route = createFileRoute('/pricing')({
     head: ({ loaderData }) => {
         if (!loaderData) return {};
         const { origin, catalogue, currency } = loaderData;
-        const faq = faqFor(familyOffers(catalogue, 'month', currency), currency);
+        const faq = faqFor(
+            familyOffers(catalogue, 'month', currency),
+            currency,
+            savesTwoMonths(catalogue, currency),
+        );
         const description = `Start free with ${formatQuota(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
         return {
             meta: [
@@ -174,6 +183,13 @@ export const Route = createFileRoute('/pricing')({
     component: PricingPage,
 });
 
+/* "2 months free", for the toggle and the questions: true of every personal and family plan here. */
+const savesTwoMonths = (catalogue: Pick<Catalogue, 'plans' | 'families'>, currency: string) =>
+    twoMonthsFree([
+        ...personalPairs(catalogue.plans, currency),
+        ...familyPairs(catalogue.families, currency),
+    ]);
+
 /* The lowest monthly price in the page's currency, for the description tag. */
 function cheapest(plans: Plan[], currency: string) {
     const monthly = plans.filter((plan) => plan.interval === 'month');
@@ -247,9 +263,13 @@ function PricingPage() {
     const [interval, setInterval] = useState<Interval>('year');
     const tiers = tiersOf(catalogue.plans);
     const free = formatQuota(catalogue.freeQuotaBytes);
+    // Every year by its month, or every year by the year, across both rows of cards.
+    const byMonth = yearsByMonth(catalogue, currency);
+    // "2 months free" beside Yearly only while it is true of every plan in this currency.
+    const saving = savesTwoMonths(catalogue, currency);
     // Only where the server serves families and sells plans: it lists none otherwise.
-    const family = familyOffers(catalogue, interval, currency);
-    const questions = faqFor(familyOffers(catalogue, 'month', currency), currency);
+    const family = familyOffers(catalogue, interval, currency, byMonth);
+    const questions = faqFor(familyOffers(catalogue, 'month', currency), currency, saving);
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
     const live =
@@ -364,7 +384,7 @@ function PricingPage() {
         if (!plan) return '';
         const price = amount(plan);
         return plan.interval === 'year'
-            ? `${money(Math.round(price.amount / 12), price.currency)} a month, billed ${money(price.amount, price.currency)} yearly.`
+            ? yearlyPrice(price.amount, price.currency, byMonth).line
             : `${money(price.amount, price.currency)} a month, billed monthly.`;
     }
     return (
@@ -441,9 +461,11 @@ function PricingPage() {
                                             label: (
                                                 <>
                                                     Yearly
-                                                    <span className="font-semibold text-primary">
-                                                        2 months free
-                                                    </span>
+                                                    {saving && (
+                                                        <span className="font-semibold text-primary">
+                                                            2 months free
+                                                        </span>
+                                                    )}
                                                 </>
                                             ),
                                         },
@@ -478,6 +500,10 @@ function PricingPage() {
                                     if (!plan) return null;
                                     const yearly = tier.year ? amount(tier.year) : null;
                                     const price = amount(plan);
+                                    const byYear =
+                                        plan.interval === 'year'
+                                            ? yearlyPrice(price.amount, price.currency, byMonth)
+                                            : null;
                                     return (
                                         <PlanCard
                                             key={tier.key}
@@ -485,17 +511,14 @@ function PricingPage() {
                                             storage={formatQuota(tier.quotaBytes)}
                                             blurb={blurbOf(tier.name, tier.description)}
                                             recommended={tier.recommended}
-                                            price={`${
-                                                plan.interval === 'year'
-                                                    ? money(
-                                                          Math.round(price.amount / 12),
-                                                          price.currency,
-                                                      )
-                                                    : money(price.amount, price.currency)
-                                            } a month`}
+                                            price={
+                                                byYear
+                                                    ? byYear.price
+                                                    : `${money(price.amount, price.currency)} a month`
+                                            }
                                             note={
-                                                plan.interval === 'year'
-                                                    ? `Billed ${money(price.amount, price.currency)} yearly.`
+                                                byYear
+                                                    ? byYear.billed
                                                     : yearly
                                                       ? `Billed monthly. ${money(yearly.amount, yearly.currency)} a year if you pay yearly.`
                                                       : 'Billed monthly.'
@@ -651,37 +674,41 @@ function Business() {
  * and lands there.
  */
 function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSession: boolean }) {
-    const first = offers[0]!;
+    // The same on every tier (a tier change keeps the family's places), as the questions say too.
+    const { includedMembers, maxMembers } = offers[0]!.plan;
     return (
         <section
             aria-labelledby="family-plan"
             data-family-plan
             className="flex flex-col gap-6 rounded-xl border border-rule bg-card p-6 lg:p-7"
         >
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between lg:gap-10">
-                <div className="flex flex-col gap-3">
-                    <h2 id="family-plan" className="text-[17px] font-bold">
-                        Family
-                    </h2>
-                    <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
-                        Family folders for up to {first.plan.includedMembers} members, end-to-end
-                        encrypted.
-                    </p>
-                    <p className="max-w-[40em] text-base leading-relaxed">
-                        Every member can open them. {FAMILY_POOL_LINE}
-                    </p>
+            <div className="flex flex-col gap-3">
+                <h2 id="family-plan" className="text-[17px] font-bold">
+                    Family
+                </h2>
+                {/* The button sits level with the headline's first line on a wide screen, under the words on a phone. */}
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
+                    <div className="flex flex-col gap-3">
+                        <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
+                            Family folders for up to {maxMembers} people.
+                        </p>
+                        <p className="max-w-[40em] text-base leading-relaxed">
+                            Each plan includes {includedMembers} members, and every member can open
+                            the folders. {FAMILY_POOL_LINE}
+                        </p>
+                    </div>
+                    <Link
+                        to={hasSession ? '/app/families' : '/register'}
+                        // Signed out: the new account lands on Families once it is set up.
+                        onClick={hasSession ? undefined : () => rememberReturn('/app/families')}
+                        className={buttonVariants({
+                            size: 'lg',
+                            className: 'w-full shrink-0 lg:w-fit',
+                        })}
+                    >
+                        Create a family
+                    </Link>
                 </div>
-                <Link
-                    to={hasSession ? '/app/families' : '/register'}
-                    // Signed out: the new account lands on Families once it is set up.
-                    onClick={hasSession ? undefined : () => rememberReturn('/app/families')}
-                    className={buttonVariants({
-                        size: 'lg',
-                        className: 'w-full shrink-0 lg:w-fit',
-                    })}
-                >
-                    Create a family
-                </Link>
             </div>
             <ul className="grid gap-4 lg:grid-cols-3">
                 {offers.map((offer) => (
@@ -701,12 +728,11 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                             <span className="text-sm leading-snug text-muted-foreground">
                                 {offer.billed}
                             </span>
-                            <span className="text-sm leading-snug text-muted-foreground">
-                                {offer.size}
-                            </span>
-                            <span className="text-sm leading-snug text-muted-foreground">
-                                {offer.extra}
-                            </span>
+                            {offer.extra && (
+                                <span className="text-sm leading-snug text-muted-foreground">
+                                    {offer.extra}
+                                </span>
+                            )}
                         </div>
                     </li>
                 ))}

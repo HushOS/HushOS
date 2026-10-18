@@ -10,6 +10,7 @@ import {
     type Route,
 } from '@playwright/test';
 import {
+    hydrated,
     newContext,
     PASSWORD,
     registerAccount,
@@ -1270,9 +1271,11 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     const DAY = 24 * 60 * 60 * 1000;
     const family = 'Ekström family';
-    // The three tiers as seed.ts makes them: four included, then 1.50 a member; a year is ten months.
+    // The three tiers as seed.ts makes them: four included, then 1.50 a member (ten months of it
+    // a year); a year's base is a round total that splits into twelve, 96, 192 and 288.
     const tier = (key: string, label: string, gib: number, usd: number, interval: string) => {
         const times = interval === 'year' ? 10 : 1;
+        const base = interval === 'year' ? (usd / 1000) * 9600 : usd;
         return {
             id: `${key}-${interval}`,
             name: `Family ${label} (${interval === 'year' ? 'yearly' : 'monthly'})`,
@@ -1280,7 +1283,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             interval,
             tier: key,
             recommended: key === 'pro',
-            prices: { usd: { base: usd * times, perMember: 150 * times } },
+            prices: { usd: { base, perMember: 150 * times } },
             includedMembers: 4,
             maxMembers: 20,
             quotaBytes: String(gib * 1024 ** 3),
@@ -1394,7 +1397,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             'Then $1.50 a month for each member after that, up to 20.',
         );
         await choose.getByRole('button', { name: /^Yearly/ }).click();
-        await expect(cards.nth(1)).toContainText('$200 a year');
+        await expect(cards.nth(1)).toContainText('$192 a year');
         await expect(cards.nth(1)).toContainText(
             'Then $15 a year for each member after that, up to 20.',
         );
@@ -1542,6 +1545,48 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(
             maya.page.getByRole('button', { name: 'Manage payment and invoices' }),
         ).toHaveCount(0);
+    });
+});
+
+/*
+ * The pricing page's Create a family, pressed signed out: it signs up first and lands on
+ * Families, through the return it keeps in this browser (rememberReturn, for an hour). The
+ * section shows only where the server sells plans and lists a family plan, so this skips
+ * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
+ * (verify-hushos `launch --billing polar`).
+ */
+test.describe('creating a family from the pricing page', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('someone without an account signs up from Create a family and lands on Families', async ({
+        browser,
+        request,
+    }) => {
+        const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
+            enabled?: boolean;
+            families?: unknown[];
+        };
+        test.skip(
+            !catalogue.enabled || !catalogue.families?.length,
+            'Billing is off or sells no family plan, so the pricing page has no family section.',
+        );
+        test.setTimeout(300_000);
+        const page = await (await newContext(browser)).newPage();
+        await page.goto('/pricing', { waitUntil: 'networkidle' });
+        const create = page
+            .locator('[data-family-plan]')
+            .getByRole('link', { name: 'Create a family', exact: true });
+        // A press before hydration follows the link without keeping the return.
+        await hydrated(create);
+        await create.click();
+        await expect(page).toHaveURL(/\/register$/);
+        await registerAccount(page, 'Rosa Ekström', undefined, {
+            viaCurrentPage: true,
+            landsOn: /\/app\/families$/,
+        });
+        await expect(page.getByRole('heading', { level: 1, name: 'Families' })).toBeVisible({
+            timeout: 60_000,
+        });
     });
 });
 

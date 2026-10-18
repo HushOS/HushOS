@@ -316,7 +316,10 @@ describe('placesOf', () => {
     });
 });
 
-/* The three tiers as seed.ts makes them: four included, then 150 a member, monthly and yearly. */
+/*
+ * The three tiers as seed.ts makes them: four included, then 150 a member (ten months of
+ * it a year); the base at its own monthly and yearly price.
+ */
 const GIB = 1024 ** 3;
 function tierPlan(
     tier: 'plus' | 'pro' | 'max',
@@ -325,6 +328,11 @@ function tierPlan(
     interval: 'month' | 'year',
 ) {
     const times = interval === 'year' ? 10 : 1;
+    const yearly = {
+        plus: { usd: 9600, inr: 390000 },
+        pro: { usd: 19200, inr: 780000 },
+        max: { usd: 28800, inr: 1380000 },
+    }[tier];
     const label = { plus: 'Plus', pro: 'Pro', max: 'Max' }[tier];
     return {
         id: `${tier}-${interval}`,
@@ -334,8 +342,8 @@ function tierPlan(
         tier,
         recommended: tier === 'pro',
         prices: {
-            usd: { base: base.usd * times, perMember: 150 * times },
-            inr: { base: base.inr * times, perMember: 5900 * times },
+            usd: { base: interval === 'year' ? yearly.usd : base.usd, perMember: 150 * times },
+            inr: { base: interval === 'year' ? yearly.inr : base.inr, perMember: 5900 * times },
         },
         includedMembers: 4,
         maxMembers: 20,
@@ -452,6 +460,45 @@ describe('tierMoves', () => {
         expect(pendingTier(moving)?.id).toBe('plus-month');
         expect(nextCharge(moving)).toMatchObject({ amount: 1000 + 2 * 150, currency: 'usd' });
         expect(nextCharge(onTier('max-month', { units: 6 }))?.amount).toBe(3000 + 2 * 150);
+    });
+
+    test('a family on an older, dearer price is quoted what it pays, not today’s list', () => {
+        // Family Pro yearly signed up at 200 USD when a year was ten months; the list is now 192.
+        const old = onTier('pro-year', { units: 6, amount: 20000 + 2 * 1500 });
+        expect(nextCharge(old)).toEqual({
+            amount: 23000,
+            currency: 'usd',
+            on: end.toISOString(),
+        });
+        expect(renewalAmount(old, 6)?.amount).toBe(23000);
+        // A cut keeps the base it pays: 200 and one place, not 192 and one.
+        expect(
+            nextCharge(onTier('pro-year', { units: 6, pendingUnits: 5, amount: 23000 }))?.amount,
+        ).toBe(20000 + 1500);
+        // A move to a smaller tier at the renewal is charged at that tier's price now.
+        expect(
+            nextCharge(
+                onTier('pro-year', { units: 6, pendingProductId: 'plus-year', amount: 23000 }),
+            )?.amount,
+        ).toBe(9600 + 2 * 1500);
+        // Up to Max with half the period left: half of 288 less half of the 200 it pays, 44
+        // (at the list's 192 it would read 48), then Max at its own price from the renewal.
+        const up = tierMoves(old, left(0.5)).find((move) => move.direction === 'up');
+        expect(up).toMatchObject({
+            plan: { id: 'max-year' },
+            now: { amount: 4400, currency: 'usd' },
+            renews: { amount: 28800 + 2 * 1500, currency: 'usd' },
+        });
+    });
+
+    test('an amount at or below the list may be a discount, so the list price stands', () => {
+        // 200 for six places on Family Pro yearly: below the 222 list, as a discount leaves it.
+        const discounted = onTier('pro-year', { units: 6, amount: 20000 });
+        expect(nextCharge(discounted)?.amount).toBe(19200 + 2 * 1500);
+        const up = tierMoves(discounted, left(0.5)).find((move) => move.direction === 'up');
+        expect(up?.now?.amount).toBe(4800);
+        // Exactly the list is the list.
+        expect(nextCharge(onTier('pro-year', { units: 6, amount: 22200 }))?.amount).toBe(22200);
     });
 
     test('only the payer changes the plan, while it renews and its last payment went through', () => {

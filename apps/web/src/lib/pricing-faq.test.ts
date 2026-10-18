@@ -57,6 +57,14 @@ describe('faqFor', () => {
         expect(items[0]?.a).not.toMatch(/nothing else/);
     });
 
+    test('promises two months free only where the catalogue gives it', () => {
+        const answer = (twoMonths?: boolean) =>
+            faqFor([], 'usd', twoMonths).find(({ q }) => q.startsWith('Can I switch'))?.a;
+        expect(answer()).toMatch(/ Paying yearly gets you two months free\.$/);
+        expect(answer(false)).not.toMatch(/months free/);
+        expect(answer(false)).toMatch(/straight away\.$/);
+    });
+
     test('answers with the tiers shown: four included, the price of a member after that, up to twenty', () => {
         const answer = (currency: string) =>
             faqFor(familyOffers({ enabled: true, families }, 'month', currency), currency).find(
