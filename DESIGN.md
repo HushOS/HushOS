@@ -413,7 +413,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Remove from this phone
         - Send a copy (the system share sheet)
         - Open in… (iOS)
-        - Info
+        - Info (its facts: Kind, Size, Changed (the file's own last change, as the uploader's device dated it), Added (when it reached HushOS), Folder)
         - Versions
         - My files
         - Account

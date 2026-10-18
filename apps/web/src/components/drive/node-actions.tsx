@@ -317,6 +317,7 @@ export function NodeSelectionBar({
                 <SelectionAction
                     icon={CopyIcon}
                     label="Copy"
+                    secondary
                     className="max-sm:hidden"
                     onClick={onCopy}
                 />
@@ -325,6 +326,7 @@ export function NodeSelectionBar({
                 <SelectionAction
                     icon={PencilIcon}
                     label="Rename"
+                    secondary
                     className="max-sm:hidden"
                     onClick={() => onRename(single)}
                 />
@@ -333,6 +335,7 @@ export function NodeSelectionBar({
                 <SelectionAction
                     icon={TagIcon}
                     label="Tags"
+                    secondary
                     className="max-sm:hidden"
                     onClick={onTags}
                 />

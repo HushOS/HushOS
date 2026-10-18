@@ -468,7 +468,7 @@ struct InfoSheet: View {
                     if item.isFolder, let count = store.folders[item.id]?.count { fact("Size", count == 1 ? "1 item" : "\(count) items") }
                     // Said as the rows and the web's details say it: "Today, 11:17 AM", "Yesterday", "6 Oct".
                     if let changed = changedLabel(item.modified) { fact("Changed", changed) }
-                    if let created = changedLabel(parseDate(item.node.createdAt)) { fact("Created", created) }
+                    if let created = changedLabel(parseDate(item.node.createdAt)) { fact("Added", created) }
                     if let folder = folderName, let parent = item.node.parentId {
                         // Where it is, one tap away: Files opens at that folder.
                         Button {
