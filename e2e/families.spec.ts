@@ -15,6 +15,7 @@ import {
     PASSWORD,
     registerAccount,
     rotationsDone,
+    saveKit,
     verificationLink,
     waitForRotation,
 } from './helpers';
@@ -35,7 +36,9 @@ import {
  *    sees it with no mark (her own words check of him vouches); the creator
  *    uploads, and the newcomer, who never checked her words, sees "Verified by
  *    Lindqvist family" in Info; the creator makes a second family folder, and
- *    the newcomer opens it and adds to it.
+ *    the newcomer opens it and adds to it. Last, the newcomer rotates his
+ *    account key: his self-grants for both folders are rewrapped as the
+ *    family's, and a fresh device opens both without writing new ones.
  * 2. Three people: an invitation opened by the wrong account; the admin on two
  *    devices, one admission held on the wire while the other device lets
  *    someone else in, so the held one meets a stale answer, is signed again
@@ -610,6 +613,52 @@ test.describe.serial('two people', () => {
         await upload(sam, 'beach.txt', 'Sand\n');
         await sam.page.getByRole('link', { name: family, exact: true }).last().click();
         await expect(sam.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
+    });
+
+    test('a member rotates their account key: their family folders’ self-grants come along, and the folders open on a fresh device', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        // Sam holds a self-grant for each folder he has opened (route 23), sealed to the family.
+        // Every one must be rewrapped as the family's, or the rotation is refused outright.
+        await sam.page.goto('/app/account', { waitUntil: 'networkidle' });
+        await expect(sam.page.getByText(/ of .+ used$/)).toBeVisible({ timeout: 60_000 });
+        const show = sam.page.getByRole('button', { name: 'Show' });
+        await hydrated(show);
+        await show.click();
+        await sam.page.getByRole('button', { name: 'Rotate account key' }).click();
+        const dialog = sam.page.getByRole('dialog');
+        await dialog.getByLabel('Password', { exact: true }).fill(PASSWORD);
+        const challenge = sam.page.waitForResponse('**/api/auth/security/start');
+        await dialog.getByRole('button', { name: 'Rotate account key' }).click();
+        const served = (await (await challenge).json()) as {
+            workspaces: { groupId: string | null }[];
+        };
+        // Not vacuous: his personal grant and a self-grant for each of the two folders.
+        expect(served.workspaces.filter((grant) => grant.groupId !== null)).toHaveLength(2);
+        await expect(sam.page).toHaveURL(/\/setup\/recovery-key/, { timeout: 120_000 });
+        await saveKit(sam.page);
+        await expect(sam.page).toHaveURL(/\/app/, { timeout: 60_000 });
+
+        // A fresh device holds only the new root: both folders open and list what is in them.
+        // A self-grant that did not open under it would be replaced from the area grant (a PUT
+        // to route 23), so none may be sent: the rewrapped ones are what opened the folders.
+        const replaced: string[] = [];
+        const fresh = await signIn(browser, sam, async (page) =>
+            page.on('request', (request) => {
+                if (request.method() === 'PUT' && request.url().endsWith('/self-grant'))
+                    replaced.push(request.url());
+            }),
+        );
+        try {
+            await openFamilyFolder(fresh, family, 'Family');
+            await expect(fileRow(fresh.page, 'from-maya.txt')).toBeVisible({ timeout: 60_000 });
+            await openFamilyFolder(fresh, family, 'Photos');
+            await expect(fileRow(fresh.page, 'beach.txt')).toBeVisible({ timeout: 60_000 });
+            expect(replaced).toEqual([]);
+        } finally {
+            await fresh.page.context().close();
+        }
     });
 });
 

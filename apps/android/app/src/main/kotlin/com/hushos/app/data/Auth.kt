@@ -501,7 +501,13 @@ object Auth {
             val g = grants.getJSONObject(index)
             val grant = com.hushos.core.WorkspaceGrant(g.getInt("version").toUInt(), g.getString("workspaceId"), g.getLong("keyVersion").toULong(),
                 g.getLong("workspaceKeyVersion").toULong(), g.getString("wrappingSalt"), g.getString("wrappingNonce"), g.getString("encryptedKey"))
-            workspaces.put(json(com.hushos.core.workspaceGrantRewrap(userId, oldRoot, newRoot, grant, keyVersion)))
+            // A family folder's self-grant opens only as its family's: the server names the family, and a wrong or
+            // missing one makes the core refuse, never guess.
+            val groupId = if (g.isNull("groupId")) null else g.getString("groupId")
+            workspaces.put(json(
+                if (groupId != null) com.hushos.core.areaSelfGrantRewrap(userId, groupId, oldRoot, newRoot, grant, keyVersion)
+                else com.hushos.core.workspaceGrantRewrap(userId, oldRoot, newRoot, grant, keyVersion),
+            ))
         }
         call(context, "/api/auth/security/finish", JSONObject().put("action", "master-key").put("attemptToken", challenge.getString("attemptToken"))
             .put("finishLoginRequest", finish.request).put("registrationRecord", registered.record)

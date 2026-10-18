@@ -70,32 +70,91 @@ impl fmt::Debug for WorkspaceGrant {
     }
 }
 
-/// Account key -> workspace key: HKDF-SHA256 over the account key, then XChaCha.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn workspace_open(user_id: String, account_key: Vec<u8>, grant: WorkspaceGrant) -> CoreResult<Vec<u8>> {
-    if grant.version != 1 {
-        return Err(input("Unsupported workspace grant version."));
-    }
-    expect_len("accountKey", &account_key, KEY_BYTES)?;
-    let salt = decode("wrappingSalt", &grant.wrapping_salt, Some(32))?;
-    let nonce = decode("wrappingNonce", &grant.wrapping_nonce, Some(NONCE_BYTES))?;
-    let ciphertext = decode("encryptedKey", &grant.encrypted_key, Some(KEY_BYTES + TAG_BYTES))?;
+fn grant_wrapping_key(root: &[u8], salt: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
-    Hkdf::<Sha256>::new(Some(&salt), &account_key)
+    Hkdf::<Sha256>::new(Some(salt), root)
         .expand(b"hushos/workspace/grant-wrap/v1", wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
-    let aad = context(&[
+    Ok(wrap)
+}
+
+/* A personal workspace grant's context, as `grantContext` in `packages/crypto/src/workspace.ts`. */
+fn grant_context(user_id: &str, workspace_id: &str, key_version: u64, workspace_key_version: u64) -> Vec<u8> {
+    context(&[
         json!("hushos/workspace/grant"),
         json!(1),
         json!(user_id.to_lowercase()),
-        json!(grant.workspace_id.to_lowercase()),
-        json!(grant.key_version),
-        json!(grant.workspace_key_version),
-    ]);
-    let key = open_with_nonce(wrap.as_slice(), &nonce, &ciphertext, &aad)?;
+        json!(workspace_id.to_lowercase()),
+        json!(key_version),
+        json!(workspace_key_version),
+    ])
+}
+
+/*
+ * A family folder's self-grant is bound to its family under a context of its
+ * own (`areaSelfGrantContext`), so the personal opener never opens one.
+ */
+fn area_self_grant_context(
+    user_id: &str,
+    group_id: &str,
+    workspace_id: &str,
+    key_version: u64,
+    workspace_key_version: u64,
+) -> Vec<u8> {
+    context(&[
+        json!("hushos/group/area-self-grant"),
+        json!(1),
+        json!(user_id.to_lowercase()),
+        json!(group_id.to_lowercase()),
+        json!(workspace_id.to_lowercase()),
+        json!(key_version),
+        json!(workspace_key_version),
+    ])
+}
+
+fn grant_open(account_key: &[u8], grant: &WorkspaceGrant, aad: &[u8]) -> CoreResult<Vec<u8>> {
+    if grant.version != 1 {
+        return Err(input("Unsupported workspace grant version."));
+    }
+    expect_len("accountKey", account_key, KEY_BYTES)?;
+    let salt = decode("wrappingSalt", &grant.wrapping_salt, Some(32))?;
+    let nonce = decode("wrappingNonce", &grant.wrapping_nonce, Some(NONCE_BYTES))?;
+    let ciphertext = decode("encryptedKey", &grant.encrypted_key, Some(KEY_BYTES + TAG_BYTES))?;
+    let wrap = grant_wrapping_key(account_key, &salt)?;
+    let key = open_with_nonce(wrap.as_slice(), &nonce, &ciphertext, aad)?;
     expect_len("workspace key", &key, KEY_BYTES)
         .map_err(|_| CoreError::Sealed("Invalid workspace key.".into()))?;
     Ok(key)
+}
+
+/* The same key under `new_root` at `key_version`: a fresh salt and nonce, the rest of the grant kept. */
+fn grant_seal(
+    new_root: &[u8],
+    grant: WorkspaceGrant,
+    key_version: u64,
+    workspace_key: &[u8],
+    aad: &[u8],
+) -> CoreResult<WorkspaceGrant> {
+    expect_len("new account key", new_root, KEY_BYTES)?;
+    let salt = random(32);
+    let nonce = random(NONCE_BYTES);
+    let wrap = grant_wrapping_key(new_root, &salt)?;
+    Ok(WorkspaceGrant {
+        version: 1,
+        workspace_id: grant.workspace_id,
+        key_version,
+        workspace_key_version: grant.workspace_key_version,
+        wrapping_salt: encode(&salt),
+        wrapping_nonce: encode(&nonce),
+        encrypted_key: encode(&seal_with_nonce(wrap.as_slice(), &nonce, workspace_key, aad)?),
+    })
+}
+
+/// Account key -> workspace key: HKDF-SHA256 over the account key, then XChaCha.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn workspace_open(user_id: String, account_key: Vec<u8>, grant: WorkspaceGrant) -> CoreResult<Vec<u8>> {
+    let aad = grant_context(&user_id, &grant.workspace_id, grant.key_version, grant.workspace_key_version);
+    grant_open(&account_key, &grant, &aad)
 }
 
 /// The same workspace key under a new account key, for a master-key rotation:
@@ -116,30 +175,71 @@ pub fn workspace_grant_rewrap(
     key_version: u64,
 ) -> CoreResult<WorkspaceGrant> {
     let workspace_key = Zeroizing::new(workspace_open(user_id.clone(), old_root, grant.clone())?);
-    expect_len("new account key", &new_root, KEY_BYTES)?;
-    let salt = random(32);
-    let nonce = random(NONCE_BYTES);
-    let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
-    Hkdf::<Sha256>::new(Some(&salt), &new_root)
-        .expand(b"hushos/workspace/grant-wrap/v1", wrap.as_mut())
-        .map_err(|_| input("HKDF failed"))?;
-    let aad = context(&[
-        json!("hushos/workspace/grant"),
-        json!(1),
-        json!(user_id.to_lowercase()),
-        json!(grant.workspace_id.to_lowercase()),
-        json!(key_version),
-        json!(grant.workspace_key_version),
-    ]);
-    Ok(WorkspaceGrant {
-        version: 1,
-        workspace_id: grant.workspace_id,
+    let aad = grant_context(&user_id, &grant.workspace_id, key_version, grant.workspace_key_version);
+    grant_seal(&new_root, grant, key_version, &workspace_key, &aad)
+}
+
+/// A family folder's self-grant (the folder key under the member's own
+/// account key, `workspace_keys` as the server serves it), opened only as one
+/// of `group_id`'s: a personal grant, or another family's, is refused.
+///
+/// ```no_run
+/// # let (account_key, grant) = (vec![0u8; 32], todo!());
+/// let folder_key = hushos_core::area_self_grant_open(
+///     "user-1".into(), "22222222-2222-4222-8222-222222222222".into(), account_key, grant)?;
+/// assert_eq!(folder_key.len(), 32);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn area_self_grant_open(
+    user_id: String,
+    group_id: String,
+    account_key: Vec<u8>,
+    grant: WorkspaceGrant,
+) -> CoreResult<Vec<u8>> {
+    let aad = area_self_grant_context(
+        &user_id,
+        &group_id,
+        &grant.workspace_id,
+        grant.key_version,
+        grant.workspace_key_version,
+    );
+    grant_open(&account_key, &grant, &aad)
+}
+
+/// A family folder's self-grant under a new account key, for a master-key
+/// rotation: still bound to `group_id` (the folder's family, as the security
+/// challenge names it). A wrong or missing family makes it refuse, since the
+/// grant opens under its own family's context only.
+///
+/// ```no_run
+/// # let (old_root, new_root, grant) = (vec![0u8; 32], vec![1u8; 32], todo!());
+/// let rewrapped = hushos_core::area_self_grant_rewrap(
+///     "user-1".into(), "22222222-2222-4222-8222-222222222222".into(), old_root, new_root, grant, 2)?;
+/// assert_eq!(rewrapped.key_version, 2);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn area_self_grant_rewrap(
+    user_id: String,
+    group_id: String,
+    old_root: Vec<u8>,
+    new_root: Vec<u8>,
+    grant: WorkspaceGrant,
+    key_version: u64,
+) -> CoreResult<WorkspaceGrant> {
+    crate::canonical::uuid(&group_id, "group id")?;
+    crate::canonical::uuid(&grant.workspace_id, "workspace id")?;
+    let workspace_key =
+        Zeroizing::new(area_self_grant_open(user_id.clone(), group_id.clone(), old_root, grant.clone())?);
+    let aad = area_self_grant_context(
+        &user_id,
+        &group_id,
+        &grant.workspace_id,
         key_version,
-        workspace_key_version: grant.workspace_key_version,
-        wrapping_salt: encode(&salt),
-        wrapping_nonce: encode(&nonce),
-        encrypted_key: encode(&seal_with_nonce(wrap.as_slice(), &nonce, &workspace_key, &aad)?),
-    })
+        grant.workspace_key_version,
+    );
+    grant_seal(&new_root, grant, key_version, &workspace_key, &aad)
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,6 +1485,121 @@ mod tests {
             Err(CoreError::Sealed(_))
         ));
         assert!(matches!(workspace_open("user-1".into(), random(32), grant), Err(CoreError::Sealed(_))));
+    }
+
+    const FAMILY: &str = "22222222-2222-4222-8222-222222222222";
+    const FOLDER: &str = "33333333-3333-4333-8333-333333333333";
+
+    /* A grant sealed as `packages/crypto` seals it, under a context written out by hand. */
+    fn sealed_grant(account_key: &[u8], folder_key: &[u8], aad: &str) -> WorkspaceGrant {
+        let salt = random(32);
+        let mut wrap = [0u8; 32];
+        Hkdf::<Sha256>::new(Some(&salt), account_key)
+            .expand(b"hushos/workspace/grant-wrap/v1", &mut wrap)
+            .unwrap();
+        let sealed = seal(&wrap, folder_key, aad.as_bytes()).unwrap();
+        WorkspaceGrant {
+            version: 1,
+            workspace_id: FOLDER.into(),
+            key_version: 2,
+            workspace_key_version: 5,
+            wrapping_salt: encode(&salt),
+            wrapping_nonce: encode(&sealed[..NONCE_BYTES]),
+            encrypted_key: encode(&sealed[NONCE_BYTES..]),
+        }
+    }
+
+    /* A family folder's self-grant, as `grantAreaKey` seals it. */
+    fn self_grant(account_key: &[u8], folder_key: &[u8]) -> WorkspaceGrant {
+        sealed_grant(
+            account_key,
+            folder_key,
+            &format!(r#"["hushos/group/area-self-grant",1,"user-1","{FAMILY}","{FOLDER}",2,5]"#),
+        )
+    }
+
+    #[test]
+    fn a_self_grant_opens_only_as_its_family_s_and_never_as_a_personal_grant() {
+        let (account_key, folder_key) = (random(32), random(32));
+        let grant = self_grant(&account_key, &folder_key);
+        assert_eq!(
+            area_self_grant_open("USER-1".into(), FAMILY.into(), account_key.clone(), grant.clone()).unwrap(),
+            folder_key
+        );
+        let other_family = "44444444-4444-4444-8444-444444444444".to_string();
+        assert!(matches!(
+            area_self_grant_open("user-1".into(), other_family, account_key.clone(), grant.clone()),
+            Err(CoreError::Sealed(_))
+        ));
+        assert!(matches!(
+            workspace_open("user-1".into(), account_key.clone(), grant.clone()),
+            Err(CoreError::Sealed(_))
+        ));
+        // And the other way: a personal grant is no family's self-grant.
+        let personal = sealed_grant(
+            &account_key,
+            &folder_key,
+            &format!(r#"["hushos/workspace/grant",1,"user-1","{FOLDER}",2,5]"#),
+        );
+        assert_eq!(
+            workspace_open("user-1".into(), account_key.clone(), personal.clone()).unwrap(),
+            folder_key
+        );
+        assert!(matches!(
+            area_self_grant_open("user-1".into(), FAMILY.into(), account_key, personal),
+            Err(CoreError::Sealed(_))
+        ));
+    }
+
+    #[test]
+    fn a_rotation_rewraps_a_self_grant_under_the_new_root_and_its_own_family() {
+        let (old_root, new_root, folder_key) = (random(32), random(32), random(32));
+        let grant = self_grant(&old_root, &folder_key);
+        let rewrapped = area_self_grant_rewrap(
+            "user-1".into(),
+            FAMILY.into(),
+            old_root.clone(),
+            new_root.clone(),
+            grant.clone(),
+            3,
+        )
+        .unwrap();
+        assert_eq!((rewrapped.key_version, rewrapped.workspace_key_version), (3, 5));
+        assert_eq!(rewrapped.workspace_id, FOLDER);
+        assert_eq!(
+            area_self_grant_open("user-1".into(), FAMILY.into(), new_root.clone(), rewrapped.clone())
+                .unwrap(),
+            folder_key
+        );
+        // Still a family's: the personal opener refuses it under the new root too.
+        assert!(matches!(
+            workspace_open("user-1".into(), new_root.clone(), rewrapped.clone()),
+            Err(CoreError::Sealed(_))
+        ));
+        assert!(matches!(
+            area_self_grant_open("user-1".into(), FAMILY.into(), old_root.clone(), rewrapped),
+            Err(CoreError::Sealed(_))
+        ));
+        // The personal rewrap of a self-grant refuses rather than rewrapping it under a guessed context.
+        assert!(matches!(
+            workspace_grant_rewrap("user-1".into(), old_root.clone(), new_root.clone(), grant.clone(), 3),
+            Err(CoreError::Sealed(_))
+        ));
+        // A server naming another family gets a refusal, never a self-grant bound to that family.
+        assert!(matches!(
+            area_self_grant_rewrap(
+                "user-1".into(),
+                "44444444-4444-4444-8444-444444444444".into(),
+                old_root.clone(),
+                new_root.clone(),
+                grant.clone(),
+                3,
+            ),
+            Err(CoreError::Sealed(_))
+        ));
+        assert!(
+            area_self_grant_rewrap("user-1".into(), "family".into(), old_root, new_root, grant, 3).is_err()
+        );
     }
 
     #[test]

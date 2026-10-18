@@ -224,6 +224,36 @@ export async function openWorkspaceKey(
     }
 }
 
+/*
+ * Master-key rotation of a group area's self-grant: the same area key under the
+ * new root, still bound to `groupId`. It opens only as that group's, so a
+ * server naming the wrong group (or none) gets a refusal, never a rewrap under
+ * another context.
+ */
+export async function rewrapAreaSelfGrant(
+    oldRoot: Uint8Array<ArrayBuffer>,
+    newRoot: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    envelope: WorkspaceKeyEnvelope,
+    keyVersion: number,
+): Promise<WorkspaceKeyEnvelope> {
+    const workspaceKey = await openAreaSelfGrant(oldRoot, userId, groupId, envelope);
+    try {
+        return await grantAreaKey(
+            workspaceKey,
+            newRoot,
+            userId,
+            groupId,
+            envelope.workspaceId,
+            keyVersion,
+            envelope.workspaceKeyVersion,
+        );
+    } finally {
+        workspaceKey.fill(0);
+    }
+}
+
 // Master-key rotation: the same workspace key, rewrapped under the new root.
 export async function rewrapWorkspaceGrant(
     oldRoot: Uint8Array<ArrayBuffer>,

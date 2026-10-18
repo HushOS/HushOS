@@ -563,6 +563,26 @@ fn main() {
         7,
     )
     .unwrap();
+    // The web's family self-grant, rewrapped here for a rotation as its family's.
+    let area = &web["areaSelfGrant"];
+    let area_grant = &area["grant"];
+    let rewrapped_area = area_self_grant_rewrap(
+        str_of(area, "userId"),
+        str_of(area, "groupId"),
+        base64url_decode(str_of(area, "accountKey")).unwrap(),
+        new_root.clone(),
+        WorkspaceGrant {
+            version: area_grant["version"].as_u64().unwrap() as u32,
+            workspace_id: str_of(area_grant, "workspaceId"),
+            key_version: area_grant["keyVersion"].as_u64().unwrap(),
+            workspace_key_version: area_grant["workspaceKeyVersion"].as_u64().unwrap(),
+            wrapping_salt: str_of(area_grant, "wrappingSalt"),
+            wrapping_nonce: str_of(area_grant, "wrappingNonce"),
+            encrypted_key: str_of(area_grant, "encryptedKey"),
+        },
+        7,
+    )
+    .unwrap();
     let rewrapped_identity =
         identity_rewrap(web_user.clone(), web_root.clone(), new_root.clone(), web_envelope.clone()).unwrap();
     // A version 1 identity in the history moves with the root too.
@@ -626,6 +646,15 @@ fn main() {
         },
         "identity": envelope_json(i),
         "legacyIdentity": envelope_json(&rewrapped_legacy),
+        "areaSelfGrant": {
+            "userId": area["userId"], "groupId": area["groupId"], "areaKey": area["areaKey"],
+            "grant": {
+                "version": rewrapped_area.version, "workspaceId": rewrapped_area.workspace_id,
+                "keyVersion": rewrapped_area.key_version, "workspaceKeyVersion": rewrapped_area.workspace_key_version,
+                "wrappingSalt": rewrapped_area.wrapping_salt, "wrappingNonce": rewrapped_area.wrapping_nonce,
+                "encryptedKey": rewrapped_area.encrypted_key,
+            },
+        },
     });
 
     // A device key's sign-in proof, made here: the web must build the same statement and accept the signature.

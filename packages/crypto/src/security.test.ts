@@ -10,7 +10,12 @@ import {
     type IdentityEnvelope,
 } from './identity';
 import { rewrapAccountKeys } from './security';
-import { createWorkspaceGrant, openWorkspaceKey } from './workspace';
+import {
+    createWorkspaceGrant,
+    grantAreaKey,
+    openAreaSelfGrant,
+    openWorkspaceKey,
+} from './workspace';
 
 /*
  * A master-key rotation must carry everything sealed under the old root to the
@@ -22,6 +27,8 @@ import { createWorkspaceGrant, openWorkspaceKey } from './workspace';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const WS = '22222222-2222-4222-8222-222222222222';
+const FAMILY = '33333333-3333-4333-8333-333333333333';
+const FOLDER = '44444444-4444-4444-8444-444444444444';
 
 /* Both private halves of an identity's signature, opened under its root. */
 async function hybridKeysOf(root: Uint8Array<ArrayBuffer>, identity: IdentityEnvelope) {
@@ -97,6 +104,69 @@ describe('master-key rotation', () => {
         expect(rewrapped.settingsKey).toBeUndefined();
         expect(rewrapped.identityHistory).toEqual([]);
         expect(rewrapped.identity.keyVersion).toBe(identity.keyVersion);
+    });
+
+    test('rewraps a family folder’s self-grant as its family’s, beside the personal grant', async () => {
+        // The bug this guards: every row went through the personal context, which cannot open
+        // a self-grant, so no family member could rotate at all.
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const next = crypto.getRandomValues(new Uint8Array(32));
+        const identity = await createIdentity(root, USER);
+        const folderKey = crypto.getRandomValues(new Uint8Array(32));
+        const personal = await createWorkspaceGrant(root, USER, WS, 1);
+        const self = await grantAreaKey(folderKey, root, USER, FAMILY, FOLDER, 1, 3);
+        const rewrapped = await rewrapAccountKeys(root, next, USER, 2, {
+            identity,
+            settingsKey: null,
+            workspaces: [
+                { ...personal, groupId: null },
+                { ...self, groupId: FAMILY },
+            ],
+        });
+        const [mine, family] = rewrapped.workspaces;
+        expect(await openWorkspaceKey(next, USER, mine!)).toEqual(
+            await openWorkspaceKey(root, USER, personal),
+        );
+        // The same folder key at the same folder version, under the new root, still the family's.
+        expect([family!.workspaceId, family!.keyVersion, family!.workspaceKeyVersion]).toEqual([
+            FOLDER,
+            2,
+            3,
+        ]);
+        expect(await openAreaSelfGrant(next, USER, FAMILY, family!)).toEqual(folderKey);
+        await expect(openWorkspaceKey(next, USER, family!)).rejects.toThrow();
+        await expect(openAreaSelfGrant(root, USER, FAMILY, family!)).rejects.toThrow();
+        // What goes back to the server is the envelope alone.
+        expect(family).not.toHaveProperty('groupId');
+    });
+
+    test('refuses a self-grant served without its family, or with another, never rewrapping it wrongly', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const identity = await createIdentity(root, USER);
+        const self = await grantAreaKey(
+            crypto.getRandomValues(new Uint8Array(32)),
+            root,
+            USER,
+            FAMILY,
+            FOLDER,
+            1,
+            1,
+        );
+        const personal = await createWorkspaceGrant(root, USER, WS, 1);
+        for (const workspaces of [
+            [self],
+            [{ ...self, groupId: null }],
+            [{ ...self, groupId: WS }],
+            // A personal grant served as a family's is refused just the same.
+            [{ ...personal, groupId: FAMILY }],
+        ])
+            await expect(
+                rewrapAccountKeys(root, crypto.getRandomValues(new Uint8Array(32)), USER, 2, {
+                    identity,
+                    settingsKey: null,
+                    workspaces,
+                }),
+            ).rejects.toThrow();
     });
 
     test('refuses a history envelope that is not this root’s, rather than leaving it behind', async () => {

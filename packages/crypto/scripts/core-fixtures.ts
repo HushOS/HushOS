@@ -60,7 +60,12 @@ import {
 } from '../src/signatures';
 import { deriveId, type IdKind } from '../src/ids';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
-import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
+import {
+    createWorkspaceGrant,
+    grantAreaKey,
+    openWorkspaceKey,
+    rewrapAreaSelfGrant,
+} from '../src/workspace';
 import { carriedRekeyed, judgeRekeyed, readRekeyed, rekeyedCases } from '../src/rekeyed-testkit';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -125,6 +130,39 @@ const workspace = {
     accountKey: encode(accountKey),
     grant,
     workspaceKey: encode(workspaceKey),
+};
+
+// A family folder's self-grant under the account key, and the same grant as a master-key
+// rotation rewraps it under a new root: the core opens the rewrapped one as the family's and
+// rewraps the original itself (core.json `rotation.areaSelfGrant`).
+const areaGroupId = uuid();
+const areaWorkspaceId = uuid();
+const areaKey = random(32);
+const areaNewRoot = random(32);
+const areaGrant = await grantAreaKey(
+    areaKey,
+    accountKey,
+    userId,
+    areaGroupId,
+    areaWorkspaceId,
+    2,
+    3,
+);
+const areaSelfGrant = {
+    userId,
+    groupId: areaGroupId,
+    accountKey: encode(accountKey),
+    newRoot: encode(areaNewRoot),
+    areaKey: encode(areaKey),
+    grant: areaGrant,
+    rewrapped: await rewrapAreaSelfGrant(
+        accountKey,
+        areaNewRoot,
+        userId,
+        areaGroupId,
+        areaGrant,
+        3,
+    ),
 };
 
 // A node under the root, its metadata, suite 3 versions with and without a thumbnail, a suite 2
@@ -820,6 +858,7 @@ await writeFile(
             account,
             device,
             workspace,
+            areaSelfGrant,
             node,
             layouts,
             document,

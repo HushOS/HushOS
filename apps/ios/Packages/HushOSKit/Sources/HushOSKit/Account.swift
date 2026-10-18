@@ -286,7 +286,14 @@ extension Auth {
         let settingsKey = try (challenge["settingsKey"] as? [String: Any]).map {
             try settingsKeyRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, envelope: settingsKeyEnvelope(from: $0))
         }
-        let workspaces = try workspacesJson.map { try workspaceGrantRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: $0), keyVersion: keyVersion) }
+        // A family folder's self-grant opens only as its family's, so it is rewrapped as one: the
+        // server names the family, and a wrong or missing one makes the core refuse, never guess.
+        let workspaces = try workspacesJson.map { served -> WorkspaceGrant in
+            if let groupId = served["groupId"] as? String {
+                return try areaSelfGrantRewrap(userId: userId, groupId: groupId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: served), keyVersion: keyVersion)
+            }
+            return try workspaceGrantRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: served), keyVersion: keyVersion)
+        }
         var body: [String: Any] = [
             "action": "master-key", "attemptToken": attemptToken, "finishLoginRequest": finish.request,
             "registrationRecord": registered.record,
