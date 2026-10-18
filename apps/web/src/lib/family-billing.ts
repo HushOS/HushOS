@@ -202,11 +202,32 @@ export function quoteAdd(summary: FamilyBillingFull, add: number, now = new Date
 }
 
 /*
- * What a period with `units` places charges at list price: the base and the
- * per-member rate for each place past those included, on the family's plan or
- * on `plan` (a tier it may move to). The same price list the raise is quoted
- * from, so the two never disagree; a discount Polar applies comes off both,
- * which the page says ("Before any discount").
+ * What the family pays a period on its own tier, when that differs from the list: a family
+ * that signed up before a price change keeps its old price (Polar keeps it on the
+ * subscription), so the catalogue's list price would quote charges it will never see. Its
+ * base is the subscription's amount less the places past those included at the per-member
+ * rate. Polar's amount is after any discount, which only ever lowers it, so an amount above
+ * the list can only be an older, dearer price and is taken as paid; one at or below the list
+ * may be a discount, and the list stands, as the page says ("Before any discount"). Null
+ * when the list is what applies.
+ */
+export function paidPrice(summary: FamilyBillingFull) {
+    const live = summary.subscription;
+    const price = livePrice(summary);
+    if (!live || !price || live.amount == null || live.currency !== price.currency) return null;
+    const billable = Math.max(0, live.units - live.includedMembers);
+    const list = price.base + price.perMember * billable;
+    if (live.amount <= list) return null;
+    return { total: live.amount, base: live.amount - price.perMember * billable };
+}
+
+/*
+ * What a period with `units` places charges: the base and the per-member rate
+ * for each place past those included, on the family's plan or on `plan` (a
+ * tier it may move to). The family's own tier at the base it pays (paidPrice),
+ * any other at list price: a move to another tier is charged at its price now.
+ * The same prices the raise is quoted from, so the two never disagree; a
+ * discount Polar applies comes off both, which the page says ("Before any discount").
  */
 export function renewalAmount(summary: FamilyBillingFull, units: number, plan?: FamilyPlan) {
     const live = summary.subscription;
@@ -214,7 +235,8 @@ export function renewalAmount(summary: FamilyBillingFull, units: number, plan?: 
     const price = live?.currency && on ? on.prices[live.currency] : undefined;
     if (!live?.currency || !on || !price) return null;
     const billable = Math.max(0, units - on.includedMembers);
-    return { amount: price.base + price.perMember * billable, currency: live.currency };
+    const base = (on.id === live.productId && paidPrice(summary)?.base) || price.base;
+    return { amount: base + price.perMember * billable, currency: live.currency };
 }
 
 /* An upgrade whose charge the bank hasn't confirmed: the family keeps the tier it paid for. */
@@ -233,6 +255,10 @@ export function pendingTier(summary: FamilyBillingFull): FamilyPlan | undefined 
 export function nextCharge(summary: FamilyBillingFull) {
     const live = summary.subscription;
     if (!live || live.cancelAtPeriodEnd) return null;
+    // Nothing scheduled: the subscription renews as it stands, at what the family pays.
+    const paid = live.pendingUnits == null && !live.pendingProductId ? paidPrice(summary) : null;
+    if (paid && live.currency)
+        return { amount: paid.total, currency: live.currency, on: live.currentPeriodEnd };
     const amount = renewalAmount(summary, live.pendingUnits ?? live.units, pendingTier(summary));
     return amount ? { ...amount, on: live.currentPeriodEnd } : null;
 }
@@ -260,8 +286,10 @@ export function tierMoves(summary: FamilyBillingFull, now = new Date()): TierMov
     const current = currentPlan(summary);
     const currency = live?.currency;
     if (!live || !current || !currency) return [];
-    const from = current.prices[currency];
-    if (!from) return [];
+    const list = current.prices[currency];
+    if (!list) return [];
+    // Proration credits the base the family pays now, not today's list price for its tier.
+    const from = { ...list, base: paidPrice(summary)?.base ?? list.base };
     const used = BigInt(summary.storage?.usedBytes ?? '0');
     const renewalUnits = live.pendingUnits ?? live.units;
     return summary.plans
