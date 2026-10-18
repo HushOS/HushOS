@@ -11,6 +11,7 @@ import { authClient } from '@/lib/auth-client';
 import { renderThumbnail } from '@/lib/thumbnails';
 import {
     clientFor,
+    driveKeys,
     invalidateFolders,
     refreshKeyChange,
     refuseWrite,
@@ -119,7 +120,11 @@ export const transfers = createTransferManager({
     keyChangePause,
     thumbnail: (file, mime) => renderThumbnail(file, mime),
     onPublished: (node) => {
-        if (queryClient) refreshFolderSoon(queryClient, node.parentId);
+        if (!queryClient) return;
+        refreshFolderSoon(queryClient, node.parentId);
+        // A new version of a file whose Versions are open: the list read while it was still on its
+        // way is stale (it showed the old version as current and no earlier one).
+        void queryClient.invalidateQueries({ queryKey: driveKeys.versions(node.id) });
     },
     onEvent: (event) => {
         for (const listener of listeners) listener(event);

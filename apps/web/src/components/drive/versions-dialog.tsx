@@ -107,14 +107,14 @@ function VersionList({
     const [confirming, setConfirming] = useState<string | null>(null);
     const [viewing, setViewing] = useState(false);
     const versions = useQuery({
-        queryKey: [...driveKeys.all, 'versions', node.id],
+        queryKey: driveKeys.versions(node.id),
         queryFn: () => clientFor(node.workspaceId).versions(node),
         staleTime: 0,
     });
 
     async function refresh() {
         await Promise.all([
-            queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'versions', node.id] }),
+            queryClient.invalidateQueries({ queryKey: driveKeys.versions(node.id) }),
             invalidateFolders(queryClient, node.parentId),
         ]);
     }
@@ -164,8 +164,10 @@ function VersionList({
     const earlier = versions.data?.find((version) => !version.current);
     // The earlier version goes 30 days after it was replaced, that is, after the current one landed.
     const replacedAt = current ? Date.parse(current.readyAt ?? current.createdAt) : NaN;
+    // Never more than 30: the dialog may have opened before the current version landed (an upload
+    // finishing while it is open), or the server's clock may run ahead of this one.
     const daysLeft = Number.isFinite(replacedAt)
-        ? Math.max(0, 30 - Math.floor((openedAt - replacedAt) / 86_400_000))
+        ? Math.max(0, 30 - Math.floor(Math.max(0, openedAt - replacedAt) / 86_400_000))
         : null;
     // The node as of one version: its content (size, thumbnail) must be that version's, not the current one's.
     const asOf = (version: NonNullable<typeof current>): DriveNode => ({
