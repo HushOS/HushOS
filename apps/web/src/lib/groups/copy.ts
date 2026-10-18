@@ -35,6 +35,31 @@ function stringField(data: unknown, key: string) {
     return typeof value === 'string' ? value : null;
 }
 
+/* The caller's own family that an `in-family` refusal names, when it names one. */
+export function familyField(data: unknown) {
+    const family = (data as { family?: unknown } | null)?.family;
+    const name = (family as { name?: unknown } | null)?.name;
+    const groupId = (family as { groupId?: unknown } | null)?.groupId;
+    return typeof name === 'string' && typeof groupId === 'string' ? { groupId, name } : null;
+}
+
+/*
+ * The join page for someone already in a family (docs/families-shared-pool.md
+ * 6.2): one family per account, so they leave theirs first. The invitation
+ * keeps its date; it isn't spent by being opened.
+ */
+export function joinInFamilyCopy(yours: string, invitedTo: string, expiresAt: string) {
+    const until = new Date(expiresAt).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'long',
+    });
+    return `You’re in ${yours}. To join ${invitedTo}, leave yours first, from its page. This invitation stays open until ${until}.`;
+}
+
+/* Create a family, for someone already in one. */
+export const createInFamilyCopy = (yours: string) =>
+    `You’re in ${yours}. Leave it before you create another.`;
+
 function numberField(data: unknown, key: string) {
     const value = (data as Record<string, unknown> | null)?.[key];
     return typeof value === 'number' ? value : null;
@@ -110,6 +135,15 @@ export function refusalCopy(
             return data && typeof data === 'object' && (data as { invitee?: unknown }).invitee
                 ? `${ctx.family ?? 'This family'} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`
                 : `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
+        case 'in-family': {
+            // Let them in: the newcomer's other family is never named to this one.
+            if (stringField(data, 'reason') === 'newcomer')
+                return 'They’ve joined another family since they accepted. They can join yours once they leave it.';
+            const yours = familyField(data);
+            return yours
+                ? createInFamilyCopy(yours.name)
+                : 'You’re in a family already. Leave it before you create another.';
+        }
         case 'organizer':
             return ORGANIZER_FIRST;
         // The payer of a live plan can't leave or be removed until it is cancelled, under Billing

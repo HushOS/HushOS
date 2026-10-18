@@ -811,6 +811,7 @@ describe('a second drop', () => {
             .where(eq(workspaces.id, ws));
         await db.insert(groupMemberships).values({
             groupId: area!.groupId!,
+            groupKind: 'family',
             userId: writer.userId,
             state: 'active',
             roles: [],

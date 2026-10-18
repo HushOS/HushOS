@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useId, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { useBillingEnabled } from '@/lib/queries';
-import { afterFamilyChange, familyContext } from '@/lib/families';
-import { errorCopy, outcomeCopy } from '@/lib/groups/copy';
+import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families';
+import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { createFamily } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
 
@@ -22,6 +22,8 @@ import { cue } from '@/lib/sounds';
  * member list with you as organizer and the first shared folder ("Family"),
  * and the outbox sends it. A creation that could not reach the server stays
  * on this device and is sent again on the next visit: said, not hidden.
+ * Someone already in a family is told to leave it first, before any keys are
+ * made (one family per account); the server refuses it too.
  */
 export function CreateFamilyDialog({
     userId,
@@ -40,11 +42,15 @@ export function CreateFamilyDialog({
     const [name, setName] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const yours = useQuery(familiesQueryOptions(userId)).data?.find(
+        (at) => at.kind === 'family' && at.state === 'active',
+    );
+    const refusal = yours ? createInFamilyCopy(yours.name) : '';
 
     async function submit(event: FormEvent) {
         event.preventDefault();
         const trimmed = name.trim();
-        if (!trimmed) return;
+        if (!trimmed || yours) return;
         setPending(true);
         setError('');
         try {
@@ -84,9 +90,10 @@ export function CreateFamilyDialog({
                 <DialogHeader>
                     <DialogTitle>Create a family</DialogTitle>
                     <DialogDescription>
-                        {billing
-                            ? 'You’ll be its organizer. Then choose a plan and invite people by email.'
-                            : 'You’ll be its organizer. Then invite people by email.'}
+                        {refusal ||
+                            (billing
+                                ? 'You’ll be its organizer. Then choose a plan and invite people by email.'
+                                : 'You’ll be its organizer. Then invite people by email.')}
                     </DialogDescription>
                 </DialogHeader>
                 <form
@@ -105,6 +112,7 @@ export function CreateFamilyDialog({
                             value={name}
                             onChange={(event) => setName(event.target.value)}
                             placeholder="Lindqvist family"
+                            disabled={Boolean(yours)}
                             aria-invalid={Boolean(error) || undefined}
                             aria-describedby={`${id}-hint`}
                         />
@@ -125,7 +133,7 @@ export function CreateFamilyDialog({
                         >
                             Cancel
                         </Button>
-                        <Button type="submit" disabled={pending || !name.trim()}>
+                        <Button type="submit" disabled={pending || !name.trim() || Boolean(yours)}>
                             {pending ? 'Creating…' : 'Create family'}
                         </Button>
                     </div>

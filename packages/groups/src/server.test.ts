@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { Client } from 'pg';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { rosterDigest } from '@hushos/crypto/groups';
 import {
@@ -60,10 +61,12 @@ import {
     documentEnvelope,
     entries,
     family,
+    familyBody,
     forgedRoster,
     grantWire,
     head,
     kitAreaKey,
+    lockWaiters,
     member,
     nextAreaRow,
     nextRoster,
@@ -775,6 +778,165 @@ describe('invitations', () => {
         expect(
             pending.pending.find((p) => p.userId === invitee.userId)?.identity?.signingPublicKey,
         ).toBe(invitee.who.served.signingPublicKey);
+    });
+});
+
+describe('one family per account (families-shared-pool 3.2)', () => {
+    /* An invitation to `fam` for `m` whose token the test holds. */
+    async function invitation(fam: Family, m: Member) {
+        const token = randomBytes(32).toString('base64url');
+        await groupsRepository.createInvitation({
+            groupId: fam.groupId,
+            email: m.email,
+            normalizedEmail: m.email,
+            tokenHash: createHash('sha256').update(token).digest(),
+            roles: [],
+            invitedBy: fam.organizer.userId,
+            expiresAt: new Date(Date.now() + 86_400_000),
+        });
+        return token;
+    }
+
+    test('a second family is refused before its statements are read, naming the first to its member', async () => {
+        const maya = await member();
+        const first = await family(maya);
+        const second = await member();
+        const theirs = await family(second);
+        // Statements no device would sign: refused for the family, never reaching the checks.
+        const garbled = {
+            ...theirs.body,
+            id: randomUUID(),
+            roster: { ...theirs.body.roster, statement: 'AA' },
+        };
+        expect(await refusal(groups.createGroup(maya.userId, garbled))).toEqual({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'self', family: { groupId: first.groupId, name: 'The Family' } },
+        });
+        expect((await groupsRepository.listGroupsFor(maya.userId)).map((g) => g.id)).toEqual([
+            first.groupId,
+        ]);
+    });
+
+    test('opening an invitation says which family you are in; accepting is refused and leaves nothing waiting', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        const token = await invitation(ortega, sam);
+        expect((await groups.openInvitation(sam.userId, token, ADDRESS)).inFamily).toBeNull();
+        const lindqvist = await family(sam);
+        await groupsRepository.renameGroup(lindqvist.groupId, 'Lindqvist family');
+        const yours = { groupId: lindqvist.groupId, name: 'Lindqvist family' };
+        expect((await groups.openInvitation(sam.userId, token, ADDRESS)).inFamily).toEqual(yours);
+        const refused = await refusal(groups.acceptInvitation(sam.userId, token, ADDRESS));
+        expect(refused).toEqual({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'self', family: yours },
+        });
+        expect((await groups.listPending(ortega.organizer.userId, ortega.groupId)).pending).toEqual(
+            [],
+        );
+        // Once they leave, the same link still works.
+        await groups.leave(sam.userId, lindqvist.groupId);
+        expect(await groups.acceptInvitation(sam.userId, token, ADDRESS)).toEqual({
+            groupId: ortega.groupId,
+            state: 'accepted',
+        });
+    });
+
+    test('letting in someone who made a family since accepting is refused before the call is checked, and only to its managers', async () => {
+        const ortega = await family();
+        const sam = await member();
+        await accepted(ortega, sam);
+        const waiting = async () =>
+            (await groups.listPending(ortega.organizer.userId, ortega.groupId)).pending.map(
+                (p) => ({ userId: p.userId, inFamily: p.inFamily }),
+            );
+        expect(await waiting()).toEqual([{ userId: sam.userId, inFamily: false }]);
+        await family(sam);
+        // The waiting list says so before anyone checks words (never which family).
+        expect(await waiting()).toEqual([{ userId: sam.userId, inFamily: true }]);
+        const before = await head(ortega.groupId);
+        // A call that would fail every check: the family rule answers first.
+        const call = {
+            expectedRevision: before.revision,
+            roster: {
+                ...wire(await ortega.h.roster(ortega.organizer.who, entries(ortega.h))),
+                statement: 'AA',
+            },
+        };
+        expect(
+            await refusal(groups.admit(ortega.organizer.userId, ortega.groupId, sam.userId, call)),
+        ).toEqual({ code: 'in-family', status: 409, data: { reason: 'newcomer' } });
+        // Someone outside the family can't use the route to learn whether Sam is in one.
+        const outsider = await member();
+        expect(
+            await refusal(groups.admit(outsider.userId, ortega.groupId, sam.userId, call)),
+        ).toMatchObject({ code: 'not-member', status: 404 });
+        expect(await head(ortega.groupId)).toEqual(before);
+        expect(
+            (await groupsRepository.membershipsOf(ortega.groupId, [sam.userId])).get(sam.userId)
+                ?.state,
+        ).toBe('accepted');
+    });
+});
+
+describe('one family per account under races', () => {
+    test('a family made while its creator is let in elsewhere: the index refuses it, and the answer names the family that won', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        await accepted(ortega, sam);
+        const built = await familyBody(sam);
+        /*
+         * Sam's creation passes every check, its one-family check included, then waits on its
+         * area commitment, which this session has written and not committed. Meanwhile Ortega
+         * family lets Sam in; then the commitment is let go, and the creation's membership
+         * meets the index.
+         */
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let creating: Promise<unknown> | undefined;
+        try {
+            await blocker.query('begin');
+            await blocker.query(
+                'insert into group_area_commitments (commitment, group_id, roster_version) values ($1, $2, 1)',
+                [
+                    Buffer.from(await areaKeyCommitment(kitAreaKey(built.areaId, 1)), 'base64url'),
+                    randomUUID(),
+                ],
+            );
+            creating = refusal(groups.createGroup(sam.userId, built.body));
+            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            const { at, call } = await nextRoster(ortega, ortega.organizer, [
+                ...entries(ortega.h),
+                sam.who.entry([]),
+            ]);
+            await groups.admit(ortega.organizer.userId, ortega.groupId, sam.userId, {
+                ...call,
+                grants: [
+                    await grantWire(
+                        ortega.groupId,
+                        ortega.areaId,
+                        1,
+                        ortega.organizer.who,
+                        sam.who,
+                        at,
+                    ),
+                ],
+            });
+        } finally {
+            await blocker.query('rollback');
+            await blocker.end();
+        }
+        expect(await creating).toEqual({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'self', family: { groupId: ortega.groupId, name: 'Ortega family' } },
+        });
+        expect(await groupsRepository.getGroupRow(built.groupId)).toBeNull();
+        expect((await groupsRepository.familyOf(sam.userId))?.groupId).toBe(ortega.groupId);
     });
 });
 
@@ -1496,26 +1658,14 @@ describe('the review rules', () => {
         ).toMatchObject({ code: 'invalid', data: { reason: 'self-grant' } });
     });
 
-    test('an account creates at most three groups, and a group holds at most ten areas', async () => {
+    test('an account is in one family at most, and a group holds at most ten areas', async () => {
         const organizer = await member();
         const fam = await family(organizer);
-        await family(organizer);
-        const third = await family(organizer);
+        // GROUP_OWNED_LIMIT is for company groups now: a second family is in-family first.
         expect(await refusal(family(organizer))).toMatchObject({
-            code: 'group-limit',
+            code: 'in-family',
             status: 409,
         });
-        // A group they handed on and left no longer counts against them.
-        await db
-            .update(groupMemberships)
-            .set({ state: 'left', leftAt: new Date() })
-            .where(
-                and(
-                    eq(groupMemberships.groupId, third.groupId),
-                    eq(groupMemberships.userId, organizer.userId),
-                ),
-            );
-        await family(organizer);
         for (let i = 2; i <= 10; i += 1)
             await groups.createArea(organizer.userId, fam.groupId, await areaCall(fam));
         expect(

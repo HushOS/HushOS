@@ -47,6 +47,7 @@ import {
     workspaceKeys,
     workspaceStorage,
     workspaces,
+    ONE_FAMILY_INDEX,
     type GroupKind,
     type GroupRole,
 } from './schema';
@@ -76,7 +77,10 @@ import {
  * - seals and grants that name a stored roster, an active member and, for
  *   grants, an area of this group;
  * - access that ends with membership: grants, seals, self-grants, and the
- *   shares and links in the group's areas.
+ *   shares and links in the group's areas;
+ * - one family per account (docs/families-shared-pool.md 4): creating,
+ *   accepting into or being admitted to a second family is `in-family`,
+ *   checked under the lock and held by group_memberships_one_family_idx.
  *
  * Every refusal rolls back everything the call wrote.
  */
@@ -309,6 +313,8 @@ export type ChainResult =
     | { status: 'members-changed'; reason: string }
     /* The group already has as many areas as the instance allows. */
     | { status: 'area-limit'; limit: number }
+    /* The person being admitted is in another family now (one family per account). */
+    | { status: 'in-family' }
     | { status: 'invalid'; reason: string };
 
 /* Thrown inside a transaction to roll it back; carries the result out. */
@@ -348,7 +354,8 @@ const RACE_KEYS = new Set(['group_rosters_pkey', 'group_key_successions_pkey']);
 
 /*
  * Runs `work`, turning a Refusal into its result and database errors into
- * answers: a race on a roster or succession key goes to `onRace`; any other
+ * answers: a race on a roster or succession key goes to `onRace`; the
+ * one-family index to `onFamily`, for the callers that can hit it; any other
  * unique or foreign key is `invalid`, named by its constraint (a client that
  * re-signed on a stale answer for those would loop for ever); a deadlock or a
  * serialization failure is `unavailable`, which a client retries.
@@ -356,6 +363,7 @@ const RACE_KEYS = new Set(['group_rosters_pkey', 'group_key_successions_pkey']);
 async function answering<T>(
     work: () => Promise<T>,
     onRace: (constraint: string) => Promise<T>,
+    onFamily?: () => T,
 ): Promise<T> {
     try {
         return await work();
@@ -364,6 +372,8 @@ async function answering<T>(
         const code = pgCode(error);
         const constraint = pgConstraint(error) ?? 'unknown';
         if (code === '23505' && RACE_KEYS.has(constraint)) return onRace(constraint);
+        // Another family took the person between the check and the write: the index is the backstop.
+        if (code === '23505' && constraint === ONE_FAMILY_INDEX && onFamily) return onFamily();
         // The constraint's name stays here: it is schema, not something a client acts on.
         if (code === '23505') return { status: 'invalid', reason: 'taken' } as T;
         if (code === '23503') return { status: 'invalid', reason: 'reference' } as T;
@@ -488,6 +498,47 @@ async function activeMembers(tx: Tx, groupId: string, userIds: string[]) {
             ),
         );
     return new Map(rows.map((row) => [row.userId, row.roles]));
+}
+
+/*
+ * The family `userId` is an active member of, other than `except`: what the
+ * one-family index counts (every active family row, dissolved or not, though
+ * a dissolved family has none: its last member left it). Null when none.
+ */
+async function activeFamily(tx: Tx | typeof db, userId: string, except?: string) {
+    const [row] = await tx
+        .select({ groupId: groups.id, name: groups.name })
+        .from(groupMemberships)
+        .innerJoin(groups, eq(groups.id, groupMemberships.groupId))
+        .where(
+            and(
+                eq(groupMemberships.userId, userId),
+                eq(groupMemberships.groupKind, 'family'),
+                eq(groupMemberships.state, 'active'),
+                except ? ne(groupMemberships.groupId, except) : undefined,
+            ),
+        )
+        .limit(1);
+    return row ?? null;
+}
+
+/* The account's family (one at most), with its name: for route checks and the join page. */
+export async function familyOf(userId: string) {
+    return activeFamily(db, userId);
+}
+
+/*
+ * Whether someone waiting to join `groupId` (accepted, not admitted) is
+ * active in another family: route 17 asks before it charges for a place, and
+ * only after the caller is known to manage the group, so it tells nobody else.
+ */
+export async function waitingButInFamily(groupId: string, userId: string) {
+    const [row] = await db
+        .select({ state: groupMemberships.state })
+        .from(groupMemberships)
+        .where(and(eq(groupMemberships.groupId, groupId), eq(groupMemberships.userId, userId)));
+    if (row?.state !== 'accepted') return false;
+    return (await activeFamily(db, userId, groupId)) !== null;
 }
 
 /*
@@ -1096,6 +1147,11 @@ export type CreateResult =
     /* The creator already has as many groups as the instance allows. */
     | { status: 'area-limit'; limit: number }
     | { status: 'group-limit'; limit: number }
+    /*
+     * The creator is in a family already, and this is one (one family per account):
+     * which, or null when the index refused a family that landed after the check.
+     */
+    | { status: 'in-family'; family: { groupId: string; name: string } | null }
     | { status: 'invalid'; reason: string };
 
 /*
@@ -1162,13 +1218,26 @@ export async function createGroup(input: {
     return answering<CreateResult>(
         () =>
             db.transaction(async (tx) => {
+                // The creator's row serialises their creations, so two at once cannot both slip
+                // under the limit, or both find them in no family.
+                await tx
+                    .select({ id: users.id })
+                    .from(users)
+                    .where(eq(users.id, input.creatorUserId))
+                    .for('no key update');
+                // A resend of a creation that committed while this one waited is a replay, not a
+                // second family: answered before the one-family check, which would count it.
+                const [landed] = await tx
+                    .select({ id: groups.id })
+                    .from(groups)
+                    .where(eq(groups.id, input.id));
+                if (landed) return refuse(await replay());
+                // Admissions elsewhere don't take that lock: group_memberships_one_family_idx
+                // refuses the loser of such a race, and `answering` reads it as in-family.
+                const family =
+                    input.kind === 'family' ? await activeFamily(tx, input.creatorUserId) : null;
+                if (family) refuse({ status: 'in-family', family });
                 if (input.ownedLimit !== undefined) {
-                    // The creator's row serialises their creations, so two at once cannot both slip under.
-                    await tx
-                        .select({ id: users.id })
-                        .from(users)
-                        .where(eq(users.id, input.creatorUserId))
-                        .for('no key update');
                     // Only groups they are still in: one handed on and left is no longer theirs.
                     const [owned] = await tx
                         .select({ groups: count() })
@@ -1215,6 +1284,7 @@ export async function createGroup(input: {
                 await recordCommitments(tx, input.id, input.roster);
                 await tx.insert(groupMemberships).values({
                     groupId: input.id,
+                    groupKind: input.kind,
                     userId: input.creatorUserId,
                     state: 'active',
                     roles: creator.roles,
@@ -1231,6 +1301,7 @@ export async function createGroup(input: {
             }),
         // The group's id cannot reach here (on conflict do nothing); no other key races.
         async () => ({ status: 'invalid', reason: 'taken' }),
+        () => ({ status: 'in-family', family: null }),
     );
 }
 
@@ -1334,6 +1405,15 @@ export async function appendChain(input: {
                             ),
                         )
                         .for('update');
+                    // One family per account: someone who joined or made another family since
+                    // they accepted waits here until they leave it. Before seats, so a full
+                    // family doesn't hide why; the index refuses whoever loses a race past this.
+                    if (
+                        group.kind === 'family' &&
+                        target?.state === 'accepted' &&
+                        (await activeFamily(tx, route.userId, groupId))
+                    )
+                        return refuse({ status: 'in-family' });
                     const [row] = await tx
                         .select({ used: count() })
                         .from(groupMemberships)
@@ -1472,6 +1552,7 @@ export async function appendChain(input: {
                 return { status: 'ok' as const, ...head };
             }),
         () => staleResult(db, groupId, roster, succession),
+        () => ({ status: 'in-family' }),
     );
 }
 
@@ -2141,6 +2222,8 @@ export async function openInvitation(tokenHash: Buffer) {
 
 export type AcceptResult =
     | { status: 'accepted'; groupId: string }
+    /* The account is in another family: it leaves that one before it accepts (one per account). */
+    | { status: 'in-family'; family: { groupId: string; name: string } }
     | { status: 'gone' | 'email-mismatch' | 'already-member' | 'unavailable' };
 
 /*
@@ -2201,11 +2284,22 @@ async function acceptUnder(
             )
             .for('update');
         if (membership?.state === 'active') return { status: 'already-member' as const };
+        /*
+         * Refused here, not only at admission: an accepted row would sit in this family's
+         * waiting list, and its managers would learn the person is in some family. Read
+         * under the group lock only; an admission elsewhere that commits after this read is
+         * the same as one after the accept, which admission then refuses.
+         */
+        if (group.kind === 'family') {
+            const family = await activeFamily(tx, input.userId, group.id);
+            if (family) return { status: 'in-family' as const, family };
+        }
         const now = new Date();
         await tx
             .insert(groupMemberships)
             .values({
                 groupId: invitation.groupId,
+                groupKind: group.kind,
                 userId: input.userId,
                 state: 'accepted',
                 invitationId: invitation.id,
@@ -2608,6 +2702,8 @@ export async function listPending(groupId: string) {
             email: users.email,
             acceptedAt: groupMemberships.acceptedAt,
             invitationRoles: groupInvitations.roles,
+            // In another family since they accepted: they can't be let in until they leave it.
+            inFamily: sql<boolean>`exists (select 1 from ${groupMemberships} other where other.user_id = ${groupMemberships.userId} and other.group_kind = 'family' and other.state = 'active' and other.group_id <> ${groupMemberships.groupId})`,
         })
         .from(groupMemberships)
         .innerJoin(users, eq(users.id, groupMemberships.userId))

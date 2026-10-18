@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import type { Client } from 'pg';
 import sodium from 'libsodium-wrappers';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
@@ -313,6 +314,13 @@ export type Family = Awaited<ReturnType<typeof family>>;
  */
 export async function family(creator?: Member) {
     const organizer = creator ?? (await member());
+    const built = await familyBody(organizer);
+    const created = await groups.createGroup(organizer.userId, built.body);
+    return { ...built, created };
+}
+
+/* What a client sends to create a family (route 1), without sending it. */
+export async function familyBody(organizer: Member) {
     const idSeed = b64(randomBytes(16));
     const groupId = await groupIdFor(organizer.userId, idSeed);
     const areaSeed = b64(randomBytes(16));
@@ -353,8 +361,7 @@ export async function family(creator?: Member) {
             },
         },
     };
-    const created = await groups.createGroup(organizer.userId, body);
-    return { organizer, groupId, areaId, h, body, created };
+    return { organizer, groupId, areaId, h, body };
 }
 
 /* The group's head as stored: the revision a writer names, and where the next roster goes. */
@@ -457,4 +464,25 @@ export async function nextAreaRow(workspaceId: string, version: number): Promise
         workspaceKeyVersion: version,
         commitment: await areaKeyCommitment(kitAreaKey(workspaceId, version)),
     };
+}
+
+/*
+ * Waits (up to about two seconds) until at least `count` other sessions of the test database are
+ * waiting on a lock, and answers how many were: a race test asserts it, so the interleaving it
+ * forces is known to have happened rather than assumed.
+ */
+export async function lockWaiters(client: Client, count: number) {
+    let waiting = 0;
+    for (let tries = 0; tries < 100; tries++) {
+        // Inside a transaction the activity view is a snapshot taken once: take a fresh one.
+        await client.query('select pg_stat_clear_snapshot()');
+        const { rows } = await client.query<{ waiting: number }>(
+            `select count(*)::int as waiting from pg_stat_activity
+             where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid()`,
+        );
+        waiting = rows[0]!.waiting;
+        if (waiting >= count) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return waiting;
 }

@@ -164,7 +164,16 @@ export function PendingList({
                             line={person.email}
                             note={`Accepted ${formatWhen(person.acceptedAt, { lower: true })}`}
                         >
-                            {waitingForPlan ? (
+                            {person.inFamily ? (
+                                // One family per account: they joined or made another since
+                                // accepting. That family is never named here.
+                                <span
+                                    className="shrink-0 text-[13px] text-muted-foreground"
+                                    data-in-family
+                                >
+                                    Already in a family
+                                </span>
+                            ) : waitingForPlan ? (
                                 <span
                                     className="shrink-0 text-[13px] text-muted-foreground"
                                     data-waits-for-plan
