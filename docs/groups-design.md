@@ -346,6 +346,8 @@ The proposal: **share records signed at family level.** A member who shares a no
 
 ### 3.5 Storage and the payer
 
+Revised by `docs/families-shared-pool.md` (decided 19 October 2026, not built yet): one pool covers each member's own files and the family folders, and an account is in one family at most. Where the two disagree, the addendum wins.
+
 - A group plan's quota pools across the group's areas and, for families, the personal spaces of members who draw from it. `freeBytes` for any workspace in the pool reads the pool.
 - **One storage source per person**, as iCloud+ and Dropbox Family do it: a member on the free tier draws from the family pool automatically once admitted; a member who pays for their own plan chooses at admission, and later in Account, to keep it (their personal space stays outside the pool) or to switch: their own plan stops renewing and their personal space moves into the pool when the period they paid for ends, with no refund (they may also switch at once, giving up the rest of that period, which the dialog says plainly). Never both.
 - **No stacking of free allowances:** the pool is the plan's size; a member's own free allowance is not added to it.
