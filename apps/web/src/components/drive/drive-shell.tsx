@@ -24,7 +24,6 @@ import { preloadViewers } from '@/lib/preload';
 import { resumePendingRotation } from '@/lib/rotation';
 import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
-import { forgetStash } from '@/lib/stash';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
 import { signOut as signOutOfBrowser } from '@/lib/sign-out';
@@ -72,8 +71,6 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         closeSpaces();
         forgetThumbnails();
         forgetPreviews();
-        // Stashed copies are sealed under the account key, which the lock just dropped: they go.
-        void forgetStash();
         void queryClient.resetQueries({ queryKey: driveKeys.all });
         // The worker forgot every family's chain and folder keys too: each family is checked again.
         void queryClient.resetQueries({ queryKey: ['families'] });

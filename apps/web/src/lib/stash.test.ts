@@ -1,81 +1,120 @@
 import { describe, expect, it, vi } from 'vitest';
+import { openStash, sealStash } from '@hushos/crypto/stash';
+import { StashGone } from '@hushos/drive/transfers';
 
-// The real auth client starts a worker and opens device storage; these tests bring their own key.
-vi.mock('@/lib/auth-client', () => ({ authClient: {} }));
+// The real auth client starts a worker and opens device storage; these tests stand in for both.
+vi.mock('@/lib/auth-client', () => ({ authClient: { store: { getState: () => ({}) } } }));
 
 const { createSealedStash } = await import('@/lib/stash');
-type StashRoot = Parameters<typeof createSealedStash>[0]['root'] extends () => Promise<infer R>
-    ? R
-    : never;
+type StashRoot = Awaited<ReturnType<Parameters<typeof createSealedStash>[0]['root']>>;
 
-/* The browser's private file system, in memory: directories of named files, nothing more. */
+const missing = () => new DOMException('Not found', 'NotFoundError');
+
+/* The browser's private file system, in memory: files and directories of files, nothing more. */
 function privateFileSystem() {
     const directories = new Map<string, Map<string, Uint8Array>>();
-    const missing = () => new DOMException('Not found', 'NotFoundError');
-    const directory = (files: Map<string, Uint8Array>) => ({
-        async getFileHandle(name: string, options?: { create?: boolean }) {
-            if (!files.has(name)) {
-                if (!options?.create) throw missing();
-                files.set(name, new Uint8Array(0));
-            }
+    const files = new Map<string, Uint8Array>();
+    let failRemovals = false;
+    const fileHandle = (store: Map<string, Uint8Array>, name: string) => ({
+        async createWritable() {
+            const parts: Uint8Array[] = [];
             return {
-                async createWritable() {
-                    const parts: Uint8Array[] = [];
-                    return {
-                        async write(part: Uint8Array) {
-                            parts.push(new Uint8Array(part));
-                        },
-                        async close() {
-                            files.set(
-                                name,
-                                new Uint8Array(await new Blob(parts as BlobPart[]).arrayBuffer()),
-                            );
-                        },
-                        async abort() {},
-                    };
+                async write(part: Uint8Array | string) {
+                    parts.push(
+                        typeof part === 'string'
+                            ? new TextEncoder().encode(part)
+                            : new Uint8Array(part),
+                    );
                 },
-                async getFile() {
-                    return new File([files.get(name)! as BlobPart], name);
+                async close() {
+                    store.set(
+                        name,
+                        new Uint8Array(await new Blob(parts as BlobPart[]).arrayBuffer()),
+                    );
                 },
+                async abort() {},
             };
         },
+        async getFile() {
+            return new File([store.get(name)! as BlobPart], name);
+        },
+    });
+    const handles = (store: Map<string, Uint8Array>) => ({
+        async getFileHandle(name: string, options?: { create?: boolean }) {
+            if (!store.has(name)) {
+                if (!options?.create) throw missing();
+                store.set(name, new Uint8Array(0));
+            }
+            return fileHandle(store, name);
+        },
         async removeEntry(name: string) {
-            if (!files.delete(name)) throw missing();
+            if (!store.delete(name)) throw missing();
         },
         async *keys() {
-            yield* files.keys();
+            yield* store.keys();
         },
     });
     const root = {
+        ...handles(files),
         async getDirectoryHandle(name: string, options?: { create?: boolean }) {
             if (!directories.has(name)) {
                 if (!options?.create) throw missing();
                 directories.set(name, new Map());
             }
-            return directory(directories.get(name)!);
+            return handles(directories.get(name)!);
         },
         async removeEntry(name: string) {
-            if (!directories.delete(name)) throw missing();
+            if (failRemovals) throw new DOMException('Busy', 'NoModificationAllowedError');
+            if (!directories.delete(name) && !files.delete(name)) throw missing();
         },
     } as unknown as StashRoot;
-    /* Everything on "disk", every file of every directory. */
-    const disk = () => [...directories.values()].flatMap((files) => [...files.values()]);
-    return { root, directories, disk };
+    return {
+        root,
+        directories,
+        /* Every byte on "disk": each stash and the revision file. */
+        disk: () => [
+            ...files.values(),
+            ...[...directories.values()].flatMap((d) => [...d.values()]),
+        ],
+        stashes: () => [...(directories.get('upload-stash-sealed')?.values() ?? [])],
+        failRemovals: () => (failRemovals = true),
+    };
 }
 
-const key = () =>
-    crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+/* The worker, as far as the stash sees it: sealing and opening under one account's key. */
+async function worker() {
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt',
+        'decrypt',
+    ]);
+    return {
+        seal: vi.fn(async (_userId: string, name: string, bytes: Uint8Array) =>
+            sealStash(key, name, bytes),
+        ),
+        open: vi.fn(async (_userId: string, name: string, stored: Blob) =>
+            openStash(key, name, stored),
+        ),
+    };
+}
 
-function stashOn(
+function setup(
     fs: ReturnType<typeof privateFileSystem>,
-    account: () => string | null,
-    derive: (userId: string) => Promise<CryptoKey>,
+    sealer: Awaited<ReturnType<typeof worker>>,
 ) {
-    return createSealedStash({ root: async () => fs.root, account, deriveKey: derive });
+    const state = { account: 'user-1' as string | null, revision: 100 };
+    const stash = createSealedStash({
+        root: async () => fs.root,
+        account: () => state.account,
+        lockRevision: () => state.revision,
+        seal: sealer.seal,
+        open: sealer.open,
+    });
+    return { stash, state };
 }
 
 const canary = new TextEncoder().encode('PLAINTEXT-CANARY a copy of something shared');
 const described = { name: 'copy.txt', type: 'text/plain', size: canary.length, lastModified: 1 };
+const plain = new TextDecoder().decode(canary);
 
 function contains(haystack: Uint8Array, needle: Uint8Array) {
     outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
@@ -88,70 +127,96 @@ function contains(haystack: Uint8Array, needle: Uint8Array) {
 describe('the sealed upload stash', () => {
     it('writes only ciphertext to disk and opens it back as the file the journal describes', async () => {
         const fs = privateFileSystem();
-        const sealing = await key();
-        const stash = stashOn(
-            fs,
-            () => 'user-1',
-            async () => sealing,
-        );
+        const { stash } = setup(fs, await worker());
         const name = await stash.put(canary);
         expect(name).not.toBeNull();
-        const stored = fs.disk();
-        expect(stored).toHaveLength(1);
-        expect(contains(stored[0]!, canary.subarray(0, 16))).toBe(false);
+        expect(fs.stashes()).toHaveLength(1);
+        expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
         const file = await stash.open(name!, described);
         expect(file.name).toBe('copy.txt');
-        expect(await file.text()).toBe(new TextDecoder().decode(canary));
+        expect(await file.text()).toBe(plain);
     });
 
-    it('cannot be opened with another key, such as another account’s on this browser', async () => {
+    it('calls a stash another key sealed lost, and a missing one too', async () => {
         const fs = privateFileSystem();
-        const name = await stashOn(fs, () => 'user-1', key).put(canary);
-        const other = await key();
-        await expect(
-            stashOn(
-                fs,
-                () => 'user-1',
-                async () => other,
-            ).open(name!, described),
-        ).rejects.toThrow();
+        const name = await setup(fs, await worker()).stash.put(canary);
+        const other = setup(fs, await worker()).stash;
+        await expect(other.open(name!, described)).rejects.toBeInstanceOf(StashGone);
+        await expect(other.open('never-written', described)).rejects.toBeInstanceOf(StashGone);
     });
 
-    it('derives a key per account, never reusing one account’s key for the next', async () => {
+    it('keeps the stash when the worker is locked rather than calling it lost', async () => {
         const fs = privateFileSystem();
-        let account = 'user-1';
-        const derive = vi.fn(async (_userId: string) => key());
-        const stash = stashOn(fs, () => account, derive);
-        await stash.put(canary);
-        account = 'user-2';
-        await stash.put(canary);
-        expect(derive.mock.calls.map(([userId]) => userId)).toEqual(['user-1', 'user-2']);
+        const sealer = await worker();
+        const { stash } = setup(fs, sealer);
+        const name = await stash.put(canary);
+        sealer.open.mockRejectedValueOnce(new Error('Your account was locked. Please try again.'));
+        const refused = await stash.open(name!, described).catch((error: unknown) => error);
+        expect(refused).not.toBeInstanceOf(StashGone);
+        expect(await (await stash.open(name!, described)).text()).toBe(plain);
     });
 
     it('keeps nothing while the account is locked', async () => {
         const fs = privateFileSystem();
-        const derive = vi.fn(key);
-        expect(await stashOn(fs, () => null, derive).put(canary)).toBeNull();
-        expect(fs.disk()).toHaveLength(0);
-        expect(derive).not.toHaveBeenCalled();
+        const sealer = await worker();
+        const { stash, state } = setup(fs, sealer);
+        state.account = null;
+        expect(await stash.put(canary)).toBeNull();
+        expect(fs.stashes()).toHaveLength(0);
+        expect(sealer.seal).not.toHaveBeenCalled();
     });
 
-    it('deletes every stash on lock and forgets the key', async () => {
+    it('survives a tab closing or reloading, which locks without moving the lock revision', async () => {
         const fs = privateFileSystem();
-        const derive = vi.fn(async () => key());
-        const stash = stashOn(fs, () => 'user-1', derive);
+        const { stash, state } = setup(fs, await worker());
         const name = await stash.put(canary);
-        await stash.forget();
+        state.account = null; // pagehide
+        await stash.settle();
+        state.account = 'user-1'; // unlocked again after the reload
+        expect(await (await stash.open(name!, described)).text()).toBe(plain);
+    });
+
+    it('is deleted after an explicit lock, here or in another tab, before anything reads it', async () => {
+        const fs = privateFileSystem();
+        const { stash, state } = setup(fs, await worker());
+        const name = await stash.put(canary);
+        state.revision = 200; // Lock on this browser, sign-out, a password change
+        await expect(stash.open(name!, described)).rejects.toBeInstanceOf(StashGone);
         expect(fs.disk()).toHaveLength(0);
-        await expect(stash.open(name!, described)).rejects.toThrow();
-        // The next stash after unlocking asks the worker again: the old key was not kept.
+    });
+
+    it('never leaves a stash behind that was being written when it was wiped', async () => {
+        const fs = privateFileSystem();
+        const sealer = await worker();
+        const { stash } = setup(fs, sealer);
+        // The wipe lands while the worker is still sealing.
+        sealer.seal.mockImplementationOnce(async (userId, name, bytes) => {
+            const parts = await sealStash(
+                await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+                    'encrypt',
+                ]),
+                name,
+                bytes,
+            );
+            await stash.forget();
+            void userId;
+            return parts;
+        });
+        expect(await stash.put(canary)).toBeNull();
+        expect(fs.stashes()).toHaveLength(0);
+    });
+
+    it('says when it could not delete the stash, so sign-out reports it', async () => {
+        const fs = privateFileSystem();
+        const { stash } = setup(fs, await worker());
         await stash.put(canary);
-        expect(derive).toHaveBeenCalledTimes(2);
+        fs.failRemovals();
+        await expect(stash.forget()).rejects.toThrow('Busy');
     });
 
     it('removes the plaintext an unsealed stash left behind, and only that', async () => {
         const fs = privateFileSystem();
-        const stash = stashOn(fs, () => 'user-1', key);
+        const { stash } = setup(fs, await worker());
         const kept = await stash.put(canary);
         const old = await fs.root.getDirectoryHandle('upload-stash', { create: true });
         const writable = await (
@@ -162,9 +227,6 @@ describe('the sealed upload stash', () => {
         await stash.dropPlaintext();
         expect(fs.directories.has('upload-stash')).toBe(false);
         expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
-        // The sealed stash is untouched.
-        expect(await (await stash.open(kept!, described)).text()).toBe(
-            new TextDecoder().decode(canary),
-        );
+        expect(await (await stash.open(kept!, described)).text()).toBe(plain);
     });
 });

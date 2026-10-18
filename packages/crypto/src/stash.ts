@@ -1,34 +1,44 @@
+import { CryptoError } from './errors';
+
 /*
  * Stashed upload bytes, sealed. A copy saved out of a share has no file on the
  * person's disk to reopen after a reload, so the web app keeps its bytes in
- * the browser's private file system until the upload is done. Those bytes are
- * the decrypted file; what reaches the disk is this sealing of them.
+ * the browser's private file system until the upload is done; what it writes
+ * there is this sealing of them, never the bytes themselves.
  *
  * The key is derived from the account key (HKDF, `hushos/stash/v1`, with the
  * user id), as editing's drafts are (editing-design.md): only an unlocked
- * session of this account can open a stash, a locked device cannot, and the
- * key is never stored. The worker hands it out as a non-extractable CryptoKey,
- * so the page can seal and open with it but never read it.
+ * session of this account can open a stash, a locked browser cannot, and the
+ * key is never stored. Sealing and opening run in the crypto worker, so the
+ * key never reaches the page (drive-design.md, keys stay in the worker).
  *
- * Format: "HSS1", the chunk size and the total length, then 8 random bytes
- * that start every chunk's nonce (the chunk's index ends it), then each chunk
- * sealed with AES-256-GCM. A chunk's associated data names the stash, its
- * index and the total length, so chunks can't be reordered, dropped, cut
- * short or moved between stashes without failing.
- * WebCrypto only: no libsodium, so the page imports this without the worker's
- * code.
+ * Format: a header of "HSS1", the chunk size, the total length and 8 random
+ * bytes that start every chunk's nonce (the chunk's index ends it); then each
+ * chunk sealed with AES-256-GCM. Every chunk's associated data is the whole
+ * header, the stash's name and the chunk's index, so chunks can't be
+ * reordered, dropped, cut short, moved between stashes or given another
+ * header without failing.
  */
 
 const MAGIC = [0x48, 0x53, 0x53, 0x31]; // "HSS1"
 const HEADER_BYTES = 4 + 4 + 8 + 8;
 const TAG_BYTES = 16;
-export const STASH_CHUNK_BYTES = 4 * 1024 * 1024;
+/* One upload chunk (drive.ts CHUNK_SIZE): a stash is read in the pieces the upload sends. */
+export const STASH_CHUNK_BYTES = 8 * 1024 * 1024;
 const LABEL = 'hushos/stash/v1';
+const MAX_UINT32 = 2 ** 32;
 
-export class StashError extends Error {}
+/* A stash that doesn't open: damaged, another account's, or another stash's bytes. */
+export class StashError extends CryptoError {}
 
-/* The account's stash key. The caller passes the account root and zeroes it. */
+/* Whether an error (or one carried across the worker as its message) says the stash is lost. */
+export function stashLost(error: unknown) {
+    return error instanceof Error && error.message.startsWith('This stash ');
+}
+
+/* The account's stash key, non-extractable. The caller passes the 32-byte account root and zeroes it. */
 export async function deriveStashKey(root: Uint8Array<ArrayBuffer>, userId: string) {
+    if (root.byteLength !== 32) throw new CryptoError('Invalid account key.');
     const material = await crypto.subtle.importKey('raw', root, 'HKDF', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
         {
@@ -44,8 +54,12 @@ export async function deriveStashKey(root: Uint8Array<ArrayBuffer>, userId: stri
     );
 }
 
-function associated(name: string, index: number, total: number) {
-    return new TextEncoder().encode(`${LABEL}|${name}|${index}|${total}`);
+function associated(header: Uint8Array, name: string, index: number) {
+    const tail = new TextEncoder().encode(`|${LABEL}|${name}|${index}`);
+    const out = new Uint8Array(header.byteLength + tail.byteLength);
+    out.set(header, 0);
+    out.set(tail, header.byteLength);
+    return out;
 }
 
 function nonceOf(prefix: Uint8Array, index: number) {
@@ -59,61 +73,60 @@ function chunkCount(total: number, chunk: number) {
     return Math.max(1, Math.ceil(total / chunk));
 }
 
-/*
- * Seals `bytes` as the stash called `name`, handing each part to `write` in
- * order: the header first, then one sealed chunk at a time, so the whole
- * ciphertext is never held at once.
- */
+/* The header, then each sealed chunk, in order: what is written to disk, end to end. */
 export async function sealStash(
     key: CryptoKey,
     name: string,
     bytes: Uint8Array,
-    write: (part: Uint8Array<ArrayBuffer>) => Promise<void>,
     chunk = STASH_CHUNK_BYTES,
 ) {
     const total = bytes.byteLength;
-    const prefix = crypto.getRandomValues(new Uint8Array(8));
+    const count = chunkCount(total, chunk);
+    // The index ends the nonce in four bytes, and the header holds the chunk size in four.
+    if (!Number.isInteger(chunk) || chunk < 1 || chunk >= MAX_UINT32 || count >= MAX_UINT32)
+        throw new CryptoError('This file is too large to stash.');
     const header = new Uint8Array(HEADER_BYTES);
     header.set(MAGIC, 0);
     const view = new DataView(header.buffer);
     view.setUint32(4, chunk);
     view.setBigUint64(8, BigInt(total));
+    const prefix = crypto.getRandomValues(new Uint8Array(8));
     header.set(prefix, 16);
-    await write(header);
-    const count = chunkCount(total, chunk);
+    const parts: Uint8Array<ArrayBuffer>[] = [header];
     for (let index = 0; index < count; index++) {
         const plain = bytes.subarray(index * chunk, Math.min(total, (index + 1) * chunk));
         const sealed = await crypto.subtle.encrypt(
             {
                 name: 'AES-GCM',
                 iv: nonceOf(prefix, index),
-                additionalData: associated(name, index, total),
+                additionalData: associated(header, name, index),
             },
             key,
             plain as BufferSource,
         );
-        await write(new Uint8Array(sealed));
+        parts.push(new Uint8Array(sealed));
     }
+    return parts;
 }
 
 /*
  * Opens the stash called `name` from its stored bytes, chunk by chunk, and
- * returns the plaintext in parts (for a Blob or File). Anything that doesn't
- * open, under this key and this name, in this order and length, is refused.
+ * returns the plaintext in parts. Anything that doesn't open, under this key
+ * and this name, in this order and length, is refused with a StashError.
  */
 export async function openStash(key: CryptoKey, name: string, stored: Blob) {
     if (stored.size < HEADER_BYTES) throw new StashError('This stash is damaged.');
     const header = new Uint8Array(await stored.slice(0, HEADER_BYTES).arrayBuffer());
     if (MAGIC.some((byte, at) => header[at] !== byte))
-        throw new StashError('This is not a sealed stash.');
+        throw new StashError('This stash is not sealed.');
     const view = new DataView(header.buffer);
     const chunk = view.getUint32(4);
     const total = Number(view.getBigUint64(8));
     const prefix = header.subarray(16, 24);
     if (!chunk || !Number.isSafeInteger(total)) throw new StashError('This stash is damaged.');
     const count = chunkCount(total, chunk);
-    const sealedTotal = HEADER_BYTES + total + count * TAG_BYTES;
-    if (stored.size !== sealedTotal) throw new StashError('This stash is damaged.');
+    if (stored.size !== HEADER_BYTES + total + count * TAG_BYTES)
+        throw new StashError('This stash is damaged.');
     const parts: Uint8Array<ArrayBuffer>[] = [];
     let offset = HEADER_BYTES;
     for (let index = 0; index < count; index++) {
@@ -127,7 +140,7 @@ export async function openStash(key: CryptoKey, name: string, stored: Blob) {
                         {
                             name: 'AES-GCM',
                             iv: nonceOf(prefix, index),
-                            additionalData: associated(name, index, total),
+                            additionalData: associated(header, name, index),
                         },
                         key,
                         sealed,

@@ -12,6 +12,7 @@ import {
     VERSION_MOVED,
     type TransferManagerOptions,
     type UploadStash,
+    StashGone,
 } from './transfers';
 
 /*
@@ -72,7 +73,7 @@ function fakeStash() {
         removed,
         async open(name, file) {
             const stored = files.get(name);
-            if (!stored) throw new Error('gone');
+            if (!stored) throw new StashGone('gone');
             return fakeFile(file.size, file.name, file.lastModified);
         },
         async remove(name) {
@@ -1568,6 +1569,63 @@ describe('queued rows and stashed copies', () => {
         expect(stash.removed).toEqual(['copy-1']);
         expect(second.journal.entries.size).toBe(0);
         expect(second.journal.queued.size).toBe(0);
+    });
+
+    test('a stash that can’t be read just now is kept and tried again; only a gone one is lost', async () => {
+        const stash = fakeStash();
+        stash.files.set('copy-1', fakeFile(2 * CHUNK, 'notes.pdf'));
+        const first = harness({ stash });
+        const [id] = first.manager.enqueue([
+            {
+                file: fakeFile(2 * CHUNK, 'notes.pdf'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'copy-1',
+            },
+        ]);
+        await settle(50);
+        await first.manager.pause(id!);
+        await settle(100);
+        // After a reload the disk is busy for a moment: not lost, the stash stays.
+        const open = stash.open.bind(stash);
+        stash.open = async () => {
+            throw new DOMException('Busy', 'NoModificationAllowedError');
+        };
+        const second = harness({ journal: first.journal, stash });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        await settle(500);
+        expect(second.item(id!).status).toBe('paused');
+        expect(stash.files.has('copy-1')).toBe(true);
+        // A lock while reopening pauses it as a lock does, and keeps the stash too.
+        stash.open = async () => {
+            throw new Error('Your account was locked. Please try again.');
+        };
+        await second.manager.resume(id!);
+        await settle(200);
+        expect(second.item(id!).error).toBe('Unlock this device to continue.');
+        expect(stash.files.has('copy-1')).toBe(true);
+        // Readable again: it finishes.
+        stash.open = open;
+        await second.manager.resume(id!);
+        await settle(2_000);
+        expect(second.item(id!).status).toBe('done');
+        // A stash that is gone, by contrast, is lost at once.
+        const third = harness({ stash });
+        const [goneId] = third.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'gone.pdf'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'copy-2',
+            },
+        ]);
+        await settle(20);
+        await third.manager.pause(goneId!);
+        const fourth = harness({ journal: third.journal, stash });
+        await fourth.manager.restore('ws');
+        await settle(500);
+        expect(fourth.item(goneId!).status).toBe('failed');
     });
 
     test('signing out stops every upload and leaves no name, digest or stashed byte behind', async () => {

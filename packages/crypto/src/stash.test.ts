@@ -12,11 +12,8 @@ function file(size: number) {
     return bytes;
 }
 
-async function sealed(key: CryptoKey, name: string, bytes: Uint8Array, chunk?: number) {
-    const parts: Uint8Array<ArrayBuffer>[] = [];
-    await sealStash(key, name, bytes, async (part) => void parts.push(part), chunk);
-    return parts;
-}
+const sealed = (key: CryptoKey, name: string, bytes: Uint8Array, chunk?: number) =>
+    sealStash(key, name, bytes, chunk);
 
 async function opened(key: CryptoKey, name: string, parts: BlobPart[]) {
     const out = await openStash(key, name, new Blob(parts));
@@ -92,6 +89,39 @@ describe('sealed stash', () => {
         await expect(opened(key, 'stash-1', [header, first, flipped, third])).rejects.toThrow(
             StashError,
         );
+    });
+
+    it('never reuses a nonce: sealing again draws a fresh prefix, and equal chunks seal differently', async () => {
+        const key = await deriveStashKey(root(), USER);
+        // Three equal chunks of zeros, sealed twice under one name.
+        const bytes = new Uint8Array(3 * 4096);
+        const once = await sealed(key, 'stash-1', bytes, 4096);
+        const twice = await sealed(key, 'stash-1', bytes, 4096);
+        const prefix = (parts: Uint8Array[]) => [...parts[0]!.subarray(16, 24)].join();
+        expect(prefix(once)).not.toBe(prefix(twice));
+        expect([...once[1]!].join()).not.toBe([...twice[1]!].join());
+        // Within one seal, equal plaintext chunks take different nonces, so a different keystream:
+        // the ciphertext itself differs, not only the tag (which the index in the associated data
+        // would change on its own).
+        const body = (chunk: Uint8Array) => [...chunk.subarray(0, chunk.byteLength - 16)].join();
+        expect(body(once[1]!)).not.toBe(body(once[2]!));
+        expect(body(once[2]!)).not.toBe(body(once[3]!));
+    });
+
+    it('refuses a header changed in any byte, its random prefix included', async () => {
+        const key = await deriveStashKey(root(), USER);
+        const [header, ...chunks] = await sealed(key, 'stash-1', file(3000));
+        for (let at = 0; at < header!.byteLength; at++) {
+            const changed = header!.slice();
+            changed[at] = changed[at]! ^ 1;
+            await expect(opened(key, 'stash-1', [changed, ...chunks])).rejects.toThrow(StashError);
+        }
+    });
+
+    it('takes only a 32-byte account key', async () => {
+        await expect(
+            deriveStashKey(new Uint8Array(16) as Uint8Array<ArrayBuffer>, USER),
+        ).rejects.toThrow('Invalid account key.');
     });
 
     it('hands out a key the page can use but never read', async () => {

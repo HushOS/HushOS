@@ -1,5 +1,5 @@
-import { openStash, sealStash } from '@hushos/crypto/stash';
-import type { UploadStash } from '@hushos/drive/transfers';
+import { stashLost } from '@hushos/crypto/stash';
+import { StashGone, type UploadStash } from '@hushos/drive/transfers';
 import { authClient } from '@/lib/auth-client';
 
 /*
@@ -9,72 +9,102 @@ import { authClient } from '@/lib/auth-client';
  * never shown to the person, cleared with site data) under a random name that
  * the upload journal records, so a restored upload reopens them itself.
  *
- * What lands there is sealed, never the plaintext (@hushos/crypto/stash): the
- * key comes from the unlocked account key and is held in memory only, so a
- * locked or signed-out browser holds ciphertext it cannot open, and locking
- * deletes the stash and forgets the key outright. A browser without a writable
- * private file system stashes nothing; the copy then finishes only if the
- * page stays open, and is reported lost otherwise.
+ * What lands there is sealed by the crypto worker under a key derived from the
+ * account key (@hushos/crypto/stash); the page never holds that key. A locked
+ * browser holds ciphertext it can't open. An explicit lock (Lock on this
+ * browser, sign-out, a password change: anything that moves the auth store's
+ * lockRevision, in this tab or another) deletes the stash; a tab closing or
+ * reloading does not, since that is exactly what the stash is for. A browser
+ * without a writable private file system stashes nothing; the copy then
+ * finishes only if the page stays open, and is reported lost otherwise.
  */
 
 const DIRECTORY = 'upload-stash-sealed';
+/* The lockRevision the stash was written under, beside it: a later revision means a lock since. */
+const REVISION = 'upload-stash-revision';
 /* Where stashes were kept, unsealed, before they were sealed. Deleted on sight. */
 const PLAINTEXT_DIRECTORY = 'upload-stash';
 
 /* The parts of the private file system the stash uses, so tests can stand in for it. */
-export type StashRoot = Pick<FileSystemDirectoryHandle, 'getDirectoryHandle' | 'removeEntry'>;
+export type StashRoot = Pick<
+    FileSystemDirectoryHandle,
+    'getDirectoryHandle' | 'getFileHandle' | 'removeEntry'
+>;
 
 export type SealedStash = UploadStash & {
     /* Seals and writes the bytes, returning the stash's name, or null when they can't be kept. */
     put(bytes: Uint8Array): Promise<string | null>;
-    /* Deletes every stash and forgets the key: on lock and sign-out. */
+    /* Deletes every stash; rejects when it could not, so sign-out can say so. */
     forget(): Promise<void>;
+    /* Deletes the stash when an explicit lock happened since it was written. */
+    settle(): Promise<void>;
     /* Deletes what the unsealed stash left on disk; once, at start-up. */
     dropPlaintext(): Promise<void>;
 };
+
+const notFound = (error: unknown) =>
+    error instanceof DOMException && error.name === 'NotFoundError';
 
 export function createSealedStash(options: {
     root: () => Promise<StashRoot>;
     /* The unlocked account, or null while locked. */
     account: () => string | null;
-    /* The account's stash key, from the worker. */
-    deriveKey: (userId: string) => Promise<CryptoKey>;
+    /* The auth store's lockRevision: it moves on every explicit lock, never on a tab closing. */
+    lockRevision: () => number;
+    /* The worker's sealing and opening (driveStashSeal, driveStashOpen). */
+    seal: (userId: string, name: string, bytes: Uint8Array) => Promise<Uint8Array[]>;
+    open: (userId: string, name: string, stored: Blob) => Promise<Uint8Array[]>;
 }): SealedStash {
-    // Held for one account: another account signing in on this page derives its own.
-    let key: { userId: string; key: Promise<CryptoKey> } | null = null;
-    function stashKey() {
-        const userId = options.account();
-        if (!userId) return Promise.reject(new Error('Unlock your account first.'));
-        if (key?.userId !== userId) {
-            const pending = options.deriveKey(userId);
-            const held = { userId, key: pending };
-            key = held;
-            // A failed derivation is asked again next time, not remembered.
-            pending.catch(() => {
-                if (key === held) key = null;
-            });
-        }
-        return key.key;
-    }
+    // Moves on every wipe, so a write that began before one never lands after it.
+    let generation = 0;
     async function directory() {
         return (await options.root()).getDirectoryHandle(DIRECTORY, { create: true });
     }
+    async function writtenUnder() {
+        try {
+            const file = await (await (await options.root()).getFileHandle(REVISION)).getFile();
+            const value = Number(await file.text());
+            return Number.isFinite(value) ? value : null;
+        } catch (error) {
+            if (notFound(error)) return null;
+            throw error;
+        }
+    }
+    async function remember(revision: number) {
+        const handle = await (await options.root()).getFileHandle(REVISION, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(String(revision));
+        await writable.close();
+    }
+    async function wipe() {
+        generation++;
+        const root = await options.root();
+        for (const name of [DIRECTORY, REVISION])
+            await root.removeEntry(name, { recursive: true }).catch((error: unknown) => {
+                if (!notFound(error)) throw error;
+            });
+    }
     const stash: SealedStash = {
         async put(bytes) {
+            const userId = options.account();
+            if (!userId) return null;
             const name = crypto.randomUUID();
             try {
-                const sealing = await stashKey();
+                await stash.settle();
+                const started = generation;
+                const parts = await options.seal(userId, name, bytes);
                 const handle = await (await directory()).getFileHandle(name, { create: true });
                 const writable = await handle.createWritable();
                 try {
-                    await sealStash(sealing, name, bytes, async (part) => {
-                        await writable.write(part);
-                    });
+                    for (const part of parts) await writable.write(part as BufferSource);
+                    // Wiped meanwhile (a lock, sign-out): this stash must not outlive it.
+                    if (generation !== started) throw new Error('The stash was cleared.');
                 } catch (error) {
                     await writable.abort().catch(() => {});
                     throw error;
                 }
                 await writable.close();
+                await remember(options.lockRevision());
                 return name;
             } catch {
                 await stash.remove(name).catch(() => {});
@@ -82,31 +112,43 @@ export function createSealedStash(options: {
             }
         },
         async open(name, file) {
-            const handle = await (await directory()).getFileHandle(name);
-            const parts = await openStash(await stashKey(), name, await handle.getFile());
-            const opened = new File(parts, file.name, {
+            await stash.settle();
+            const userId = options.account();
+            if (!userId) throw new Error('Your account was locked.');
+            let stored: File;
+            try {
+                stored = await (await (await directory()).getFileHandle(name)).getFile();
+            } catch (error) {
+                throw notFound(error) ? new StashGone('This stash is gone.') : error;
+            }
+            let parts: Uint8Array[];
+            try {
+                parts = await options.open(userId, name, stored);
+            } catch (error) {
+                throw stashLost(error) ? new StashGone((error as Error).message) : error;
+            }
+            const opened = new File(parts as BlobPart[], file.name, {
                 type: file.type,
                 lastModified: file.lastModified,
             });
-            if (opened.size !== file.size) throw new Error('The stashed bytes are not the file.');
+            if (opened.size !== file.size)
+                throw new StashGone('The stashed bytes are not the file.');
             return opened;
         },
         async remove(name) {
             await (await directory()).removeEntry(name).catch(() => {});
         },
         async sweep(keep) {
+            await stash.settle();
             const dir = await directory();
             const names: string[] = [];
             for await (const name of dir.keys()) if (!keep.has(name)) names.push(name);
             for (const name of names) await dir.removeEntry(name).catch(() => {});
         },
-        async forget() {
-            key = null;
-            await (
-                await options.root()
-            )
-                .removeEntry(DIRECTORY, { recursive: true })
-                .catch(() => {});
+        forget: wipe,
+        async settle() {
+            const written = await writtenUnder();
+            if (written !== null && options.lockRevision() > written) await wipe();
         },
         async dropPlaintext() {
             await (
@@ -131,8 +173,19 @@ export function stashAvailable() {
 export const uploadStash = createSealedStash({
     root: () => navigator.storage.getDirectory(),
     account: () => authClient.store.getState().unlockedUserId,
-    deriveKey: async (userId) => (await authClient.rpc('driveStashKey', { userId })).key,
+    lockRevision: () => authClient.store.getState().lockRevision,
+    seal: async (userId, name, bytes) =>
+        (await authClient.rpc('driveStashSeal', { userId, name, bytes })).parts,
+    open: async (userId, name, stored) =>
+        (await authClient.rpc('driveStashOpen', { userId, name, stored })).parts,
 });
+
+// Wherever the stash is used (Drive, or a link page saving a copy), an explicit lock in this
+// tab or another deletes it as soon as the store hears of it.
+if (stashAvailable())
+    authClient.store.subscribe((state, previous) => {
+        if (state.lockRevision !== previous.lockRevision) void uploadStash.settle().catch(() => {});
+    });
 
 /* Writes the bytes and returns the stash's name, or null when this browser cannot keep them. */
 export async function stashBytes(bytes: Uint8Array): Promise<string | null> {
@@ -140,7 +193,7 @@ export async function stashBytes(bytes: Uint8Array): Promise<string | null> {
     return uploadStash.put(bytes);
 }
 
-/* On lock and sign-out: every stash goes, and so does the key. */
+/* At sign-out: every stash goes. Rejects when it could not, so the wipe is reported and retried. */
 export async function forgetStash() {
     if (stashAvailable()) await uploadStash.forget();
 }
