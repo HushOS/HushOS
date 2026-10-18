@@ -1,0 +1,23 @@
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_a718771ff124fc 1481-1482,1489,1492,1498,1594-1622
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_a861d3d2df0b66 3009-3011
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_48a73fe82fed5b 2602-2632
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eb8e581970d8766c9e7ac0fe40592e57354f30e6",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
