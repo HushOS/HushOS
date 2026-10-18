@@ -1,6 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { newContext, registerAccount } from './helpers';
+import { newContext, operatorRole, registerAccount } from './helpers';
 
 /*
  * An operator adds storage to someone's account and takes it back. The
@@ -22,7 +21,7 @@ test.beforeAll(async ({ browser }) => {
     test.setTimeout(240_000);
     operator = await (await newContext(browser)).newPage();
     const operatorEmail = (await registerAccount(operator)).email;
-    execFileSync('bun', ['run', 'admin:grant', operatorEmail], { stdio: 'pipe' });
+    operatorRole('grant', operatorEmail);
     member = await (await newContext(browser)).newPage();
     memberEmail = (await registerAccount(member)).email;
 });

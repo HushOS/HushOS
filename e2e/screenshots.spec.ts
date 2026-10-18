@@ -11,6 +11,7 @@ import {
 } from '@playwright/test';
 import {
     addContact,
+    e2eDatabase,
     grip,
     newContext as baseContext,
     newFolder,
@@ -232,6 +233,7 @@ async function backdate(p: Page) {
         rows.push(`('${id}'::uuid, '${ago(name).toISOString()}'::timestamptz)`);
     }
     const sql = `update drive_nodes n set updated_at = v.at, created_at = least(n.created_at, v.at) from (values ${rows.join(', ')}) v(id, at) where n.id = v.id`;
+    // The server's own database (e2eDatabase), never the container's default when it is another's.
     execFileSync('docker', [
         'compose',
         '-f',
@@ -240,10 +242,12 @@ async function backdate(p: Page) {
         'compose.dev.yaml',
         'exec',
         '-T',
+        '-e',
+        `E2E_DB=${e2eDatabase().name}`,
         'db',
         'sh',
         '-c',
-        `psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "${sql}"`,
+        `psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$E2E_DB" -c "${sql}"`,
     ]);
 }
 
