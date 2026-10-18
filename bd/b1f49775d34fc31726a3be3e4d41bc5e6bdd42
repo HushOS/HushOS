@@ -1,0 +1,37 @@
+apps/web/src/content/blog/family-plans.mdx
+  s_c56e31c87cddde::t_d142e15684e903 59
+apps/web/src/lib/family-billing.test.ts
+  s_c56e31c87cddde::t_94051f95fd4bd7 319-322,331-335,345-346
+docs/groups-design.md
+  s_c56e31c87cddde::t_50913d5e89a7f6 355
+docs/polar-group-billing-spike.md
+  s_c56e31c87cddde::t_22ded68e1574cd 42
+docs/self-hosting.md
+  s_c56e31c87cddde::t_46b44545290900 554
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_989e35b4ffce72 1202-1203,1206,1214,1328
+packages/billing/scripts/seed.ts
+  s_c56e31c87cddde::t_e00b7b38a94f6a 10-18,23-24,39-40,73,133-134,139-143,149,199
+packages/billing/src/seed-prices.test.ts
+  s_c56e31c87cddde::t_d65f0bf9694a50 1-79
+packages/billing/src/seed-prices.ts
+  s_c56e31c87cddde::t_aec8ff01a314d4 1-132
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_e360319d9074de 68,141,264-265,953
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bdb1f49775d34fc31726a3be3e4d41bc5e6bdd42",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
