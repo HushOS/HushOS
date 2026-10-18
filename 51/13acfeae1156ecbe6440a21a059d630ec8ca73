@@ -1,0 +1,30 @@
+apps/web/src/lib/key-change-words.test.ts
+  s_c56e31c87cddde::t_2a9dea3a689f41 1-30
+apps/web/src/lib/drive.ts
+  s_c56e31c87cddde::t_f19b4a2ecfa046 24
+  s_c56e31c87cddde::t_9b95a24fb9f3f6 330
+apps/web/src/lib/key-change-words.ts
+  s_c56e31c87cddde::t_6c90e7cd505c5c 1-17
+  s_c56e31c87cddde::t_1c75981773c43d 18
+apps/web/src/lib/groups/copy.ts
+  s_c56e31c87cddde::t_a71dadc13a774b 1
+  s_c56e31c87cddde::t_e9cdff9cf674ab 188
+docs/groups-design.md
+  s_c56e31c87cddde::t_1b8f92e56a599c 293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5113acfeae1156ecbe6440a21a059d630ec8ca73",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
