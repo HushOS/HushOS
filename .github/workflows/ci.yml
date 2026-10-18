@@ -144,6 +144,30 @@ jobs:
                   path: web-output.tar
                   retention-days: 1
 
+    # WebKit runs on macOS, and the server output carries native modules for the platform it
+    # was built on (takumi's OG renderer among them): the Linux build cannot start there. Built
+    # once on macOS, only when the WebKit suite runs, for its four shards.
+    build-macos:
+        name: Build (macOS, for WebKit)
+        needs: changes
+        if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
+        runs-on: macos-15
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+            - run: bun install --frozen-lockfile
+            - name: Build
+              run: bun run build
+            - name: Pack the server output
+              run: tar -cf web-output.tar -C apps/web .output
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: web-output-macos
+                  path: web-output.tar
+                  retention-days: 1
+
     # The Rust core's own tests (units, doc examples, both fixture directions): nothing else in
     # CI runs cargo. Stable, with the build cached, so a warm run is a minute or two. Only when
     # the core, its bindings, or the TypeScript twin its fixtures come from changed.
@@ -327,7 +351,7 @@ jobs:
     # expensive part of a run, and every push to main still runs them.
     e2e-webkit:
         name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
-        needs: [changes, build]
+        needs: [changes, build-macos]
         if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
         runs-on: macos-15
         timeout-minutes: 40
@@ -343,7 +367,7 @@ jobs:
             - run: bun install --frozen-lockfile
             - uses: actions/download-artifact@v4
               with:
-                  name: web-output
+                  name: web-output-macos
             - name: Unpack the server output
               run: tar -xf web-output.tar -C apps/web
             # Families off, as in the chromium suite; the families flows run on chromium only.
@@ -406,8 +430,8 @@ jobs:
     # issue collects them, retitled to the latest commit, with a comment per failed run.
     webkit-report:
         name: Report a WebKit failure on main
-        needs: e2e-webkit
-        if: always() && needs.e2e-webkit.result == 'failure' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        needs: [build-macos, e2e-webkit]
+        if: always() && (needs.build-macos.result == 'failure' || needs.e2e-webkit.result == 'failure') && github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
         permissions:
             issues: write
@@ -543,7 +567,7 @@ jobs:
     ci-ok:
         name: CI ok
         if: always()
-        needs: [changes, check, build, rust, e2e, e2e-families, e2e-webkit, images]
+        needs: [changes, check, build, build-macos, rust, e2e, e2e-families, e2e-webkit, images]
         runs-on: ubuntu-latest
         steps:
             - name: Every job that ran passed
