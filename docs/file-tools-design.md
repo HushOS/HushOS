@@ -523,3 +523,15 @@ Open in editing-design.md that bear on milestone 1 (that document's decisions ar
 10. **When the stale check fires.** Until milestone 2's `versionOf`, a stale save is caught at upload completion, not at begin: the bytes go up and are then aborted or attached as a copy. Accept that for milestone 1, or move the begin-time check forward?
 11. **Family folders.** editing-design.md names owners, editors, viewers and link visitors. Confirm that family members edit family files, refused while the folder is read-only on the device or its keys changed.
 12. **Text above 8 MiB** opens read-only there. Should the large-file card's Continue allow editing up to a higher ceiling, or stay read-only? This note assumes read-only.
+
+## Owner decisions (2026-10-19)
+
+The open questions above are answered as recommended, with two changes:
+
+- **Results and reload (4):** accepted that a tool's results don't survive a reload, but while any result is still waiting to upload, the page asks before it unloads (`beforeunload`), so a reload or close isn't silent.
+- **Text over 8 MiB (12):** opens read only, with the large-file card offering editing behind a warning about memory and speed, up to the text ceiling.
+- **PDF writing:** `@cantoo/pdf-lib` (MIT; 2.7.1, actively released, though its maintainers promise support only for their own roadmap), pinned to an exact version and run in a worker; vendored if it goes quiet. pdf.js stays the reader (rendering, PDF to images, page thumbnails).
+- **HEIC (1):** convert only where the browser decodes HEIC; a software decoder waits for a licence and patent check. **wasm-vips and HEIC (2):** verified in that PR.
+- **Save a copy (5):** its plaintext stash moves to sealed storage in its own PR, soon.
+- **Out of room in someone else's share (6):** a clear "no room" message and a clean-up; the owner's free space is never revealed.
+- **Cancel (7):** all or nothing, Trash for editors. **Metadata (8):** One PDF drops image metadata by default; Convert keeps it unless asked. **Limits (9):** as above. **Stale save (10):** accepted until milestone 2. **Family members edit family files (11):** yes.
