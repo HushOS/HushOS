@@ -164,11 +164,10 @@ for (const tier of tiers) {
  * rupees, so Plus costs what personal Pro does and Pro and Max twice personal Pro
  * and Max, and 59 rupees a member. A year is ten months in every currency.
  *
- * FAMILY_PRICES_CONFIRMED gates production: until the owner confirms the
- * currency table, a production run skips the family products. Nothing in CI,
- * Docker or `dev` runs this file.
+ * FAMILY_PRICES_CONFIRMED gates production: the owner confirmed the currency
+ * table on 2026-10-19. Nothing in CI, Docker or `dev` runs this file.
  */
-const FAMILY_PRICES_CONFIRMED = false;
+const FAMILY_PRICES_CONFIRMED = true;
 const archiveLegacyFamily = process.argv.includes('--archive-legacy-family');
 const familyIncluded = 4;
 const familyPerMember = { usd: 150, eur: 150, gbp: 120, inr: 5900 } as Amounts;
