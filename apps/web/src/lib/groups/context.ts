@@ -36,6 +36,8 @@ export type GroupOperation =
     | 'groupReseal'
     /* A family folder's previous top-folder key checked, and repaired when it does not open (route 28). */
     | 'groupPreviousRoot'
+    /* Folders the family's member list names that aren't its own, which the worker ignored. */
+    | 'groupForeignListings'
     | 'groupForget'
     /* A member's join code over the committed chain, read to them by the person letting them in. */
     | 'groupJoinCode'
@@ -60,7 +62,14 @@ export type GroupNotice =
     /* Changes that had not reached the server did not open on this device and were dropped. */
     | { kind: 'changes-lost'; groupId: string; count: number }
     /* An earlier version's held-back admission of this person, never sent, was dropped. */
-    | { kind: 'admission-dropped'; groupId: string; userId: string };
+    | { kind: 'admission-dropped'; groupId: string; userId: string }
+    /*
+     * The family's member list names folders that aren't its own: `owner`'s (another family
+     * opened them here), or this account's own files when null. Ignored, never trusted; said
+     * on the family's page (lib/families.ts, foreignListingsQueryOptions), and for good, since a
+     * member list keeps everything it names.
+     */
+    | { kind: 'foreign-listing'; groupId: string; owner: string | null; count: number };
 
 export type GroupSettings = LoadedSettings['settings'] & { groups?: Record<string, GroupPin> };
 

@@ -401,3 +401,7 @@ Shipped iOS and Android apps do not read origins yet. In personal workspaces a r
 ### Rollout
 
 1. Server first: accept both forms, clear origins on other writes, require the group rule. 2. The web, deployed with it; families switch on only after both. 3. Native apps. 4. A later release stops writing the legacy signature once the native minimum version reads rekeyed rows (docs/envelope-migrations.md rule 6: retirement is its own release). Shipped apps' personal rotations keep sending the legacy form; on rows that carry an origin the server refuses those records and the web, or an updated app, finishes the rotation.
+
+## A member list naming folders not its own
+
+The worker's area ledger ignores a committed member list's listing of another family's folder, or of the account's own workspace, and the family's page says so ("Lindqvist family's member list names a folder that isn't its own"). **Residual:** the notice names the owning family by the name the server serves, and family names are server plaintext, unsigned and not unique, so two families called "Berg family", or a renamed one, can make the notice name a family the person does not mean; and a listing whose owner has not been opened on this device (its sync failed or has not run) is not reported at all (`session.groups.test.ts`, "the known gap"). Neither changes what is trusted: the listing is ignored either way.

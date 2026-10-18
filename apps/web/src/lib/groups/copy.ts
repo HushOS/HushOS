@@ -222,8 +222,27 @@ export function noticeCopy(
     notice: GroupNotice,
     family = 'the family',
     person: (userId: string) => string | undefined = () => undefined,
+    familyOf: (groupId: string) => string | undefined = () => undefined,
 ) {
     switch (notice.kind) {
+        case 'foreign-listing': {
+            // Nothing was trusted, so no alarm. A committed member list needs a manager's signature
+            // and an honest server refuses this, so both had a part; no one is named, since which
+            // manager it was isn't something this screen can say. The owner's name stays out of the
+            // advice, so a forwarded notice says no more than it must about the person's families.
+            const them = notice.count === 1 && notice.owner !== null ? 'it' : 'them';
+            const what =
+                notice.owner === null
+                    ? 'your own files, in My files'
+                    : `${notice.count === 1 ? 'one' : notice.count} of ${familyOf(notice.owner) ?? 'another family'}’s folders`;
+            return [
+                `It names ${what}.`,
+                `HushOS ignored that, so nothing in ${them} was shared or changed.`,
+                `Someone who manages, or managed, ${family} signed it, and the server accepted it.`,
+                'A member list keeps everything it names, so this notice stays.',
+                `Tell the other members of ${family}.`,
+            ].join(' ');
+        }
         case 'admission-dropped':
             return `An earlier admission of ${person(notice.userId) ?? 'someone waiting to join'} wasn’t sent; let them in again.`;
         case 'record-reset':
@@ -235,6 +254,16 @@ export function noticeCopy(
         case 'documents-cleared':
             return `A family folder’s ${notice.document === 'tags' ? 'tags' : 'settings'} couldn’t be opened while its keys were replaced, and started again empty.`;
     }
+}
+
+/* A notice's title, where it has one. */
+export function noticeTitle(notice: GroupNotice, family = 'The family') {
+    if (notice.kind !== 'foreign-listing') return null;
+    // My files isn't a folder, and one family may name both: the titles differ.
+    if (notice.owner === null) return `${family}’s member list names your own files`;
+    return notice.count === 1
+        ? `${family}’s member list names a folder that isn’t its own`
+        : `${family}’s member list names folders that aren’t its own`;
 }
 
 /*

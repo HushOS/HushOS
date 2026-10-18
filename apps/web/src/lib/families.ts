@@ -130,6 +130,34 @@ export async function syncFamilies(
     }
     return { results, notices };
 }
+/*
+ * Folders this family's member list names that aren't its own (the worker's area ledger,
+ * `foreignListings`), as one notice per owner: another family, or this account's own files.
+ * Asked once the app-wide pass has run (`passedAt`, its time), so every family it accepted has
+ * opened its folders in the worker and the owner is known whatever order the families were
+ * synced in. The worker ignored the listings; this only says so.
+ */
+export const foreignListingsQueryOptions = (userId: string, groupId: string, passedAt: number) =>
+    queryOptions({
+        queryKey: [...familyKeys.family(userId, groupId), 'foreign', passedAt] as const,
+        queryFn: async (): Promise<GroupNotice[]> => {
+            const { listings } = await familyContext(userId).rpc('groupForeignListings', {
+                groupId,
+            });
+            const byOwner = new Map<string | null, number>();
+            for (const { openedBy } of listings)
+                byOwner.set(openedBy, (byOwner.get(openedBy) ?? 0) + 1);
+            return [...byOwner].map(([owner, count]) => ({
+                kind: 'foreign-listing',
+                groupId,
+                owner,
+                count,
+            }));
+        },
+        staleTime: Infinity,
+        retry: false,
+    });
+
 /* The pass's query key: the drive shell takes it from lib/families-keys, never from here. */
 export const familiesSyncKey = familiesSyncAllKey;
 export const familiesSyncQueryOptions = (userId: string) =>

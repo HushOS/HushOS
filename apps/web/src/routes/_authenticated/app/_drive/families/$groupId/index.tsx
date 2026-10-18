@@ -28,10 +28,12 @@ import {
     afterFamilyChange,
     canManage,
     familiesQueryOptions,
+    familiesSyncQueryOptions,
     familyContext,
     familyQueryOptions,
     firstName,
     firstNames,
+    foreignListingsQueryOptions,
     invitationsQueryOptions,
     pendingQueryOptions,
     useFamilySync,
@@ -76,6 +78,13 @@ function FamilyPage() {
         enabled: summary?.state === 'active',
     });
     const sync = useFamilySync(userId, groupId, summary, { pollWhileWalking: KEY_CHANGE_POLL_MS });
+    // The app-wide pass the Drive runtime runs (read here, never started): folders this family's
+    // member list names that aren't its own are asked after it, so their owner has been opened.
+    const pass = useQuery({ ...familiesSyncQueryOptions(userId), enabled: false });
+    const foreign = useQuery({
+        ...foreignListingsQueryOptions(userId, groupId, pass.dataUpdatedAt),
+        enabled: sync.data?.result.status === 'accepted' && pass.data !== undefined,
+    });
     const work = useFamilyWork(groupId);
     const manager = summary?.state === 'active' && canManage(summary.roles);
     const pending = useQuery({
@@ -219,8 +228,12 @@ function FamilyPage() {
                 )}
                 {sync.data && (
                     <NoticeList
-                        notices={sync.data.notices}
-                        nameOf={() => family}
+                        notices={[...sync.data.notices, ...(foreign.data ?? [])]}
+                        nameOf={(id) =>
+                            id === groupId
+                                ? family
+                                : families.data?.find((at) => at.id === id)?.name
+                        }
                         personOf={(id) => {
                             const waiting = pending.data?.find((at) => at.userId === id);
                             return waiting ? firstName(waiting.name) : names[id];
