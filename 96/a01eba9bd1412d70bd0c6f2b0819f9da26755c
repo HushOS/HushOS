@@ -1,0 +1,33 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/MasterKeyRotationTest.kt
+  s_c56e31c87cddde::t_53533a8fcfd7c5 1-61
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/MasterKeyRotationTests.swift
+  s_c56e31c87cddde::t_e906657d7558a0 1-64
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_c56e31c87cddde::t_3d0c94342c0e19 498,510-529
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_c56e31c87cddde::t_5200c7b50431c9 244-257,303
+packages/crypto/src/workspace.ts
+  s_c56e31c87cddde::t_ccd51698f08a92 154-168
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_6f0dc3be425789 26,2376-2400,3957-4131
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_66be4b0991732f 26,327-345,742-743,836-837,2726-2728
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_cb5befa1dd8638 14,51-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "96a01eba9bd1412d70bd0c6f2b0819f9da26755c",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
