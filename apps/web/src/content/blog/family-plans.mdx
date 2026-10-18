@@ -1,0 +1,83 @@
+---
+title: Family plans
+description: Up to 20 people share family folders, end-to-end encrypted, and each keeps their own private space. How joining works, what happens when someone leaves, what it costs, and what is not built yet.
+date: 2026-10-19
+author: HushOS
+cover: FAMILY
+tone: sage
+---
+
+import { Cta, Ledger } from '../../components/mdx';
+
+HushOS has family plans from today. Up to 20 people share family folders, end-to-end encrypted, and each of them keeps their own private space beside them. Families work on the web and in the iPhone and Android apps.
+
+## What a family is
+
+A family is a group of HushOS accounts with folders they share. Every member can open the family folders, and nobody else can, us included. Their keys are made and sealed on members' own devices, the same way your own files are.
+
+Each member keeps their own files. My files stays private from the rest of the family, exactly as it is private from us. The family folders sit beside it, under the family's name. A family's storage is for its family folders; each member's own files stay on their own plan, Free included.
+
+One person organizes the family. They can let others manage it too: invite people, let them in, make family folders and remove someone.
+
+## Joining
+
+You invite someone by email. They sign in, or make an account, and accept. Then the two of you check each other, in person or on a call. Not in a message sent through HushOS.
+
+First, the newcomer reads the twelve words on their join screen and the person letting them in compares them. That is the same check as when you share with someone: it proves the keys HushOS shows for them are really theirs.
+
+Then both screens show a join code. The person letting them in reads all twelve words. The newcomer's screen hides two of them, so the newcomer compares the other ten and types the two they could not see.
+
+**Why the join code.** A new member's device has to learn who is in the family and which keys are whose. It learns that from a signed member list, which the server stores and hands out. A dishonest server could hand a newcomer a different list, with an extra member whose keys it holds, and the newcomer's device would lock family files for them too. The join code is worked out from the member list each screen was given, so matching words mean both of you see the same list. The newcomer's device then pins those first keys, and every later version of the list has to follow on from them, signed by someone who manages the family.
+
+The two hidden words make sure the check really happens. Ten words can be skimmed and agreed to without listening. Two words that only the other person's screen shows cannot be typed without hearing them. The newcomer's device picks which two at random and never tells the server.
+
+If the words do not match, the newcomer's device keeps nothing, and HushOS says not to use the family until the two of you have sorted it out.
+
+The join code protects a family from the server. It does not protect a family from the people who manage it: they decide who is in it.
+
+## When someone leaves
+
+Someone who manages the family chooses Remove from family. The person removed loses the family folders straight away, and HushOS replaces the keys of every family folder, which can take a few minutes. Someone who leaves on their own loses the folders straight away too, and their keys are replaced the next time a manager opens the family. Either way, their own files stay theirs.
+
+Nothing they kept opens anything new. Files from before they left stay sealed under the keys they had, so anything they could open then stays readable to them if they ever got a copy of the server's data.
+
+Files keep their authors through all of that. Every file in a family folder carries a signature from whoever wrote it. Replacing keys means locking every file again, and the easy way would sign each file as the work of whoever replaced the keys. HushOS keeps the writer's original signature instead, and the person replacing the keys signs only that they locked it again. Info on the file shows both: Written by Sam, Keys replaced by Maya. Your device opens the original and the copy locked again and compares them itself, so nobody can attach Sam's signature to something Sam did not write.
+
+A file written by someone who has since been removed reads "Written by Sam, who has left Lindqvist family." That mark is on purpose. Someone who has left may still hold the keys they had, and a signature carries no date anyone can trust, so HushOS cannot tell an old file of theirs from one made to look old. It says what it knows instead of vouching for them.
+
+## Plans
+
+<Ledger
+    rows={[
+        ['Family Plus', '800 GB for the family folders, $10 a month'],
+        ['Family Pro', '2 TB for the family folders, $20 a month'],
+        ['Family Max', '4 TB for the family folders, $30 a month'],
+        [
+            'Members',
+            'Four included, then $1.50 a month ($15 a year) for each member after that, up to 20',
+        ],
+        ['Yearly', 'Ten months of the monthly price'],
+        ['Tax', 'Added where it applies, at checkout'],
+    ]}
+/>
+
+Polar, which takes the payment, is told it is a HushOS family and who pays. It is not told the family's name or who is in it.
+
+If you run HushOS on your own server, families are in the same code. Turn them on, and you decide how much space and how many places each family gets.
+
+## What the server knows
+
+To let the right people in, HushOS's server knows the family's name, who is in it and what each person can do, who invited and let in whom, the email addresses invitations went to, and how many family folders there are, with their sizes rounded up. It cannot open family folders: not a file name, not a byte of what is inside.
+
+The family's name is not encrypted because it appears in invitation emails and on bills. If you would rather it said nothing, choose a neutral one.
+
+The [security page](/security) lists what the server learns about everything else.
+
+## What is not done yet
+
+- **Sharing from a family folder.** You cannot share a file or make a link from inside a family folder yet. When keys are replaced, HushOS has to tell which shares were made by someone allowed to make them, and that needs shares signed at family level, which we have not built.
+- **What someone already has.** A member who is removed keeps anything they already downloaded or kept on a device. New keys protect what is written after they go; they cannot reach into copies someone already made.
+
+<Cta title="Make a family">
+    Open Families in Drive and create one. You choose a plan before you invite anyone.
+</Cta>
