@@ -1,0 +1,31 @@
+apps/web/vitest.config.ts
+  s_c56e31c87cddde::t_328c0771ded100 8-10
+packages/auth/vitest.config.ts
+  s_c56e31c87cddde::t_f245fde0f482cf 5-7
+packages/billing/vitest.config.ts
+  s_c56e31c87cddde::t_0a5af43dad75b8 5-7
+packages/crypto/vitest.config.ts
+  s_c56e31c87cddde::t_db6a849da19fac 5-7
+packages/db/vitest.config.ts
+  s_c56e31c87cddde::t_d319da3c5ddd0b 5-7
+packages/drive/vitest.config.ts
+  s_c56e31c87cddde::t_d25edc2889c774 5-7
+packages/jobs/vitest.config.ts
+  s_c56e31c87cddde::t_bf4f35d1b7ec98 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ff88220c229bd26723280c224c7d7b646e702d5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
