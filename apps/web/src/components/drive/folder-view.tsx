@@ -13,11 +13,14 @@ import { useFamilyArea, waitsForKeyChange, type FamilyArea } from '@/components/
 import {
     CornerCheck,
     EmptyState,
+    HiddenSortToggle,
+    LIST_COLUMN,
     MarqueeBox,
     RowName,
     SelectableMark,
     SkeletonRows,
     SortButton,
+    useHiddenColumn,
     useListSelection,
 } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
@@ -213,6 +216,10 @@ export function FolderView({ folderId }: { folderId: string }) {
     const queryClient = useQueryClient();
     const listing = useQuery(folderQueryOptions(folderId, area?.workspaceId));
     const [order, setOrder] = useSortOrder();
+    // The list's table, to tell when the column it is sorted by is hidden for room.
+    const [table, setTable] = useState<HTMLTableElement | null>(null);
+    const sortColumn = order.key === 'name' ? null : order.key;
+    const sortHidden = useHiddenColumn(table, sortColumn);
     const rows = useMemo(
         () => (listing.data ? sortNodesBy(listing.data.children, order) : []),
         [listing.data, order],
@@ -485,6 +492,9 @@ export function FolderView({ folderId }: { folderId: string }) {
             ? 'My files'
             : crumb.name;
     const shared = crumbs.length > 0 && crumbs[0]!.workspaceId !== workspaceId;
+    // Without a Who can open column (a family or shared folder), Changed and Size keep their room longer.
+    const changedColumn = !shared && !area ? LIST_COLUMN.changed : LIST_COLUMN.changedAlone;
+    const sizeColumn = !shared && !area ? LIST_COLUMN.size : LIST_COLUMN.sizeAlone;
     /*
      * Whether things may be added here: one's own folder, or a family folder this device may
      * write. While a key change has yet to reach it, uploads wait in the queue (D9); anything
@@ -966,7 +976,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 <ContextMenu>
                     <ContextMenuTrigger
                         render={<div />}
-                        className="flex min-h-0 min-w-0 flex-1 flex-col"
+                        className="@container/list flex min-h-0 min-w-0 flex-1 flex-col"
                     >
                         {listing.isPending && <SkeletonRows />}
                         {listing.isError && (
@@ -1013,6 +1023,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                         )}
                         {listing.data && rows.length > 0 && view === 'list' && (
                             <table
+                                ref={setTable}
                                 aria-label={`Contents of ${title || 'folder'}`}
                                 aria-multiselectable="true"
                                 className="w-full table-fixed border-collapse"
@@ -1021,7 +1032,12 @@ export function FolderView({ folderId }: { folderId: string }) {
                                     <tr className="h-10 border-b border-rule">
                                         <th
                                             scope="col"
-                                            aria-sort={ariaSort(order, 'name')}
+                                            // While the sorted column is hidden, its order is said here.
+                                            aria-sort={
+                                                sortHidden
+                                                    ? ariaSort(order, order.key)
+                                                    : ariaSort(order, 'name')
+                                            }
                                             className="pl-4 text-left md:pl-8"
                                         >
                                             <span className="flex items-center gap-3 md:gap-4">
@@ -1030,20 +1046,51 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     label="Name"
                                                     {...sortProps(order, 'name', setOrder)}
                                                 />
+                                                {sortHidden && sortColumn && (
+                                                    <span className="ml-auto pr-2">
+                                                        <HiddenSortToggle
+                                                            label={
+                                                                sortColumn === 'size'
+                                                                    ? 'size'
+                                                                    : 'date changed'
+                                                            }
+                                                            ascending={order.ascending}
+                                                            order={
+                                                                sortColumn === 'size'
+                                                                    ? order.ascending
+                                                                        ? 'smallest first'
+                                                                        : 'largest first'
+                                                                    : order.ascending
+                                                                      ? 'oldest first'
+                                                                      : 'newest first'
+                                                            }
+                                                            onClick={() =>
+                                                                setOrder({
+                                                                    key: sortColumn,
+                                                                    ascending: !order.ascending,
+                                                                })
+                                                            }
+                                                        />
+                                                    </span>
+                                                )}
                                             </span>
                                         </th>
                                         {!shared && !area && (
                                             <th
                                                 scope="col"
-                                                className="hidden w-[22%] text-left text-xs font-semibold text-muted-foreground lg:table-cell"
+                                                className={cn(
+                                                    LIST_COLUMN.access,
+                                                    'w-44 text-left text-xs font-semibold text-muted-foreground',
+                                                )}
                                             >
                                                 Who can open
                                             </th>
                                         )}
                                         <th
                                             scope="col"
+                                            data-column="modified"
                                             aria-sort={ariaSort(order, 'modified')}
-                                            className="hidden w-40 text-left sm:table-cell"
+                                            className={cn(changedColumn, 'w-40 text-left')}
                                         >
                                             <SortButton
                                                 label="Changed"
@@ -1052,8 +1099,9 @@ export function FolderView({ folderId }: { folderId: string }) {
                                         </th>
                                         <th
                                             scope="col"
+                                            data-column="size"
                                             aria-sort={ariaSort(order, 'size')}
-                                            className="hidden w-28 pr-2 text-right md:table-cell"
+                                            className={cn(sizeColumn, 'w-28 pr-2 text-right')}
                                         >
                                             <SortButton
                                                 label="Size"
@@ -1147,20 +1195,35 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                         />
                                                     </td>
                                                     {!shared && !area && (
-                                                        <td className="hidden min-w-0 pr-4 lg:table-cell">
+                                                        <td
+                                                            className={cn(
+                                                                LIST_COLUMN.access,
+                                                                'min-w-0 pr-4',
+                                                            )}
+                                                        >
                                                             <AccessCell
                                                                 access={access.get(node.id)}
                                                                 inherited={inheritedFrom !== null}
                                                             />
                                                         </td>
                                                     )}
-                                                    <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
+                                                    <td
+                                                        className={cn(
+                                                            changedColumn,
+                                                            'text-[13px] text-muted-foreground tabular-nums',
+                                                        )}
+                                                    >
                                                         {formatWhen(
                                                             node.metadata?.modified ??
                                                                 node.updatedAt,
                                                         )}
                                                     </td>
-                                                    <td className="hidden pr-2 text-right text-[13px] text-muted-foreground tabular-nums md:table-cell">
+                                                    <td
+                                                        className={cn(
+                                                            sizeColumn,
+                                                            'pr-2 text-right text-[13px] text-muted-foreground tabular-nums',
+                                                        )}
+                                                    >
                                                         <SizeText node={node} folderWord="–" />
                                                     </td>
                                                     <td className="pr-3 text-right sm:pr-5">

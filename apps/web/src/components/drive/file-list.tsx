@@ -1,6 +1,7 @@
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, XIcon, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import {
+    useCallback,
     useEffect,
     useRef,
     useState,
@@ -667,5 +668,79 @@ export function RowMenuButton(props: ComponentProps<typeof Button>) {
             className="size-9 rounded-md text-muted-foreground hover:bg-card hover:text-foreground aria-expanded:bg-card"
             {...props}
         />
+    );
+}
+
+/*
+ * Which of a file list's columns show, by the list's own width (`@container/list` on the
+ * column it sits in) rather than the window's: the Info panel takes 332px beside it, so at
+ * 1024px the list is about 440px wide. The name column keeps at least 320px (about 230px of
+ * name beside its mark). As room runs out Size goes first, then Changed; Who can open, the
+ * list's main signal, goes last, at a fixed 176px (`w-44`), leaving the name and its menu as
+ * on a phone. Lists without Who can open (family and shared folders, a tag's list) keep
+ * Changed and Size longer. Info says all three for the item it shows.
+ */
+export const LIST_COLUMN = {
+    access: 'hidden @min-[35rem]/list:table-cell',
+    changed: 'hidden @min-[45rem]/list:table-cell',
+    size: 'hidden @min-[52rem]/list:table-cell',
+    changedAlone: 'hidden @min-[34rem]/list:table-cell',
+    sizeAlone: 'hidden @min-[41rem]/list:table-cell',
+} as const;
+
+/*
+ * Whether a list's column is hidden for room right now, read from its header
+ * (`data-column`), so it follows LIST_COLUMN without repeating its widths.
+ */
+export function useHiddenColumn(table: HTMLTableElement | null, column: string | null) {
+    const subscribe = useCallback(
+        (onChange: () => void) => {
+            if (!table) return () => {};
+            const observer = new ResizeObserver(onChange);
+            observer.observe(table);
+            return () => observer.disconnect();
+        },
+        [table],
+    );
+    return useSyncExternalStore(
+        subscribe,
+        () => {
+            const header = column
+                ? table?.querySelector<HTMLElement>(`thead [data-column="${column}"]`)
+                : null;
+            return header ? getComputedStyle(header).display === 'none' : false;
+        },
+        () => false,
+    );
+}
+
+/*
+ * In the Name header while the column the list is sorted by is hidden for room: says the
+ * order ("By size", with its arrow) and reverses it, so a sort never goes silent.
+ */
+export function HiddenSortToggle({
+    label,
+    ascending,
+    order,
+    onClick,
+}: {
+    /* "size", "date changed". */
+    label: string;
+    ascending: boolean;
+    /* The direction in words, for screen readers: "largest first". */
+    order: string;
+    onClick: () => void;
+}) {
+    const Arrow = ascending ? ArrowUpIcon : ArrowDownIcon;
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-label={`By ${label}, ${order}. Reverse the order`}
+            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
+        >
+            By {label}
+            <Arrow className="size-3.5" aria-hidden="true" />
+        </button>
     );
 }

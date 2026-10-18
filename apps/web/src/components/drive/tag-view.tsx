@@ -1,3 +1,4 @@
+import { cn } from 'cn';
 import {
     recolourTag,
     removeTag,
@@ -10,7 +11,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { PaletteIcon, PencilIcon, TagIcon, Trash2Icon } from 'lucide-react';
 import { useId, useState } from 'react';
-import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
+import { EmptyState, LIST_COLUMN, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { Swatch, TagColourPicker } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
@@ -132,7 +133,8 @@ export function TagView({ tagId }: { tagId: string }) {
     }
 
     return (
-        <div className="flex flex-col">
+        // Columns by the list's own width, as in a folder without Who can open (LIST_COLUMN).
+        <div className="@container/list flex flex-col">
             <PageHeader
                 title={
                     tag ? (
@@ -206,10 +208,19 @@ export function TagView({ tagId }: { tagId: string }) {
                             <th scope="col" className="pl-5 text-left sm:pl-8">
                                 Name
                             </th>
-                            <th scope="col" className="hidden w-40 text-left sm:table-cell">
+                            <th
+                                scope="col"
+                                className={cn(LIST_COLUMN.changedAlone, 'w-40 text-left')}
+                            >
                                 Changed
                             </th>
-                            <th scope="col" className="w-28 pr-5 text-right sm:pr-8">
+                            <th
+                                scope="col"
+                                className={cn(
+                                    LIST_COLUMN.sizeAlone,
+                                    'w-28 pr-5 text-right sm:pr-8',
+                                )}
+                            >
                                 Size
                             </th>
                         </tr>
@@ -236,7 +247,7 @@ export function TagView({ tagId }: { tagId: string }) {
                                     data-node-id={node.id}
                                     className="h-14 border-b border-rule hover:bg-muted"
                                 >
-                                    <td className="min-w-0 pl-5 sm:pl-8">
+                                    <td className="min-w-0 pr-5 pl-5 sm:pl-8">
                                         <span className="flex min-w-0 items-center gap-4">
                                             <Link
                                                 {...target}
@@ -260,10 +271,20 @@ export function TagView({ tagId }: { tagId: string }) {
                                             />
                                         </span>
                                     </td>
-                                    <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
+                                    <td
+                                        className={cn(
+                                            LIST_COLUMN.changedAlone,
+                                            'text-[13px] text-muted-foreground tabular-nums',
+                                        )}
+                                    >
                                         {formatWhen(node.metadata?.modified ?? node.updatedAt)}
                                     </td>
-                                    <td className="pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8">
+                                    <td
+                                        className={cn(
+                                            LIST_COLUMN.sizeAlone,
+                                            'pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8',
+                                        )}
+                                    >
                                         {node.kind === 'folder'
                                             ? '–'
                                             : Number.isNaN(size)

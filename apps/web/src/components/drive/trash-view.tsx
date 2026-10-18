@@ -439,7 +439,13 @@ export function TrashView() {
     return (
         <div
             ref={listRef}
-            className={cn('relative flex flex-1 flex-col', marquee && 'select-none')}
+            // Columns by the list's own width, as the file lists' (LIST_COLUMN in file-list.tsx):
+            // the name column keeps at least 320px; Was in goes first (its words move under the
+            // name), then Size, then the action labels, then Trashed.
+            className={cn(
+                '@container/list relative flex flex-1 flex-col',
+                marquee && 'select-none',
+            )}
         >
             <MarqueeBox marquee={marquee} />
             <PageHeader
@@ -515,16 +521,22 @@ export function TrashView() {
                                     Name
                                 </span>
                             </th>
-                            <th scope="col" className="hidden w-[22%] text-left md:table-cell">
+                            <th scope="col" className={cn(TRASH_COLUMN.where, 'w-[22%] text-left')}>
                                 Was in
                             </th>
-                            <th scope="col" className="hidden w-36 text-left sm:table-cell">
+                            <th scope="col" className={cn(TRASH_COLUMN.trashed, 'w-36 text-left')}>
                                 Trashed
                             </th>
-                            <th scope="col" className="hidden w-24 pr-2 text-right lg:table-cell">
+                            <th
+                                scope="col"
+                                className={cn(TRASH_COLUMN.size, 'w-24 pr-2 text-right')}
+                            >
                                 Size
                             </th>
-                            <th scope="col" className="w-28 pr-3 sm:w-64 sm:pr-5">
+                            <th
+                                scope="col"
+                                className={cn(TRASH_COLUMN.actionsWide, 'w-28 pr-3 sm:pr-5')}
+                            >
                                 <span className="sr-only">Actions</span>
                             </th>
                         </tr>
@@ -534,6 +546,23 @@ export function TrashView() {
                             const isSelected = selected.has(item.node.id);
                             const parent = item.ancestors.at(-1);
                             const location = item.ancestors.map(folderName).join(' › ');
+                            // The folder it was in: a link back to it, unless it is gone or in the Trash too.
+                            const whereFolder =
+                                item.parentTrashed || !parent ? (
+                                    <span className="font-semibold">{folderName(parent)}</span>
+                                ) : (
+                                    <Link
+                                        {...(parent.id === rootId
+                                            ? ({ to: '/app/drive' } as const)
+                                            : ({
+                                                  to: '/app/drive/f/$folderId',
+                                                  params: { folderId: parent.id },
+                                              } as const))}
+                                        className="font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                                    >
+                                        {folderName(parent)}
+                                    </Link>
+                                );
                             const rowBusy = active?.id === item.node.id ? active.verb : null;
                             const rowFailed = failedIds.has(item.node.id);
                             return (
@@ -564,7 +593,8 @@ export function TrashView() {
                                                 <span
                                                     className={cn(
                                                         'row-span-2',
-                                                        !rowFailed && 'md:row-span-1',
+                                                        // Two lines while Was in sits under the name.
+                                                        !rowFailed && TRASH_COLUMN.whereSpan,
                                                     )}
                                                 >
                                                     <SelectableMark
@@ -588,36 +618,31 @@ export function TrashView() {
                                                     </span>
                                                 ) : (
                                                     // Where it was, on screens with no room for the column.
-                                                    <span className="truncate text-[13px] text-muted-foreground md:hidden">
-                                                        Was in {folderName(parent)}
+                                                    <span
+                                                        className={cn(
+                                                            TRASH_COLUMN.whereLine,
+                                                            'truncate text-[13px] text-muted-foreground',
+                                                        )}
+                                                        title={location}
+                                                    >
+                                                        Was in {whereFolder}
                                                         {item.parentTrashed &&
                                                             ', also in the Trash'}
                                                     </span>
                                                 )}
                                             </span>
                                         </td>
-                                        <td className="hidden min-w-0 pr-4 text-[13px] md:table-cell">
+                                        <td
+                                            className={cn(
+                                                TRASH_COLUMN.where,
+                                                'min-w-0 pr-4 text-[13px]',
+                                            )}
+                                        >
                                             <span
                                                 className="flex min-w-0 flex-col"
                                                 title={location}
                                             >
-                                                {item.parentTrashed || !parent ? (
-                                                    <span className="truncate font-semibold">
-                                                        {folderName(parent)}
-                                                    </span>
-                                                ) : (
-                                                    <Link
-                                                        {...(parent.id === rootId
-                                                            ? ({ to: '/app/drive' } as const)
-                                                            : ({
-                                                                  to: '/app/drive/f/$folderId',
-                                                                  params: { folderId: parent.id },
-                                                              } as const))}
-                                                        className="truncate font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
-                                                    >
-                                                        {folderName(parent)}
-                                                    </Link>
-                                                )}
+                                                <span className="truncate">{whereFolder}</span>
                                                 {item.parentTrashed && (
                                                     <span className="text-muted-foreground">
                                                         Also in the Trash
@@ -625,10 +650,20 @@ export function TrashView() {
                                                 )}
                                             </span>
                                         </td>
-                                        <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
+                                        <td
+                                            className={cn(
+                                                TRASH_COLUMN.trashed,
+                                                'text-[13px] text-muted-foreground tabular-nums',
+                                            )}
+                                        >
                                             {formatWhen(item.node.trashedAt)}
                                         </td>
-                                        <td className="hidden pr-2 text-right text-[13px] text-muted-foreground tabular-nums lg:table-cell">
+                                        <td
+                                            className={cn(
+                                                TRASH_COLUMN.size,
+                                                'pr-2 text-right text-[13px] text-muted-foreground tabular-nums',
+                                            )}
+                                        >
                                             {item.node.kind === 'folder' ? (
                                                 '–'
                                             ) : !item.node.currentVersion ? (
@@ -643,7 +678,7 @@ export function TrashView() {
                                             {rowBusy ? (
                                                 <output className="inline-flex items-center gap-2 pr-2 text-[13px] text-muted-foreground">
                                                     <Spinner />
-                                                    <span className="max-sm:sr-only">
+                                                    <span className={TRASH_COLUMN.actionLabel}>
                                                         {rowBusy === 'restoring'
                                                             ? 'Restoring…'
                                                             : 'Deleting forever…'}
@@ -675,7 +710,7 @@ export function TrashView() {
                                                         onClick={() => void restore(item)}
                                                     >
                                                         <RotateCcwIcon />
-                                                        <span className="max-sm:sr-only">
+                                                        <span className={TRASH_COLUMN.actionLabel}>
                                                             {item.parentTrashed
                                                                 ? 'Restore to My files'
                                                                 : 'Restore'}
@@ -798,3 +833,20 @@ export function TrashView() {
         </div>
     );
 }
+
+/*
+ * The Trash list's columns by its own width (see the list's comment): the name column keeps
+ * at least 320px beside 112px of icon actions. Was in goes first (its words move under the
+ * name, `whereLine`, and the mark spans both lines, `whereSpan`), then Size, then the action
+ * labels (the actions widen to 224px, which "Restore to My files" and Delete forever need), then
+ * Trashed.
+ */
+const TRASH_COLUMN = {
+    where: 'hidden @min-[63rem]/list:table-cell',
+    whereLine: '@min-[63rem]/list:hidden',
+    whereSpan: '@min-[63rem]/list:row-span-1',
+    trashed: 'hidden @min-[36rem]/list:table-cell',
+    size: 'hidden @min-[49rem]/list:table-cell',
+    actionsWide: '@min-[43rem]/list:w-56',
+    actionLabel: '@max-[43rem]/list:sr-only',
+} as const;
