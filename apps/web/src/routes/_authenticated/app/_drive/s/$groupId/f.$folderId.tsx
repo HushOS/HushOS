@@ -29,14 +29,27 @@ function FamilyFolderPage() {
     const { groupId, folderId } = Route.useParams();
     const space = useFamilySpace();
     const queryClient = useQueryClient();
-    // Asked again whenever the family's folders change (a sync that opens one, or drops one).
-    const folders = space.areas.map((area) => `${area.workspaceId}:${area.write}`).join(',');
+    // Asked again whenever the family's folders change as areaOf reads them (a sync that opens
+    // one, drops one, or gives one another top folder); never for what may be written there,
+    // which `state` below always reads from the latest sync.
+    const folders = space.areas
+        .map((area) => `${area.workspaceId}:${area.opened ? 'open' : 'shut'}:${area.view.root?.id}`)
+        .join(',');
     const located = useQuery({
         queryKey: [...driveKeys.all, 'space', groupId, 'folder', folderId, folders],
         queryFn: () =>
             areaOf(space.userId, groupId, space.areas, folderId, (listing) =>
                 queryClient.setQueryData(driveKeys.folder(folderId), listing),
             ),
+        // Meanwhile this folder stays where it was found, while that family folder is still
+        // listed and open: the page keeps its list rather than flashing empty rows.
+        placeholderData: (previous, previousQuery) =>
+            previous &&
+            previousQuery?.queryKey[2] === groupId &&
+            previousQuery.queryKey[4] === folderId &&
+            space.areas.some((area) => area.workspaceId === previous && area.opened)
+                ? previous
+                : undefined,
         staleTime: Infinity,
         retry: false,
     });

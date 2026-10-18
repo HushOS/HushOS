@@ -534,6 +534,24 @@ test.describe.serial('two people', () => {
                     for (const area of space.areas) area.workspaceKeyVersion += 1;
             await route.fulfill({ response, json: body });
         });
+        // Synced in place first: the folder stays on the page (never empty rows, never a fresh
+        // mount, which would lose the mark set here), and Add goes the moment it reads so.
+        const kept = sam.page.getByRole('navigation', { name: 'Folder path' });
+        await kept.evaluate((nav) => nav.setAttribute('data-kept', 'yes'));
+        const sync = () =>
+            sam.page.evaluate(() =>
+                document.dispatchEvent(new Event('visibilitychange', { bubbles: true })),
+            );
+        const add = sam.page.getByRole('button', { name: 'Add', exact: true });
+        await expect(add).toBeVisible();
+        await sync();
+        await expect(sam.page.locator('[data-area-state="keys-changed"]')).toBeVisible({
+            timeout: 90_000,
+        });
+        await expect(add).toHaveCount(0);
+        await expect(fileRow(sam.page, 'from-sam.txt')).toBeVisible();
+        await expect(kept).toHaveAttribute('data-kept', 'yes');
+        // And on a fresh load too.
         await sam.page.reload();
         await expect(sam.page.locator('[data-area-state="keys-changed"]')).toBeVisible({
             timeout: 90_000,
@@ -550,6 +568,14 @@ test.describe.serial('two people', () => {
         );
         await sam.page.keyboard.press('Escape');
         await sam.page.unroute(ahead);
+        // Synced in place again, the folder is writable and Add is back, on the same mount.
+        await kept.evaluate((nav) => nav.setAttribute('data-kept', 'yes'));
+        await sync();
+        await expect(sam.page.locator('[data-area-state="keys-changed"]')).toHaveCount(0, {
+            timeout: 90_000,
+        });
+        await expect(add).toBeVisible();
+        await expect(kept).toHaveAttribute('data-kept', 'yes');
 
         // My files is Sam's own: none of the family's files are listed there.
         await sam.page.goto('/app/drive');
