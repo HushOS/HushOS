@@ -1,0 +1,28 @@
+apps/web/src/components/drive/json-view.tsx
+  s_c56e31c87cddde::t_ce62ef87decb23 18-24,44-48,51-52,96-98,112-127,133-134,137-142,148,150,153-156,158-160
+  s_c56e31c87cddde::t_0278d739258830 1,162,164-180,192,205,209-213,217,221,366-374,376-379,410,499-509,515-516,594,596,625-626,679-680,696,699-700,707-718,723-726,774-782
+apps/web/src/components/drive/rich-text.tsx
+  s_c56e31c87cddde::t_49822d6e889a68 255-256,258,264-268,272,289,305,313,402,405
+apps/web/src/lib/highlight.ts
+  s_c56e31c87cddde::t_c932c3952dc721 209,211-213,236,238-247,254
+apps/web/src/lib/json.test.ts
+  s_c56e31c87cddde::t_ff4b6532451035 1,53,60,63-69,91-106,115-144
+apps/web/src/lib/json.ts
+  s_c56e31c87cddde::t_6ec8b2fd2e5140 13-14,18-27,34-39,44-57,69-73,75-76,78-90,99,262-285,289-290,293,295-296,299,307-308,310-318,325,330-331,337,355-357,362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a89725771e763c72c19ab1adf5fca1704a0a53f8",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
