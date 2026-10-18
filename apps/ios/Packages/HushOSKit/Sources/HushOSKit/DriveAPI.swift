@@ -32,10 +32,17 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
  */
 public final class DriveAPI: Sendable {
     /*
-     * `HushOS-Client` on every request: the Drive protocol this build speaks (packages/drive's
-     * DRIVE_PROTOCOL_VERSION). 3: padded objects (content suite 3) and signed writes.
+     * `HushOS-Client` on every request: the HushOS version of this build (CFBundleShortVersionString,
+     * MARKETING_VERSION in project.yml), which the server compares with its minimum for `ios`
+     * (packages/drive's checkClient). The app and its extensions carry the same version. A bundle
+     * without one (a unit-test host) says 0.0.0, older than any minimum. Builds before 1.0.0 sent
+     * the Drive protocol number here ("ios/3").
      */
-    public static let clientHeader = "ios/3"
+    public static let clientHeader: String = {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let valid = version.wholeMatch(of: #/[0-9]+\.[0-9]+\.[0-9]+/#) != nil
+        return "ios/" + (valid ? version : "0.0.0")
+    }()
 
     public let session: SharedKeychain.Session
     private let http: URLSession

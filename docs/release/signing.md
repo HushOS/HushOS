@@ -21,7 +21,7 @@ From `apps/ios/project.yml` (XcodeGen; the `.xcodeproj` is generated, not commit
 - **The File Provider testing mode** (`com.apple.developer.fileprovider.testing-mode`) is in `App/HushOS-Simulator.entitlements` only. `App/HushOS.xcconfig` picks that file for simulator builds and `App/HushOS.entitlements` for devices, so a store archive never carries it; `apps/ios/scripts/archive.sh` checks this and stops if it does.
 - **`HUSHOS_LINK_HOST`** is set in `App/HushOS.xcconfig` to `hushos.com` and expands into both associated-domain entries. A self-hosted build sets its own host in `App/Local.xcconfig` (included if present, not committed). The store build must keep `hushos.com`.
 - **Device family:** `TARGETED_DEVICE_FAMILY: '1,2'`, so the app is universal and **iPad screenshots are mandatory** (13-inch, 2064×2752 or 2048×2732). Nothing in the app is designed for iPad. Apple refuses an update that drops a device family the store version supports (QA1623, archived but still enforced), so this has to be decided **before the first App Store release**: change it to `'1'` for an iPhone-only launch (recommended). A build that only went to TestFlight probably does not lock it in, but Apple doesn't document that either way.
-- **Versions:** `CFBundleShortVersionString: '0.1.0'` and `CFBundleVersion: '1'` in all five targets. They must match across targets, and every upload needs a higher build number. `archive.sh <version> <build>` rewrites all ten values at once.
+- **Versions:** every target's Info.plist reads `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)`, set once under `settings: base:` in `project.yml`, so the app and its extensions always match. `MARKETING_VERSION` is the product version (the release pull request sets it); `archive.sh` passes the build number from `scripts/build-number.sh`, and every upload needs a higher one.
 - **Deployment target:** iOS 26.0, built with Xcode 27 here. Apple has required the iOS 26 SDK for uploads since 28 April 2026, so this is fine.
 
 ### Certificates, identifiers and profiles: let Xcode do it
@@ -52,7 +52,7 @@ The Team ID is 10 capital letters and digits, on https://developer.apple.com/acc
 
 1. **The production server:** `APPLE_APP_IDS=<TEAMID>.com.hushos.app` (`packages/env/src/app.ts` checks the format). The web then serves `https://hushos.com/.well-known/apple-app-site-association` with `applinks` (share links `/s/*`, `/recover/complete`, `/app`, `/app/drive*`, `/app/shared*`, `/app/trash*`; `/app/billing*` and `/app/admin*` excluded) and `webcredentials`. Unset, it answers 404, which is what it does today.
 2. **The associated-domains entitlement** needs nothing more: `applinks:hushos.com` and `webcredentials:hushos.com` are already in `App/HushOS.entitlements`; the Team ID binds them through the signature.
-3. **Builds:** `DEVELOPMENT_TEAM=<TEAMID> bun run ios:archive <version> <build>` (and `bun run ios:device` for a phone). To archive from Xcode's own menu instead, add `DEVELOPMENT_TEAM: <TEAMID>` under `settings: base:` in `apps/ios/project.yml` and commit it: otherwise every `xcodegen generate` drops the team from all five targets.
+3. **Builds:** `DEVELOPMENT_TEAM=<TEAMID> bun run ios:archive` (and `bun run ios:device` for a phone). To archive from Xcode's own menu instead, add `DEVELOPMENT_TEAM: <TEAMID>` under `settings: base:` in `apps/ios/project.yml` and commit it: otherwise every `xcodegen generate` drops the team from all five targets.
 
 Apple's CDN fetches the association file within 24 hours of the app's first install, and devices refresh about weekly (https://developer.apple.com/documentation/xcode/supporting-associated-domains, checked 2026-10-05). Check what Apple has cached at `https://app-site-association.cdn-apple.com/a/v1/hushos.com`.
 
@@ -67,7 +67,7 @@ Apple's CDN fetches the association file within 24 hours of the app's first inst
 From `apps/android/app/build.gradle.kts` and `app/src/main/AndroidManifest.xml`:
 
 - `applicationId` and `namespace` `com.hushos.app`; `minSdk 29`, `targetSdk 36` (Play has required 36 for new apps and updates since 31 August 2026), `compileSdk 37`.
-- `versionCode = 1`, `versionName = "0.1.0"`.
+- `versionName` is the product version (the release pull request sets it); `versionCode` is `-PbuildNumber`, which `bundle-release.sh` takes from `scripts/build-number.sh` (the commit count on main), or the same count when nothing is passed.
 - Release: R8 minify and resource shrinking on, `DEFAULT_ORIGIN` `https://hushos.com`; `-PdefaultOrigin=` changes it for a self-hosted build. The same origin sets the app-link intent filter's scheme and host and `appLinkVerify` (`true` only for https), so the store build verifies `hushos.com`.
 - Permissions: `INTERNET`, `ACCESS_NETWORK_STATE`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` (queued transfers through WorkManager), `POST_NOTIFICATIONS`, `CAMERA` (the recovery-kit scan; `camera.any` not required); WorkManager adds `WAKE_LOCK` and `RECEIVE_BOOT_COMPLETED` in the merged manifest. No media, storage or advertising-ID permissions (checked in the merged release manifest).
 - `allowBackup="false"`; cleartext only in the debug build (`src/debug/res/xml/network_security_config.xml`, for the dev server); release allows https only.
@@ -130,4 +130,4 @@ on the production server (`ANDROID_APP_PACKAGE` defaults to `com.hushos.app`). T
 
 ### versionCode
 
-Every bundle needs a `versionCode` higher than any Play has seen for the app, on any track (maximum 2,100,000,000). `versionName` is what people see. `bundle-release.sh <versionName> <versionCode>` rewrites both in `build.gradle.kts`; commit that change after a successful upload. Use the same numbers as iOS (version `1.0.0`, build `1` then `2`...) so a report of "build 7" means the same on both.
+Every bundle needs a `versionCode` higher than any Play has seen for the app, on any track (maximum 2,100,000,000). `versionName` is what people see. Both come from the commit: package.json's version and `scripts/build-number.sh`'s count of commits on main, the same pair as iOS, so a report of "build 512" means the same on both. Build only from main (the script refuses other commits): a branch's count can pass the next main build's, and Play then refuses main's bundle.

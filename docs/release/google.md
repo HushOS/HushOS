@@ -138,10 +138,11 @@ Facts: new apps must ship as App Bundles with Play App Signing (https://develope
 1. Build the bundle:
 
     ```sh
-    bun run android:bundle 1.0.0 1     # or: apps/android/scripts/bundle-release.sh 1.0.0 1
+    git checkout v1.0.0               # the release tag
+    bun run android:bundle            # or: apps/android/scripts/bundle-release.sh
     ```
 
-    It writes `apps/android/app/build/outputs/bundle/release/app-release.aab`, signed with the upload key, and prints the key's SHA-256. Commit the `build.gradle.kts` version change afterwards.
+    It writes `apps/android/app/build/outputs/bundle/release/app-release.aab`, signed with the upload key, and prints the key's SHA-256. The version is package.json's and the version code the commit count on main (`scripts/build-number.sh`); nothing is edited.
 
 2. Play Console > **Test and release > Testing > Internal testing** > **Testers** tab > **Create email list**: `HushOS team`, add the Gmail or Google Workspace addresses of your testers (yours first) > Save. Tick the list.
 3. **Releases** tab > **Create new release**.
@@ -177,4 +178,4 @@ The Android app used to link to `/app/billing`, which sells plans; outside Googl
 
 1. Check the listing at `https://play.google.com/store/apps/details?id=com.hushos.app`.
 2. Add the Google Play link to hushos.com (the home page FAQ still says to add the website to the home screen).
-3. Every update: `bun run android:bundle <version> <next versionCode>`, upload to internal testing, check, then **Promote release** to production.
+3. Every update: check out the release tag, `bun run android:bundle`, upload to internal testing, check, then **Promote release** to production.

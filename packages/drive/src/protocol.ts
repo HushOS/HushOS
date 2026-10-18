@@ -128,6 +128,11 @@ export type DriveErrorCode =
  * redeployed, so this is how an old CLI or file provider learns it must update
  * instead of failing on a shape it no longer understands. Pure functions; the
  * API layer turns a refusal into the response.
+ *
+ * The version is the HushOS product version (`web/1.0.0`, `ios/1.0.0`), the
+ * same for the server, the web app and both phone apps. Clients built before
+ * product versioning sent their Drive protocol number instead (`ios/3`); they
+ * still parse, and count as older than every product version.
  */
 
 export const CLIENT_HEADER = 'HushOS-Client';
@@ -164,7 +169,31 @@ export function compareVersions(a: string, b: string) {
     return 0;
 }
 
-/* "web/1,cli/0.4" -> Map; the env schema has already checked the shape. */
+/* A product version as clients send it: major.minor.patch, no leading zeros. */
+const PRODUCT_VERSION = /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$/;
+
+export function isProductVersion(version: string) {
+    return PRODUCT_VERSION.test(version);
+}
+
+/*
+ * The oldest client release that will understand the protocol changes now
+ * being built. Nothing refuses older clients yet: a change that needs it sets
+ * this as the minimum for its route or for the operator's defaults.
+ */
+export const UPCOMING_PROTOCOL_MINIMUM = '1.0.0';
+
+/*
+ * Whether a client is at least `minimum`, a product version. A client that sent
+ * anything else (a pre-1.0 protocol number such as "3", a fourth segment) is
+ * older than every minimum: "3" must not pass for newer than "1.0.0".
+ */
+export function meetsMinimum(client: ClientIdentity, minimum: string) {
+    if (!isProductVersion(minimum)) throw new Error(`${minimum} is not a product version.`);
+    return isProductVersion(client.version) && compareVersions(client.version, minimum) >= 0;
+}
+
+/* "web/1.0.0,ios/1.0.0" -> Map; the env schema has already checked the shape. */
 export function parseMinimums(value: string | null | undefined) {
     const minimums = new Map<string, string>();
     for (const pair of (value ?? '').split(',')) {
@@ -195,7 +224,7 @@ export function checkClient(
             message: `Send a ${CLIENT_HEADER} header of the form name/version.`,
         };
     const minimum = minimums.get(client.name);
-    if (minimum !== undefined && compareVersions(client.version, minimum) < 0)
+    if (minimum !== undefined && !meetsMinimum(client, minimum))
         return {
             ok: false,
             status: 426,

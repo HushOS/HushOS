@@ -1,0 +1,49 @@
+name: Release
+
+# release-please (release-please-config.json, .release-please-manifest.json) on every push to
+# main: it keeps one release pull request open that bumps the version everywhere and updates
+# CHANGELOG.md from the Conventional Commit subjects since the last release. Merging that pull
+# request creates the tag vX.Y.Z and the GitHub release; the image job in ci.yml pushes the
+# X.Y.Z, X.Y and X image tags from the same merge commit. See CONTRIBUTING.md (Releasing).
+on:
+    push:
+        branches: [main]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}
+    cancel-in-progress: false
+
+jobs:
+    release-please:
+        name: Release pull request and tag
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: write
+            issues: write
+            pull-requests: write
+        steps:
+            # A pull request opened with the workflow's own GITHUB_TOKEN starts no workflows, so CI
+            # would never run on the release pull request. A GitHub App token (preferred) or a
+            # fine-grained token in RELEASE_PLEASE_TOKEN opens it as someone CI answers to.
+            - name: Token from the release app
+              id: app
+              if: vars.RELEASE_APP_ID != ''
+              uses: actions/create-github-app-token@v3
+              with:
+                  app-id: ${{ vars.RELEASE_APP_ID }}
+                  private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+            - uses: googleapis/release-please-action@v5
+              id: release
+              with:
+                  token: ${{ steps.app.outputs.token || secrets.RELEASE_PLEASE_TOKEN || github.token }}
+                  config-file: release-please-config.json
+                  manifest-file: .release-please-manifest.json
+            - name: Summary
+              if: steps.release.outputs.release_created == 'true'
+              env:
+                  TAG: ${{ steps.release.outputs.tag_name }}
+              run: echo "Released $TAG. Add upgrade notes to the GitHub release if it needs any." >> "$GITHUB_STEP_SUMMARY"

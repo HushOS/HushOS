@@ -40,13 +40,15 @@ export const storageEnv = createEnv({
         // After a database restore: the orphan sweep stays paused until this
         // moment, so objects the restored database forgot are not destroyed first.
         DRIVE_ORPHAN_SWEEP_PAUSED_UNTIL: z.iso.datetime({ offset: true }).optional(),
-        // The oldest client the server still serves, per client name, as
-        // "web/1,cli/0.4". A client below its minimum gets 426 and told to update.
+        // The oldest client the server still serves, per client name, as product
+        // versions: "web/1.0.0,ios/1.0.0". A client below its minimum gets 426 and
+        // told to update. Protocol numbers ("web/3") were the minimums before 1.0.0
+        // and are refused here: every product version would compare below them.
         DRIVE_CLIENT_MINIMUMS: z
             .string()
             .regex(
-                /^[a-z][a-z0-9-]{0,31}\/[0-9]+(\.[0-9]+){0,3}(,[a-z][a-z0-9-]{0,31}\/[0-9]+(\.[0-9]+){0,3})*$/,
-                'Use name/version pairs separated by commas, for example web/1,cli/0.4.',
+                /^[a-z][a-z0-9-]{0,31}\/(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(,[a-z][a-z0-9-]{0,31}\/(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8}))*$/,
+                'Use name/version pairs of product versions separated by commas, for example web/1.0.0,ios/1.0.0.',
             )
             .optional(),
         DRIVE_MAX_FILE_BYTES: z

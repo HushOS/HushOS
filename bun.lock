@@ -20,6 +20,7 @@
     },
     "apps/web": {
       "name": "@hushos/web",
+      "version": "0.0.0",
       "dependencies": {
         "@atlaskit/pragmatic-drag-and-drop": "3.1.0",
         "@atlaskit/pragmatic-drag-and-drop-hitbox": "2.2.0",
@@ -111,6 +112,7 @@
     },
     "packages/auth": {
       "name": "@hushos/auth",
+      "version": "0.0.0",
       "dependencies": {
         "@hushos/crypto": "workspace:*",
         "@hushos/db": "workspace:*",
@@ -127,6 +129,7 @@
     },
     "packages/billing": {
       "name": "@hushos/billing",
+      "version": "0.0.0",
       "dependencies": {
         "@hushos/db": "workspace:*",
         "@hushos/env": "workspace:*",
@@ -142,6 +145,7 @@
     },
     "packages/config": {
       "name": "@hushos/config",
+      "version": "0.0.0",
       "devDependencies": {
         "oxfmt": "0.66.0",
         "typescript": "7.0.2",
@@ -149,6 +153,7 @@
     },
     "packages/crypto": {
       "name": "@hushos/crypto",
+      "version": "0.0.0",
       "dependencies": {
         "@noble/post-quantum": "0.7.1",
         "@scure/bip39": "2.4.0",
@@ -168,6 +173,7 @@
     },
     "packages/db": {
       "name": "@hushos/db",
+      "version": "0.0.0",
       "dependencies": {
         "@hushos/crypto": "workspace:*",
         "@hushos/env": "workspace:*",
@@ -187,6 +193,7 @@
     },
     "packages/drive": {
       "name": "@hushos/drive",
+      "version": "0.0.0",
       "dependencies": {
         "@aws-sdk/client-s3": "3.1131.0",
         "@aws-sdk/s3-request-presigner": "3.1131.0",
@@ -205,6 +212,7 @@
     },
     "packages/emails": {
       "name": "@hushos/emails",
+      "version": "0.0.0",
       "dependencies": {
         "@aws-sdk/client-sesv2": "3.1127.0",
         "@hushos/env": "workspace:*",
@@ -226,6 +234,7 @@
     },
     "packages/env": {
       "name": "@hushos/env",
+      "version": "0.0.0",
       "dependencies": {
         "@t3-oss/env-core": "0.13.11",
         "zod": "4.5.4",
@@ -239,6 +248,7 @@
     },
     "packages/groups": {
       "name": "@hushos/groups",
+      "version": "0.0.0",
       "dependencies": {
         "@hushos/billing": "workspace:*",
         "@hushos/crypto": "workspace:*",
@@ -260,6 +270,7 @@
     },
     "packages/jobs": {
       "name": "@hushos/jobs",
+      "version": "0.0.0",
       "dependencies": {
         "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
@@ -277,6 +288,7 @@
     },
     "packages/logging": {
       "name": "@hushos/logging",
+      "version": "0.0.0",
       "dependencies": {
         "evlog": "^2.28.1",
       },
@@ -289,6 +301,7 @@
     },
     "packages/shared": {
       "name": "@hushos/shared",
+      "version": "0.0.0",
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",
@@ -297,6 +310,7 @@
     },
     "packages/tokens": {
       "name": "@hushos/tokens",
+      "version": "0.0.0",
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",
@@ -306,6 +320,7 @@
     },
     "packages/utils": {
       "name": "@hushos/utils",
+      "version": "0.0.0",
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",

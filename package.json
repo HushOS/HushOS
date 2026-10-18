@@ -1,5 +1,6 @@
 {
     "name": "hushos",
+    "version": "0.1.0",
     "private": true,
     "license": "AGPL-3.0-only",
     "workspaces": [
@@ -16,7 +17,8 @@
         "lint:fix": "oxlint --fix .",
         "format": "oxfmt --write .",
         "format:check": "oxfmt --check .",
-        "check": "bun run lint && bun run format:check && bun run typecheck",
+        "check": "bun run lint && bun run format:check && bun run check:versions && bun run typecheck",
+        "check:versions": "bun scripts/check-versions.ts",
         "core:test": "cargo test --workspace",
         "core:check": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo clippy -p hushos-core --features fuzzing --all-targets -- -D warnings && cargo fmt --manifest-path crates/hushos-core/fuzz/Cargo.toml --check && cargo clippy --locked --manifest-path crates/hushos-core/fuzz/Cargo.toml --all-targets -- -D warnings",
         "fixtures": "bun run --cwd packages/crypto fixtures:core && cargo run -q -p hushos-core --example fixtures && bun run fixtures:groups",
