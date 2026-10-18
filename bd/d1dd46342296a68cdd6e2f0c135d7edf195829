@@ -1,0 +1,85 @@
+DESIGN.md
+  s_ca1aae6af8b2d6::t_bdd249b92bc893 366,442-448
+apps/ios/AGENTS.md
+  s_ca1aae6af8b2d6::t_8810166f717b6c 106-116
+apps/ios/App/AccountView.swift
+  s_ca1aae6af8b2d6::t_23051339cd5a06 49,106-109,113
+apps/ios/App/ActionSheets.swift
+  s_ca1aae6af8b2d6::t_efd7b942e70b5a 472-480,530
+apps/ios/App/AppModel.swift
+  s_ca1aae6af8b2d6::t_86efb1632a0eca 175-176,192
+apps/ios/App/BrowseView.swift
+  s_ca1aae6af8b2d6::t_9cde2fb0b0f5a4 95-107,193,216,237-238,243-247,285,298,324-327,339-340,431,459-463
+apps/ios/App/DriveStore.swift
+  s_ca1aae6af8b2d6::t_c180da23bebaed 55-56,86-105,251-253,424,429-430,468-469,479-481,627,629-639
+apps/ios/App/Families.swift
+  s_ca1aae6af8b2d6::t_21fca836e9ffa0 1-435
+apps/ios/App/NodeActions.swift
+  s_ca1aae6af8b2d6::t_9063042a715a06 86-88,93-98,151,153-164,171
+apps/ios/App/Unverified.swift
+  s_ca1aae6af8b2d6::t_9702f75e25be49 13,17-23,25-31,46-52,144
+apps/ios/App/Viewer.swift
+  s_ca1aae6af8b2d6::t_6c4367623b3258 171
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_ca1aae6af8b2d6::t_3dddb544b6ede5 28
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_ca1aae6af8b2d6::t_43ecbd5afc0a38 33-35,89
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_ca1aae6af8b2d6::t_7d3ef91c9709dc 306-307
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_ca1aae6af8b2d6::t_78251183109fa8 60-61,111-123
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveModels.swift
+  s_ca1aae6af8b2d6::t_8dc36e7cf54835 30-47,71-76
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyIntegrity.swift
+  s_ca1aae6af8b2d6::t_53aecee3bf967e 1-347
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRecords.swift
+  s_ca1aae6af8b2d6::t_d66a978170ec99 1-96
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_ca1aae6af8b2d6::t_6b399216abdba5 1-704
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWords.swift
+  s_ca1aae6af8b2d6::t_0307081ecfc0c7 1-54
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI.swift
+  s_ca1aae6af8b2d6::t_d8e7c1e862a152 1-242
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Integrity.swift
+  s_ca1aae6af8b2d6::t_10c2bf41c7805b 44-49,54-55,57-58,86-93
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_ca1aae6af8b2d6::t_03c847d800a060 163-164
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_ca1aae6af8b2d6::t_865721d841a569 225-226,339-340
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Reports.swift
+  s_ca1aae6af8b2d6::t_1e7a3d713ce0c0 92-93
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_ca1aae6af8b2d6::t_2651a5816bf149 52,60,74,76-81,86,109,115,127-145
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_ca1aae6af8b2d6::t_86f9d804bb0013 160-209,305-306
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_ca1aae6af8b2d6::t_70835f8c2c3894 1-150
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_ca1aae6af8b2d6::t_2228b63346b805 146-147
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_ca1aae6af8b2d6::t_25cd67e7584a73 20,43,75-76,95-96,99,154,161,193,227,543
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_ca1aae6af8b2d6::t_35f25d98442d47 127-135,176-183,380-383,399-403,408-418
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyLinesTests.swift
+  s_ca1aae6af8b2d6::t_d0fb2b06395fe8 1-81
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_ca1aae6af8b2d6::t_cae6e45d1c471e 1-603
+docs/groups-mobile-plan.md
+  s_ca1aae6af8b2d6::t_4001a260f9e4d0 108-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bdd1dd46342296a68cdd6e2f0c135d7edf195829",
+  "prompts": {},
+  "sessions": {
+    "s_ca1aae6af8b2d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a35447e4b9aa8b932",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
