@@ -23,6 +23,7 @@ import { usePageRestored } from '@/lib/page-restore';
 import { setPaletteOpen } from '@/lib/palette';
 import { billingQueryOptions, storageQueryOptions } from '@/lib/queries';
 import { sessionQueryOptions } from '@/lib/session';
+import { useIsTablet } from '@/hooks/use-mobile';
 import { getSidebarStateServerFn } from '@/lib/theme';
 import { bindContactsToQueries } from '@/lib/contacts';
 import { bindTransfersToQueries, guardUnloadWhileUploading } from '@/lib/transfers';
@@ -46,7 +47,13 @@ export const Route = createFileRoute('/_authenticated/app')({
 function AppLayout() {
     const router = useRouter();
     const { user } = Route.useRouteContext();
-    const sidebarOpen = Route.useLoaderData();
+    // Open or closed as the person last chose (the cookie). Until they choose, the width decides:
+    // the icon rail between a phone and a desk (768 to 1023px), where the full sidebar would
+    // squeeze the page to about 500px, and open on a desk. A phone uses the sheet either way.
+    const savedSidebar = Route.useLoaderData();
+    const [sidebarChoice, setSidebarChoice] = useState(savedSidebar);
+    const tablet = useIsTablet();
+    const sidebarOpen = sidebarChoice ?? !tablet;
     const queryClient = router.options.context.queryClient;
     const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
     const rememberError = useStore(authClient.store, (state) => state.rememberError);
@@ -147,7 +154,9 @@ function AppLayout() {
     }, [queryClient]);
     return (
         <SidebarProvider
-            defaultOpen={sidebarOpen}
+            open={sidebarOpen}
+            onOpenChange={setSidebarChoice}
+            auto={sidebarChoice === null}
             style={{ '--sidebar-width': '15rem' } as CSSProperties}
         >
             <NavigationBar />
@@ -159,9 +168,11 @@ function AppLayout() {
              */}
             <SidebarInset className="min-w-0 bg-card md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
                 <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 bg-card px-3 sm:px-5 md:px-8">
+                    {/* The sheet on a phone; on a tablet it opens or folds the rail. A desk has the rail's edge and Mod+B. */}
                     <SidebarTrigger
                         aria-label="Menu"
-                        className="text-muted-foreground hover:text-foreground md:hidden"
+                        size="icon"
+                        className="text-muted-foreground hover:text-foreground lg:hidden"
                     />
                     {/* Search opens the command palette; it reads as a box so people know where to look. */}
                     <button
