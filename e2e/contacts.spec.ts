@@ -1,6 +1,5 @@
-import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
-import { newContext, registerAccount } from './helpers';
+import { newContext, operatorRole, registerAccount } from './helpers';
 
 /*
  * Contacts and the management area, driven as two people: one publishes an
@@ -116,7 +115,7 @@ test('the management page opens for an operator granted from the command line an
     await alice.waitForURL(/\/app\/drive$/);
     await expect(alice.getByRole('link', { name: 'Management' })).toHaveCount(0);
 
-    execFileSync('bun', ['run', 'admin:grant', bobEmail], { stdio: 'pipe' });
+    operatorRole('grant', bobEmail);
     await bob.goto('/app/admin');
     await expect(bob.getByRole('heading', { name: 'Management' })).toBeVisible({
         timeout: 60_000,

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,47 @@ import * as XLSX from 'xlsx';
 
 export const MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? 'http://localhost:8025';
 export const PASSWORD = 'correct-horse-battery-staple-9';
+
+/*
+ * The database of the server under test, for the few steps that reach it directly (operator
+ * roles, backdating). Against a server of its own (E2E_BASE_URL) it is E2E_DATABASE_URL, and
+ * required: Bun loads the root .env into every script, and that names the developer's own
+ * database, never the other server's. Otherwise the suite started (or reuses) the dev server
+ * on the root .env, as CI does, so it is that file's, as Bun loaded it.
+ */
+export function e2eDatabase() {
+    const url = process.env.E2E_BASE_URL
+        ? process.env.E2E_DATABASE_URL
+        : (process.env.E2E_DATABASE_URL ?? process.env.DATABASE_URL);
+    if (!url)
+        throw new Error(
+            process.env.E2E_BASE_URL
+                ? `E2E_BASE_URL is set, so set E2E_DATABASE_URL to that server's database too (the root .env names your own).`
+                : 'No DATABASE_URL: run the suite from the repository root, where Bun loads .env.',
+        );
+    const name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ''));
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error(`Unexpected database name in ${name}.`);
+    return {
+        url,
+        migrationUrl: process.env.E2E_BASE_URL
+            ? (process.env.E2E_MIGRATION_DATABASE_URL ?? url)
+            : (process.env.E2E_MIGRATION_DATABASE_URL ?? process.env.MIGRATION_DATABASE_URL ?? url),
+        name,
+    };
+}
+
+/* Grants or takes back the operator role, as `bun run admin:grant` does, in the server's own database. */
+export function operatorRole(action: 'grant' | 'revoke', email: string) {
+    const database = e2eDatabase();
+    execFileSync('bun', ['run', `admin:${action}`, email], {
+        stdio: 'pipe',
+        env: {
+            ...process.env,
+            DATABASE_URL: database.url,
+            MIGRATION_DATABASE_URL: database.migrationUrl,
+        },
+    });
+}
 
 /*
  * Where to click a row to select it: the padding before its thumbnail. The name

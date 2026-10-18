@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import {
@@ -7,11 +6,12 @@ import {
     newContext,
     newFolder,
     newLink,
+    openFolder,
+    operatorRole,
     PASSWORD,
     registerAccount,
     sampleFiles,
     sha256,
-    openFolder,
 } from './helpers';
 
 /*
@@ -84,7 +84,7 @@ test.beforeAll(async ({ browser }) => {
     operator = await (await newContext(browser)).newPage();
     operatorEmail = (await registerAccount(operator)).email;
     // The operator exists, with an identity, before anyone reports: the key is sealed to them.
-    execFileSync('bun', ['run', 'admin:grant', operatorEmail], { stdio: 'pipe' });
+    operatorRole('grant', operatorEmail);
 
     owner = await (await newContext(browser)).newPage();
     ownerEmail = (await registerAccount(owner)).email;
@@ -253,7 +253,7 @@ test('an operator promoted after the report cannot open it until an operator who
 }) => {
     const late = await (await newContext(browser)).newPage();
     const lateEmail = (await registerAccount(late)).email;
-    execFileSync('bun', ['run', 'admin:grant', lateEmail], { stdio: 'pipe' });
+    operatorRole('grant', lateEmail);
     await openReportContent(late, reportId);
     await expect(late.getByRole('alert')).toContainText(/not sealed to you/, { timeout: 60_000 });
 
