@@ -1,0 +1,39 @@
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_c56e31c87cddde::t_0dde14ce288e10 91-97,268,278-282,291-293
+docs/polar-group-billing-spike.md
+  s_c56e31c87cddde::t_59557eb1222d16 724-731
+docs/self-hosting.md
+  s_c56e31c87cddde::t_8236da4d2953a8 545
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_582a7cb960ac08 1058
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_8b344809e0093f 155-166,178,222,234-236,242-243,381-382,384,386-404,408-413,734,1129-1131
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_052f70700ab3cb 189,205,522-523,527,529,2921,2925-2936,3317,3406-3498
+packages/db/drizzle/20261018015107_group_plan_tiers/migration.sql
+  s_c56e31c87cddde::t_efba48c3f71b72 2-3,16
+packages/db/drizzle/20261018015107_group_plan_tiers/snapshot.json
+  s_c56e31c87cddde::t_5e35f84ebc0cad 4,5911-5923
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_eb63220836c2fc 504-512,515-519,538
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_c52d8f07e72a4c 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_d44032a4d00034 194-199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d77b52930be3507d3b71d352ffcd689a78bccac3",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
