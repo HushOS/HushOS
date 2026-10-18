@@ -123,6 +123,12 @@ export function previewKind(node: DriveNode): PreviewKind {
     return 'none';
 }
 
+/* A JSON file, which opens in the JSON viewer: by its name, or by its recorded type. */
+export function isJsonFile(name: string, mime: string | null | undefined) {
+    const type = (mime ?? '').split(';')[0]!.trim().toLowerCase();
+    return languageFor(name) === 'json' || type === 'application/json';
+}
+
 const TEXT_SNIFF_BYTES = 8 * 1024;
 
 /*
