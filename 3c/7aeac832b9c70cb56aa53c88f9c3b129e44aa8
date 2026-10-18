@@ -1,0 +1,80 @@
+packages/billing/src/protocol.ts
+  s_c56e31c87cddde::t_a6af2dbce52615 19-29
+  s_c56e31c87cddde::t_9d8e8bcf0b441e 82-110
+  s_c56e31c87cddde::t_0e489507b6a2bb 111-128
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_c4f2cda39ea07f 32,283-284,372,375,377,394,429,434,442,445,450-451,456,458,460,465,467,470,472,476,478-479,481,810,834,910-1140
+  s_c56e31c87cddde::t_b9f726f2e1af1e 15,28,105,268,281-282,368-371,373-374,376,378,389-393,395,400-401,404-406,425-428,430-433,435-441,443-444,446-449,452-455,457,459,461-464,466,468-469,471,473-475,477,480,482,828,833,1280,1282-1284,1301
+DESIGN.md
+  s_c56e31c87cddde::t_503478cdd486b0 396
+apps/web/src/components/families/family-billing.tsx
+  s_c56e31c87cddde::t_febb7b84aba3ad 2,29,47,55,59,64,415-417,425-433,436-446,448,464,478,516,518,524-525,561-579,613-618,656-660,662-681,740-747,962-1162
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_292db6155a843b 1216-1228
+apps/web/src/lib/billing-api.ts
+  s_c56e31c87cddde::t_1bea714a623cde 24
+apps/web/src/lib/family-billing.test.ts
+  s_c56e31c87cddde::t_32ca19a1d7f14f 6-8,32-33,79,172-174,197-198,317-477
+apps/web/src/lib/family-billing.ts
+  s_c56e31c87cddde::t_e28fb2ee42b7cd 11,192-196,198,200-210,213-216,220,224-285,289-292,305-306,340-342
+apps/web/src/lib/plans.test.ts
+  s_c56e31c87cddde::t_f1822f2228be72 3,80-93,95,97-98,101-112,114,117-122,124-127,130-178,181-190,194-198,201-209,217-219
+apps/web/src/lib/plans.ts
+  s_c56e31c87cddde::t_72d45c84bd2278 68-71,74-78,80,82,84,89-91,94,98-128,131-134,139,141-143
+apps/web/src/lib/pricing-faq.test.ts
+  s_c56e31c87cddde::t_c446d200b011c9 3,6-27,33-35,37,44,51,58-68
+apps/web/src/lib/pricing-faq.ts
+  s_c56e31c87cddde::t_35edb7156510f5 1-2,32-41,44-47,49-57,61,66-70,74
+apps/web/src/routes/pricing/route.tsx
+  s_c56e31c87cddde::t_711c61dbd19c2f 39-40,100,251-252,514-516,647-651,653-654,659,661-672,678-681,686-716
+docs/groups-design.md
+  s_c56e31c87cddde::t_24add74d3300e3 354-356
+docs/polar-group-billing-spike.md
+  s_c56e31c87cddde::t_b1b6bf5f1c0032 42,211
+docs/self-hosting.md
+  s_c56e31c87cddde::t_1262f6b5c9ab69 535,545
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_523aae28ca8922 1085-1090,1092-1096,1098-1107,1120-1121,1126-1127,1130,1135-1136,1139,1143,1145,1194-1199,1201-1213,1229-1231,1240,1248-1249,1252-1253,1257-1288,1306,1345,1349
+packages/billing/scripts/seed.ts
+  s_c56e31c87cddde::t_f7a2413d8ad1a5 9,21-24,152-165,167-169,171-203,206,208-209,215,223,227,248-249,255-310,312-324,326-358
+packages/billing/src/api.ts
+  s_c56e31c87cddde::t_30853dfc37e64a 1,40-43,92-93,262-276
+packages/billing/src/groups-gate.test.ts
+  s_c56e31c87cddde::t_48ef80c8f8e01d 62-91,127-129,134,136
+packages/billing/src/provider.ts
+  s_c56e31c87cddde::t_17338428fd0176 9,16-17,100-102,133,164-166,183-186,225-226,285-297
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_96121dc86aacab 25-31,45-49,115-152,172-179,236-278,523-558,574-576,699-700,724,726-733,736-812,1343-1345,1356-1366,1414-1423,1425-1434,1438-1464,1535-1598,2329-2637
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_acf99f2157b7fb 17,34,45,48,51,70
+packages/db/drizzle/20261017234809_group_plan_tiers/migration.sql
+  s_c56e31c87cddde::t_41d3d6c8cea495 1-2
+packages/db/drizzle/20261017234809_group_plan_tiers/snapshot.json
+  s_c56e31c87cddde::t_8e5d6f7167a443 1-12645
+packages/db/src/billing.groups.test.ts
+  s_c56e31c87cddde::t_c9046149c9e1de 39,194-238
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_58427b798c13f7 280-281,436-447,458,519
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_3b8627169ae4de 41
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_92c4f3587d7e4a 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_d266837bb95c4a 151-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c7aeac832b9c70cb56aa53c88f9c3b129e44aa8",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
