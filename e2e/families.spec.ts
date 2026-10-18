@@ -839,7 +839,9 @@ test.describe.serial('removal, leaving and key changes', () => {
     test('removing someone: hold, finish, remove; their files read as a former member’s before the walk passes and after it; the rest open on a fresh device; their family is gone', async ({
         browser,
     }) => {
-        test.setTimeout(600_000);
+        // About 1.3 minutes on CI's dev server, and up to half a minute more waiting on route 2's
+        // poll below: a wait that never ends fails in three, not ten.
+        test.setTimeout(180_000);
         // Sam adds a file after Replace keys, so the removal's walk is the first to re-key it.
         await openFamilyFolder(sam, family, 'Family');
         await upload(sam, 'sam-notes.txt', 'Notes by Sam\n');
@@ -851,6 +853,21 @@ test.describe.serial('removal, leaving and key changes', () => {
         // top folder under its new key until released.
         const committedBefore = await committedVersion(ana.page);
         const spaces = await holdSpaces(ana.page);
+        // The member list version Ana's families list (route 2) has last named. Once it names the
+        // removal's, her family page keys a new sync, which the held listing keeps waiting.
+        let listed = 0;
+        const onFamilies = async (response: Response) => {
+            if (
+                response.request().method() !== 'GET' ||
+                new URL(response.url()).pathname !== '/api/groups'
+            )
+                return;
+            const body = (await response.json().catch(() => ({}))) as {
+                groups?: { rosterVersion: number }[];
+            };
+            for (const group of body.groups ?? []) listed = Math.max(listed, group.rosterVersion);
+        };
+        ana.page.on('response', onFamilies);
         await openFamilyPage(maya, groupPath, family);
         const walk = await holdWalk(maya.page);
         const others = [await holdWalk(ana.page)];
@@ -889,6 +906,16 @@ test.describe.serial('removal, leaving and key changes', () => {
         await expect
             .poll(() => committedVersion(ana.page), { timeout: 60_000 })
             .toBeGreaterThan(committedBefore);
+        // Her families list names the new version too (on that sync, or its next poll), and the
+        // page still shows Trips as last synced while the new sync waits: never a blank page.
+        await expect.poll(() => listed, { timeout: 45_000 }).toBeGreaterThan(committedBefore);
+        ana.page.off('response', onFamilies);
+        await expect(
+            ana.page
+                .getByRole('navigation', { name: 'Folder path' })
+                .getByRole('heading', { level: 1 }),
+        ).toHaveText('Trips');
+        await expect(fileRow(ana.page, 'trip.txt')).toBeVisible();
 
         // Ana uploads into Trips in that gap, while the walk is held there. Her device knows the
         // keys changed and has not listed the new top folder yet: a key change on its way, so
