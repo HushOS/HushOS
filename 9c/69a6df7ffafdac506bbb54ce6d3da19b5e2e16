@@ -1,0 +1,29 @@
+DESIGN.md
+  s_c56e31c87cddde::t_d55a39fb543831 416
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_c56e31c87cddde::t_baaab499f0d9fa 606
+apps/ios/App/ActionSheets.swift
+  s_c56e31c87cddde::t_b4bd3c6598d706 471
+apps/web/src/components/drive/details-panel.tsx
+  s_c56e31c87cddde::t_de296d7f55af5b 5,388-393,395,550-607,610,613
+apps/web/src/components/drive/file-list.tsx
+  s_c56e31c87cddde::t_cd5b4950c89571 438-441,469-479,481-484,486-487,494-496,526,534-535,543,549-558
+apps/web/src/components/drive/node-actions.tsx
+  s_c56e31c87cddde::t_e962916cb54056 320,329,338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c69a6df7ffafdac506bbb54ce6d3da19b5e2e16",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
