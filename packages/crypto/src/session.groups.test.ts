@@ -1402,10 +1402,12 @@ describe('the write version (F9)', () => {
         const f = await family();
         const r = await rotated(f);
         const { alice, groupId, ws, area } = f;
-        // The chain lists key 2 now, and this device holds only key 1: nothing is written.
+        // The chain lists key 2 now, and this device holds only key 1 and has listed the root
+        // only under it: nothing is written, and the write waits for the listing (a sync between
+        // its acceptance and its root listing), as an upload waits out a key change.
         await expect(
             alice.call('driveCreateNodes', newFolder(ws, area.root.id, 1)),
-        ).rejects.toThrow(KEYS_CHANGED);
+        ).rejects.toThrow(KEY_CHANGE_PENDING);
         await expect(
             alice.call('driveSealDocument', {
                 workspaceId: ws,
@@ -1413,7 +1415,7 @@ describe('the write version (F9)', () => {
                 version: 2,
                 document: {},
             }),
-        ).rejects.toThrow(KEYS_CHANGED);
+        ).rejects.toThrow(KEY_CHANGE_PENDING);
         const opened = await alice.call('groupOpenArea', {
             groupId,
             workspaceId: ws,
@@ -1464,6 +1466,42 @@ describe('the write version (F9)', () => {
         ).rejects.toThrow(/not sealed under the folder’s current key/);
     });
 
+    test('a write landing between a sync’s acceptance and its root listing waits, and only the listing and the walk end the wait', async () => {
+        const f = await family();
+        // Alice's sync has committed the removal's member list (area key 2) and not yet listed
+        // the root under it: the folder she made earlier still shows writable on her page.
+        const r = await rotated(f);
+        const { alice, groupId, ws, area } = f;
+        const intoChild = () => alice.call('driveCreateNodes', newFolder(ws, CHILD, 1));
+        await expect(intoChild()).rejects.toThrow(KEY_CHANGE_PENDING);
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, area.root.id, 1)),
+        ).rejects.toThrow(KEY_CHANGE_PENDING);
+        const open = (servedVersion: number) =>
+            alice.call('groupOpenArea', {
+                groupId,
+                workspaceId: ws,
+                idSeed: area.idSeed,
+                servedVersion,
+                grant: null,
+                selfGrant: r.rotation.selfGrant,
+            });
+        // The sync opens the area at key 2: still waiting for the root.
+        await expect(open(2)).resolves.toMatchObject({ writable: false, reason: 'root-behind' });
+        await expect(intoChild()).rejects.toThrow(KEY_CHANGE_PENDING);
+        // A server behind the member list is no wait: that stops writes until a reload.
+        await expect(open(1)).resolves.toMatchObject({ reason: 'server-behind' });
+        await expect(intoChild()).rejects.toThrow(KEYS_CHANGED);
+        await open(2);
+        // The sync lists the rotated root: the area takes writes again under it, and the child
+        // the walk has not reached keeps waiting rather than failing.
+        await alice.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        await expect(
+            alice.call('driveCreateNodes', newFolder(ws, area.root.id, 5)),
+        ).resolves.toBeTruthy();
+        await expect(intoChild()).rejects.toThrow(KEY_CHANGE_PENDING);
+    });
+
     test('a root opened under an older version, or a folder’s previous key, takes no new child', async () => {
         const f = await family();
         const r = await rotated(f);
@@ -1483,9 +1521,11 @@ describe('the write version (F9)', () => {
             nodes: [f.rootListing],
         });
         expect(before.nodes[0]!.metadata?.name).toBe('Family');
-        // ...and writes nothing under it, at any depth, whatever groupOpenArea was told.
+        // ...and writes nothing under it, at any depth, whatever groupOpenArea was told. The
+        // worker cannot tell a withheld root from one not listed yet, so it waits; the sync that
+        // listed this root says the folder's keys changed (lib/groups/sync.ts, areaWrite).
         await expect(bob.call('driveCreateNodes', newFolder(ws, area.root.id, 1))).rejects.toThrow(
-            KEYS_CHANGED,
+            KEY_CHANGE_PENDING,
         );
         await expect(
             bob.call('groupOpenArea', {
@@ -1573,9 +1613,10 @@ describe('the write version (F9)', () => {
             nodes: [{ ...f.rootListing, parentKeyEpoch: 2 }],
         });
         expect(stale.nodes[0]!.error).toMatch(/could not be opened/);
+        // Nothing is written: the root seen is still the one under key 1, so the write waits.
         await expect(
             f.bob.call('driveCreateNodes', newFolder(f.ws, f.area.root.id, 1)),
-        ).rejects.toThrow(KEYS_CHANGED);
+        ).rejects.toThrow(KEY_CHANGE_PENDING);
         await expect(
             f.bob.call('groupOpenArea', {
                 groupId: f.groupId,

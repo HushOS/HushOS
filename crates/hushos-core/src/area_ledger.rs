@@ -396,11 +396,15 @@ impl State {
         if self.blocked.contains_key(&at) {
             return Err(refused(KEYS_CHANGED));
         }
-        // Only once a root wrapped under this very version was opened here.
-        if self.root_seen_at.get(&at) != Some(&version) {
-            return Err(refused(KEYS_CHANGED));
+        // Only once a root wrapped under this very version was opened here. A root seen under
+        // an earlier version is a key change this device committed but has not listed yet (a
+        // sync between its acceptance and its root listing): a wait, which the next listing
+        // ends. No root seen at all, or one past the chain, is not.
+        match self.root_seen_at.get(&at) {
+            Some(seen) if *seen == version => Ok(Some(version)),
+            Some(seen) if *seen < version => Err(refused(KEY_CHANGE_PENDING)),
+            _ => Err(refused(KEYS_CHANGED)),
         }
-        Ok(Some(version))
     }
 
     fn unwritable(&self, at: &AreaSlot, latest: u64) -> Option<AreaBlock> {
@@ -448,7 +452,12 @@ impl State {
         };
         let at = (group_id, workspace_id.to_string());
         if area_root_check(chain, workspace_id.to_string(), parent_key_epoch, root_key.to_vec()).is_err() {
-            if self.root_seen_at.get(&at) == Some(&parent_key_epoch) {
+            // A root refused at the version seen, or at the write version itself, leaves no root
+            // seen: the area reads as a key change that went wrong (KEYS_CHANGED), not one still on
+            // its way, until a committed root at the write version opens.
+            if self.root_seen_at.get(&at) == Some(&parent_key_epoch)
+                || self.area_write.get(&at) == Some(&parent_key_epoch)
+            {
                 self.root_seen_at.remove(&at);
             }
             return Ok(false);
