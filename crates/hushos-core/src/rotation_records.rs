@@ -10,10 +10,13 @@
 //!
 //! - a record that already carries an origin carries it on, after the same
 //!   bound check a reader makes (`*_origin_carry`), or drops it
-//!   (`drop_origin`) and is re-sealed when it does not bind or its writer is
-//!   gone;
+//!   (`drop_origin`) and is re-sealed when it does not bind, its writer is
+//!   gone, or it names a writer with no signature;
 //! - a signed record with a named writer becomes its own origin;
-//! - anything else is re-sealed.
+//! - anything else is re-sealed as the walker's (decision D6): readers show it
+//!   "Re-locked by" the walker, never as written by them. A server and a
+//!   removed member can plant unsigned content a walk re-seals so
+//!   (docs/integrity-design.md, "What the check does not stop").
 //!
 //! A family folder's rotation writes no legacy signature beside a re-keyed
 //! record (decision D3). The web's personal path (`legacyRecord`, and the
@@ -22,14 +25,14 @@
 //! reaches personal folders (W1 in docs/groups-mobile-plan.md).
 
 use crate::drive::{
-    metadata_rekey, origin_key_wrap, origin_opening_key, version_rekey, MetadataContext, OriginKeyContext,
-    OriginRecord, VersionContext,
+    metadata_rekey_with, origin_key_wrap_with, origin_opening_key_with, version_rekey_with, MetadataContext,
+    OriginKeyContext, OriginRecord, VersionContext,
 };
-use crate::error::{input, CoreResult};
+use crate::error::CoreResult;
 use crate::signatures::{
-    metadata_origin_carry, metadata_rekey_sign, metadata_resealed_sign, version_origin_carry,
-    version_rekey_sign, version_resealed_sign, MetadataStatement, NodeKind, RecordOrigin, RekeyedMetadata,
-    RekeyedVersion, ServedOrigin, VersionStatement,
+    metadata_origin_carry_with, metadata_rekey_sign_with, metadata_resealed_sign_with,
+    version_origin_carry_with, version_rekey_sign_with, version_resealed_sign_with, MetadataStatement,
+    NodeKind, RecordOrigin, RekeyedMetadata, RekeyedVersion, ServedOrigin, VersionStatement,
 };
 
 /// A re-keyed record's origin as the server serves it (`RekeyView`): the
@@ -143,8 +146,6 @@ struct Served<'a> {
     key_epoch: u64,
 }
 
-const NO_ORIGIN_SIGNATURE: &str = "This record's origin carries no signature.";
-
 /*
  * One record re-sealed raw under `fresh` and signed (module docs): the twin of
  * rekeyRecord with a family folder's judge, which writes no legacy signature
@@ -158,48 +159,51 @@ fn rekey_record(
     signing_seed: &[u8],
 ) -> CoreResult<RotatedRecord> {
     let next = match served.statement {
-        Statement::Metadata(s) => metadata_rekey(
-            MetadataContext {
+        Statement::Metadata(s) => metadata_rekey_with(
+            &MetadataContext {
                 workspace_id: s.workspace_id.clone(),
                 node_id: s.node_id.clone(),
                 metadata_version: s.metadata_version,
             },
-            old.to_vec(),
-            fresh.to_vec(),
-            served.envelope.to_vec(),
+            old,
+            fresh,
+            served.envelope,
         )?,
-        Statement::Version(s) => version_rekey(
-            VersionContext {
+        Statement::Version(s) => version_rekey_with(
+            &VersionContext {
                 workspace_id: s.workspace_id.clone(),
                 node_id: s.node_id.clone(),
                 version_id: s.version_id.clone(),
                 object_id: s.object_id.clone(),
             },
             s.content_suite,
-            old.to_vec(),
-            fresh.to_vec(),
-            served.envelope.to_vec(),
+            old,
+            fresh,
+            served.envelope,
         )?,
     };
     let resealed = |drop_origin: bool| -> CoreResult<RotatedRecord> {
         let signature = match served.statement {
-            Statement::Metadata(s) => metadata_resealed_sign(signing_seed.to_vec(), s.clone(), next.clone())?,
-            Statement::Version(s) => version_resealed_sign(signing_seed.to_vec(), s.clone(), next.clone())?,
+            Statement::Metadata(s) => metadata_resealed_sign_with(signing_seed, s, &next)?,
+            Statement::Version(s) => version_resealed_sign_with(signing_seed, s, &next)?,
         };
         Ok(RotatedRecord { envelope: next.clone(), signature: Some(signature), rekey: None, drop_origin })
     };
     let origin = if let Some(rekey) = served.rekey {
-        // The rekeyed statement names the writer: an origin whose writer is gone is dropped.
-        let Some(signer_id) = rekey.origin.signer_id.clone().filter(|id| !id.is_empty()) else {
+        // The rekeyed statement names the writer: an origin whose writer is gone, or that names a
+        // writer with no signature (no state an honest server serves), is dropped.
+        let (Some(signer_id), Some(signature)) = (
+            rekey.origin.signer_id.clone().filter(|id| !id.is_empty()),
+            rekey.origin.signature.clone().filter(|signature| !signature.is_empty()),
+        ) else {
             return resealed(true);
         };
-        let signature = rekey.origin.signature.clone().ok_or_else(|| input(NO_ORIGIN_SIGNATURE))?;
         let carried = match served.statement {
-            Statement::Metadata(s) => metadata_origin_carry(
-                old.to_vec(),
-                fresh.to_vec(),
+            Statement::Metadata(s) => metadata_origin_carry_with(
+                old,
+                fresh,
                 target_epoch,
-                RekeyedMetadata {
+                &RekeyedMetadata {
                     statement: s.clone(),
                     key_epoch: served.key_epoch,
                     envelope: served.envelope.to_vec(),
@@ -207,11 +211,11 @@ fn rekey_record(
                     rekey_signature: Some(rekey.signature.clone()),
                 },
             )?,
-            Statement::Version(s) => version_origin_carry(
-                old.to_vec(),
-                fresh.to_vec(),
+            Statement::Version(s) => version_origin_carry_with(
+                old,
+                fresh,
                 target_epoch,
-                RekeyedVersion {
+                &RekeyedVersion {
                     statement: s.clone(),
                     key_epoch: served.key_epoch,
                     envelope: served.envelope.to_vec(),
@@ -238,17 +242,17 @@ fn rekey_record(
                 (&s.workspace_id, &s.node_id, OriginRecord::Version { version_id: s.version_id.clone() })
             }
         };
-        let opening = zeroize::Zeroizing::new(origin_opening_key(served.envelope.to_vec(), old.to_vec())?);
-        let key_envelope = origin_key_wrap(
-            OriginKeyContext {
+        let opening = origin_opening_key_with(served.envelope, old)?;
+        let key_envelope = origin_key_wrap_with(
+            &OriginKeyContext {
                 workspace_id: workspace_id.clone(),
                 node_id: node_id.clone(),
                 key_epoch: target_epoch,
                 record,
                 origin_envelope: served.envelope.to_vec(),
             },
-            fresh.to_vec(),
-            opening.to_vec(),
+            fresh,
+            &opening[..],
         )?;
         RecordOrigin {
             envelope: served.envelope.to_vec(),
@@ -260,12 +264,8 @@ fn rekey_record(
         return resealed(false);
     };
     let signature = match served.statement {
-        Statement::Metadata(s) => {
-            metadata_rekey_sign(signing_seed.to_vec(), s.clone(), target_epoch, next.clone(), origin.clone())?
-        }
-        Statement::Version(s) => {
-            version_rekey_sign(signing_seed.to_vec(), s.clone(), target_epoch, next.clone(), origin.clone())?
-        }
+        Statement::Metadata(s) => metadata_rekey_sign_with(signing_seed, s, target_epoch, &next, &origin)?,
+        Statement::Version(s) => version_rekey_sign_with(signing_seed, s, target_epoch, &next, &origin)?,
     };
     Ok(RotatedRecord {
         envelope: next,

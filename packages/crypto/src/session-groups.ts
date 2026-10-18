@@ -2814,6 +2814,9 @@ export function createGroupSession(host: GroupHost) {
     ): Promise<GroupResults['groupVerify']> {
         const groupId = uuid(input.groupId, 'group id');
         const { workspaceId } = input;
+        // The family is the one the folder was opened under here, never the caller's word for it.
+        if (ledger.familyOf(workspaceId) !== groupId)
+            throw new CryptoError('This folder is not one of this family’s.');
         const verdict = verdicts(
             groupId,
             workspaceId,

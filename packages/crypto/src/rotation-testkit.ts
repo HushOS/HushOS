@@ -27,7 +27,7 @@ import {
 } from './group-testkit';
 import { recordVerdicts } from './group-verdicts';
 import { decode, encode } from './keys';
-import { KEY_CHANGE_PENDING } from './protocol';
+import { KEY_CHANGE_PENDING, SHARED_IN_FAMILY } from './protocol';
 import { rekeyNode, type RotateNodeInput, type ServedRekey } from './rotation-records';
 import { rekeyOnly, servedRekeyedRecord, type GroupWriter } from './session-groups';
 import {
@@ -56,9 +56,8 @@ import {
  * read the other twin's walked nodes with their own verdicts
  * (group-verdicts.ts; AreaLedger::record_verdict) on a fresh member's ledger.
  * Both declare each case's verdicts, which records are re-keyed, re-sealed or
- * dropped, what may be written after the walk, and the core's one refusal
- * the web does not make (a node with shares or links in a family folder:
- * the web re-seals them).
+ * dropped, what may be written after the walk, and the nodes both refuse (a
+ * node with shares or links in a family folder).
  *
  * The family: person 1 manages it, 2 writes, 3 was removed at roster 2 (the
  * area's key version 2), 4 reads. AREA's top level is ROOT, with root:1
@@ -73,9 +72,6 @@ export const CHILD_B = '0e0e0e0e-0000-4000-8000-000000000005';
 export const STALE = '0e0e0e0e-0000-4000-8000-000000000006';
 const SHARE = '5a5a5a5a-0000-4000-8000-000000000001';
 const LINK = '1e1e1e1e-0000-4000-8000-000000000001';
-/* The core's refusal of a node with shares or links in a family folder (area_ledger.rs). */
-export const SHARED_IN_FAMILY =
-    'This item has shares or links, which a family folder never has, so it was not re-keyed.';
 const versionId = (n: number) => `5e5e5e5e-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const objectId = (n: number) => `0b0b0b0b-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 /* The scenarios' named keys: k:n is pattern(32, 200 + n). */
@@ -194,6 +190,8 @@ async function versionRekeyed(
     now: Uint8Array,
     writer: Person,
     rekeyer: Person,
+    /* Where an earlier walker wrapped the origin key: at another epoch or for another version, dishonestly. */
+    wrap: { epoch: number; version: number } = { epoch: 2, version: n },
 ): Promise<Version> {
     const written = await versionBy(nodeId, n, first, writer);
     const origin = decode(written.contentKeyEnvelope);
@@ -206,8 +204,8 @@ async function versionRekeyed(
     const keyEnvelope = await wrapOriginKey(originOpeningKey(origin, first), now, {
         workspaceId: AREA,
         nodeId,
-        keyEpoch: 2,
-        record: { kind: 'version', versionId: versionId(n) },
+        keyEpoch: wrap.epoch,
+        record: { kind: 'version', versionId: versionId(wrap.version) },
         originEnvelope: origin,
     });
     const statement = await versionRekeyedStatement(
@@ -386,8 +384,8 @@ export type StaleChild = {
 /*
  * A case as both twins declare it: the nodes walked in order, who walks and
  * reads, what each node's records are and read as (per node, metadata
- * first), or the core's refusal (`refused`, its exact message) with what the
- * web re-seals instead (`webReseals`); and, after the walk, whether the first
+ * first), or the refusal both twins give (`refused`, its exact message);
+ * and, after the walk, whether the first
  * child walked is writable and a stale child (and anything under it) is not.
  */
 export type RotationCase = {
@@ -400,7 +398,6 @@ export type RotationCase = {
     /* For a node only re-wrapped: the named key it holds. */
     key?: string;
     refused?: string;
-    webReseals?: { shares: number; links: number };
     stale?: StaleChild;
     writes?: { walked: string; stale: string; under: string };
     expected: Doc[][];
@@ -430,8 +427,23 @@ export async function rotationCases(): Promise<RotationCase[]> {
     const gone = await versionRekeyed(FILE, 3, key(0), key(1), p2, p1);
     gone.rekey!.origin.signerId = null;
     // A version whose writer's account is gone: the signature stays, the signer is served as nobody.
-    const writerGone = await versionBy(FILE, 23, key(1), p2);
+    const writerGone = await versionBy(FILE, 23, key(2), p2);
     writerGone.signer = null;
+    // Origins an earlier walker wrapped at another epoch, or for another version, and one naming its
+    // writer with no signature.
+    const otherEpoch = await versionRekeyed(FILE, 31, key(0), key(1), p2, p1, {
+        epoch: 3,
+        version: 31,
+    });
+    const otherVersion = await versionRekeyed(FILE, 32, key(0), key(1), p2, p1, {
+        epoch: 2,
+        version: 33,
+    });
+    const noSignature = await versionRekeyed(FILE, 34, key(0), key(1), p2, p1);
+    noSignature.rekey!.origin.signature = null as unknown as string;
+    // Named as person 2's, signed by person 3: a planted signer.
+    const planted = await versionBy(FILE, 41, key(1), p3);
+    planted.signer = p2.userId;
     const folder = await makeNode({
         id: FOLDER,
         kind: 'folder',
@@ -469,25 +481,16 @@ export async function rotationCases(): Promise<RotationCase[]> {
     ];
     const linked = await fileNode(key(1), 1, 1, p2, []);
     linked.links = [{ id: LINK, hasPassword: false, secretEnvelope: null }];
+    const verified = () => rekeyedVerdict(side('verified', true), side('verified', true), true);
+    const base = { walker: 1, reader: 4, target: 2 };
     return [
         {
+            ...base,
             name: 'a removal walk keeps every writer record',
-            walker: 1,
-            reader: 4,
-            target: 2,
-            nodes: [
-                await fileNode(key(1), 1, 1, p3, [
-                    await versionBy(FILE, 1, key(1), p2),
-                    await versionBy(FILE, 5, key(1), null),
-                ]),
-            ],
-            shapes: [['rekeyed', 'rekeyed', 'resealed']],
+            nodes: [await fileNode(key(1), 1, 1, p3, [await versionBy(FILE, 1, key(1), p2)])],
+            shapes: [['rekeyed', 'rekeyed']],
             expected: [
-                [
-                    rekeyedVerdict(side('former-member'), side('verified', true), true),
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
-                    signedVerdict('resealed'),
-                ],
+                [rekeyedVerdict(side('former-member'), side('verified', true), true), verified()],
             ],
         },
         {
@@ -510,24 +513,41 @@ export async function rotationCases(): Promise<RotationCase[]> {
             ],
             shapes: [['rekeyed', 'rekeyed', 'dropped', 'dropped']],
             expected: [
+                [verified(), verified(), signedVerdict('resealed'), signedVerdict('resealed')],
+            ],
+        },
+        {
+            ...base,
+            target: 3,
+            name: 'carried origins wrapped elsewhere or unsigned are dropped',
+            nodes: [
+                await withMetadataRekeyed(
+                    await fileNode(key(1), 2, 1, null, [otherEpoch, otherVersion, noSignature]),
+                    key(0),
+                    key(1),
+                    p2,
+                    p1,
+                ),
+            ],
+            shapes: [['rekeyed', 'dropped', 'dropped', 'dropped']],
+            expected: [
                 [
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
+                    verified(),
+                    signedVerdict('resealed'),
                     signedVerdict('resealed'),
                     signedVerdict('resealed'),
                 ],
             ],
         },
         {
-            // Its own re-key and re-seal judged by its own keys, the writers' records by the roster.
-            name: 'the walker reads its own walk',
-            walker: 1,
+            // Under the top level's current key: its own re-key and re-seal judged by its own keys.
+            ...base,
             reader: 1,
-            target: 2,
+            name: 'the walker reads its own walk',
             nodes: [
-                await fileNode(key(1), 1, 1, p3, [
-                    await versionBy(FILE, 1, key(1), p2),
-                    await versionBy(FILE, 5, key(1), null),
+                await fileNode(key(2), 1, 2, p3, [
+                    await versionBy(FILE, 1, key(2), p2),
+                    await versionBy(FILE, 5, key(2), null),
                 ]),
             ],
             shapes: [['rekeyed', 'rekeyed', 'resealed']],
@@ -540,26 +560,24 @@ export async function rotationCases(): Promise<RotationCase[]> {
             ],
         },
         {
-            name: 'a node already at the target is only re-wrapped',
-            walker: 1,
+            ...base,
             reader: 2,
             target: 3,
+            name: 'a node already at the target is only re-wrapped',
             nodes: [await fileNode(key(4), 3, 2, p2, [])],
             shapes: [[]],
             key: 'k:4',
             expected: [[]],
         },
         {
+            ...base,
             name: 'a folder walk wraps its children under its pending key',
-            walker: 1,
-            reader: 4,
-            target: 2,
             nodes: [
                 folder,
                 await child(CHILD_A, key(3), p2, [await versionBy(CHILD_A, 11, key(3), p2)]),
-                await child(CHILD_B, key(5), p3, [await versionBy(CHILD_B, 12, key(5), null)]),
+                await child(CHILD_B, key(5), p3, [await versionBy(CHILD_B, 12, key(5), p3)]),
             ],
-            shapes: [['rekeyed'], ['rekeyed', 'rekeyed'], ['rekeyed', 'resealed']],
+            shapes: [['rekeyed'], ['rekeyed', 'rekeyed'], ['rekeyed', 'rekeyed']],
             stale: {
                 id: STALE,
                 parentId: FOLDER,
@@ -581,59 +599,66 @@ export async function rotationCases(): Promise<RotationCase[]> {
                 under: 'key-change-pending',
             },
             expected: [
-                [rekeyedVerdict(side('verified', true), side('verified', true), true)],
-                [
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
-                ],
+                [verified()],
+                [verified(), verified()],
                 [
                     rekeyedVerdict(side('former-member'), side('verified', true), true),
-                    signedVerdict('resealed'),
+                    rekeyedVerdict(side('former-member'), side('verified', true), true),
                 ],
             ],
         },
         {
+            // A later walk under the top level's current key, so the gone writer's version is re-sealed.
+            ...base,
             name: 'a file with three versions, one by a writer since gone',
-            walker: 1,
-            reader: 4,
-            target: 2,
             nodes: [
-                await fileNode(key(1), 1, 1, p2, [
-                    await versionBy(FILE, 21, key(1), p2),
-                    await versionBy(FILE, 22, key(1), p3),
+                await fileNode(key(2), 1, 2, p2, [
+                    await versionBy(FILE, 21, key(2), p2),
+                    await versionBy(FILE, 22, key(2), p3),
                     writerGone,
                 ]),
             ],
             shapes: [['rekeyed', 'rekeyed', 'rekeyed', 'resealed']],
             expected: [
                 [
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
-                    rekeyedVerdict(side('verified', true), side('verified', true), true),
+                    verified(),
+                    verified(),
                     rekeyedVerdict(side('former-member'), side('verified', true), true),
                     signedVerdict('resealed'),
                 ],
             ],
         },
         {
-            name: 'a shared node in a family folder is refused by the core',
-            walker: 1,
-            reader: 4,
-            target: 2,
+            ...base,
+            name: 'a planted signer reads back as a bad signature in its name',
+            nodes: [await fileNode(key(1), 1, 1, p2, [planted])],
+            shapes: [['rekeyed', 'rekeyed']],
+            expected: [
+                [verified(), rekeyedVerdict(side('bad-signature'), side('verified', true), true)],
+            ],
+        },
+        {
+            // A removal's walk re-seals what nobody signed as the walker's: re-locked, never written by.
+            ...base,
+            name: "an unsigned record under the replaced key is re-sealed as the walker's",
+            nodes: [await fileNode(key(1), 1, 1, p2, [await versionBy(FILE, 5, key(1), null)])],
+            shapes: [['rekeyed', 'resealed']],
+            expected: [[verified(), signedVerdict('resealed')]],
+        },
+        {
+            ...base,
+            name: 'a shared node in a family folder is refused',
             nodes: [shared],
             shapes: [],
             refused: SHARED_IN_FAMILY,
-            webReseals: { shares: 1, links: 0 },
             expected: [],
         },
         {
-            name: 'a linked node in a family folder is refused by the core',
-            walker: 1,
-            reader: 4,
-            target: 2,
+            ...base,
+            name: 'a linked node in a family folder is refused',
             nodes: [linked],
             shapes: [],
             refused: SHARED_IN_FAMILY,
-            webReseals: { shares: 0, links: 1 },
             expected: [],
         },
     ];
@@ -686,24 +711,36 @@ export async function walk(c: RotationCase) {
         });
     const out: Rotated[] = [];
     for (const node of c.nodes) {
-        const rotated = await ledger.rotateKey(AREA, node, c.target, ({ old, fresh, parentKey }) =>
-            rekeyNode({
-                workspaceId: AREA,
-                targetEpoch: c.target,
-                granterUserId: walker.userId,
-                node,
-                judge: rekeyOnly,
-                old,
-                fresh,
-                parentKey,
-                ownerKind: 'group',
-                signer: () => ({
-                    userId: walker.userId,
-                    signingKey: walker.signer.signingKey,
-                    hybridKeys: () => walker.signer,
+        let rotated;
+        try {
+            rotated = await ledger.rotateKey(AREA, node, c.target, ({ old, fresh, parentKey }) =>
+                rekeyNode({
+                    workspaceId: AREA,
+                    targetEpoch: c.target,
+                    granterUserId: walker.userId,
+                    node,
+                    judge: rekeyOnly,
+                    old,
+                    fresh,
+                    parentKey,
+                    ownerKind: 'group',
+                    signer: () => ({
+                        userId: walker.userId,
+                        signingKey: walker.signer.signingKey,
+                        hybridKeys: () => walker.signer,
+                    }),
                 }),
-            }),
-        );
+            );
+        } catch (error) {
+            // A node this walk refuses: the refusal's message, and nothing of the walk.
+            if (!(error instanceof CryptoError)) throw error;
+            return {
+                rotated: [] as Rotated[],
+                nodeKeys: [],
+                writes: undefined,
+                refused: error.message,
+            };
+        }
         if (rotated.rewrap) {
             out.push({
                 id: node.id,
@@ -780,7 +817,7 @@ export async function walk(c: RotationCase) {
         }
         writes = { walked, stale, under };
     }
-    return { rotated: out, nodeKeys, writes };
+    return { rotated: out, nodeKeys, writes, refused: undefined as string | undefined };
 }
 
 /* What each walked node's records are, in order, as the case declares them. */
@@ -876,8 +913,14 @@ export async function readBack(c: RotationCase, rotated: Rotated[], served: Doc[
     const writers: GroupWriter[] = people.map((p) => ({
         userId: p.userId,
         pinned: null,
-        served: null,
-        links: null,
+        served: {
+            keyVersion: p.served.keyVersion,
+            encryptionPublicKey: p.served.encryptionPublicKey,
+            signingPublicKey: p.served.signingPublicKey,
+            mlDsaPublicKey: p.served.mlDsaPublicKey,
+            kemPublicKey: p.served.kemPublicKey,
+        },
+        links: [],
         personal: { current: p.served.signingPublicKey, retired: [] },
     }));
     const trusted = new Map<string, TrustedSigner>(
@@ -984,15 +1027,9 @@ export async function rotationFixture() {
     const { people } = await family();
     const out = [];
     for (const c of await rotationCases()) {
-        const { rotated, nodeKeys, writes } = await walk(c);
+        const { rotated, nodeKeys, writes, refused } = await walk(c);
+        if (refused !== c.refused) throw new Error(`${c.name}: refused ${refused}`);
         if (c.refused) {
-            // The web re-seals what the core refuses: say so, and how much.
-            const reseals = {
-                shares: rotated.reduce((n, r) => n + r.shares, 0),
-                links: rotated.reduce((n, r) => n + r.links, 0),
-            };
-            if (JSON.stringify(reseals) !== JSON.stringify(c.webReseals))
-                throw new Error(`${c.name}: re-sealed ${JSON.stringify(reseals)}`);
             out.push({ ...c, rotated, served: [], rekeyedInputs: [] });
             continue;
         }

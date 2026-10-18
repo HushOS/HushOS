@@ -97,9 +97,16 @@ fn node_ctx(node_id: &str, parent_id: &str, parent_key_epoch: u64, key_epoch: u6
     }
 }
 
-/* A member's ledger: the chain committed, the area opened at version 2, its top level listed. */
-fn member_ledger() -> Arc<AreaLedger> {
+/* Person `account`'s ledger: their account opened, the chain committed, the area opened at version 2, its top level listed. */
+fn member_ledger(account: usize) -> Arc<AreaLedger> {
     let ledger = AreaLedger::new();
+    let person = &family().people[account - 1];
+    ledger
+        .open_account(
+            person.user_id.clone(),
+            base64url_decode(person.served.signing_public_key.clone()).unwrap(),
+        )
+        .unwrap();
     ledger.commit(Arc::clone(&family().chain)).unwrap();
     ledger.open_area(GROUP.into(), AREA.into(), AREA_SEED.into(), 2, area_key_at(AREA, 2), 2).unwrap();
     ledger
@@ -190,6 +197,24 @@ fn version_rekeyed(
     writer: &Person,
     rekeyer: &Person,
 ) -> RotatingVersion {
+    version_rekeyed_wrapped(node_id, n, first, now, writer, rekeyer, 2, n)
+}
+
+/*
+ * The same, its origin key wrapped (and attested) at `wrap_epoch` for version `wrap_version`: a
+ * dishonest earlier walker's wrap, at another epoch or for another version than the record's.
+ */
+#[allow(clippy::too_many_arguments)]
+fn version_rekeyed_wrapped(
+    node_id: &str,
+    n: u32,
+    first: &[u8],
+    now: &[u8],
+    writer: &Person,
+    rekeyer: &Person,
+    wrap_epoch: u64,
+    wrap_version: u32,
+) -> RotatingVersion {
     let written = version_by(node_id, n, first, Some(writer));
     let origin = written.envelope.clone();
     let envelope =
@@ -198,8 +223,8 @@ fn version_rekeyed(
         OriginKeyContext {
             workspace_id: AREA.into(),
             node_id: node_id.into(),
-            key_epoch: 2,
-            record: OriginRecord::Version { version_id: version_id(n) },
+            key_epoch: wrap_epoch,
+            record: OriginRecord::Version { version_id: version_id(wrap_version) },
             origin_envelope: origin.clone(),
         },
         now.to_vec(),
@@ -392,7 +417,6 @@ pub struct Case {
     /* For a node only re-wrapped: the named key it holds. */
     pub key: Option<&'static str>,
     pub refused: Option<&'static str>,
-    pub web_reseals: Option<Value>,
     pub stale: Option<StaleChild>,
     pub writes: Option<Value>,
     pub expected: Vec<Vec<Value>>,
@@ -417,8 +441,17 @@ pub fn rotation_cases() -> Vec<Case> {
     let mut gone = version_rekeyed(FILE, 3, &key(0), &key(1), &p[1], &p[0]);
     gone.rekey.as_mut().unwrap().origin.signer_id = None;
     // A version whose writer's account is gone: the signature stays, the signer is served as nobody.
-    let mut writer_gone = version_by(FILE, 23, &key(1), Some(&p[1]));
+    let mut writer_gone = version_by(FILE, 23, &key(2), Some(&p[1]));
     writer_gone.signer = None;
+    // Origins an earlier walker wrapped at another epoch, or for another version, and one naming its
+    // writer with no signature.
+    let other_epoch = version_rekeyed_wrapped(FILE, 31, &key(0), &key(1), &p[1], &p[0], 3, 31);
+    let other_version = version_rekeyed_wrapped(FILE, 32, &key(0), &key(1), &p[1], &p[0], 2, 33);
+    let mut no_signature = version_rekeyed(FILE, 34, &key(0), &key(1), &p[1], &p[0]);
+    no_signature.rekey.as_mut().unwrap().origin.signature = None;
+    // Named as person 2's, signed by person 3: a planted signer.
+    let mut planted = version_by(FILE, 41, &key(1), Some(&p[2]));
+    planted.signer = Some(p[1].user_id.clone());
     let folder = make_node(NodeSpec {
         id: FOLDER,
         kind: NodeKind::Folder,
@@ -450,7 +483,7 @@ pub fn rotation_cases() -> Vec<Case> {
         RotatingNode { share_ids: vec![SHARE.into()], ..file_node(&key(1), 1, 1, Some(&p[1]), vec![]) };
     let linked =
         RotatingNode { link_ids: vec![LINK.into()], ..file_node(&key(1), 1, 1, Some(&p[1]), vec![]) };
-    let none = |name, nodes, shapes, expected| Case {
+    let case = |name, nodes, shapes, expected| Case {
         name,
         walker: 1,
         reader: 4,
@@ -459,33 +492,26 @@ pub fn rotation_cases() -> Vec<Case> {
         shapes,
         key: None,
         refused: None,
-        web_reseals: None,
         stale: None,
         writes: None,
         expected,
     };
+    let verified = || rekeyed_verdict(side("verified", true), side("verified", true), Some(true));
     vec![
-        none(
+        case(
             "a removal walk keeps every writer record",
-            vec![file_node(
-                &key(1),
-                1,
-                1,
-                Some(&p[2]),
-                vec![version_by(FILE, 1, &key(1), Some(&p[1])), version_by(FILE, 5, &key(1), None)],
-            )],
-            vec![vec!["rekeyed", "rekeyed", "resealed"]],
+            vec![file_node(&key(1), 1, 1, Some(&p[2]), vec![version_by(FILE, 1, &key(1), Some(&p[1]))])],
+            vec![vec!["rekeyed", "rekeyed"]],
             vec![vec![
                 rekeyed_verdict(side("former-member", false), side("verified", true), Some(true)),
-                rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
-                signed_verdict("resealed"),
+                verified(),
             ]],
         ),
         Case {
             walker: 4,
             reader: 1,
             target: 3,
-            ..none(
+            ..case(
                 "a second walk carries a bound origin and drops the rest",
                 vec![with_metadata_rekeyed(
                     file_node(
@@ -501,25 +527,40 @@ pub fn rotation_cases() -> Vec<Case> {
                     &p[0],
                 )],
                 vec![vec!["rekeyed", "rekeyed", "dropped", "dropped"]],
+                vec![vec![verified(), verified(), signed_verdict("resealed"), signed_verdict("resealed")]],
+            )
+        },
+        Case {
+            target: 3,
+            ..case(
+                "carried origins wrapped elsewhere or unsigned are dropped",
+                vec![with_metadata_rekeyed(
+                    file_node(&key(1), 2, 1, None, vec![other_epoch, other_version, no_signature]),
+                    &key(0),
+                    &key(1),
+                    &p[1],
+                    &p[0],
+                )],
+                vec![vec!["rekeyed", "dropped", "dropped", "dropped"]],
                 vec![vec![
-                    rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
-                    rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
+                    verified(),
+                    signed_verdict("resealed"),
                     signed_verdict("resealed"),
                     signed_verdict("resealed"),
                 ]],
             )
         },
-        // Its own re-key and re-seal judged by its own keys, the writers' records by the roster.
+        // Under the top level's current key: its own re-key and re-seal judged by its own keys.
         Case {
             reader: 1,
-            ..none(
+            ..case(
                 "the walker reads its own walk",
                 vec![file_node(
-                    &key(1),
+                    &key(2),
                     1,
-                    1,
+                    2,
                     Some(&p[2]),
-                    vec![version_by(FILE, 1, &key(1), Some(&p[1])), version_by(FILE, 5, &key(1), None)],
+                    vec![version_by(FILE, 1, &key(2), Some(&p[1])), version_by(FILE, 5, &key(2), None)],
                 )],
                 vec![vec!["rekeyed", "rekeyed", "resealed"]],
                 vec![vec![
@@ -533,7 +574,7 @@ pub fn rotation_cases() -> Vec<Case> {
             reader: 2,
             target: 3,
             key: Some("k:4"),
-            ..none(
+            ..case(
                 "a node already at the target is only re-wrapped",
                 vec![file_node(&key(4), 3, 2, Some(&p[1]), vec![])],
                 vec![vec![]],
@@ -551,57 +592,69 @@ pub fn rotation_cases() -> Vec<Case> {
             writes: Some(
                 json!({ "walked": "writable", "stale": "key-change-pending", "under": "key-change-pending" }),
             ),
-            ..none(
+            ..case(
                 "a folder walk wraps its children under its pending key",
                 vec![
                     folder,
                     child(CHILD_A, key(3), &p[1], vec![version_by(CHILD_A, 11, &key(3), Some(&p[1]))]),
-                    child(CHILD_B, key(5), &p[2], vec![version_by(CHILD_B, 12, &key(5), None)]),
+                    child(CHILD_B, key(5), &p[2], vec![version_by(CHILD_B, 12, &key(5), Some(&p[2]))]),
                 ],
-                vec![vec!["rekeyed"], vec!["rekeyed", "rekeyed"], vec!["rekeyed", "resealed"]],
+                vec![vec!["rekeyed"], vec!["rekeyed", "rekeyed"], vec!["rekeyed", "rekeyed"]],
                 vec![
-                    vec![rekeyed_verdict(side("verified", true), side("verified", true), Some(true))],
-                    vec![
-                        rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
-                        rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
-                    ],
+                    vec![verified()],
+                    vec![verified(), verified()],
                     vec![
                         rekeyed_verdict(side("former-member", false), side("verified", true), Some(true)),
-                        signed_verdict("resealed"),
+                        rekeyed_verdict(side("former-member", false), side("verified", true), Some(true)),
                     ],
                 ],
             )
         },
-        none(
+        // A later walk under the top level's current key, so the gone writer's version is re-sealed.
+        case(
             "a file with three versions, one by a writer since gone",
             vec![file_node(
-                &key(1),
+                &key(2),
                 1,
-                1,
+                2,
                 Some(&p[1]),
                 vec![
-                    version_by(FILE, 21, &key(1), Some(&p[1])),
-                    version_by(FILE, 22, &key(1), Some(&p[2])),
+                    version_by(FILE, 21, &key(2), Some(&p[1])),
+                    version_by(FILE, 22, &key(2), Some(&p[2])),
                     writer_gone,
                 ],
             )],
             vec![vec!["rekeyed", "rekeyed", "rekeyed", "resealed"]],
             vec![vec![
-                rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
-                rekeyed_verdict(side("verified", true), side("verified", true), Some(true)),
+                verified(),
+                verified(),
                 rekeyed_verdict(side("former-member", false), side("verified", true), Some(true)),
                 signed_verdict("resealed"),
             ]],
         ),
+        case(
+            "a planted signer reads back as a bad signature in its name",
+            vec![file_node(&key(1), 1, 1, Some(&p[1]), vec![planted])],
+            vec![vec!["rekeyed", "rekeyed"]],
+            vec![vec![
+                verified(),
+                rekeyed_verdict(side("bad-signature", false), side("verified", true), Some(true)),
+            ]],
+        ),
+        // A removal's walk re-seals what nobody signed as the walker's: re-locked, never written by.
+        case(
+            "an unsigned record under the replaced key is re-sealed as the walker's",
+            vec![file_node(&key(1), 1, 1, Some(&p[1]), vec![version_by(FILE, 5, &key(1), None)])],
+            vec![vec!["rekeyed", "resealed"]],
+            vec![vec![verified(), signed_verdict("resealed")]],
+        ),
         Case {
             refused: Some(SHARED_IN_FAMILY),
-            web_reseals: Some(json!({ "shares": 1, "links": 0 })),
-            ..none("a shared node in a family folder is refused by the core", vec![shared], vec![], vec![])
+            ..case("a shared node in a family folder is refused", vec![shared], vec![], vec![])
         },
         Case {
             refused: Some(SHARED_IN_FAMILY),
-            web_reseals: Some(json!({ "shares": 0, "links": 1 })),
-            ..none("a linked node in a family folder is refused by the core", vec![linked], vec![], vec![])
+            ..case("a linked node in a family folder is refused", vec![linked], vec![], vec![])
         },
     ]
 }
@@ -747,8 +800,8 @@ pub fn walk(
     target: u64,
     stale: Option<&StaleChild>,
 ) -> Result<Walked, String> {
+    let ledger = member_ledger(walker);
     let walker = &family().people[walker - 1];
-    let ledger = member_ledger();
     for node in nodes {
         ledger
             .open_listed_node(
@@ -978,7 +1031,7 @@ pub fn read_back(
     reader: usize,
 ) -> (Vec<Vec<Value>>, String) {
     let people = &family().people;
-    let ledger = member_ledger();
+    let ledger = member_ledger(reader);
     let mut held = vec![];
     for (node, r) in nodes.iter().zip(rotated) {
         held.push(
@@ -1013,8 +1066,14 @@ pub fn read_back(
         .map(|p| GroupWriter {
             user_id: p.user_id.clone(),
             pinned: None,
-            served: None,
-            links: None,
+            served: Some(ServedKeys {
+                key_version: p.served.key_version,
+                encryption_public_key: p.served.encryption_public_key.clone(),
+                signing_public_key: p.served.signing_public_key.clone(),
+                ml_dsa_public_key: p.served.ml_dsa_public_key.clone(),
+                kem_public_key: p.served.kem_public_key.clone(),
+            }),
+            links: Some(vec![]),
             personal: Some(keys_of(p)),
         })
         .collect();
@@ -1024,14 +1083,16 @@ pub fn read_back(
             records
                 .iter()
                 .map(|record| {
-                    match ledger.record_verdict(
-                        GROUP.into(),
-                        RecordReader { user_id: me.user_id.clone(), keys: keys_of(me) },
-                        writers.clone(),
-                        false,
-                        served_record(record),
-                        None,
-                    ) {
+                    match ledger
+                        .record_verdict(
+                            GROUP.into(),
+                            RecordReader { user_id: me.user_id.clone(), keys: keys_of(me) },
+                            writers.clone(),
+                            served_record(record),
+                            None,
+                        )
+                        .expect("the family the folder was opened under")
+                    {
                         RecordVerdict::Signed { verdict } => json!({
                             "kind": "signed",
                             "integrity": super::rekeyed::group_verdict_name(verdict.verdict),
@@ -1145,7 +1206,6 @@ pub fn rotation_fixture() -> Vec<Value> {
                 "shapes": c.shapes,
                 "key": c.key,
                 "refused": c.refused,
-                "webReseals": c.web_reseals,
                 "stale": stale_json(&c.stale),
                 "writes": c.writes,
                 "expected": c.expected,

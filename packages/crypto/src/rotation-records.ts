@@ -17,6 +17,7 @@ import {
 import { decode, encode } from './keys';
 import { openLinkSecret, sealLinkKeyWith, sealLinkSecret } from './links';
 import { KEM_PUBLIC_KEY_BYTES } from './pq';
+import { SHARED_IN_FAMILY } from './protocol';
 import { rekeyedFor } from './rekeyed-scope';
 import type { RecordJudge } from './session-groups';
 import type { DriveVersionEnvelope } from './session';
@@ -327,8 +328,9 @@ export async function rekeyRecord(
     let origin: RecordOrigin;
     if (input.rekey) {
         const served = input.rekey.origin;
-        // The rekeyed statement names the writer: an origin whose writer is gone is dropped.
-        if (!served.signerId) return resealed(true);
+        // The rekeyed statement names the writer: an origin whose writer is gone, or that names a
+        // writer with no signature (no state an honest server serves), is dropped.
+        if (!served.signerId || !served.signature) return resealed(true);
         const carried: RekeyedRecord = {
             record,
             statement,
@@ -433,6 +435,10 @@ export async function rekeyNode(input: {
     const nodeId = node.id;
     const by = input.signer;
     by();
+    // Sharing is hidden in family folders (design 3.4): any share or link there is one the server
+    // listed, and re-sealing it would hand the fresh key to whoever it names. The core refuses alike.
+    if (input.ownerKind === 'group' && (node.shares.length > 0 || node.links.length > 0))
+        throw new CryptoError(SHARED_IN_FAMILY);
     const keyEnvelope = await wrapNodeKey(fresh, parentKey, {
         workspaceId,
         nodeId,

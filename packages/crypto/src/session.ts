@@ -2530,6 +2530,16 @@ export function createCryptoSession() {
                 // The source as a reading would check it: only what verified is vouched for again,
                 // and a copy of something saved from a link stays saved.
                 const trusted = trustSet(message.input.signers);
+                // A re-keyed source served without its key epoch: its signature columns are the
+                // walker's, so nothing about its writer can be judged, and it is not copied.
+                if (
+                    group !== null &&
+                    source.keyEpoch === undefined &&
+                    (source.metadataRekey || source.rekey)
+                )
+                    throw new CryptoError(
+                        'HushOS couldn’t check who wrote this, so it was not locked again. Try again.',
+                    );
                 // A re-keyed source is judged on its writer's record, where origins are read.
                 const readsOrigins =
                     group !== null &&

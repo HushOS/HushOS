@@ -59,7 +59,7 @@ use crate::group_verdicts::{
 use crate::groups::{area_key_commitment, area_root_check, area_write_version};
 use crate::ids::{check_id, IdKind};
 use crate::rotation_records::{rekey_node_records, RotatedNode, RotatingNode};
-use crate::signatures::{signing_public_key, Integrity};
+use crate::signatures::{signing_public_key_of, Integrity};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
@@ -95,8 +95,13 @@ pub const NOT_A_FAMILY_FOLDER: &str = "Only a family folder's items are re-keyed
 /// A node in a family folder with shares or links, which a family folder never has (design 3.4).
 pub const SHARED_IN_FAMILY: &str =
     "This item has shares or links, which a family folder never has, so it was not re-keyed.";
-/// A copy out of a folder the family's committed chain does not list, or the family never opened here.
+/// A copy out of, or a verdict in, a folder the family's committed chain does not list, or that was
+/// not opened under this family here.
 pub const NOT_THIS_FAMILYS: &str = "This folder is not one of this family’s.";
+/// A verdict or a walk before the account was opened on the ledger ([`AreaLedger::open_account`]).
+pub const NO_ACCOUNT: &str = "Unlock your account first.";
+/// A reader or signing seed that is not the unlocked account's.
+pub const NOT_THIS_ACCOUNT: &str = "These keys are not this account's. Unlock again and retry.";
 /// A chain older than the one this device already holds for the family (a
 /// background acceptance that lost a race with the foreground's): refused,
 /// and nothing of it (the record, the pin) is to be written.
@@ -268,6 +273,10 @@ struct State {
     /* What the web's group session holds: committed chains by group, and areas opened per group. */
     chains: HashMap<String, Arc<AcceptedRosters>>,
     opened: HashMap<String, BTreeMap<String, OpenedArea>>,
+    /* Families whose last acceptance was the fork (uncommit with fork): read by personal keys alone. */
+    forked: std::collections::HashSet<String>,
+    /* The unlocked account: its user id and current signing public key (open_account). */
+    account: Option<(String, Vec<u8>)>,
 }
 
 fn slot(workspace_id: &str, node_id: &str) -> Slot {
@@ -489,13 +498,19 @@ impl State {
                 }
             }
         }
+        self.forked.remove(&group_id);
         self.chains.insert(group_id, chain);
         Ok(())
     }
 
-    fn uncommit(&mut self, group_id: &str) {
+    fn uncommit(&mut self, group_id: &str, fork: bool) {
         self.area_write.retain(|(group, _), _| group != group_id);
         self.chains.remove(group_id);
+        if fork {
+            self.forked.insert(group_id.to_string());
+        } else {
+            self.forked.remove(group_id);
+        }
     }
 
     fn forget_group(&mut self, group_id: &str) {
@@ -510,6 +525,33 @@ impl State {
         self.root_ids.retain(|(group, _), _| group != group_id);
         self.opened.remove(group_id);
         self.chains.remove(group_id);
+        self.forked.remove(group_id);
+    }
+
+    /* The reader the app passes, held to the unlocked account: its id and its current signing key. */
+    fn check_reader(&self, reader: &RecordReader) -> CoreResult<()> {
+        let (user_id, signing_public_key) = self.account.as_ref().ok_or_else(|| refused(NO_ACCOUNT))?;
+        if !reader.user_id.eq_ignore_ascii_case(user_id) || reader.keys.current != *signing_public_key {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        Ok(())
+    }
+
+    /* A signing seed the app passes, held to the unlocked account's current signing key. */
+    fn check_seed(&self, signing_seed: &[u8]) -> CoreResult<()> {
+        let (_, signing_public_key) = self.account.as_ref().ok_or_else(|| refused(NO_ACCOUNT))?;
+        if signing_public_key_of(signing_seed)? != *signing_public_key {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        Ok(())
+    }
+
+    /* The family a folder is read under: the one it was opened under here, and only that one. */
+    fn check_family(&self, group_id: &str, workspace_id: &str) -> CoreResult<()> {
+        if self.family_of(workspace_id).as_deref() != Some(group_id) {
+            return Err(refused(NOT_THIS_FAMILYS));
+        }
+        Ok(())
     }
 
     fn admit_area_key(
@@ -949,6 +991,11 @@ impl State {
             let key_envelope = self.rewrap_at_target(workspace_id, node, old)?;
             return Ok(Rotation::Rewrap { key_envelope, key: kept });
         }
+        // A second walk of the node to the same target while the first is pending: the first's fresh
+        // key would be replaced under children already wrapped under it.
+        if self.pending.get(&slot(workspace_id, &node.node_id)).is_some_and(|p| p.epoch == target_epoch) {
+            return Err(refused(ITEM_CHANGED));
+        }
         let fresh = Zeroizing::new(random(32));
         // A fresh key is a write like any other (F14): its parent is pending in this walk or
         // rooted at the write version.
@@ -1014,8 +1061,8 @@ impl State {
 impl State {
     /*
      * The verdict glue's view of a family (the worker's verdicts): its
-     * committed chain, or a fork the app holds, or nothing; the areas it
-     * opened here at the version opened.
+     * committed chain, or the fork its last acceptance was, or nothing; the
+     * areas it opened here at the version opened.
      */
     fn judge(
         &self,
@@ -1023,12 +1070,11 @@ impl State {
         record: &ServedRecord,
         reader: RecordReader,
         writers: Vec<GroupWriter>,
-        forked: bool,
         cache: Option<Arc<SuccessionCache>>,
     ) -> Judge {
         let reading = match self.chains.get(group_id) {
             Some(chain) => GroupReading::Accepted { chain: Arc::clone(chain) },
-            None if forked => GroupReading::Fork,
+            None if self.forked.contains(group_id) => GroupReading::Fork,
             None => GroupReading::Unavailable,
         };
         let areas = self
@@ -1106,9 +1152,23 @@ impl AreaLedger {
         self.lock().commit(chain)
     }
 
-    /// A refusal or a fork for the family: none of its areas is written until a chain is committed again.
-    pub fn uncommit(&self, group_id: String) {
-        self.lock().uncommit(&group_id);
+    /// A refusal (`fork` false) or a fork (`fork` true) for the family: none of its areas is written
+    /// until a chain is committed again. After a fork, its records read by personal keys alone
+    /// ([`AreaLedger::record_verdict`]); a commit or forgetting the family clears it.
+    pub fn uncommit(&self, group_id: String, fork: bool) {
+        self.lock().uncommit(&group_id, fork);
+    }
+
+    /// The unlocked account: its user id and current signing public key, as its open identity
+    /// proves them. Every verdict's reader and every walk's signing seed must be this account's;
+    /// a lock ([`AreaLedger::clear`]) forgets it.
+    pub fn open_account(&self, user_id: String, signing_public_key: Vec<u8>) -> CoreResult<()> {
+        uuid(&user_id, "user id")?;
+        if signing_public_key.len() != 32 {
+            return Err(input("Invalid signing key."));
+        }
+        self.lock().account = Some((user_id.to_lowercase(), signing_public_key));
+        Ok(())
     }
 
     /// A family the person no longer reads: the keys of the areas it opened, and all it knew of them.
@@ -1310,20 +1370,25 @@ impl AreaLedger {
     /// its key is rooted at the write version ([`NOT_CARRIED`]), its records
     /// untouched (`rewrap`); any other gets a fresh key under a parent the
     /// rules allow, and its metadata and versions are re-keyed raw under it
-    /// and signed with `signing_seed` (the walker's identity): an origin
-    /// already kept is carried after the bound check, or dropped
-    /// (`drop_origin`, re-sealed) when it does not bind or its writer is gone;
-    /// a signed record becomes its own origin; an unsigned one is re-sealed. No
-    /// legacy signature goes beside a re-key. The fresh key is pending, for
-    /// the node's children in the same walk, only once every record re-keyed,
-    /// until [`AreaLedger::rotate_commit`]; it never leaves the ledger. Refused
-    /// for a workspace that is no family folder ([`NOT_A_FAMILY_FOLDER`]), a
-    /// node with shares or links ([`SHARED_IN_FAMILY`]), and a family folder's
-    /// top level ([`AREA_ROOT`]).
+    /// and signed with `signing_seed`, which must be the unlocked account's
+    /// ([`AreaLedger::open_account`]): an origin already kept is carried after
+    /// the bound check, or dropped (`drop_origin`, re-sealed) when it does not
+    /// bind, its writer is gone, or it names a writer with no signature; a
+    /// signed record becomes its own origin; an unsigned one is re-sealed as the
+    /// walker's (docs/integrity-design.md, "What the check does not stop"). No legacy
+    /// signature goes beside a re-key. The fresh key is pending, for the
+    /// node's children in the same walk, only once every record re-keyed,
+    /// until [`AreaLedger::rotate_commit`]; it never leaves the ledger, and a
+    /// second walk of the node to the same target meanwhile is refused
+    /// (`ITEM_CHANGED`). Refused for a workspace that is no family folder
+    /// ([`NOT_A_FAMILY_FOLDER`]), a node with shares or links
+    /// ([`SHARED_IN_FAMILY`]), and a family folder's top level ([`AREA_ROOT`]).
     ///
     /// ```
     /// use hushos_core::*;
     /// let ledger = AreaLedger::new();
+    /// let seed = random_bytes(32)?;
+    /// ledger.open_account("00000001-abcd-4abc-8abc-abcdefabcdef".into(), signing_public_key(seed.clone())?)?;
     /// let personal = "f0f0f0f0-0000-4000-8000-00000000000f";
     /// ledger.open_personal_workspace(personal.into(), 1, random_bytes(32)?)?;
     /// let node = RotatingNode {
@@ -1333,8 +1398,11 @@ impl AreaLedger {
     ///     metadata_signer: None, metadata_signature: None, metadata_rekey: None,
     ///     versions: vec![], share_ids: vec![], link_ids: vec![],
     /// };
+    /// // Another identity's seed is refused before anything is made.
+    /// let other = ledger.rotate_node(personal.into(), node.clone(), 2, random_bytes(32)?).unwrap_err();
+    /// assert_eq!(other.to_string(), NOT_THIS_ACCOUNT);
     /// // A personal folder's walk stays with the app's own re-sealing.
-    /// let refused = ledger.rotate_node(personal.into(), node, 2, random_bytes(32)?).unwrap_err();
+    /// let refused = ledger.rotate_node(personal.into(), node, 2, seed).unwrap_err();
     /// assert_eq!(refused.to_string(), NOT_A_FAMILY_FOLDER);
     /// assert_eq!(ledger.rotate_drop_all(personal.into()), 0, "nothing pending");
     /// # Ok::<(), hushos_core::CoreError>(())
@@ -1347,8 +1415,8 @@ impl AreaLedger {
         signing_seed: Vec<u8>,
     ) -> CoreResult<RotatedNode> {
         let signing_seed = Zeroizing::new(signing_seed);
-        signing_public_key(signing_seed.to_vec())?;
         let mut state = self.lock();
+        state.check_seed(&signing_seed)?;
         state.require_writable(&workspace_id)?;
         if !state.is_area(&workspace_id) {
             return Err(refused(NOT_A_FAMILY_FOLDER));
@@ -1386,47 +1454,42 @@ impl AreaLedger {
     }
 
     /// What a reader shows for one record in a family folder (design 2.8): a
-    /// signed record by this account (`reader`) under its own keys, anyone
-    /// else's as the family's committed chain says ([`crate::group_writer_trust`],
-    /// each writer's pin, served identity and links from `writers`, and their
+    /// signed record by this account under its own keys, anyone else's as the
+    /// family's committed chain says ([`crate::group_writer_trust`], each
+    /// writer's pin, served identity and links from `writers`, and their
     /// personal keys where the roster does not speak); a re-keyed one with the
-    /// node's key at `record.key_epoch` as this ledger holds it, its origin
-    /// judged as its writer's trust says and the re-keyer (the record's
-    /// signer) as theirs. Without a committed chain the family reads as
-    /// unchecked, or, when the app holds it as `forked`, by personal keys
-    /// alone. `cache` is the session's, shared across calls.
+    /// node's key at `record.key_epoch` as this ledger holds it (unchecked
+    /// without an epoch), its origin judged as its writer's trust says and the
+    /// re-keyer (the record's signer) as theirs. The family is the one the
+    /// folder was opened under here: another `group_id` is refused
+    /// ([`NOT_THIS_FAMILYS`]). Without a committed chain the family reads as
+    /// unchecked, or, when its last acceptance was the fork
+    /// ([`AreaLedger::uncommit`]), by personal keys alone. `reader` must be the
+    /// unlocked account ([`AreaLedger::open_account`]). `cache` is the
+    /// session's, shared across calls.
     ///
     /// ```
     /// use hushos_core::*;
-    /// let (me, them) = (random_bytes(32)?, random_bytes(32)?);
-    /// let keys = |seed: &Vec<u8>| TrustedKeys { current: signing_public_key(seed.clone()).unwrap(), retired: vec![] };
+    /// let seed = random_bytes(32)?;
+    /// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
     /// let statement = MetadataStatement {
     ///     workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(),
     ///     node_id: "0e0e0e0e-0000-4000-8000-000000000002".into(), kind: NodeKind::File, metadata_version: 1,
     /// };
-    /// let record = |signer: &str, seed: &Vec<u8>| ServedRecord {
+    /// let record = ServedRecord {
     ///     statement: RecordStatement::Metadata { statement: statement.clone() },
-    ///     key_epoch: Some(1), envelope: b"sealed".to_vec(), signer: Some(signer.into()),
-    ///     signature: Some(metadata_sign(seed.clone(), statement.clone(), b"sealed".to_vec()).unwrap()),
-    ///     rekey: None,
-    /// };
-    /// let reader = RecordReader { user_id: "00000001-abcd-4abc-8abc-abcdefabcdef".into(), keys: keys(&me) };
-    /// let writer = GroupWriter {
-    ///     user_id: "00000002-abcd-4abc-8abc-abcdefabcdef".into(), pinned: None, served: None, links: None,
-    ///     personal: Some(keys(&them)),
+    ///     key_epoch: Some(1), envelope: b"sealed".to_vec(), signer: None,
+    ///     signature: Some(metadata_sign(seed, statement, b"sealed".to_vec())?), rekey: None,
     /// };
     /// let ledger = AreaLedger::new();
-    /// let read = |signer: &str, seed: &Vec<u8>, forked: bool| {
-    ///     match ledger.record_verdict("0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), reader.clone(), vec![writer.clone()], forked, record(signer, seed), None) {
-    ///         RecordVerdict::Signed { verdict } => verdict.verdict,
-    ///         RecordVerdict::Rekeyed { .. } => unreachable!(),
-    ///     }
-    /// };
-    /// // This account's own record, by its own keys; where no family opened the folder here the
-    /// // roster does not speak, and another writer's record reads by the personal keys passed.
-    /// assert_eq!(read("00000001-abcd-4abc-8abc-abcdefabcdef", &me, false), GroupVerdict::Verified);
-    /// assert_eq!(read("00000002-abcd-4abc-8abc-abcdefabcdef", &them, false), GroupVerdict::Verified);
-    /// assert_eq!(read("00000002-abcd-4abc-8abc-abcdefabcdef", &me, false), GroupVerdict::BadSignature);
+    /// let account = "00000001-abcd-4abc-8abc-abcdefabcdef";
+    /// ledger.open_account(account.into(), me.current.clone())?;
+    /// let reader = RecordReader { user_id: account.into(), keys: me };
+    /// // A folder no family opened here: no family speaks for it.
+    /// let refused = ledger
+    ///     .record_verdict("0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), reader, vec![], record, None)
+    ///     .unwrap_err();
+    /// assert_eq!(refused.to_string(), NOT_THIS_FAMILYS);
     /// # Ok::<(), hushos_core::CoreError>(())
     /// ```
     pub fn record_verdict(
@@ -1434,21 +1497,20 @@ impl AreaLedger {
         group_id: String,
         reader: RecordReader,
         writers: Vec<GroupWriter>,
-        forked: bool,
         record: ServedRecord,
         cache: Option<Arc<SuccessionCache>>,
-    ) -> RecordVerdict {
+    ) -> CoreResult<RecordVerdict> {
         let (judge, node_key) = {
             let state = self.lock();
-            let judge = state.judge(&group_id, &record, reader, writers, forked, cache);
-            let node_key = record.key_epoch.and_then(|epoch| {
-                let (workspace_id, node_id) = record_node(&record.statement);
-                state.key_at_epoch(workspace_id, node_id, epoch)
-            });
-            (judge, node_key)
+            state.check_reader(&reader)?;
+            let (workspace_id, node_id) = record_node(&record.statement);
+            state.check_family(&group_id, workspace_id)?;
+            let node_key =
+                record.key_epoch.and_then(|epoch| state.key_at_epoch(workspace_id, node_id, epoch));
+            (state.judge(&group_id, &record, reader, writers, cache), node_key)
         };
         let node_key = node_key.map(Zeroizing::new);
-        match &record.rekey {
+        Ok(match &record.rekey {
             Some(rekey) => RecordVerdict::Rekeyed {
                 verdict: judge.rekeyed(
                     &record.statement,
@@ -1467,7 +1529,7 @@ impl AreaLedger {
                     record.signature.as_deref(),
                 ),
             },
-        }
+        })
     }
 
     /// How a copy of `record` out of a family folder signs it: the prior to
@@ -1476,10 +1538,12 @@ impl AreaLedger {
     /// former member's record, a key conflict's, a re-keyed record whose
     /// origin does not bind (or whose node key this ledger does not hold), and
     /// anything else read `Resealed`; an unchecked record is refused, so
-    /// nothing is vouched for blind. A re-keyed record is judged on its
-    /// origin only when its key epoch is served. Refused for a folder the
-    /// family's committed chain does not list or the family never opened here
-    /// ([`NOT_THIS_FAMILYS`]).
+    /// nothing is vouched for blind, and so is a re-keyed record served
+    /// without its key epoch (never judged through the walker's legacy
+    /// columns). Refused for a folder the family's committed chain does not
+    /// list or that was not opened under this family here
+    /// ([`NOT_THIS_FAMILYS`]), and for a `reader` that is not the unlocked
+    /// account.
     ///
     /// ```
     /// use hushos_core::*;
@@ -1494,9 +1558,12 @@ impl AreaLedger {
     ///     key_epoch: Some(1), envelope: b"sealed".to_vec(), signer: None,
     ///     signature: Some(metadata_sign(seed, statement, b"sealed".to_vec())?), rekey: None,
     /// };
-    /// let reader = RecordReader { user_id: "00000001-abcd-4abc-8abc-abcdefabcdef".into(), keys: me };
+    /// let ledger = AreaLedger::new();
+    /// let account = "00000001-abcd-4abc-8abc-abcdefabcdef";
+    /// ledger.open_account(account.into(), me.current.clone())?;
+    /// let reader = RecordReader { user_id: account.into(), keys: me };
     /// // No family chain committed here: nothing is copied out on its word.
-    /// let refused = AreaLedger::new()
+    /// let refused = ledger
     ///     .copy_form("0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), reader, vec![], record, None)
     ///     .unwrap_err();
     /// assert_eq!(refused.to_string(), NOT_THIS_FAMILYS);
@@ -1512,16 +1579,17 @@ impl AreaLedger {
     ) -> CoreResult<Integrity> {
         let (judge, node_key) = {
             let state = self.lock();
+            state.check_reader(&reader)?;
             let (workspace_id, node_id) = record_node(&record.statement);
             let listed =
                 state.chains.get(&group_id).is_some_and(|chain| chain.area_keys.contains_key(workspace_id));
-            let opened = state.opened.get(&group_id).is_some_and(|areas| areas.contains_key(workspace_id));
-            if !listed || !opened {
+            if !listed {
                 return Err(refused(NOT_THIS_FAMILYS));
             }
+            state.check_family(&group_id, workspace_id)?;
             let node_key =
                 record.key_epoch.and_then(|epoch| state.key_at_epoch(workspace_id, node_id, epoch));
-            (state.judge(&group_id, &record, reader, writers, false, cache), node_key)
+            (state.judge(&group_id, &record, reader, writers, cache), node_key)
         };
         let node_key = node_key.map(Zeroizing::new);
         let verdict = match (&record.rekey, record.key_epoch) {
@@ -1540,7 +1608,10 @@ impl AreaLedger {
                 }
                 checked.origin.verdict
             }
-            _ => {
+            // A re-keyed record without its epoch: its signature columns are the walker's, so
+            // nothing about its writer can be judged. Unchecked, and not copied.
+            (Some(_), None) => GroupVerdict::Unchecked,
+            (None, _) => {
                 judge
                     .signed(
                         &record.statement,
@@ -1997,7 +2068,7 @@ mod tests {
         assert_eq!(ledger.key_at_epoch(AREA.into(), node(2), 1).unwrap(), folder.key);
         // A refusal for the group stops writes until a chain is committed again.
         let refused = writable_at(1);
-        refused.uncommit(GROUP.into());
+        refused.uncommit(GROUP.into(), false);
         assert_eq!(message(refused.require_writable(AREA.into())), NOT_CHECKED_KEYS);
         refused.commit(chain(vec![vec![Row::Key(1)]])).unwrap();
         assert!(refused.require_writable(AREA.into()).is_ok());
@@ -2084,7 +2155,7 @@ mod tests {
         ledger.open_listed_node(AREA.into(), old_root).unwrap();
         assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
         assert_eq!(message(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1)), KEY_CHANGE_PENDING);
-        ledger.uncommit(OTHER_GROUP.into());
+        ledger.uncommit(OTHER_GROUP.into(), false);
         assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
         ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
         assert!(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 2, 2).is_ok());
@@ -2095,7 +2166,7 @@ mod tests {
         let ledger = writable_at(1);
         let folder = ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1).unwrap();
         // Its chain refused, or forgotten, without ever being committed here: nothing changes.
-        ledger.uncommit(OTHER_GROUP.into());
+        ledger.uncommit(OTHER_GROUP.into(), false);
         ledger.forget_group(OTHER_GROUP.into());
         assert!(ledger.require_writable(AREA.into()).is_ok());
         // Committed listing the area, then forgotten: the folder's keys stay, and it is written again.
@@ -2277,8 +2348,8 @@ mod tests {
     use crate::group_trust::{GroupIntegrity, GroupRekeyedVerdict, WriterPin};
     use crate::rotation_records::{RotatedRecord, RotatingVersion, ServedRekey};
     use crate::signatures::{
-        metadata_sign, version_rekey_sign, version_sign, MetadataStatement, NodeKind, RecordOrigin,
-        ServedOrigin, TrustedKeys, VersionStatement,
+        metadata_sign, signing_public_key, version_rekey_sign, version_sign, MetadataStatement, NodeKind,
+        RecordOrigin, ServedOrigin, TrustedKeys, VersionStatement,
     };
 
     /* The walk tests' family: 1 manages and walks, 2 writes, 3 was removed at roster 2, 4 reads. */
@@ -2358,9 +2429,10 @@ mod tests {
         fn keys(&self, n: usize) -> TrustedKeys {
             TrustedKeys { current: signing_public_key(self.seed(n)).unwrap(), retired: vec![] }
         }
-        /* A ledger with the area writable at version 2 and its top level opened. */
-        fn ledger(&self) -> Arc<AreaLedger> {
+        /* Person `n`'s ledger: the account opened, the area writable at version 2, its top level opened. */
+        fn ledger(&self, n: usize) -> Arc<AreaLedger> {
             let ledger = AreaLedger::new();
+            ledger.open_account(self.id(n), self.keys(n).current).unwrap();
             ledger.commit(Arc::clone(&self.chain)).unwrap();
             open(&ledger, 2, 2);
             ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
@@ -2369,15 +2441,24 @@ mod tests {
         fn reader(&self, n: usize) -> RecordReader {
             RecordReader { user_id: self.id(n), keys: self.keys(n) }
         }
-        /* Every member as a writer, their personal keys known too. */
+        /* Every member as a writer: their identity and links loaded, their personal keys known too. */
         fn writers(&self) -> Vec<GroupWriter> {
             (1..=4)
-                .map(|n| GroupWriter {
-                    user_id: self.id(n),
-                    pinned: None,
-                    served: None,
-                    links: None,
-                    personal: Some(self.keys(n)),
+                .map(|n| {
+                    let served = self.people[n - 1].served();
+                    GroupWriter {
+                        user_id: self.id(n),
+                        pinned: None,
+                        served: Some(crate::identity::ServedKeys {
+                            key_version: served.key_version,
+                            encryption_public_key: served.encryption_public_key,
+                            signing_public_key: served.signing_public_key,
+                            ml_dsa_public_key: served.ml_dsa_public_key,
+                            kem_public_key: served.kem_public_key,
+                        }),
+                        links: Some(vec![]),
+                        personal: Some(self.keys(n)),
+                    }
                 })
                 .collect()
         }
@@ -2607,9 +2688,9 @@ mod tests {
         }
         out
     }
-    /* A member's fresh ledger holding the node's new key, opened from the walk's envelope under the top level. */
-    fn reading_ledger(f: &Family, rotated: &RotatedNode, target: u64) -> Arc<AreaLedger> {
-        let ledger = f.ledger();
+    /* Person `reader`'s fresh ledger holding the node's new key, opened from the walk's envelope under the top level. */
+    fn reading_ledger(f: &Family, rotated: &RotatedNode, target: u64, reader: usize) -> Arc<AreaLedger> {
+        let ledger = f.ledger(reader);
         ledger
             .open_listed_node(
                 AREA.into(),
@@ -2636,7 +2717,7 @@ mod tests {
         records
             .into_iter()
             .map(|record| {
-                ledger.record_verdict(GROUP.into(), f.reader(reader), f.writers(), false, record, None)
+                ledger.record_verdict(GROUP.into(), f.reader(reader), f.writers(), record, None).unwrap()
             })
             .collect()
     }
@@ -2650,14 +2731,27 @@ mod tests {
         RecordVerdict::Signed { verdict: side(verdict, false) }
     }
 
+    /* A plain record of version `n` as a listing serves it, signer and signature as given. */
+    fn plain(f: &Family, n: u32, signer: Option<usize>, signed_by: Option<usize>) -> ServedRecord {
+        let version = version_by(f, n, &key(1), signed_by);
+        ServedRecord {
+            statement: RecordStatement::Version { statement: version_statement(n) },
+            key_epoch: Some(1),
+            envelope: version.envelope,
+            signer: signer.map(|who| f.id(who)),
+            signature: version.signature,
+            rekey: None,
+        }
+    }
+
     #[test]
     fn a_walk_keeps_each_writer_s_record_and_a_reader_names_the_writer_never_the_walker() {
         let f = family();
-        let ledger = f.ledger();
-        // Named by person 3 (since removed), uploaded by person 2, a version nobody signed; under the
-        // top level's old key, as a removal's walk finds it.
+        let ledger = f.ledger(1);
+        // Named by person 3 (since removed), uploaded by person 2; under the top level's old key, as
+        // a removal's walk finds it.
         let mut file = file_node(&f, &key(1), 1, 1, Some(3));
-        file.versions = vec![version_by(&f, 1, &key(1), Some(2)), version_by(&f, 5, &key(1), None)];
+        file.versions = vec![version_by(&f, 1, &key(1), Some(2))];
         list(&ledger, &file);
         let rotated = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
         assert!(!rotated.rewrap);
@@ -2665,26 +2759,24 @@ mod tests {
         assert!(metadata.rekey.is_some() && metadata.signature.is_none() && !metadata.drop_origin);
         let uploaded = &rotated.versions[0].record;
         assert!(uploaded.rekey.is_some() && uploaded.signature.is_none() && !uploaded.drop_origin);
-        let unsigned = &rotated.versions[1].record;
-        assert!(unsigned.rekey.is_none() && unsigned.signature.is_some() && !unsigned.drop_origin);
         // Pending only: the fresh key is the node's once the server takes the batch.
         assert!(ledger.key_at_epoch(AREA.into(), node(FILE), 2).is_none());
         assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(FILE)]), 1);
         assert!(ledger.key_at_epoch(AREA.into(), node(FILE), 2).is_some());
         // Person 4 reads it on their own device: the removed member's name stays theirs.
-        let reading = reading_ledger(&f, &rotated, 2);
+        let reading = reading_ledger(&f, &rotated, 2, 4);
         let verdicts = read_all(&f, &reading, served_after(&f, &file, &rotated, 2, 1), 4);
         let walker = side(GroupVerdict::Verified, true);
         assert_eq!(verdicts[0], rekeyed(side(GroupVerdict::FormerMember, false), walker.clone(), Some(true)));
         assert_eq!(verdicts[1], rekeyed(side(GroupVerdict::Verified, true), walker, Some(true)));
-        assert_eq!(verdicts[2], signed(GroupVerdict::Resealed));
         // The walker reading its own walk: its re-key judged by its own keys, the writers' by the roster.
-        let own = read_all(&f, &reading, served_after(&f, &file, &rotated, 2, 1), 1);
+        let own_ledger = reading_ledger(&f, &rotated, 2, 1);
+        let own = read_all(&f, &own_ledger, served_after(&f, &file, &rotated, 2, 1), 1);
         assert_eq!(
             own[1],
             rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, false), Some(true))
         );
-        // Break-check: the origin swapped for another version's record no longer binds.
+        // The origin swapped for another version's record no longer binds.
         let mut swapped = served_after(&f, &file, &rotated, 2, 1);
         let other = version_by(&f, 6, &key(1), Some(2));
         if let Some(rekey) = swapped[1].rekey.as_mut() {
@@ -2700,30 +2792,27 @@ mod tests {
     #[test]
     fn an_origin_kept_before_is_carried_only_when_it_binds_and_dropped_otherwise() {
         let f = family();
-        let ledger = f.ledger();
+        let ledger = f.ledger(4);
         // The file was walked once already (epoch 1 to 2, key 0 to key 1): its versions carry origins.
-        let mut file = file_node(&f, &key(1), 2, 1, None);
+        let mut file = file_node(&f, &key(1), 2, 1, Some(2));
         let carried = version_rekeyed(&f, 2, &key(0), &key(1), 2, 1);
         let mut gone = version_rekeyed(&f, 3, &key(0), &key(1), 2, 1);
         gone.rekey.as_mut().unwrap().origin.signer_id = None;
         // Its current bytes are not its origin's: a dishonest earlier walker re-sealed something else.
         let mut unbound = version_rekeyed(&f, 4, &key(0), &key(1), 2, 1);
         unbound.envelope = version_seal(version_ctx(4), key(1), vec![9; 32], 1, 0).unwrap().envelope;
-        file.versions = vec![carried.clone(), gone, unbound];
+        // An origin naming its writer with no signature: dropped, never a stop for the node.
+        let mut no_signature = version_rekeyed(&f, 5, &key(0), &key(1), 2, 1);
+        no_signature.rekey.as_mut().unwrap().origin.signature = None;
+        file.versions = vec![carried.clone(), gone, unbound, no_signature];
         list(&ledger, &file);
         let rotated = ledger.rotate_node(AREA.into(), file.clone(), 3, f.seed(4)).unwrap();
-        let [kept, dropped_gone, dropped_unbound] =
-            [&rotated.versions[0].record, &rotated.versions[1].record, &rotated.versions[2].record];
+        let kept = &rotated.versions[0].record;
         assert!(kept.rekey.is_some() && !kept.drop_origin);
-        assert!(dropped_gone.rekey.is_none() && dropped_gone.drop_origin && dropped_gone.signature.is_some());
-        assert!(
-            dropped_unbound.rekey.is_none()
-                && dropped_unbound.drop_origin
-                && dropped_unbound.signature.is_some()
-        );
-        // The unsigned metadata is re-sealed, dropping nothing.
-        let metadata = rotated.metadata.clone().unwrap();
-        assert!(metadata.rekey.is_none() && !metadata.drop_origin);
+        for dropped in &rotated.versions[1..] {
+            assert!(dropped.record.rekey.is_none() && dropped.record.drop_origin, "{}", dropped.version_id);
+            assert!(dropped.record.signature.is_some(), "{}", dropped.version_id);
+        }
         ledger.rotate_commit(AREA.into(), vec![node(FILE)]);
         // A row not yet walked is read with the node's key at its own epoch (the previous one now).
         let before = ServedRecord {
@@ -2735,24 +2824,25 @@ mod tests {
             rekey: carried.rekey.clone(),
         };
         assert_eq!(
-            ledger.record_verdict(GROUP.into(), f.reader(1), f.writers(), false, before, None),
-            rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, false), Some(true))
+            ledger.record_verdict(GROUP.into(), f.reader(4), f.writers(), before, None).unwrap(),
+            rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, true), Some(true))
         );
-        let reading = reading_ledger(&f, &rotated, 3);
+        let reading = reading_ledger(&f, &rotated, 3, 1);
         let verdicts = read_all(&f, &reading, served_after(&f, &file, &rotated, 3, 4), 1);
         // Person 2's version, carried through two walks: still theirs, and bound.
         assert_eq!(
             verdicts[1],
             rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, true), Some(true))
         );
-        assert_eq!(verdicts[2], signed(GroupVerdict::Resealed));
-        assert_eq!(verdicts[3], signed(GroupVerdict::Resealed));
+        for dropped in &verdicts[2..] {
+            assert_eq!(*dropped, signed(GroupVerdict::Resealed));
+        }
     }
 
     #[test]
     fn a_node_whose_records_do_not_re_key_leaves_no_pending_key_behind() {
         let f = family();
-        let ledger = f.ledger();
+        let ledger = f.ledger(1);
         let mut file = file_node(&f, &key(1), 1, 1, Some(2));
         // A version sealed under another key than the node's: the walk cannot re-seal it.
         file.versions = vec![version_by(&f, 1, &key(1), Some(2)), version_by(&f, 2, &key(7), Some(2))];
@@ -2763,11 +2853,11 @@ mod tests {
         assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(FILE)]), 0);
         assert_eq!(message(ledger.new_node_key(AREA.into(), node(3), node(FILE), 2, 2)), KEY_CHANGE_PENDING);
         // A carried origin whose current envelope the walker's key does not open stops it too.
-        let mut stale = file_node(&f, &key(1), 2, 1, None);
+        let mut stale = file_node(&f, &key(1), 2, 1, Some(2));
         let mut wrong = version_rekeyed(&f, 3, &key(0), &key(1), 2, 1);
         wrong.envelope = version_seal(version_ctx(3), key(8), vec![3; 32], 300, 0).unwrap().envelope;
         stale.versions = vec![wrong];
-        let fresh_ledger = f.ledger();
+        let fresh_ledger = f.ledger(1);
         list(&fresh_ledger, &stale);
         assert!(fresh_ledger.rotate_node(AREA.into(), stale, 3, f.seed(1)).is_err());
         assert_eq!(fresh_ledger.rotate_drop_all(AREA.into()), 0);
@@ -2777,9 +2867,87 @@ mod tests {
     }
 
     #[test]
+    fn an_unsigned_record_under_the_replaced_key_is_re_sealed_and_reads_as_re_locked_by_the_walker() {
+        let f = family();
+        // Under the top level's old key, as a removal's walk finds it: a version nobody signed, and
+        // one whose writer's account is gone (signature kept, signer served as nobody).
+        let ledger = f.ledger(1);
+        let mut file = file_node(&f, &key(1), 1, 1, Some(2));
+        let mut gone = version_by(&f, 6, &key(1), Some(2));
+        gone.signer = None;
+        file.versions = vec![version_by(&f, 5, &key(1), None), gone];
+        list(&ledger, &file);
+        let walked = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
+        for version in &walked.versions {
+            let record = &version.record;
+            assert!(record.rekey.is_none() && record.signature.is_some() && !record.drop_origin);
+        }
+        assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(FILE)]), 1);
+        // Read by another member: re-locked by the walker, never written by them (decision D6).
+        let reading = reading_ledger(&f, &walked, 2, 4);
+        let verdicts = read_all(&f, &reading, served_after(&f, &file, &walked, 2, 1), 4);
+        assert_eq!(&verdicts[1..], &[signed(GroupVerdict::Resealed), signed(GroupVerdict::Resealed)]);
+    }
+
+    #[test]
+    fn a_node_is_walked_once_per_target_while_its_fresh_key_is_pending() {
+        let f = family();
+        let ledger = f.ledger(1);
+        let file = file_node(&f, &key(1), 1, 1, Some(2));
+        list(&ledger, &file);
+        let first = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
+        // A child wrapped under the first walk's fresh key would be stranded if a second replaced it.
+        assert_eq!(message(ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1))), ITEM_CHANGED);
+        assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(FILE)]), 1);
+        assert_eq!(
+            node_open(ctx(AREA, &node(FILE), &node(ROOT), 2, 2), root_key(2), first.key_envelope).unwrap(),
+            ledger.key_at_epoch(AREA.into(), node(FILE), 2).unwrap().to_vec()
+        );
+        // Dropped, the node may be walked again.
+        let again = f.ledger(1);
+        list(&again, &file);
+        again.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
+        assert_eq!(again.rotate_drop(AREA.into(), vec![node(FILE)]), 1);
+        assert!(again.rotate_node(AREA.into(), file, 2, f.seed(1)).is_ok());
+    }
+
+    #[test]
+    fn a_walk_and_a_verdict_are_the_unlocked_account_s_alone() {
+        let f = family();
+        let ledger = f.ledger(1);
+        let file = file_node(&f, &key(1), 1, 1, Some(2));
+        list(&ledger, &file);
+        // Another member's seed on this account's ledger: refused before anything is made.
+        assert_eq!(message(ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(2))), NOT_THIS_ACCOUNT);
+        assert_eq!(ledger.rotate_drop_all(AREA.into()), 0);
+        let record = plain(&f, 1, Some(2), Some(2));
+        // Another reader, or this account's id with another key: refused.
+        assert_eq!(
+            message(ledger.record_verdict(GROUP.into(), f.reader(4), f.writers(), record.clone(), None)),
+            NOT_THIS_ACCOUNT
+        );
+        let posing = RecordReader { user_id: f.id(1), keys: f.keys(2) };
+        assert_eq!(
+            message(ledger.record_verdict(GROUP.into(), posing.clone(), f.writers(), record.clone(), None)),
+            NOT_THIS_ACCOUNT
+        );
+        assert_eq!(
+            message(ledger.copy_form(GROUP.into(), posing, f.writers(), record.clone(), None)),
+            NOT_THIS_ACCOUNT
+        );
+        // Before the account is opened, nothing is judged or walked; a lock forgets it.
+        ledger.clear();
+        assert_eq!(
+            message(ledger.record_verdict(GROUP.into(), f.reader(1), f.writers(), record, None)),
+            NO_ACCOUNT
+        );
+        assert_eq!(message(ledger.rotate_node(AREA.into(), file, 2, f.seed(1))), NO_ACCOUNT);
+    }
+
+    #[test]
     fn a_walk_refuses_shares_links_a_personal_workspace_and_the_top_level() {
         let f = family();
-        let ledger = f.ledger();
+        let ledger = f.ledger(1);
         let file = file_node(&f, &key(1), 1, 1, Some(2));
         list(&ledger, &file);
         let shared = RotatingNode { share_ids: vec![version_id(1)], ..file.clone() };
@@ -2807,7 +2975,7 @@ mod tests {
     #[test]
     fn a_node_already_at_the_target_is_re_wrapped_with_its_records_untouched() {
         let f = family();
-        let ledger = f.ledger();
+        let ledger = f.ledger(1);
         // Already at epoch 3, written under the top level's current key: only re-wrapped.
         let file = file_node(&f, &key(4), 3, 2, Some(2));
         list(&ledger, &file);
@@ -2820,72 +2988,96 @@ mod tests {
     }
 
     #[test]
-    fn a_record_s_verdict_follows_the_committed_chain_or_a_fork_and_a_withheld_key_is_unchecked() {
+    fn a_record_s_verdict_follows_the_ledger_s_family_chain_and_fork_and_a_withheld_key_is_unchecked() {
         let f = family();
-        let ledger = f.ledger();
+        let ledger = f.ledger(1);
         let mut file = file_node(&f, &key(1), 1, 1, Some(3));
         file.versions = vec![version_by(&f, 1, &key(1), Some(2))];
         list(&ledger, &file);
         let rotated = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
-        let reading = reading_ledger(&f, &rotated, 2);
+        let reading = reading_ledger(&f, &rotated, 2, 4);
         let records = served_after(&f, &file, &rotated, 2, 1);
-        // The node key at another epoch than the record's: nothing can be confirmed.
-        let mut elsewhere = records[1].clone();
-        elsewhere.key_epoch = Some(5);
-        let RecordVerdict::Rekeyed { verdict } =
-            reading.record_verdict(GROUP.into(), f.reader(4), f.writers(), false, elsewhere, None)
-        else {
-            panic!("re-keyed")
+        let verdict_of = |ledger: &AreaLedger, reader: usize, record: ServedRecord| {
+            ledger.record_verdict(GROUP.into(), f.reader(reader), f.writers(), record, None)
         };
-        assert_eq!((verdict.origin.verdict, verdict.bound), (GroupVerdict::Unchecked, None));
-        // A plain record by person 2: the roster's word; without the chain unchecked; forked, personal.
-        let plain = ServedRecord {
-            statement: RecordStatement::Version { statement: version_statement(1) },
-            key_epoch: Some(1),
-            envelope: file.versions[0].envelope.clone(),
-            signer: Some(f.id(2)),
-            signature: file.versions[0].signature.clone(),
-            rekey: None,
-        };
-        let judge = |ledger: &AreaLedger, forked: bool, reader: usize| {
-            ledger.record_verdict(GROUP.into(), f.reader(reader), f.writers(), forked, plain.clone(), None)
-        };
+        // The node key at another epoch than the record's, or no epoch at all: nothing confirmed.
+        for epoch in [Some(5), None] {
+            let elsewhere = ServedRecord { key_epoch: epoch, ..records[1].clone() };
+            let Ok(RecordVerdict::Rekeyed { verdict }) = verdict_of(&reading, 4, elsewhere) else {
+                panic!("re-keyed")
+            };
+            assert_eq!((verdict.origin.verdict, verdict.bound), (GroupVerdict::Unchecked, None), "{epoch:?}");
+        }
+        // Another family's id for this folder: refused, never judged under that family's roster.
         assert_eq!(
-            judge(&reading, false, 4),
-            RecordVerdict::Signed { verdict: side(GroupVerdict::Verified, true) }
+            message(reading.record_verdict(
+                OTHER_GROUP.into(),
+                f.reader(4),
+                f.writers(),
+                records[1].clone(),
+                None
+            )),
+            NOT_THIS_FAMILYS
         );
-        reading.uncommit(GROUP.into());
-        assert_eq!(judge(&reading, false, 4), signed(GroupVerdict::Unchecked));
-        assert_eq!(judge(&reading, true, 4), signed(GroupVerdict::Verified));
+        // A plain record by person 2: the roster's word; without the chain unchecked; after a fork,
+        // personal keys; once a chain is committed again, the roster's word again.
+        let record = plain(&f, 1, Some(2), Some(2));
+        assert_eq!(
+            verdict_of(&reading, 4, record.clone()),
+            Ok(RecordVerdict::Signed { verdict: side(GroupVerdict::Verified, true) })
+        );
+        reading.uncommit(GROUP.into(), false);
+        assert_eq!(verdict_of(&reading, 4, record.clone()), Ok(signed(GroupVerdict::Unchecked)));
+        reading.uncommit(GROUP.into(), true);
+        assert_eq!(verdict_of(&reading, 4, record.clone()), Ok(signed(GroupVerdict::Verified)));
+        reading.commit(Arc::clone(&f.chain)).unwrap();
+        assert_eq!(
+            verdict_of(&reading, 4, record.clone()),
+            Ok(RecordVerdict::Signed { verdict: side(GroupVerdict::Verified, true) })
+        );
+        // Forgetting the family forgets its fork too.
+        reading.uncommit(GROUP.into(), true);
+        reading.forget_group(GROUP.into());
+        assert_eq!(message(verdict_of(&reading, 4, record.clone())), NOT_THIS_FAMILYS);
         // This account's own record is judged by its own keys, whatever the roster says.
-        assert_eq!(judge(&reading, false, 2), signed(GroupVerdict::Verified));
+        let own = reading_ledger(&f, &rotated, 2, 2);
+        own.uncommit(GROUP.into(), false);
+        assert_eq!(verdict_of(&own, 2, record.clone()), Ok(signed(GroupVerdict::Verified)));
         // A stripped signature is unsigned, before any trust is looked up.
-        let stripped = ServedRecord { signature: None, ..plain.clone() };
-        assert_eq!(
-            reading.record_verdict(GROUP.into(), f.reader(4), f.writers(), false, stripped, None),
-            signed(GroupVerdict::Unsigned)
-        );
+        let stripped = ServedRecord { signature: None, ..record };
+        assert_eq!(verdict_of(&own, 2, stripped), Ok(signed(GroupVerdict::Unsigned)));
     }
 
     #[test]
     fn a_copy_vouches_only_for_what_verified_and_never_for_a_removed_member_s_record() {
         let f = family();
-        let ledger = f.ledger();
+        let ledger = f.ledger(1);
         let mut file = file_node(&f, &key(1), 1, 1, Some(3));
-        file.versions = vec![version_by(&f, 1, &key(1), Some(2)), version_by(&f, 5, &key(1), None)];
+        file.versions = vec![version_by(&f, 1, &key(1), Some(2))];
         list(&ledger, &file);
         let rotated = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
-        let reading = reading_ledger(&f, &rotated, 2);
+        let reading = reading_ledger(&f, &rotated, 2, 4);
         let records = served_after(&f, &file, &rotated, 2, 1);
         let form = |record: &ServedRecord, writers: Vec<GroupWriter>| {
             reading.copy_form(GROUP.into(), f.reader(4), writers, record.clone(), None)
         };
         assert_eq!(form(&records[0], f.writers()), Ok(Integrity::Resealed), "a removed member's name");
         assert_eq!(form(&records[1], f.writers()), Ok(Integrity::Verified));
-        assert_eq!(form(&records[2], f.writers()), Ok(Integrity::Resealed));
-        // A re-keyed record whose key epoch is not served is judged as the walker's own signature: none.
+        // Person 2 named, person 3's signature; nobody the reader knows; no signature: re-sealed.
+        assert_eq!(
+            form(&plain(&f, 7, Some(2), Some(3)), f.writers()),
+            Ok(Integrity::Resealed),
+            "bad signature"
+        );
+        let stranger = ServedRecord {
+            signer: Some("00000009-abcd-4abc-8abc-abcdefabcdef".into()),
+            ..plain(&f, 8, None, Some(3))
+        };
+        assert_eq!(form(&stranger, f.writers()), Ok(Integrity::Resealed), "unknown signer");
+        assert_eq!(form(&plain(&f, 9, Some(2), None), f.writers()), Ok(Integrity::Resealed), "unsigned");
+        // A re-keyed record whose key epoch is not served: its columns are the walker's, so unchecked.
         let no_epoch = ServedRecord { key_epoch: None, ..records[1].clone() };
-        assert_eq!(form(&no_epoch, f.writers()), Ok(Integrity::Resealed));
+        assert!(form(&no_epoch, f.writers()).is_err());
         // Bytes that do not bind are never vouched for.
         let mut unbound = records[1].clone();
         unbound.rekey.as_mut().unwrap().origin.key_envelope[10] ^= 1;
@@ -2900,8 +3092,18 @@ mod tests {
             trusted_via: Some(String::new()),
         });
         assert!(form(&records[1], unsure).is_err());
-        // Only out of a folder this family's chain lists and this device opened.
-        reading.uncommit(GROUP.into());
+        // Only out of a folder this family's chain lists and this device opened under it.
+        assert_eq!(
+            message(reading.copy_form(
+                OTHER_GROUP.into(),
+                f.reader(4),
+                f.writers(),
+                records[1].clone(),
+                None
+            )),
+            NOT_THIS_FAMILYS
+        );
+        reading.uncommit(GROUP.into(), false);
         assert_eq!(message(form(&records[1], f.writers())), NOT_THIS_FAMILYS);
     }
 }

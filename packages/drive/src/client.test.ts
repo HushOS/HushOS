@@ -1,3 +1,4 @@
+import { SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
 import { describe, expect, test } from 'vitest';
 import type { DriveApi, NodeView, ServedIdentity } from './api';
 import { createDriveClient, type Rpc, type SharingLedger } from './client';
@@ -726,5 +727,48 @@ describe('re-keyed records', () => {
             }),
         ]);
         expect(JSON.stringify(h.wired)).not.toContain('osig');
+    });
+    test('a family walk the worker refuses for a share stops with that reason after a few tries', async () => {
+        const h = harness();
+        let served = 0;
+        let sent = 0;
+        const api = {
+            ...h.api,
+            rotationWork: async () => {
+                served++;
+                return {
+                    done: false,
+                    nextCursor: null,
+                    nodes: [{ ...rekeyedA(), depth: 1, versions: [], shares: [], links: [] }],
+                };
+            },
+        } as unknown as DriveApi;
+        const rpc = (async (operation: string, input: Record<string, unknown>) => {
+            if (operation !== 'driveRotateNodes')
+                return (h.rpc as unknown as (o: string, i: unknown) => Promise<unknown>)(
+                    operation,
+                    input,
+                );
+            sent++;
+            return {
+                nodes: (input.nodes as { id: string }[]).map((n) => ({
+                    id: n.id,
+                    error: SHARED_IN_FAMILY,
+                })),
+            };
+        }) as unknown as Rpc;
+        const client = createDriveClient(rpc, api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+            signers: async () => ({}),
+        });
+        await client.open('owner');
+        await expect(client.rotate(node(A, ROOT) as never)).rejects.toThrow(
+            /came with shares or links, which family folders never have/,
+        );
+        // Bounded: the node is never sent to the server, and the walk gives up instead of looping.
+        expect(sent).toBe(4);
+        expect(served).toBe(4);
+        expect(h.wired).toEqual([]);
     });
 });

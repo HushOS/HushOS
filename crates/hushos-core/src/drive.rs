@@ -1125,12 +1125,23 @@ pub fn metadata_rekey(
     new_key: Vec<u8>,
     envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
-    expect_len("oldKey", &old_key, KEY_BYTES)?;
-    expect_len("newKey", &new_key, KEY_BYTES)?;
+    let (old_key, new_key) = (Zeroizing::new(old_key), Zeroizing::new(new_key));
+    metadata_rekey_with(&ctx, &old_key, &new_key, &envelope)
+}
+
+/* The same over borrowed keys: no copy of either outlives the call. */
+pub(crate) fn metadata_rekey_with(
+    ctx: &MetadataContext,
+    old_key: &[u8],
+    new_key: &[u8],
+    envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    expect_len("oldKey", old_key, KEY_BYTES)?;
+    expect_len("newKey", new_key, KEY_BYTES)?;
     if envelope.len() > METADATA_ENVELOPE_MAX_BYTES {
         return Err(CoreError::Sealed("This encrypted envelope is damaged.".into()));
     }
-    rekey(&old_key, &new_key, &envelope, &metadata_context(&ctx)?)
+    rekey(old_key, new_key, envelope, &metadata_context(ctx)?)
 }
 
 /// A version envelope sealed again under a new node key, byte for byte, in
@@ -1144,10 +1155,22 @@ pub fn version_rekey(
     new_key: Vec<u8>,
     envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
-    expect_len("oldKey", &old_key, KEY_BYTES)?;
-    expect_len("newKey", &new_key, KEY_BYTES)?;
-    expect_len("envelope", &envelope, version_envelope_len(suite)?)?;
-    rekey(&old_key, &new_key, &envelope, &version_context(&ctx, suite)?)
+    let (old_key, new_key) = (Zeroizing::new(old_key), Zeroizing::new(new_key));
+    version_rekey_with(&ctx, suite, &old_key, &new_key, &envelope)
+}
+
+/* The same over borrowed keys: no copy of either outlives the call. */
+pub(crate) fn version_rekey_with(
+    ctx: &VersionContext,
+    suite: u32,
+    old_key: &[u8],
+    new_key: &[u8],
+    envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    expect_len("oldKey", old_key, KEY_BYTES)?;
+    expect_len("newKey", new_key, KEY_BYTES)?;
+    expect_len("envelope", envelope, version_envelope_len(suite)?)?;
+    rekey(old_key, new_key, envelope, &version_context(ctx, suite)?)
 }
 
 /* A version envelope's length in its suite. */
@@ -1181,17 +1204,36 @@ pub(crate) fn version_envelope_len(suite: u32) -> CoreResult<usize> {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn origin_opening_key(origin_envelope: Vec<u8>, node_key: Vec<u8>) -> CoreResult<Vec<u8>> {
-    expect_len("nodeKey", &node_key, KEY_BYTES)?;
-    Ok(opening_key(&node_key, &origin_envelope)?.to_vec())
+    let node_key = Zeroizing::new(node_key);
+    Ok(origin_opening_key_with(&origin_envelope, &node_key)?.to_vec())
+}
+
+/* The same over a borrowed node key, the opening key wiped when dropped. */
+pub(crate) fn origin_opening_key_with(
+    origin_envelope: &[u8],
+    node_key: &[u8],
+) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+    expect_len("nodeKey", node_key, KEY_BYTES)?;
+    opening_key(node_key, origin_envelope)
 }
 
 /// An origin's opening key wrapped under the node key at the epoch it now
 /// has: the 72-byte `originKeyEnvelope` a re-keyed record carries.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn origin_key_wrap(ctx: OriginKeyContext, node_key: Vec<u8>, origin_key: Vec<u8>) -> CoreResult<Vec<u8>> {
-    expect_len("nodeKey", &node_key, KEY_BYTES)?;
-    expect_len("originKey", &origin_key, KEY_BYTES)?;
-    seal(&node_key, &origin_key, &origin_key_context(&ctx)?)
+    let (node_key, origin_key) = (Zeroizing::new(node_key), Zeroizing::new(origin_key));
+    origin_key_wrap_with(&ctx, &node_key, &origin_key)
+}
+
+/* The same over borrowed keys: no copy of either outlives the call. */
+pub(crate) fn origin_key_wrap_with(
+    ctx: &OriginKeyContext,
+    node_key: &[u8],
+    origin_key: &[u8],
+) -> CoreResult<Vec<u8>> {
+    expect_len("nodeKey", node_key, KEY_BYTES)?;
+    expect_len("originKey", origin_key, KEY_BYTES)?;
+    seal(node_key, origin_key, &origin_key_context(ctx)?)
 }
 
 /// The inverse of [`origin_key_wrap`]: what a reader, or the next rotation,

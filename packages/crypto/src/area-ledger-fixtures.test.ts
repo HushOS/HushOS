@@ -92,15 +92,10 @@ describe('the nodes the core walked, read here', () => {
         const c = (await rotationCases())[index]!;
         const theirs = walked[index]!;
         if (c.refused) {
-            // The documented difference: the core refuses, with exactly this message; the worker
-            // re-seals the node's shares or links.
+            // Both twins refuse the node, with exactly this message, and write nothing of it.
             expect(theirs.refused).toBe(c.refused);
             expect(theirs.rotated).toEqual([]);
-            const here = await walk({ ...c, nodes: theirs.nodes });
-            expect({
-                shares: here.rotated.reduce((n, r) => n + r.shares, 0),
-                links: here.rotated.reduce((n, r) => n + r.links, 0),
-            }).toEqual(c.webReseals);
+            expect((await walk({ ...c, nodes: theirs.nodes })).refused).toBe(c.refused);
             return;
         }
         // What the core's walk wrote: the records each case says, re-keyed, re-sealed or dropped.

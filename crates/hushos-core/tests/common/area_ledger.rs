@@ -596,7 +596,7 @@ impl Runner {
                 json!({})
             }
             Step::Uncommit(group) => {
-                ledger.uncommit(group.clone());
+                ledger.uncommit(group.clone(), false);
                 json!({})
             }
             Step::Forget(group) => {

@@ -82,19 +82,11 @@ fn every_node_the_web_walked_reads_here_as_both_twins_declared_and_walks_here_al
         let input: Vec<RotatingNode> = nodes.iter().map(rotations::node_of).collect();
         let rotated = walked["rotated"].as_array().unwrap();
         if let Some(message) = case.refused {
-            // The documented difference: this core refuses the web's node with exactly this message,
-            // where the web re-sealed its shares or links.
+            // Both twins refuse the node, with exactly this message, and write nothing of it.
             assert_eq!(walked["refused"], message, "{}: the web declares the refusal", case.name);
+            assert_eq!(rotated.len(), 0, "{}: the web wrote nothing", case.name);
             let here = rotations::walk(&input, case.walker, target, None);
             assert_eq!(here.err().as_deref(), Some(message), "{}: refused here", case.name);
-            let reseals = |what: &str| rotated.iter().map(|r| r[what].as_u64().unwrap()).sum::<u64>();
-            let declared = case.web_reseals.as_ref().unwrap();
-            assert_eq!(
-                json!({ "shares": reseals("shares"), "links": reseals("links") }),
-                *declared,
-                "{}",
-                case.name
-            );
             refused += 1;
             continue;
         }
