@@ -23,6 +23,7 @@ import { usePageRestored } from '@/lib/page-restore';
 import { setPaletteOpen } from '@/lib/palette';
 import { billingQueryOptions, storageQueryOptions } from '@/lib/queries';
 import { sessionQueryOptions } from '@/lib/session';
+import { useIsTablet } from '@/hooks/use-mobile';
 import { getSidebarStateServerFn } from '@/lib/theme';
 import { bindContactsToQueries } from '@/lib/contacts';
 import { bindTransfersToQueries, guardUnloadWhileUploading } from '@/lib/transfers';
@@ -46,7 +47,13 @@ export const Route = createFileRoute('/_authenticated/app')({
 function AppLayout() {
     const router = useRouter();
     const { user } = Route.useRouteContext();
-    const sidebarOpen = Route.useLoaderData();
+    // Open or closed as the person last chose (the cookie). Until they choose, the width decides:
+    // the icon rail between a phone and a desk (768 to 1023px), where the full sidebar would
+    // squeeze the page to about 500px, and open on a desk. A phone uses the sheet either way.
+    const savedSidebar = Route.useLoaderData();
+    const [sidebarChoice, setSidebarChoice] = useState(savedSidebar);
+    const tablet = useIsTablet();
+    const sidebarOpen = sidebarChoice ?? !tablet;
     const queryClient = router.options.context.queryClient;
     const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
     const rememberError = useStore(authClient.store, (state) => state.rememberError);
@@ -147,7 +154,8 @@ function AppLayout() {
     }, [queryClient]);
     return (
         <SidebarProvider
-            defaultOpen={sidebarOpen}
+            open={sidebarOpen}
+            onOpenChange={setSidebarChoice}
             style={{ '--sidebar-width': '15rem' } as CSSProperties}
         >
             <NavigationBar />

@@ -183,36 +183,42 @@ function PoolMeter({
     const used = empty ? 1 : Math.min(1, Math.max(0, Number(usedBytes) / Number(quota)));
     const nearlyFull = used >= 0.95;
     const free = quota > usedBytes ? quota - usedBytes : 0n;
+    const usedLine = empty
+        ? 'No room'
+        : `${formatSpace(pool.usedBytes)} of ${formatQuota(pool.quotaBytes)} used`;
     return (
-        <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
-            <span className="eyebrow truncate text-muted-foreground">{family}</span>
-            <Progress
-                value={Math.round(used * 100)}
-                aria-label={`${family}’s storage used`}
-                className={cn(
-                    'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
-                    nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',
-                )}
-            >
-                <ProgressValue className="ml-0 text-[13px] text-foreground tabular-nums">
-                    {() =>
-                        empty
-                            ? 'No room'
-                            : `${formatSpace(pool.usedBytes)} of ${formatQuota(pool.quotaBytes)} used`
-                    }
-                </ProgressValue>
-            </Progress>
-            <span
-                className={cn(
-                    'text-[13px] tabular-nums',
-                    nearlyFull ? 'text-destructive' : 'text-muted-foreground',
-                )}
-            >
-                {empty
-                    ? 'The family has no plan right now'
-                    : `${formatSpace(free.toString())} free`}
-            </span>
-        </div>
+        <>
+            <CollapsedMeter
+                used={used}
+                nearlyFull={nearlyFull}
+                line={`${family}: ${usedLine}${empty ? '' : `, ${formatSpace(free.toString())} free`}`}
+            />
+            <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
+                <span className="eyebrow truncate text-muted-foreground">{family}</span>
+                <Progress
+                    value={Math.round(used * 100)}
+                    aria-label={`${family}’s storage used`}
+                    className={cn(
+                        'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
+                        nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',
+                    )}
+                >
+                    <ProgressValue className="ml-0 text-[13px] text-foreground tabular-nums">
+                        {() => usedLine}
+                    </ProgressValue>
+                </Progress>
+                <span
+                    className={cn(
+                        'text-[13px] tabular-nums',
+                        nearlyFull ? 'text-destructive' : 'text-muted-foreground',
+                    )}
+                >
+                    {empty
+                        ? 'The family has no plan right now'
+                        : `${formatSpace(free.toString())} free`}
+                </span>
+            </div>
+        </>
     );
 }
 
@@ -238,55 +244,114 @@ function OwnMeter({ label }: { label: string | null }) {
         : ending
           ? `${ending.productName} ends ${formatDay(ending.currentPeriodEnd)}`
           : `${formatSpace(storage.availableBytes)} free`;
+    const usedLine = storage
+        ? `${formatSpace(storage.usedBytes)} of ${formatQuota(storage.quotaBytes)} used`
+        : 'Storage';
     return (
-        <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
-            {label && <span className="eyebrow text-muted-foreground">{label}</span>}
-            <Progress
-                value={Math.round(used * 100)}
-                aria-label="Storage used"
-                className={cn(
-                    'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
-                    nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',
-                )}
-            >
-                <ProgressValue className="ml-0 text-[13px] text-foreground tabular-nums">
-                    {() =>
-                        storage
-                            ? `${formatSpace(storage.usedBytes)} of ${formatQuota(storage.quotaBytes)} used`
-                            : 'Storage'
-                    }
-                </ProgressValue>
-            </Progress>
-            <span
-                className={cn(
-                    'text-[13px] tabular-nums',
-                    nearlyFull && !ending ? 'text-destructive' : 'text-muted-foreground',
-                )}
-            >
-                {line ?? 'Opening your account…'}
-            </span>
-            {billing && catalogue && summary && (
-                <Link
-                    to="/app/billing"
-                    className="self-start text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+        <>
+            <CollapsedMeter
+                used={used}
+                nearlyFull={nearlyFull && !ending}
+                line={`${label ? `${label}: ` : ''}${usedLine}${line ? `, ${line}` : ''}`}
+            />
+            <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
+                {label && <span className="eyebrow text-muted-foreground">{label}</span>}
+                <Progress
+                    value={Math.round(used * 100)}
+                    aria-label="Storage used"
+                    className={cn(
+                        'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
+                        nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',
+                    )}
                 >
-                    {ending
-                        ? 'Resume plan'
-                        : nearlyFull && canUpgrade
-                          ? 'Get more room'
-                          : 'Plan and storage'}
-                </Link>
-            )}
-        </div>
+                    <ProgressValue className="ml-0 text-[13px] text-foreground tabular-nums">
+                        {() => usedLine}
+                    </ProgressValue>
+                </Progress>
+                <span
+                    className={cn(
+                        'text-[13px] tabular-nums',
+                        nearlyFull && !ending ? 'text-destructive' : 'text-muted-foreground',
+                    )}
+                >
+                    {line ?? 'Opening your account…'}
+                </span>
+                {billing && catalogue && summary && (
+                    <Link
+                        to="/app/billing"
+                        className="self-start text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                    >
+                        {ending
+                            ? 'Resume plan'
+                            : nearlyFull && canUpgrade
+                              ? 'Get more room'
+                              : 'Plan and storage'}
+                    </Link>
+                )}
+            </div>
+        </>
+    );
+}
+
+/*
+ * The meter in the icon rail: a ring in the places' 40px square, its words in the tooltip and
+ * the button's name. Pressing it opens the sidebar, where the whole meter is.
+ */
+const RING = 2 * Math.PI * 7;
+function CollapsedMeter({
+    used,
+    nearlyFull,
+    line,
+}: {
+    used: number;
+    nearlyFull: boolean;
+    line: string;
+}) {
+    const { setOpen } = useSidebar();
+    return (
+        <SidebarMenu className="hidden group-data-[collapsible=icon]:flex">
+            <SidebarMenuItem>
+                <SidebarMenuButton
+                    tooltip={line}
+                    data-storage-rail
+                    onClick={() => setOpen(true)}
+                    className={cn(item, collapsed)}
+                >
+                    <svg viewBox="0 0 20 20" aria-hidden="true" className="-rotate-90">
+                        <circle
+                            cx="10"
+                            cy="10"
+                            r="7"
+                            fill="none"
+                            strokeWidth="2.5"
+                            className="stroke-rule"
+                        />
+                        <circle
+                            cx="10"
+                            cy="10"
+                            r="7"
+                            fill="none"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeDasharray={RING}
+                            strokeDashoffset={RING * (1 - Math.min(1, Math.max(0, used)))}
+                            className={nearlyFull ? 'stroke-destructive' : 'stroke-primary'}
+                        />
+                    </svg>
+                    <span>{line}</span>
+                </SidebarMenuButton>
+            </SidebarMenuItem>
+        </SidebarMenu>
     );
 }
 
 /*
  * Collapsed, every place is a 40px square (the expanded row's height) with its icon in the
- * middle, and the label leaves the layout instead of being clipped beside it.
+ * middle, and the label leaves the layout instead of being clipped beside it. It stays the
+ * link's name for a screen reader (sr-only, not hidden); the tooltip shows it on hover or focus.
  */
 const collapsed =
-    'group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&>span:last-child]:hidden';
+    'group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&>span:last-child]:sr-only';
 /* The active place is tinted, semibold and its icon heavier: never tint alone. */
 /* The quieter rows draw 16px icons in the 18px column (1px each side), so every label starts in one line. */
 const item =

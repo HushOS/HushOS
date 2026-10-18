@@ -50,7 +50,11 @@ export const setContrastServerFn = createServerFn({ method: 'POST' })
         });
     });
 
-/* The sidebar writes `sidebar_state` itself; the server reads it so the first paint matches. */
-export const getSidebarStateServerFn = createServerFn().handler(() => {
-    return getCookie('sidebar_state') !== 'false';
+/*
+ * The sidebar writes `sidebar_state` itself when someone opens or closes it; the server reads it
+ * so the first paint matches. Null when nobody has chosen: the width decides (app/route.tsx).
+ */
+export const getSidebarStateServerFn = createServerFn().handler((): boolean | null => {
+    const saved = getCookie('sidebar_state');
+    return saved === 'true' ? true : saved === 'false' ? false : null;
 });
