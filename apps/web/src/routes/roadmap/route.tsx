@@ -3,7 +3,6 @@ import { cn } from 'cn';
 import { ArrowRightIcon } from 'lucide-react';
 import { Cover } from '@/components/cover';
 import { DitherAvatar } from '@/components/dither-kit/avatar';
-import { DitherGradient } from '@/components/dither-kit/gradient';
 import { ReadingPage } from '@/components/legal-layout';
 import {
     sections,
@@ -227,19 +226,9 @@ function RoadmapPage() {
             summary={description}
             headings={timeline.map((section) => ({ id: section.status, title: section.title }))}
             banner={
-                // The cover on a dither-kit wash rising from its foot, as the home page's band has;
-                // the wash goes in high contrast, the cover stays (identities.css).
-                <div className="relative isolate px-3 pt-3 pb-8 sm:px-6 sm:pt-6 sm:pb-12">
-                    <DitherGradient
-                        from={150}
-                        direction="up"
-                        cell={4}
-                        opacity={0.5}
-                        className="id-wash -z-10 rounded-md"
-                    />
-                    <div className="cover-wipe overflow-hidden rounded-md shadow-sm">
-                        <Cover word="AHEAD" tone="mint" seed="roadmap" cols={96} rows={16} dither />
-                    </div>
+                // One contained cover, as About's: the dither lives inside the card, never past it.
+                <div className="cover-wipe overflow-hidden rounded-md">
+                    <Cover word="AHEAD" tone="mint" seed="roadmap" cols={96} rows={16} dither />
                 </div>
             }
         >
