@@ -1,0 +1,31 @@
+DESIGN.md
+  s_c56e31c87cddde::t_66806bf134f410 445
+apps/web/src/components/families/family-alerts.tsx
+  s_c56e31c87cddde::t_d831dab2f274c6 13-25
+apps/web/src/components/families/members.tsx
+  s_c56e31c87cddde::t_6c74f1abcde00c 215,226-230,342,351,364,406,452,457-458,487-489
+apps/web/src/lib/families.ts
+  s_c56e31c87cddde::t_4162bb92fb6f96 239-240,242-244
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/index.tsx
+  s_c56e31c87cddde::t_53d1b4ae2c16ad 7,187-189,310
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/route.tsx
+  s_c56e31c87cddde::t_29f8ca7641b8d1 7,161-165
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_6859bde46a0372 689,691,695-699,945-949,956-959,996-998
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ddc8ad3bb1befa83e67d7816cf2ba681c585467e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
