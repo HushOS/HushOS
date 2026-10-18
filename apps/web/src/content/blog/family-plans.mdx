@@ -1,29 +1,15 @@
 ---
-# DRAFT, not published. content/blog/drafts/ is outside the blog's glob
-# (content/blog/*.mdx), so this post is not built, listed, routed, or in the
-# sitemap, llms.txt or the home page. To publish, move it up one directory;
-# the import path is already written for content/blog/, and the slug
-# (family-plans) also seeds the cover. Before that, confirm: the date; that
-# the phone apps open family folders at launch (the Note in the body); that
-# Family pricing v2 has replaced the old Family plan in plans.ts, the pricing
-# page, DESIGN.md and polar:seed. Keep the phone-apps Note until release day.
 title: Family plans
 description: Up to 20 people share family folders, end-to-end encrypted, and each keeps their own private space. How joining works, what happens when someone leaves, what it costs, and what is not built yet.
-date: 2026-10-18
+date: 2026-10-19
 author: HushOS
 cover: FAMILY
 tone: sage
 ---
 
-import { Cta, Ledger, Note } from '../../components/mdx';
+import { Cta, Ledger } from '../../components/mdx';
 
 HushOS has family plans from today. Up to 20 people share family folders, end-to-end encrypted, and each of them keeps their own private space beside them. Families work on the web and in the iPhone and Android apps.
-
-<Note title="For the owner: confirm before publishing">
-    The line above says the phone apps have family folders at launch. Today they open only in a
-    browser. Keep it only if mobile families ship with the plans; otherwise say "on the web, with
-    the iPhone and Android apps to follow".
-</Note>
 
 ## What a family is
 
@@ -66,7 +52,10 @@ A file written by someone who has since been removed reads "Written by Sam, who 
         ['Family Plus', '800 GB for the family folders, $10 a month'],
         ['Family Pro', '2 TB for the family folders, $20 a month'],
         ['Family Max', '4 TB for the family folders, $30 a month'],
-        ['Members', 'Four included, then $1.50 a month ($15 a year) for each member after that, up to 20'],
+        [
+            'Members',
+            'Four included, then $1.50 a month ($15 a year) for each member after that, up to 20',
+        ],
         ['Yearly', 'Ten months of the monthly price'],
         ['Tax', 'Added where it applies, at checkout'],
     ]}
