@@ -1,13 +1,28 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { db } from '../../db/src/client';
+import { workspaceKeys } from '../../db/src/schema';
 import {
     closeDatabase,
     createTestAccount,
+    createTestFamily,
     createTestIdentity,
+    insertLegacyLink,
+    insertLegacyShare,
     resetDatabase,
 } from '../../db/test/helpers';
-import { folder, member, root, share, type Account } from '../test/fixtures';
+import * as signed from '../../db/test/signed';
+import {
+    epoch,
+    folder,
+    keyEnvelope,
+    member,
+    metadataEnvelope,
+    minted,
+    root,
+    share,
+    type Account,
+} from '../test/fixtures';
 import * as server from './server';
 
 /*
@@ -83,6 +98,148 @@ describe('creating and re-sealing', () => {
         expect((await server.listSharedWithMe(guest.userId)).shares[0]!.shareEnvelope).toBe(
             b64(fresh),
         );
+    });
+});
+
+describe('in a family folder', () => {
+    /* The owner's family, its folder (which they hold a key to) and the folder's root. */
+    async function familyRoot() {
+        const { areaIds } = await createTestFamily({ organizerId: owner.userId });
+        const areaId = areaIds[0]!;
+        await db.insert(workspaceKeys).values({
+            workspaceId: areaId,
+            userId: owner.userId,
+            keyVersion: 1,
+            wrappingSalt: randomBytes(32),
+            wrappingNonce: randomBytes(24),
+            encryptedKey: randomBytes(48),
+        });
+        const created = await signed.createRoot({
+            workspaceId: areaId,
+            userId: owner.userId,
+            id: randomUUID(),
+            envelopes: {
+                keyEpoch: await epoch(areaId),
+                parentKeyEpoch: 1,
+                keyEnvelope: keyEnvelope(),
+                metadataEnvelope: metadataEnvelope(),
+            },
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        return { areaId, node: created.root };
+    }
+
+    test('no share or link is made, sealed again or given a new expiry, and stopping one left from before still works', async () => {
+        const { areaId, node } = await familyRoot();
+        const refused = { status: 409, code: 'family-sharing' };
+        expect(
+            await refusal(
+                server.shareNode(owner.userId, areaId, node.id, {
+                    granteeUserId: guest.userId,
+                    role: 'viewer',
+                    keyEpoch: node.keyEpoch,
+                    shareEnvelope: b64(randomBytes(4565)),
+                }),
+            ),
+        ).toEqual(refused);
+        const { id: linkId, seed: linkIdSeed } = minted('link', areaId);
+        expect(
+            await refusal(
+                server.createLink(owner.userId, areaId, node.id, {
+                    linkId,
+                    linkIdSeed,
+                    token: randomBytes(32).toString('base64url'),
+                    keyEpoch: node.keyEpoch,
+                    linkEnvelope: b64(randomBytes(72)),
+                    linkSalt: b64(randomBytes(16)),
+                    secretEnvelope: b64(randomBytes(136)),
+                    hasPassword: false,
+                    expiresAt: null,
+                }),
+            ),
+        ).toEqual(refused);
+        expect(await server.listNodeShares(owner.userId, areaId, node.id)).toEqual({ shares: [] });
+        expect(await server.listNodeLinks(owner.userId, areaId, node.id)).toEqual({ links: [] });
+        // Rows a server before the refusal could have stored: refused alike, left as they were.
+        const legacyShare = await insertLegacyShare({
+            workspaceId: areaId,
+            nodeId: node.id,
+            granterUserId: owner.userId,
+            granteeUserId: guest.userId,
+            role: 'viewer',
+            keyEpoch: node.keyEpoch,
+            shareEnvelope: randomBytes(4565),
+        });
+        const legacyLink = await insertLegacyLink({
+            id: randomUUID(),
+            workspaceId: areaId,
+            nodeId: node.id,
+            granterUserId: owner.userId,
+            tokenHash: randomBytes(32),
+            keyEpoch: node.keyEpoch,
+            linkEnvelope: randomBytes(72),
+            linkSalt: randomBytes(16),
+            secretEnvelope: randomBytes(136),
+            hasPassword: false,
+            expiresAt: null,
+        });
+        // As the grantee is served it, leaving out the feed cursor, which is sealed afresh each time.
+        const served = async () =>
+            (await server.listSharedWithMe(guest.userId)).shares.map(
+                ({ cursor: _cursor, ...row }) => row,
+            );
+        const shareBefore = await served();
+        const linksBefore = await server.listNodeLinks(owner.userId, areaId, node.id);
+        expect(shareBefore.map((row) => row.shareEnvelope)).toEqual([
+            b64(legacyShare.shareEnvelope),
+        ]);
+        expect(
+            await refusal(
+                server.resealShare(owner.userId, areaId, legacyShare.id, {
+                    keyEpoch: node.keyEpoch,
+                    shareEnvelope: b64(randomBytes(4565)),
+                }),
+            ),
+        ).toEqual(refused);
+        expect(
+            await refusal(
+                server.updateLink(owner.userId, areaId, legacyLink.id, {
+                    keyEpoch: node.keyEpoch,
+                    expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+                }),
+            ),
+        ).toEqual(refused);
+        expect(
+            await refusal(
+                server.updateLink(owner.userId, areaId, legacyLink.id, {
+                    keyEpoch: node.keyEpoch,
+                    seal: {
+                        linkEnvelope: b64(randomBytes(72)),
+                        linkSalt: b64(randomBytes(16)),
+                        hasPassword: true,
+                    },
+                }),
+            ),
+        ).toEqual(refused);
+        expect(await served()).toEqual(shareBefore);
+        expect(await server.listNodeLinks(owner.userId, areaId, node.id)).toEqual(linksBefore);
+        expect(await server.revokeShare(owner.userId, areaId, legacyShare.id)).toEqual({
+            revoked: true,
+        });
+        expect(await server.revokeLink(owner.userId, areaId, legacyLink.id)).toEqual({
+            revoked: true,
+        });
+        // The same calls in the owner's own Drive go through.
+        expect(
+            (
+                await server.shareNode(owner.userId, owner.workspaceId, project.id, {
+                    granteeUserId: guest.userId,
+                    role: 'viewer',
+                    keyEpoch: project.keyEpoch,
+                    shareEnvelope: b64(randomBytes(4565)),
+                })
+            ).share.suite,
+        ).toBe(4);
     });
 });
 

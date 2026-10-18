@@ -7,6 +7,8 @@ import {
     closeDatabase,
     createTestAccount,
     createTestIdentity,
+    insertLegacyLink,
+    insertLegacyShare,
     resetDatabase,
     signerFor,
 } from '../test/helpers';
@@ -999,7 +1001,8 @@ describe('departures', () => {
         granter: string,
         grantee: string,
     ) {
-        const result = await drive.createShare({
+        // Left by a server before family folders refused sharing: the repository makes none now.
+        const share = await insertLegacyShare({
             workspaceId: group.areaId,
             nodeId: root.id,
             granterUserId: granter,
@@ -1008,11 +1011,10 @@ describe('departures', () => {
             keyEpoch: root.keyEpoch,
             shareEnvelope: randomBytes(4565),
         });
-        if (result.status !== 'ok') throw new Error(result.status);
-        return result.share.id;
+        return share.id;
     }
     async function linkOf(group: Family, root: { id: string; keyEpoch: number }, granter: string) {
-        const result = await drive.createLink({
+        const link = await insertLegacyLink({
             id: randomUUID(),
             workspaceId: group.areaId,
             nodeId: root.id,
@@ -1025,8 +1027,7 @@ describe('departures', () => {
             hasPassword: false,
             expiresAt: null,
         });
-        if (result.status !== 'ok') throw new Error(result.status);
-        return result.link.id;
+        return link.id;
     }
     const liveShare = async (id: string) =>
         (
@@ -1953,17 +1954,29 @@ describe('departures', () => {
     });
 
     test('a Drive write that lands after its writer left the group is refused under the lock', async () => {
-        const { creator, group, leaver, stayer } = await threeMembers();
+        const { creator, group, stayer } = await threeMembers();
         await ensureIdentity(stayer.userId);
         const root = await areaRoot(group, creator.userId);
+        const folderBy = async (userId: string) =>
+            signed.createFolders({
+                workspaceId: group.areaId,
+                userId,
+                folders: [
+                    {
+                        id: randomUUID(),
+                        parentId: root.id,
+                        envelopes: {
+                            keyEpoch: (await drive.allocateKeyEpochs(group.areaId, 1))!.from,
+                            parentKeyEpoch: root.keyEpoch,
+                            keyEnvelope: randomBytes(72),
+                            metadataEnvelope: randomBytes(100),
+                        },
+                    },
+                ],
+            });
         // The Drive domain checked access before this; the departure commits in between.
         expect(await groups.leaveGroup(group.groupId, stayer.userId)).toEqual({ status: 'left' });
-        await expect(shareOf(group, root, stayer.userId, leaver.userId)).rejects.toBeInstanceOf(
-            drive.AccessEndedError,
-        );
-        await expect(linkOf(group, root, stayer.userId)).rejects.toBeInstanceOf(
-            drive.AccessEndedError,
-        );
+        await expect(folderBy(stayer.userId)).rejects.toBeInstanceOf(drive.AccessEndedError);
         await expect(
             drive.putWorkspaceDocument({
                 limits: DOCUMENT_LIMITS,
@@ -1975,13 +1988,118 @@ describe('departures', () => {
             }),
         ).rejects.toBeInstanceOf(drive.AccessEndedError);
         expect(await drive.getWorkspaceDocument(group.areaId, 'tags')).toBeNull();
-        expect(
-            await db.select().from(driveShares).where(eq(driveShares.granterUserId, stayer.userId)),
-        ).toEqual([]);
         // Someone still in the group writes as before.
-        expect(await liveShare(await shareOf(group, root, creator.userId, leaver.userId))).toBe(
-            true,
+        expect(await folderBy(creator.userId)).toMatchObject({ status: 'created' });
+        expect(
+            await drive.putWorkspaceDocument({
+                limits: DOCUMENT_LIMITS,
+                workspaceId: group.areaId,
+                kind: 'tags',
+                version: 0,
+                envelope: randomBytes(64),
+                writer: creator.userId,
+            }),
+        ).toMatchObject({ status: 'ok' });
+    });
+
+    test('a family folder takes no share or link, nor a new seal or expiry on one left from before, and stopping one still works', async () => {
+        const { creator, group } = await threeMembers();
+        const outsider = await createTestAccount();
+        await ensureIdentity(outsider.userId);
+        const root = await areaRoot(group, creator.userId);
+        const changeSeqOf = async () =>
+            (await db.select().from(driveNodes).where(eq(driveNodes.id, root.id)))[0]!.changeSeq;
+        const before = await changeSeqOf();
+        const share = {
+            workspaceId: group.areaId,
+            nodeId: root.id,
+            granterUserId: creator.userId,
+            granteeUserId: outsider.userId,
+            role: 'viewer' as const,
+            keyEpoch: root.keyEpoch,
+            shareEnvelope: randomBytes(drive.SHARE_ENVELOPE_BYTES),
+        };
+        const link = {
+            workspaceId: group.areaId,
+            nodeId: root.id,
+            granterUserId: creator.userId,
+            keyEpoch: root.keyEpoch,
+            linkEnvelope: randomBytes(72),
+            linkSalt: randomBytes(16),
+            secretEnvelope: randomBytes(104),
+            hasPassword: false,
+            expiresAt: null,
+        };
+        // The organizer, who may do anything else here, makes neither.
+        expect(await drive.createShare(share)).toEqual({ status: 'family-sharing' });
+        expect(
+            await drive.createLink({ ...link, id: randomUUID(), tokenHash: randomBytes(32) }),
+        ).toEqual({ status: 'family-sharing' });
+        expect(await db.select().from(driveShares).where(eq(driveShares.nodeId, root.id))).toEqual(
+            [],
         );
+        expect(await db.select().from(driveLinks).where(eq(driveLinks.nodeId, root.id))).toEqual(
+            [],
+        );
+        // A refusal moves nothing a rotation that read the root would then find stale.
+        expect(await changeSeqOf()).toBe(before);
+        // One each left by a server before this: neither sealed again nor given a new expiry.
+        const legacyShare = await insertLegacyShare(share);
+        const legacyLink = await insertLegacyLink({
+            ...link,
+            id: randomUUID(),
+            tokenHash: randomBytes(32),
+        });
+        expect(
+            await drive.resealShare({
+                workspaceId: group.areaId,
+                shareId: legacyShare.id,
+                granterUserId: creator.userId,
+                keyEpoch: root.keyEpoch,
+                shareEnvelope: randomBytes(drive.SHARE_ENVELOPE_BYTES),
+            }),
+        ).toEqual({ status: 'family-sharing' });
+        for (const change of [
+            {
+                seal: {
+                    linkEnvelope: randomBytes(72),
+                    linkSalt: randomBytes(16),
+                    hasPassword: true,
+                    secretEnvelope: randomBytes(104),
+                },
+            },
+            { expiresAt: new Date(Date.now() + 24 * 3600 * 1000) },
+        ])
+            expect(
+                await drive.updateLink({
+                    workspaceId: group.areaId,
+                    linkId: legacyLink.id,
+                    keyEpoch: root.keyEpoch,
+                    ...change,
+                }),
+            ).toEqual({ status: 'family-sharing' });
+        const [shareRow] = await db
+            .select()
+            .from(driveShares)
+            .where(eq(driveShares.id, legacyShare.id));
+        expect(shareRow!.shareEnvelope).toEqual(legacyShare.shareEnvelope);
+        const [linkRow] = await db
+            .select()
+            .from(driveLinks)
+            .where(eq(driveLinks.id, legacyLink.id));
+        expect(linkRow).toMatchObject({
+            linkEnvelope: legacyLink.linkEnvelope,
+            hasPassword: false,
+            expiresAt: null,
+        });
+        expect(await changeSeqOf()).toBe(before);
+        // Stopping them is how such a folder is cleared, and marks it due for rotation.
+        expect((await areaRow(group.areaId)).rotationDueAt).toBeNull();
+        expect(await drive.revokeShare(group.areaId, legacyShare.id)).not.toBeNull();
+        expect(await drive.revokeLink(group.areaId, legacyLink.id)).not.toBeNull();
+        expect(await liveShare(legacyShare.id)).toBe(false);
+        expect(await liveLink(legacyLink.id)).toBe(false);
+        expect((await areaRow(group.areaId)).rotationDueAt).not.toBeNull();
     });
 
     test('a roster rotation waits for a Drive rotation that re-keyed nodes, and those nodes still open from server rows after both', async () => {
@@ -3555,7 +3673,7 @@ describe('deleting a family folder (groups design 2.10)', () => {
         });
         if (made.status !== 'created') throw new Error(made.status);
         const outsider = await createTestAccount();
-        const shared = await drive.createShare({
+        const shared = await insertLegacyShare({
             workspaceId: photos,
             nodeId: made.root.id,
             granterUserId: creator.userId,
@@ -3564,8 +3682,7 @@ describe('deleting a family folder (groups design 2.10)', () => {
             keyEpoch: made.root.keyEpoch,
             shareEnvelope: randomBytes(4565),
         });
-        if (shared.status !== 'ok') throw new Error(shared.status);
-        return { creator, member, group, head, photos, root: made.root, share: shared.share.id };
+        return { creator, member, group, head, photos, root: made.root, share: shared.id };
     }
     const retire = (group: Family, head: Head, uploader: string, workspaceId: string) =>
         groups.appendChain({

@@ -19,10 +19,9 @@ import {
     type SuccessionLink,
 } from './identity';
 import { CONTENT_SUITE, openNodeKey, wrapNodeKey, wrapPreviousRootKey } from './drive';
-import { sealLinkSecret } from './links';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
-import { KEY_CHANGE_PENDING, NOT_CARRIED, SHARED_IN_FAMILY } from './protocol';
+import { FAMILY_SHARING, KEY_CHANGE_PENDING, NOT_CARRIED, SHARED_IN_FAMILY } from './protocol';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
 import { openAreaSelfGrant } from './workspace';
 import {
@@ -2294,69 +2293,6 @@ describe('the write version (F9)', () => {
             await expect(write(ROOTED, 9)).resolves.toBeTruthy();
             await expect(write(CHILD, 1)).rejects.toThrow(KEY_CHANGE_PENDING);
         };
-        await both((nodeId, keyEpoch) =>
-            bob.call('driveSealShare', {
-                workspaceId: ws,
-                nodeId,
-                keyEpoch,
-                granterUserId: BOB,
-                granteeUserId: ALICE,
-                granteePublicKey: alice.served.encryptionPublicKey,
-                granteeKemPublicKey: alice.served.kemPublicKey,
-            }),
-        );
-        const LINK = 'cacacaca-0000-4000-8000-00000000000a';
-        await both((nodeId, keyEpoch) =>
-            bob.call('driveSealLink', {
-                workspaceId: ws,
-                nodeId,
-                keyEpoch,
-                linkId: LINK,
-                password: null,
-            }),
-        );
-        // A link secret each folder's own key sealed: CHILD's under its key 1, as its maker left it.
-        const sealed = await bob.call('driveSealLink', {
-            workspaceId: ws,
-            nodeId: ROOTED,
-            keyEpoch: 9,
-            linkId: LINK,
-            password: null,
-        });
-        const areaKey = await openAreaSelfGrant(alice.root, ALICE, groupId, area.selfGrant);
-        const rootKey = await openNodeKey(decode(f.rootListing.keyEnvelope), areaKey, {
-            workspaceId: ws,
-            nodeId: area.root.id,
-            parentId: ws,
-            parentKeyEpoch: 1,
-            keyEpoch: 1,
-        });
-        const childKey = await openNodeKey(decode(r.childListing.keyEnvelope), rootKey, {
-            workspaceId: ws,
-            nodeId: CHILD,
-            parentId: area.root.id,
-            parentKeyEpoch: 1,
-            keyEpoch: 1,
-        });
-        const childSecret = encode(
-            await sealLinkSecret(
-                crypto.getRandomValues(new Uint8Array(32)),
-                crypto.getRandomValues(new Uint8Array(32)),
-                crypto.getRandomValues(new Uint8Array(32)),
-                childKey,
-                { workspaceId: ws, nodeId: CHILD, keyEpoch: 1, linkId: LINK },
-            ),
-        );
-        await both((nodeId, keyEpoch) =>
-            bob.call('driveResealLink', {
-                workspaceId: ws,
-                nodeId,
-                keyEpoch,
-                linkId: LINK,
-                secretEnvelope: nodeId === CHILD ? childSecret : sealed.secretEnvelope,
-                password: null,
-            }),
-        );
         // Re-wrapped under the rotated root, whose key is rooted: the node's own key still is not.
         await both((nodeId, keyEpoch) =>
             bob.call('driveRewrapNode', {
@@ -2394,6 +2330,69 @@ describe('the write version (F9)', () => {
                 versionId: VERSION,
             }),
         );
+    });
+
+    test('design 3.4: a family folder seals no share or link, in a folder that takes every other write', async () => {
+        const f = await family();
+        const r = await rotated(f);
+        const { alice, bob, groupId, ws, area } = f;
+        await bob.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: r.grantTo(BOB),
+            granterMlDsaPublicKey: alice.served.mlDsaPublicKey,
+            selfGrant: null,
+        });
+        await bob.call('driveOpenNodes', { workspaceId: ws, nodes: [r.rotatedRoot()] });
+        const ROOTED = 'c9c9c9c9-0000-4000-8000-000000000009';
+        // Writable: Bob makes it, and a folder under it.
+        await bob.call('driveCreateNodes', newFolder(ws, area.root.id, 5, ROOTED));
+        await expect(
+            bob.call('driveCreateNodes', newFolder(ws, ROOTED, 9, LATER.replace('c5', 'cf'))),
+        ).resolves.toBeTruthy();
+        const LINK = 'cacacaca-0000-4000-8000-00000000000a';
+        await expect(
+            bob.call('driveSealShare', {
+                workspaceId: ws,
+                nodeId: ROOTED,
+                keyEpoch: 9,
+                granterUserId: BOB,
+                granteeUserId: ALICE,
+                granteePublicKey: alice.served.encryptionPublicKey,
+                granteeKemPublicKey: alice.served.kemPublicKey,
+            }),
+        ).rejects.toThrow(FAMILY_SHARING);
+        await expect(
+            bob.call('driveSealLink', {
+                workspaceId: ws,
+                nodeId: ROOTED,
+                keyEpoch: 9,
+                linkId: LINK,
+                password: null,
+            }),
+        ).rejects.toThrow(FAMILY_SHARING);
+        await expect(
+            bob.call('driveResealLink', {
+                workspaceId: ws,
+                nodeId: ROOTED,
+                keyEpoch: 9,
+                linkId: LINK,
+                secretEnvelope: encode(new Uint8Array(136)),
+                password: 'new',
+            }),
+        ).rejects.toThrow(FAMILY_SHARING);
+        // The top folder too, whose key only the roster moves.
+        await expect(
+            bob.call('driveSealLink', {
+                workspaceId: ws,
+                nodeId: area.root.id,
+                keyEpoch: 5,
+                linkId: LINK,
+                password: null,
+            }),
+        ).rejects.toThrow(FAMILY_SHARING);
     });
 
     test('design 2.10 (F11): deleting a folder stages its tombstone alone, and the folder is written and opened no more', async () => {

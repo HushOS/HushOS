@@ -1,4 +1,3 @@
-import { SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
 import { describe, expect, test } from 'vitest';
 import type { DriveApi, NodeView, ServedIdentity } from './api';
 import { createDriveClient, type Rpc, type SharingLedger } from './client';
@@ -728,34 +727,115 @@ describe('re-keyed records', () => {
         ]);
         expect(JSON.stringify(h.wired)).not.toContain('osig');
     });
-    test('a family walk the worker refuses for a share stops with that reason after a few tries', async () => {
+    test('a family walk refuses a node the server lists a share or link on, the walker’s own included, and never hands it to the worker', async () => {
+        for (const served of [
+            { shares: true, links: false },
+            { shares: false, links: true },
+        ]) {
+            const h = harness();
+            // The node as the harness serves it: two shares and two links.
+            const listed = (await h.api.rotationWork(WS, A, null)).nodes[0]!;
+            let calls = 0;
+            const api = {
+                ...h.api,
+                // Served until the server applies it, which a refused node never is.
+                rotationWork: async () => {
+                    calls++;
+                    if (h.wired.length) return { done: true, nextCursor: null, nodes: [] };
+                    return {
+                        done: false,
+                        nextCursor: null,
+                        nodes: [
+                            {
+                                ...listed,
+                                shares: served.shares ? listed.shares : [],
+                                links: served.links ? listed.links : [],
+                            },
+                        ],
+                    };
+                },
+            } as unknown as DriveApi;
+            const trusted: string[] = [];
+            const client = createDriveClient(h.rpc, api, {
+                trustGrantee: async (grantee, identity) => {
+                    trusted.push(grantee);
+                    return h.trustGrantee(grantee, identity);
+                },
+                // Every share and link served is in the walker’s own ledger: still refused.
+                ledger: ledgerOf({ shares: { [A]: ['g1', 'g2'] }, links: { l1: A, l2: A } }),
+                signers: async () => ({}),
+                rotationTrust: async () => ({ groupId: 'family', staged: null, writers: [] }),
+            });
+            await client.open('owner');
+            const walk = client.rotate(node(A, ROOT) as never);
+            await expect(walk).rejects.toThrow(/has shares or links/);
+            // The message names no one to blame: the share may well be the walker’s own.
+            await expect(walk).rejects.not.toThrow(/server/);
+            // Bounded, and the node never reached the worker or the server, sealed to nobody.
+            expect(calls).toBe(4);
+            expect(h.rotated).toEqual([]);
+            expect(h.wired).toEqual([]);
+            expect(trusted).toEqual([]);
+        }
+    });
+});
+
+describe('a rotation stopped mid-batch', () => {
+    test('a batch the worker could not sign drops every key it made, so a retry in the same tab walks the node again', async () => {
         const h = harness();
-        let served = 0;
-        let sent = 0;
+        // The worker's pending keys, as its ledger keeps them: a node pending is not walked again.
+        const pending = new Set<string>();
+        let signs = false;
         const api = {
             ...h.api,
-            rotationWork: async () => {
-                served++;
-                return {
-                    done: false,
-                    nextCursor: null,
-                    nodes: [{ ...rekeyedA(), depth: 1, versions: [], shares: [], links: [] }],
-                };
-            },
+            rotationWork: async () =>
+                h.wired.length
+                    ? { done: true, nextCursor: null, nodes: [] }
+                    : {
+                          done: false,
+                          nextCursor: null,
+                          nodes: [
+                              { ...node(A, ROOT), depth: 1, versions: [], shares: [], links: [] },
+                          ],
+                      },
         } as unknown as DriveApi;
         const rpc = (async (operation: string, input: Record<string, unknown>) => {
-            if (operation !== 'driveRotateNodes')
-                return (h.rpc as unknown as (o: string, i: unknown) => Promise<unknown>)(
-                    operation,
-                    input,
-                );
-            sent++;
-            return {
-                nodes: (input.nodes as { id: string }[]).map((n) => ({
-                    id: n.id,
-                    error: SHARED_IN_FAMILY,
-                })),
-            };
+            const ids = (input.nodeIds as string[] | undefined) ?? [];
+            switch (operation) {
+                case 'driveRotateNodes':
+                    return {
+                        nodes: (input.nodes as { id: string }[]).map((n) => {
+                            if (pending.has(n.id))
+                                return {
+                                    id: n.id,
+                                    error: 'This item changed since it was opened. Refresh and retry.',
+                                };
+                            pending.add(n.id);
+                            return {
+                                id: n.id,
+                                keyEnvelope: 'k',
+                                rewrap: false,
+                                metadataEnvelope: 'm',
+                                metadataSignature: signs ? 'msig' : null,
+                                versions: [],
+                                shares: [],
+                                links: [],
+                            };
+                        }),
+                    };
+                case 'driveRotateCommit':
+                case 'driveRotateDrop':
+                    for (const id of ids) pending.delete(id);
+                    return (h.rpc as unknown as (o: string, i: unknown) => Promise<unknown>)(
+                        operation,
+                        input,
+                    );
+                default:
+                    return (h.rpc as unknown as (o: string, i: unknown) => Promise<unknown>)(
+                        operation,
+                        input,
+                    );
+            }
         }) as unknown as Rpc;
         const client = createDriveClient(rpc, api, {
             trustGrantee: h.trustGrantee,
@@ -764,11 +844,51 @@ describe('re-keyed records', () => {
         });
         await client.open('owner');
         await expect(client.rotate(node(A, ROOT) as never)).rejects.toThrow(
-            /came with shares or links, which family folders never have/,
+            /could not sign what it sealed/,
         );
-        // Bounded: the node is never sent to the server, and the walk gives up instead of looping.
-        expect(sent).toBe(4);
-        expect(served).toBe(4);
         expect(h.wired).toEqual([]);
+        expect(h.settled).toEqual({ commit: [], drop: [A] });
+        expect(pending.size).toBe(0);
+        // The retry, without a reload: the node is walked afresh and lands.
+        signs = true;
+        await expect(client.rotate(node(A, ROOT) as never)).resolves.toEqual({ rotated: 1 });
+        expect(h.wired).toMatchObject([{ id: A, rotated: { metadataSignature: 'msig' } }]);
+    });
+});
+
+describe('sealing again outside one’s own Drive', () => {
+    test('a share this account made in a family folder is counted refused and never sealed, even when its ledger lists it', async () => {
+        const h = harness({ g1: 4, g2: 4 });
+        const familyNode = { ...node('family-node', 'family-root'), workspaceId: 'family-ws' };
+        const api = {
+            ...h.api,
+            sharedByMe: async () => ({
+                shares: [
+                    {
+                        id: 'share-own',
+                        suite: 4,
+                        node: node(A, ROOT),
+                        grantee: { id: 'g1' },
+                        granteeIdentity: identity('g1'),
+                    },
+                    {
+                        id: 'share-family',
+                        suite: 4,
+                        node: familyNode,
+                        grantee: { id: 'g1' },
+                        granteeIdentity: identity('g1'),
+                    },
+                ],
+                links: [],
+            }),
+        } as unknown as DriveApi;
+        const client = createDriveClient(h.rpc, api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: { [A]: ['g1'], 'family-node': ['g1'] }, links: {} }),
+        });
+        await client.open('owner');
+        expect(await client.upgradeShares({ all: true })).toEqual({ resealed: 1, refused: 1 });
+        expect(h.resealed).toEqual(['share-own']);
+        expect(h.sealedFor).toEqual(['g1']);
     });
 });

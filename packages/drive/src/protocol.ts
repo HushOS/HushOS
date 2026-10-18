@@ -113,7 +113,9 @@ export type DriveErrorCode =
     /* A workspace document write would pass WORKSPACE_DOCUMENT_KINDS or WORKSPACE_DOCUMENT_BYTES. */
     | 'document-limit'
     /* A write's signature did not verify against the writer's current signing key. */
-    | 'bad-signature';
+    | 'bad-signature'
+    /* A share or link made or changed in a family folder, where sharing is not offered. */
+    | 'family-sharing';
 
 /* ------------------------------------------------------------------------- */
 /* The client header                                                          */

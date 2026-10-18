@@ -463,6 +463,9 @@ const rotating = () =>
         'Keys are being rotated for this folder. Try again in a moment.',
         409,
     );
+/* Sharing is not offered in family folders (docs/groups-design.md 3.4); the repository refuses it. */
+const familySharing = () =>
+    new DriveError('family-sharing', 'Sharing isn’t available in family folders.', 409);
 const trashed = () =>
     new DriveError('trashed', 'This item is in the trash. Restore it first.', 409);
 const parentTrashed = () =>
@@ -968,6 +971,8 @@ export async function shareNode(
             throw new DriveError('invalid', 'You already have access to your own files.', 409);
         case 'unsupported':
             throw new DriveError('unsupported', 'Update HushOS to share.', 409);
+        case 'family-sharing':
+            throw familySharing();
         case 'ok': {
             const shares = await driveRepository.listNodeShares(workspaceId, nodeId);
             const share = shares.find((row) => row.id === result.share.id);
@@ -1002,6 +1007,7 @@ export async function resealShare(
     if (result.status === 'stale') throw stale();
     if (result.status === 'unsupported')
         throw new DriveError('unsupported', 'Update HushOS to share.', 409);
+    if (result.status === 'family-sharing') throw familySharing();
     return { resealed: true as const };
 }
 
@@ -1747,6 +1753,8 @@ export async function createLink(
             throw stale();
         case 'conflict':
             throw new DriveError('conflict', 'A link with this id already exists.', 409);
+        case 'family-sharing':
+            throw familySharing();
         case 'ok':
             return { link: linkView(result.link) };
     }
@@ -1802,6 +1810,8 @@ export async function updateLink(
             throw new DriveError('not-found', 'This link no longer exists.', 404);
         case 'stale':
             throw stale();
+        case 'family-sharing':
+            throw familySharing();
         case 'ok':
             return { link: linkView(result.link) };
     }

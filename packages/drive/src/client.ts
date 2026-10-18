@@ -1221,6 +1221,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             const grantee = share.grantee.id;
             if (waiting.has(grantee) && !owed.has(grantee)) owed.set(grantee, true);
             if (share.suite === 4 && !all && !waiting.has(grantee)) continue;
+            // Only a share in this account's own Drive: one it made elsewhere is in a family folder,
+            // where sharing is not offered (design 3.4) and the worker and server refuse to seal.
+            if (options.view || share.node.workspaceId !== workspace?.workspaceId) {
+                refused++;
+                continue;
+            }
             // Only a share the owner made: the server's list alone is no reason to seal.
             if (!ledger.shares[share.node.id]?.includes(grantee)) {
                 refused++;
@@ -1503,7 +1509,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         let idle = 0;
         // A node the worker would not carry into the new tree (design 2.10): only a manager clears it.
         let notCarried = false;
-        // A family-folder node with shares or links, which only a server lists (design 3.4).
+        // A family-folder node with shares or links, which family folders do not take (design 3.4).
         let shared = false;
         for (;;) {
             const work = await api.rotationWork(ws, rootId, cursor);
@@ -1523,6 +1529,14 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             for (const parentId of parents)
                 if (!inBatch.has(parentId) && !openedNodes.has(parentId))
                     await listFolder(parentId);
+            // A family folder's walk refuses any share or link the server lists on a node, the
+            // walker's own included (design 3.4): none is made there, so none is sealed again or
+            // filtered down to the ledger's and the rest left to close. The worker and the core
+            // refuse such a node alike; this one never reaches the worker.
+            const sending = group
+                ? work.nodes.filter((n) => !n.shares.length && !n.links.length)
+                : work.nodes;
+            if (sending.length < work.nodes.length) shared = true;
             const sealed = await rpc('driveRotateNodes', {
                 workspaceId: ws,
                 targetEpoch,
@@ -1530,7 +1544,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 signers,
                 ...(group ? { group } : {}),
                 nodes: await Promise.all(
-                    work.nodes.map(async (n) => ({
+                    sending.map(async (n) => ({
                         id: n.id,
                         kind: n.kind,
                         parentId: parentRef(n),
@@ -1589,51 +1603,55 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     })),
                 ),
             });
-            const batch = [];
-            for (const [index, result] of sealed.nodes.entries()) {
-                const source = work.nodes[index]!;
-                if (result.error !== undefined) {
-                    if (result.error === NOT_CARRIED) notCarried = true;
-                    if (result.error === SHARED_IN_FAMILY) shared = true;
-                    continue;
-                }
-                if (!result.rewrap && !result.metadataSignature && !result.metadataRekey)
-                    throw new Error('The rotation could not sign what it sealed. Try again.');
-                batch.push({
-                    id: source.id,
-                    changeSeq: source.changeSeq ?? 0,
-                    parentKeyEpoch: source.id === rootId ? source.parentKeyEpoch : targetEpoch,
-                    keyEnvelope: result.keyEnvelope,
-                    rotated: result.rewrap
-                        ? null
-                        : {
-                              metadataEnvelope: result.metadataEnvelope,
-                              metadataSignature: result.metadataSignature,
-                              metadataRekey: result.metadataRekey ?? null,
-                              ...(result.metadataDropOrigin ? { metadataDropOrigin: true } : {}),
-                              versions: result.versions,
-                              shares: result.shares,
-                              links: result.links.flatMap((link) =>
-                                  'unsealable' in link
-                                      ? []
-                                      : [
-                                            {
-                                                id: link.id,
-                                                linkEnvelope: link.linkEnvelope,
-                                                secretEnvelope: link.secretEnvelope,
-                                            },
-                                        ],
-                              ),
-                              unsealableLinks: result.links.flatMap((link) =>
-                                  'unsealable' in link ? [link.id] : [],
-                              ),
-                          },
-                });
-            }
             let applied = 0;
-            // The keys the worker made become the nodes' own only for what the server applied.
+            // The keys the worker made become the nodes' own only for what the server applied:
+            // whatever stops this batch, every other key it made is dropped, so a retry in this
+            // tab walks those nodes again instead of finding them pending.
             const kept = new Set<string>();
             try {
+                const batch = [];
+                for (const [index, result] of sealed.nodes.entries()) {
+                    const source = sending[index]!;
+                    if (result.error !== undefined) {
+                        if (result.error === NOT_CARRIED) notCarried = true;
+                        if (result.error === SHARED_IN_FAMILY) shared = true;
+                        continue;
+                    }
+                    if (!result.rewrap && !result.metadataSignature && !result.metadataRekey)
+                        throw new Error('The rotation could not sign what it sealed. Try again.');
+                    batch.push({
+                        id: source.id,
+                        changeSeq: source.changeSeq ?? 0,
+                        parentKeyEpoch: source.id === rootId ? source.parentKeyEpoch : targetEpoch,
+                        keyEnvelope: result.keyEnvelope,
+                        rotated: result.rewrap
+                            ? null
+                            : {
+                                  metadataEnvelope: result.metadataEnvelope,
+                                  metadataSignature: result.metadataSignature,
+                                  metadataRekey: result.metadataRekey ?? null,
+                                  ...(result.metadataDropOrigin
+                                      ? { metadataDropOrigin: true }
+                                      : {}),
+                                  versions: result.versions,
+                                  shares: result.shares,
+                                  links: result.links.flatMap((link) =>
+                                      'unsealable' in link
+                                          ? []
+                                          : [
+                                                {
+                                                    id: link.id,
+                                                    linkEnvelope: link.linkEnvelope,
+                                                    secretEnvelope: link.secretEnvelope,
+                                                },
+                                            ],
+                                  ),
+                                  unsealableLinks: result.links.flatMap((link) =>
+                                      'unsealable' in link ? [link.id] : [],
+                                  ),
+                              },
+                    });
+                }
                 if (batch.length) {
                     const { results } = await api.rotateNodes(ws, rootId, batch);
                     for (const r of results)
@@ -1657,7 +1675,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             if (idle > 3)
                 throw new Error(
                     shared
-                        ? 'An item in this family folder came with shares or links, which family folders never have, so its keys weren’t changed. Ask whoever runs your HushOS server to look into it.'
+                        ? 'An item in this family folder has shares or links, which family folders don’t support, so its keys weren’t changed. The key change can finish once they’re stopped.'
                         : notCarried
                           ? 'One item in this folder can’t take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes.'
                           : 'The rotation could not finish. Try again.',
