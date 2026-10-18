@@ -182,9 +182,10 @@
     }
 }
 
-/* The band's dithered wash goes with the band: none in high contrast. */
+/* The band's dithered wash goes with the band, and small dithered marks with it: none in high contrast. */
 @media (prefers-contrast: more) {
     .id-wash,
+    .dither-mark,
     .dither-panel {
         display: none !important;
     }
@@ -199,6 +200,7 @@
     }
 }
 .hc .id-wash,
+.hc .dither-mark,
 .hc .dither-panel {
     display: none !important;
 }
