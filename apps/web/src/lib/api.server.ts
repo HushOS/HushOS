@@ -2,7 +2,13 @@ import '@/lib/server-only';
 import { createHash } from 'node:crypto';
 import { cors } from '@elysia/cors';
 import { db } from '@hushos/db';
-import { EvlogError, parseError, authLogAction, sanitizeFailure } from '@hushos/logging';
+import {
+    EvlogError,
+    parseError,
+    authLogAction,
+    log as serverLog,
+    sanitizeFailure,
+} from '@hushos/logging';
 import { useRequest } from 'nitro/context';
 import { API_SERVICE } from '@hushos/shared';
 import { Elysia, t, NotFound, ValidationError, ParseError } from 'elysia';
@@ -22,6 +28,7 @@ import {
     CLIENT_HEADER,
     LINK_TOKEN_HEADER,
     checkClient,
+    legacyMinimums,
     parseMinimums,
 } from '@hushos/drive/protocol';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
@@ -254,6 +261,13 @@ function billingMutation(request: Request, sessionToken: string | null) {
  * that client is refused with 426 and told how to update, before any work.
  */
 const clientMinimums = parseMinimums(storageEnv.DRIVE_CLIENT_MINIMUMS);
+const legacyClientMinimums = legacyMinimums(clientMinimums);
+if (legacyClientMinimums.length > 0)
+    serverLog.warn({
+        message:
+            'DRIVE_CLIENT_MINIMUMS has pre-1.0 protocol floors; they hold only clients from before 1.0.0. Use product versions such as web/1.0.0.',
+        drive: { legacyClientMinimums },
+    });
 function requireClient(request: Request) {
     const check = checkClient(request.headers.get(CLIENT_HEADER), clientMinimums);
     if (!check.ok)

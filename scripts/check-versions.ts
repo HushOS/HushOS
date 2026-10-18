@@ -1,9 +1,10 @@
 /*
  * HushOS has one product version, the root package.json's. The release pull request
  * (release-please, release-please-config.json) writes it into every copy below; this fails
- * when one of them disagrees, so a hand edit or a copy release-please missed stops CI instead
- * of shipping an app that names another version. Workspace packages are private and keep a
- * fixed placeholder: they are never published, so a version there would only mislead.
+ * when one of them disagrees, so a hand edit or a copy release-please missed is caught before
+ * an app ships naming another version: the store build scripts stop on it, and CI shows it as
+ * a warning (never a failure, so it cannot hold up a deploy). Workspace packages are private
+ * and keep a fixed placeholder: they are never published, so a version there would mislead.
  *
  *   bun run check:versions
  */

@@ -95,6 +95,11 @@ jobs:
             - run: bun install --frozen-lockfile
             - name: Lint, format, and typecheck
               run: bun run check
+            # Release versioning: a copy of the version that disagrees with package.json is a
+            # warning, never a failure, so it cannot hold up a deploy. The store build scripts and
+            # release.yml's image tagging refuse it.
+            - name: Versions agree
+              run: bun run check:versions || echo "::warning title=Versions disagree::Run bun run check:versions; release.yml will not tag images for a release whose versions disagree."
             - name: Apply migrations to a fresh database
               run: bun run --cwd packages/db db:migrate
             - name: Check the schema matches the checked-in migrations
@@ -478,40 +483,16 @@ jobs:
                       target: worker
         steps:
             - uses: actions/checkout@v7
-              # Release versioning: the parent commit as well, to tell a release commit (below).
-              with:
-                  fetch-depth: 2
             - name: Set image name
               id: image
               env:
                   IMAGE_SUFFIX: ${{ matrix.image }}
               run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
-            # Release versioning (release.yml; CONTRIBUTING.md, Releasing). Every image is labelled
-            # with the product version in package.json. The release commit, the merged release pull
-            # request that release-please tags vX.Y.Z, is the one push that changes the manifest's
-            # version: its images also get X.Y.Z, X.Y and X. The commit is built and tagged once,
-            # here, so the release images are the ones main published and deployed.
-            - name: Release version and tags
+            # Release versioning (CONTRIBUTING.md, Releasing): the product version for the image
+            # label. Version tags are copied from sha-<commit> by release.yml, never pushed here.
+            - name: Product version
               id: release
-              env:
-                  IMAGE: ${{ steps.image.outputs.name }}
-              run: |
-                  version=$(jq -r .version package.json)
-                  echo "version=$version" >> "$GITHUB_OUTPUT"
-                  current=$(jq -r '."."' .release-please-manifest.json)
-                  previous=$(git show HEAD^:.release-please-manifest.json 2>/dev/null | jq -r '."." // empty' || true)
-                  tags=""
-                  if [[ "$GITHUB_EVENT_NAME" == push && -n "$previous" && "$current" != "$previous" ]]; then
-                      if [[ "$current" != "$version" || ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-                          echo "The manifest says $current and package.json $version: not a release commit." >&2
-                          exit 1
-                      fi
-                      major=${BASH_REMATCH[1]}
-                      minor=${BASH_REMATCH[2]}
-                      tags=$(printf '%s:%s\n%s:%s.%s\n%s:%s' "$IMAGE" "$version" "$IMAGE" "$major" "$minor" "$IMAGE" "$major")
-                      echo "Release $version: also tagged $version, $major.$minor and $major."
-                  fi
-                  { echo 'tags<<TAGS'; echo "$tags"; echo 'TAGS'; } >> "$GITHUB_OUTPUT"
+              run: echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
             - name: Log in to GHCR
@@ -535,11 +516,9 @@ jobs:
                   push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
                   cache-from: type=gha,scope=image-${{ matrix.image }}
                   cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=image-{0}', matrix.image) || '' }}
-                  # Release versioning: the last line is empty except on a release commit.
                   tags: |
                       ${{ steps.image.outputs.name }}:latest
                       ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
-                      ${{ steps.release.outputs.tags }}
                   labels: |
                       org.opencontainers.image.source=https://github.com/${{ github.repository }}
                       org.opencontainers.image.revision=${{ github.sha }}

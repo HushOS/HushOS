@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
     checkClient,
     compareVersions,
+    legacyMinimums,
     meetsMinimum,
     parseClientHeader,
     parseMinimums,
@@ -48,9 +49,13 @@ describe('product version minimum', () => {
         expect(meetsMinimum(client('ios/0.1.0'), UPCOMING_PROTOCOL_MINIMUM)).toBe(false);
     });
 
-    test('a minimum that is not a product version is a configuration bug, not a pass', () => {
-        expect(() => meetsMinimum(client('ios/1.0.0'), '3')).toThrow(/not a product version/);
-        expect(() => meetsMinimum(client('ios/1.0.0'), '1.0')).toThrow(/not a product version/);
+    test('a pre-1.0 floor still holds pre-1.0 clients, and every product version passes it', () => {
+        expect(meetsMinimum(client('ios/2'), '3')).toBe(false);
+        expect(meetsMinimum(client('ios/3'), '3')).toBe(true);
+        expect(meetsMinimum(client('ios/4'), '3')).toBe(true);
+        // A product version is a later client than any protocol number, "0.1.0" included.
+        expect(meetsMinimum(client('ios/0.1.0'), '3')).toBe(true);
+        expect(meetsMinimum(client('ios/1.0.0'), '99')).toBe(true);
     });
 });
 
@@ -72,5 +77,28 @@ describe('client check', () => {
         expect(checkClient('ios/3', minimums)).toMatchObject({ ok: true });
         expect(checkClient(undefined, minimums)).toMatchObject({ status: 400 });
         expect(checkClient('garbage', new Map())).toMatchObject({ status: 400 });
+    });
+
+    test('a minimum from before 1.0.0 keeps refusing the old clients it was set for', () => {
+        // DRIVE_CLIENT_MINIMUMS=web/3 as an operator wrote it before product versions.
+        const minimums = parseMinimums('web/3');
+        expect(checkClient('web/2', minimums)).toMatchObject({ status: 426, message: /Reload/ });
+        expect(checkClient('web/3', minimums)).toMatchObject({ ok: true });
+        expect(checkClient('web/0.1.0', minimums)).toMatchObject({ ok: true });
+        expect(checkClient('web/1.0.0', minimums)).toMatchObject({ ok: true });
+        expect(legacyMinimums(minimums)).toEqual(['web']);
+    });
+
+    test('a mixed list holds each client to its own kind of floor', () => {
+        const minimums = parseMinimums('web/3,ios/1.0.0,android/2');
+        expect(checkClient('web/2', minimums)).toMatchObject({ status: 426 });
+        expect(checkClient('web/1.0.0', minimums)).toMatchObject({ ok: true });
+        // A product floor refuses old clients whatever their protocol number says.
+        expect(checkClient('ios/3', minimums)).toMatchObject({ status: 426 });
+        expect(checkClient('ios/0.9.9', minimums)).toMatchObject({ status: 426 });
+        expect(checkClient('ios/1.0.0', minimums)).toMatchObject({ ok: true });
+        expect(checkClient('android/1', minimums)).toMatchObject({ status: 426 });
+        expect(checkClient('android/0.1.0', minimums)).toMatchObject({ ok: true });
+        expect(legacyMinimums(minimums)).toEqual(['web', 'android']);
     });
 });

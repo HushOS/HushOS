@@ -132,7 +132,8 @@ export type DriveErrorCode =
  * The version is the HushOS product version (`web/1.0.0`, `ios/1.0.0`), the
  * same for the server, the web app and both phone apps. Clients built before
  * product versioning sent their Drive protocol number instead (`ios/3`); they
- * still parse, and count as older than every product version.
+ * still parse, and count as older than every product version minimum. Minimums
+ * written before 1.0.0 (`web/3`) still hold those old clients to them.
  */
 
 export const CLIENT_HEADER = 'HushOS-Client';
@@ -184,16 +185,28 @@ export function isProductVersion(version: string) {
 export const UPCOMING_PROTOCOL_MINIMUM = '1.0.0';
 
 /*
- * Whether a client is at least `minimum`, a product version. A client that sent
- * anything else (a pre-1.0 protocol number such as "3", a fourth segment) is
- * older than every minimum: "3" must not pass for newer than "1.0.0".
+ * Whether a client is at least `minimum`. Two kinds of minimum:
+ *
+ * - A product version (`1.0.0`): the client must send a product version at
+ *   least that high. One that sent anything else (a pre-1.0 protocol number
+ *   such as "3") is older than every product version: "3" must not pass for
+ *   newer than "1.0.0".
+ * - Anything else (`3`): a floor from before 1.0.0, when clients sent their
+ *   Drive protocol number. Pre-1.0 clients are compared with it as they always
+ *   were; a client sending a product version is past every such floor.
  */
 export function meetsMinimum(client: ClientIdentity, minimum: string) {
-    if (!isProductVersion(minimum)) throw new Error(`${minimum} is not a product version.`);
-    return isProductVersion(client.version) && compareVersions(client.version, minimum) >= 0;
+    if (isProductVersion(minimum))
+        return isProductVersion(client.version) && compareVersions(client.version, minimum) >= 0;
+    return isProductVersion(client.version) || compareVersions(client.version, minimum) >= 0;
 }
 
-/* "web/1.0.0,ios/1.0.0" -> Map; the env schema has already checked the shape. */
+/* The client names whose minimum is a pre-1.0 protocol floor, for a deprecation warning. */
+export function legacyMinimums(minimums: ReadonlyMap<string, string>) {
+    return [...minimums].filter(([, minimum]) => !isProductVersion(minimum)).map(([name]) => name);
+}
+
+/* "web/1.0.0,ios/1.0.0" (or the older "web/3") -> Map; the env schema has already checked the shape. */
 export function parseMinimums(value: string | null | undefined) {
     const minimums = new Map<string, string>();
     for (const pair of (value ?? '').split(',')) {

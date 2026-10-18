@@ -1,6 +1,7 @@
 {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-    "bootstrap-sha": "39ae9e5b930fb526af3c9f416beab8d7a9c312f2",
+    "bootstrap-sha": "8d405a67858d3e90df160eb3ba6f758d864072fa",
+    "signoff": "TheBinaryGuy <hello@thebinary.dev>",
     "include-component-in-tag": false,
     "include-v-in-tag": true,
     "changelog-sections": [
@@ -8,7 +9,7 @@
         { "type": "fix", "section": "Bug fixes" },
         { "type": "perf", "section": "Performance" },
         { "type": "revert", "section": "Reverts" },
-        { "type": "docs", "section": "Documentation" },
+        { "type": "docs", "section": "Documentation", "hidden": true },
         { "type": "refactor", "section": "Refactoring", "hidden": true },
         { "type": "style", "section": "Style", "hidden": true },
         { "type": "test", "section": "Tests", "hidden": true },
