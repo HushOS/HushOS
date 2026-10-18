@@ -1,0 +1,108 @@
+crates/hushos-core/fixtures/settings-area-cases.json
+  s_c56e31c87cddde::t_8552be3a2c00e7 1-472
+  s_c56e31c87cddde::t_30cd2ca9e240d9 473-500
+crates/hushos-core/src/area_open.rs
+  s_c56e31c87cddde::t_88289cf7810f8c 1-333,335-336,338
+  s_c56e31c87cddde::t_cf250c0c5d245c 334,337,339-364
+packages/crypto/src/settings-marks.ts
+  s_c56e31c87cddde::t_aa22d8d6100fae 1-77
+  s_c56e31c87cddde::t_ed85f3c86d30eb 78-107
+crates/hushos-core/src/ledger_settings.rs
+  s_c56e31c87cddde::t_e7eeb563f2f684 1-644
+  s_c56e31c87cddde::t_be8e7d607614fb 645-672
+crates/hushos-core/tests/common/settings_areas.rs
+  s_c56e31c87cddde::t_f903c937e96807 1-439
+  s_c56e31c87cddde::t_b47a37f5d459a6 440-474
+crates/hushos-core/src/area_open/tests.rs
+  s_c56e31c87cddde::t_157d79b005fbc0 1-257,263-264
+  s_c56e31c87cddde::t_6dc4b79ad3cb00 258-262,265-306
+packages/crypto/src/settings-areas-testkit.ts
+  s_c56e31c87cddde::t_9d0c5402003dbf 1-409
+  s_c56e31c87cddde::t_09ac4313f3b6ec 410-435
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_04c76dc4ac0ea5 104
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_364b3621a014f6 110,113
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c56e31c87cddde::t_cbae5e20290374 388-395,409,414,418-435,437-445,447,453,466-471
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI.swift
+  s_c56e31c87cddde::t_b4159551bda365 182-201,262-286
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_c56e31c87cddde::t_53b25efe9bb5ae 64-68,308,336
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c56e31c87cddde::t_300b19070cf249 44-49,53-55,57,100-115
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_c56e31c87cddde::t_692d1836cc7648 359,361
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_c56e31c87cddde::t_d871f4e8ebf5cd 95-135,325,330-331,467-470,499-502,530,607-616,624
+apps/web/src/lib/groups/sync.test.ts
+  s_c56e31c87cddde::t_eab45bd6e8a16f 361
+crates/hushos-core/AGENTS.md
+  s_c56e31c87cddde::t_74b2c8de7d576a 152,160-166
+crates/hushos-core/examples/roster_call_fixtures.rs
+  s_c56e31c87cddde::t_fe242177c30b0f 17-18,29-32
+crates/hushos-core/fixtures/web-roster-calls.json
+  s_c56e31c87cddde::t_f505e77720359f 29,31,37,39,45,47,53,55,61,63,69,71,77,79,128,130,140,149,196,198,206,216,225,260,262,270,304,306,309,311-312,314,323,358,360,492,496,744-745,760-761,776-777,792-793,808-809,823-824,838-839,855-856,872-873,884,896-897,908-909,920-2032
+crates/hushos-core/fuzz/src/lib.rs
+  s_c56e31c87cddde::t_1fd7cea31d2a4e 41-45
+crates/hushos-core/fuzz/src/targets.rs
+  s_c56e31c87cddde::t_d909a7bc61e6f6 680-681,1598-1753
+crates/hushos-core/src/area_ledger.rs
+  s_c56e31c87cddde::t_ec202459296ab5 89-90,116,331-350,1777-1934,1987-1991,2041-2051,2058-2065,2068-2072,2076
+crates/hushos-core/src/contacts.rs
+  s_c56e31c87cddde::t_95c90d1d351ea0 172,278,359-379
+crates/hushos-core/src/device_record.rs
+  s_c56e31c87cddde::t_56c545ef9847f8 24,648,675-679,684,736,803-804,811,850,889,1683,1688,1727,1751,1755,1811
+crates/hushos-core/src/group_trust.rs
+  s_c56e31c87cddde::t_c011593a5845ab 1907-1909
+crates/hushos-core/src/groups.rs
+  s_c56e31c87cddde::t_7aa9748405eb90 1297-1299
+crates/hushos-core/src/join.rs
+  s_c56e31c87cddde::t_d7acad4d4a1adf 50-51,545,552,677,761,860,879,972-977,1024,1118
+crates/hushos-core/src/lib.rs
+  s_c56e31c87cddde::t_f64b0b3a4d01e5 16,32,46,60
+crates/hushos-core/src/roster_calls.rs
+  s_c56e31c87cddde::t_d0a6574f7284a1 49,69,560,562-565,664-668,672-675,1043,1389-1392
+crates/hushos-core/tests/common/mod.rs
+  s_c56e31c87cddde::t_98bc1c568c5c3a 10
+crates/hushos-core/tests/common/roster_calls.rs
+  s_c56e31c87cddde::t_286d2ce718127d 136,142,182
+crates/hushos-core/tests/roster_call_fixtures.rs
+  s_c56e31c87cddde::t_12a69786025f11 51-61
+docs/groups-mobile-plan.md
+  s_c56e31c87cddde::t_07392ce25f96f3 68,116-128,140,145,229
+packages/crypto/fuzz/fixtures.ts
+  s_c56e31c87cddde::t_1bbfc6fce09f4a 118-119
+packages/crypto/fuzz/seeds.ts
+  s_c56e31c87cddde::t_1c2370d120596e 12,328-417
+packages/crypto/fuzz/verdicts.ts
+  s_c56e31c87cddde::t_81ed8b95b0b277 98-100,1110-1113,2029-2181
+packages/crypto/scripts/roster-call-fixtures.ts
+  s_c56e31c87cddde::t_f98d16715b06e8 3,10-11,19-20
+packages/crypto/src/__fixtures__/core-roster-calls.json
+  s_c56e31c87cddde::t_6e49710ab8a34f 3-308,315,324,336,338,383,392,402,412,414,458,468,470,504,506,511,521-522,524-525,558,560,713,715,721,723,729,731,737,739,745,747,753,755,761,763,797,801,1039,1049,1055,1065,1071,1081,1087,1097,1103,1113,1119,1128,1134,1143,1150,1160,1167,1177,1184,1196,1201,1208,1213,1220,1225,1229-2033
+packages/crypto/src/contacts.ts
+  s_c56e31c87cddde::t_adec396ec14532 256-277
+packages/crypto/src/roster-call-fixtures.test.ts
+  s_c56e31c87cddde::t_5707f6bc9cef83 4,45-54
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_b54f3093902d2f 7-13,740-741,1478-1479,1494,1497,1499,1510,1518,2134,2662
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_d5a53b35630f7f 43,1781-1786
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5258f5ba121fb0a7ed21590871a2ed7afe18719b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
