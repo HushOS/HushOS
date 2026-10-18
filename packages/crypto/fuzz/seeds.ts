@@ -3,7 +3,17 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GROUP } from '../src/group-testkit';
 import { parseRoster } from '../src/groups';
-import { core, groups, ledgerScenarios, repository, web, webGroups, type Json } from './fixtures';
+import {
+    core,
+    coreLedger,
+    groups,
+    ledgerScenarios,
+    repository,
+    web,
+    webGroups,
+    webLedger,
+    type Json,
+} from './fixtures';
 import { TARGETS, type Target } from './verdicts';
 
 /*
@@ -288,7 +298,13 @@ export function documents(target: Target): Uint8Array[] {
                 json({ steps: k.steps.slice(0, Math.ceil(k.steps.length / 2)) }),
             ]);
         case 'record_integrity':
-            return [c, w].flatMap((f: Json) => f.rekeyed.cases.map((k: Json) => json(k.input)));
+            return [
+                ...[c, w].flatMap((f: Json) => f.rekeyed.cases.map((k: Json) => json(k.input))),
+                // Records each twin's walk re-keyed in a family folder, with the roster's trust.
+                ...[coreLedger(), webLedger()].flatMap((f: Json) =>
+                    f.rotations.flatMap((k: Json) => k.rekeyedInputs.map(json)),
+                ),
+            ];
         case 'origin_open': {
             const r = c.rekeyed.metadata;
             const theirs = w.rekeyed.metadata;

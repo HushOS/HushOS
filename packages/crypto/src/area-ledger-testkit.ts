@@ -51,7 +51,7 @@ import { KEY_CHANGE_PENDING, NOT_CARRIED } from './protocol';
  * rewrapNode (driveRewrapNode) and rotateKey (rotateOne, with a re-key that
  * only wraps the fresh key). What they do not reach is the worker's grant
  * opening (openAreaGrant needs an unlocked account and a holder's seal; it
- * has its own shared cases, `sealCases`) and rekeyNode's records (core step 2).
+ * has its own shared cases, `sealCases`) and rekeyNode's records (rotation-testkit.ts).
  *
  * Two rule oracles hold on every run: each successful create, re-wrap or walk
  * key went under a parent rooted at the area's write version (a key the

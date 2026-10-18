@@ -3,3 +3,4 @@
 pub mod area_ledger;
 pub mod groups;
 pub mod rekeyed;
+pub mod rotations;

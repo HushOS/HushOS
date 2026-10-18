@@ -36,20 +36,30 @@
 //! ignored and reported ([`AreaLedger::foreign_listings`]). A chain older than
 //! the one held, or another at its version, is refused.
 //!
-//! Where it differs from the worker, on purpose: [`AreaLedger::rotate_key`]
-//! marks a walk's fresh key pending at once (the worker's `rotateKey` does
-//! after re-keying the node's records, a callback UniFFI does not carry), so
-//! an app whose record re-keying fails calls [`AreaLedger::rotate_drop`] for
-//! the node, or [`AreaLedger::rotate_drop_all`] when it lost track of the
-//! batch, as a refused batch does.
+//! A walk runs one node at a time through [`AreaLedger::rotate_node`], which
+//! makes the fresh key, re-keys the node's records with it
+//! (`rotation_records.rs`, the twin of the worker's `rekeyNode`) and only then
+//! marks the key pending, as the worker's `rotateKey` does: a node whose
+//! records do not re-key leaves nothing behind. A refused batch is dropped
+//! with [`AreaLedger::rotate_drop`], or [`AreaLedger::rotate_drop_all`] when
+//! the app lost track of it. [`AreaLedger::record_verdict`] and
+//! [`AreaLedger::copy_form`] judge records against the chain this ledger
+//! committed (`group_verdicts.rs`, the twin of the worker's `recordVerdicts`
+//! and `judgeWith`).
 
 use crate::bytes::{random, SecretBytes};
 use crate::canonical::uuid;
 use crate::drive::{node_open_checked, node_wrap_checked, previous_root_key_open, NodeKeyContext};
 use crate::error::{input, CoreError, CoreResult};
 use crate::group_trust::AcceptedRosters;
+use crate::group_trust::{GroupReading, GroupVerdict, SuccessionCache};
+use crate::group_verdicts::{
+    copy_prior, GroupWriter, Judge, RecordReader, RecordStatement, RecordVerdict, ServedRecord,
+};
 use crate::groups::{area_key_commitment, area_root_check, area_write_version};
 use crate::ids::{check_id, IdKind};
+use crate::rotation_records::{rekey_node_records, RotatedNode, RotatingNode};
+use crate::signatures::{signing_public_key, Integrity};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
@@ -80,6 +90,13 @@ const NOT_THE_FAMILYS: &str = "This folder does not belong to the family.";
 const NOT_LISTED: &str = "This folder is not on the family’s member list.";
 const ITEM_CHANGED: &str = "This item changed since it was opened. Refresh and retry.";
 const FAMILY_FOLDER: &str = "This was refused: it is a family folder.";
+/// A walk handed a node outside the family folders: personal rotations re-seal as the apps always have.
+pub const NOT_A_FAMILY_FOLDER: &str = "Only a family folder's items are re-keyed here.";
+/// A node in a family folder with shares or links, which a family folder never has (design 3.4).
+pub const SHARED_IN_FAMILY: &str =
+    "This item has shares or links, which a family folder never has, so it was not re-keyed.";
+/// A copy out of a folder the family's committed chain does not list, or the family never opened here.
+pub const NOT_THIS_FAMILYS: &str = "This folder is not one of this family’s.";
 /// A chain older than the one this device already holds for the family (a
 /// background acceptance that lost a race with the foreground's): refused,
 /// and nothing of it (the record, the pin) is to be written.
@@ -184,12 +201,12 @@ pub struct NewNodeKey {
     pub key_envelope: Vec<u8>,
 }
 
-/// One node of a walk: its key envelope under the parent's key at the
-/// target; the node's key as it was (`old_key`); and, unless the node was
+/// One node of a walk's key half ([`AreaLedger::rotate_key`], for the shared
+/// scenarios and the fuzz target): its key envelope under the parent's key at
+/// the target; the node's key as it was (`old_key`); and, unless the node was
 /// only re-wrapped under a re-keyed parent (`rewrap`), the fresh key that
-/// replaces it, to re-key its records with.
+/// replaces it. Apps never see one: [`AreaLedger::rotate_node`] keeps both keys.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RotatedKey {
     pub key_envelope: Vec<u8>,
     pub rewrap: bool,
@@ -908,20 +925,29 @@ impl State {
         Ok(key_envelope)
     }
 
-    fn rotate_key(
+    /*
+     * One node of a walk to `target_epoch` (the worker's rotateKey): a node
+     * already at the target is re-wrapped, only if its key is rooted at the
+     * write version (NOT_CARRIED); any other gets a fresh key under a parent
+     * the rules allow, handed to `rekey` with the key it replaces, and is
+     * marked pending only once `rekey` succeeded. A family folder's top level
+     * is never a walk's (AREA_ROOT).
+     */
+    fn rotate_key_with<T>(
         &mut self,
         workspace_id: &str,
         node: &RotatingNodeKey,
         target_epoch: u64,
-    ) -> CoreResult<RotatedKey> {
+        rekey: impl FnOnce(&[u8], &[u8]) -> CoreResult<T>,
+    ) -> CoreResult<Rotation<T>> {
         // As the web's driveRotateNodes: no walk in a family folder this device found unwritable.
         self.require_writable(workspace_id)?;
         let old = self.rotation_old_key(workspace_id, node)?;
         // Already at the target, only wrapped under an unrotated parent: the same key, re-wrapped.
         if node.key_epoch >= target_epoch {
-            let kept = SecretBytes::new(old.to_vec());
+            let kept = old.clone();
             let key_envelope = self.rewrap_at_target(workspace_id, node, old)?;
-            return Ok(RotatedKey { key_envelope, rewrap: true, old_key: Some(kept), fresh_key: None });
+            return Ok(Rotation::Rewrap { key_envelope, key: kept });
         }
         let fresh = Zeroizing::new(random(32));
         // A fresh key is a write like any other (F14): its parent is pending in this walk or
@@ -933,6 +959,8 @@ impl State {
             &parent_key,
             &fresh,
         )?;
+        // The node's records, re-keyed before anything is held: a failure leaves no pending key.
+        let result = rekey(&old, &fresh)?;
         self.pending.insert(
             slot(workspace_id, &node.node_id),
             Pending {
@@ -943,12 +971,7 @@ impl State {
                 rooted_at,
             },
         );
-        Ok(RotatedKey {
-            key_envelope,
-            rewrap: false,
-            old_key: Some(SecretBytes::new(old.to_vec())),
-            fresh_key: Some(SecretBytes::new(fresh.to_vec())),
-        })
+        Ok(Rotation::Fresh { key_envelope, old, fresh, result })
     }
 
     fn commit_pending(&mut self, workspace_id: &str, node_ids: &[String]) -> u32 {
@@ -986,6 +1009,50 @@ impl State {
         }
         count
     }
+}
+
+impl State {
+    /*
+     * The verdict glue's view of a family (the worker's verdicts): its
+     * committed chain, or a fork the app holds, or nothing; the areas it
+     * opened here at the version opened.
+     */
+    fn judge(
+        &self,
+        group_id: &str,
+        record: &ServedRecord,
+        reader: RecordReader,
+        writers: Vec<GroupWriter>,
+        forked: bool,
+        cache: Option<Arc<SuccessionCache>>,
+    ) -> Judge {
+        let reading = match self.chains.get(group_id) {
+            Some(chain) => GroupReading::Accepted { chain: Arc::clone(chain) },
+            None if forked => GroupReading::Fork,
+            None => GroupReading::Unavailable,
+        };
+        let areas = self
+            .opened
+            .get(group_id)
+            .map(|areas| areas.iter().map(|(at, area)| (at.clone(), area.version)).collect())
+            .unwrap_or_default();
+        let (workspace_id, _) = record_node(&record.statement);
+        Judge::new(group_id.to_string(), workspace_id.to_string(), reading, areas, reader, writers, cache)
+    }
+}
+
+/* The workspace and node a record belongs to, as its statement names them. */
+fn record_node(statement: &RecordStatement) -> (&str, &str) {
+    match statement {
+        RecordStatement::Metadata { statement } => (&statement.workspace_id, &statement.node_id),
+        RecordStatement::Version { statement } => (&statement.workspace_id, &statement.node_id),
+    }
+}
+
+/* What a walk did with one node's key: re-wrapped it at the target, or replaced it (pending). */
+enum Rotation<T> {
+    Rewrap { key_envelope: Vec<u8>, key: Zeroizing<Vec<u8>> },
+    Fresh { key_envelope: Vec<u8>, old: Zeroizing<Vec<u8>>, fresh: Zeroizing<Vec<u8>>, result: T },
 }
 
 fn area_write_version_of(chain: &AcceptedRosters, workspace_id: &str) -> Option<u64> {
@@ -1238,18 +1305,256 @@ impl AreaLedger {
         )
     }
 
-    /// One node of a walk to `target_epoch`: a node already at the target is
-    /// re-wrapped, only if its key is rooted at the write version
-    /// ([`NOT_CARRIED`]); any other gets a fresh key under a parent the rules
-    /// allow, pending until [`AreaLedger::rotate_commit`]. A family folder's
-    /// top level is never a walk's ([`AREA_ROOT`]).
-    pub fn rotate_key(
+    /// One node of a walk to `target_epoch` in a family folder, whole: a node
+    /// already at the target is re-wrapped under its re-keyed parent, only if
+    /// its key is rooted at the write version ([`NOT_CARRIED`]), its records
+    /// untouched (`rewrap`); any other gets a fresh key under a parent the
+    /// rules allow, and its metadata and versions are re-keyed raw under it
+    /// and signed with `signing_seed` (the walker's identity): an origin
+    /// already kept is carried after the bound check, or dropped
+    /// (`drop_origin`, re-sealed) when it does not bind or its writer is gone;
+    /// a signed record becomes its own origin; an unsigned one is re-sealed. No
+    /// legacy signature goes beside a re-key. The fresh key is pending, for
+    /// the node's children in the same walk, only once every record re-keyed,
+    /// until [`AreaLedger::rotate_commit`]; it never leaves the ledger. Refused
+    /// for a workspace that is no family folder ([`NOT_A_FAMILY_FOLDER`]), a
+    /// node with shares or links ([`SHARED_IN_FAMILY`]), and a family folder's
+    /// top level ([`AREA_ROOT`]).
+    ///
+    /// ```
+    /// use hushos_core::*;
+    /// let ledger = AreaLedger::new();
+    /// let personal = "f0f0f0f0-0000-4000-8000-00000000000f";
+    /// ledger.open_personal_workspace(personal.into(), 1, random_bytes(32)?)?;
+    /// let node = RotatingNode {
+    ///     node_id: "0e0e0e0e-0000-4000-8000-000000000002".into(), parent_id: personal.into(),
+    ///     parent_key_epoch: 1, key_epoch: 1, wrapped_parent_key_epoch: 1, key_envelope: vec![0; 72],
+    ///     kind: NodeKind::File, metadata_version: 1, metadata_envelope: vec![0; 64],
+    ///     metadata_signer: None, metadata_signature: None, metadata_rekey: None,
+    ///     versions: vec![], share_ids: vec![], link_ids: vec![],
+    /// };
+    /// // A personal folder's walk stays with the app's own re-sealing.
+    /// let refused = ledger.rotate_node(personal.into(), node, 2, random_bytes(32)?).unwrap_err();
+    /// assert_eq!(refused.to_string(), NOT_A_FAMILY_FOLDER);
+    /// assert_eq!(ledger.rotate_drop_all(personal.into()), 0, "nothing pending");
+    /// # Ok::<(), hushos_core::CoreError>(())
+    /// ```
+    pub fn rotate_node(
         &self,
         workspace_id: String,
-        node: RotatingNodeKey,
+        node: RotatingNode,
         target_epoch: u64,
-    ) -> CoreResult<RotatedKey> {
-        self.lock().rotate_key(&workspace_id, &node, target_epoch)
+        signing_seed: Vec<u8>,
+    ) -> CoreResult<RotatedNode> {
+        let signing_seed = Zeroizing::new(signing_seed);
+        signing_public_key(signing_seed.to_vec())?;
+        let mut state = self.lock();
+        state.require_writable(&workspace_id)?;
+        if !state.is_area(&workspace_id) {
+            return Err(refused(NOT_A_FAMILY_FOLDER));
+        }
+        if !node.share_ids.is_empty() || !node.link_ids.is_empty() {
+            return Err(refused(SHARED_IN_FAMILY));
+        }
+        let key = RotatingNodeKey {
+            node_id: node.node_id.clone(),
+            parent_id: node.parent_id.clone(),
+            parent_key_epoch: node.parent_key_epoch,
+            key_epoch: node.key_epoch,
+            wrapped_parent_key_epoch: node.wrapped_parent_key_epoch,
+            key_envelope: node.key_envelope.clone(),
+        };
+        let rotation = state.rotate_key_with(&workspace_id, &key, target_epoch, |old, fresh| {
+            rekey_node_records(&workspace_id, &node, old, fresh, target_epoch, &signing_seed)
+        })?;
+        Ok(match rotation {
+            Rotation::Rewrap { key_envelope, .. } => RotatedNode {
+                node_id: node.node_id,
+                key_envelope,
+                rewrap: true,
+                metadata: None,
+                versions: vec![],
+            },
+            Rotation::Fresh { key_envelope, result: (metadata, versions), .. } => RotatedNode {
+                node_id: node.node_id,
+                key_envelope,
+                rewrap: false,
+                metadata: Some(metadata),
+                versions,
+            },
+        })
+    }
+
+    /// What a reader shows for one record in a family folder (design 2.8): a
+    /// signed record by this account (`reader`) under its own keys, anyone
+    /// else's as the family's committed chain says ([`crate::group_writer_trust`],
+    /// each writer's pin, served identity and links from `writers`, and their
+    /// personal keys where the roster does not speak); a re-keyed one with the
+    /// node's key at `record.key_epoch` as this ledger holds it, its origin
+    /// judged as its writer's trust says and the re-keyer (the record's
+    /// signer) as theirs. Without a committed chain the family reads as
+    /// unchecked, or, when the app holds it as `forked`, by personal keys
+    /// alone. `cache` is the session's, shared across calls.
+    ///
+    /// ```
+    /// use hushos_core::*;
+    /// let (me, them) = (random_bytes(32)?, random_bytes(32)?);
+    /// let keys = |seed: &Vec<u8>| TrustedKeys { current: signing_public_key(seed.clone()).unwrap(), retired: vec![] };
+    /// let statement = MetadataStatement {
+    ///     workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(),
+    ///     node_id: "0e0e0e0e-0000-4000-8000-000000000002".into(), kind: NodeKind::File, metadata_version: 1,
+    /// };
+    /// let record = |signer: &str, seed: &Vec<u8>| ServedRecord {
+    ///     statement: RecordStatement::Metadata { statement: statement.clone() },
+    ///     key_epoch: Some(1), envelope: b"sealed".to_vec(), signer: Some(signer.into()),
+    ///     signature: Some(metadata_sign(seed.clone(), statement.clone(), b"sealed".to_vec()).unwrap()),
+    ///     rekey: None,
+    /// };
+    /// let reader = RecordReader { user_id: "00000001-abcd-4abc-8abc-abcdefabcdef".into(), keys: keys(&me) };
+    /// let writer = GroupWriter {
+    ///     user_id: "00000002-abcd-4abc-8abc-abcdefabcdef".into(), pinned: None, served: None, links: None,
+    ///     personal: Some(keys(&them)),
+    /// };
+    /// let ledger = AreaLedger::new();
+    /// let read = |signer: &str, seed: &Vec<u8>, forked: bool| {
+    ///     match ledger.record_verdict("0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), reader.clone(), vec![writer.clone()], forked, record(signer, seed), None) {
+    ///         RecordVerdict::Signed { verdict } => verdict.verdict,
+    ///         RecordVerdict::Rekeyed { .. } => unreachable!(),
+    ///     }
+    /// };
+    /// // This account's own record, by its own keys; where no family opened the folder here the
+    /// // roster does not speak, and another writer's record reads by the personal keys passed.
+    /// assert_eq!(read("00000001-abcd-4abc-8abc-abcdefabcdef", &me, false), GroupVerdict::Verified);
+    /// assert_eq!(read("00000002-abcd-4abc-8abc-abcdefabcdef", &them, false), GroupVerdict::Verified);
+    /// assert_eq!(read("00000002-abcd-4abc-8abc-abcdefabcdef", &me, false), GroupVerdict::BadSignature);
+    /// # Ok::<(), hushos_core::CoreError>(())
+    /// ```
+    pub fn record_verdict(
+        &self,
+        group_id: String,
+        reader: RecordReader,
+        writers: Vec<GroupWriter>,
+        forked: bool,
+        record: ServedRecord,
+        cache: Option<Arc<SuccessionCache>>,
+    ) -> RecordVerdict {
+        let (judge, node_key) = {
+            let state = self.lock();
+            let judge = state.judge(&group_id, &record, reader, writers, forked, cache);
+            let node_key = record.key_epoch.and_then(|epoch| {
+                let (workspace_id, node_id) = record_node(&record.statement);
+                state.key_at_epoch(workspace_id, node_id, epoch)
+            });
+            (judge, node_key)
+        };
+        let node_key = node_key.map(Zeroizing::new);
+        match &record.rekey {
+            Some(rekey) => RecordVerdict::Rekeyed {
+                verdict: judge.rekeyed(
+                    &record.statement,
+                    record.key_epoch.unwrap_or(0),
+                    &record.envelope,
+                    rekey,
+                    record.signer.as_deref(),
+                    node_key.as_ref().map(|key| key.to_vec()),
+                ),
+            },
+            None => RecordVerdict::Signed {
+                verdict: judge.signed(
+                    &record.statement,
+                    &record.envelope,
+                    record.signer.as_deref(),
+                    record.signature.as_deref(),
+                ),
+            },
+        }
+    }
+
+    /// How a copy of `record` out of a family folder signs it: the prior to
+    /// pass to [`crate::metadata_copy_sign`] or [`crate::version_copy_sign`]
+    /// with `from_link` false. `Verified` and `SavedFromLink` stay so; a
+    /// former member's record, a key conflict's, a re-keyed record whose
+    /// origin does not bind (or whose node key this ledger does not hold), and
+    /// anything else read `Resealed`; an unchecked record is refused, so
+    /// nothing is vouched for blind. A re-keyed record is judged on its
+    /// origin only when its key epoch is served. Refused for a folder the
+    /// family's committed chain does not list or the family never opened here
+    /// ([`NOT_THIS_FAMILYS`]).
+    ///
+    /// ```
+    /// use hushos_core::*;
+    /// let seed = random_bytes(32)?;
+    /// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+    /// let statement = MetadataStatement {
+    ///     workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(),
+    ///     node_id: "0e0e0e0e-0000-4000-8000-000000000002".into(), kind: NodeKind::File, metadata_version: 1,
+    /// };
+    /// let record = ServedRecord {
+    ///     statement: RecordStatement::Metadata { statement: statement.clone() },
+    ///     key_epoch: Some(1), envelope: b"sealed".to_vec(), signer: None,
+    ///     signature: Some(metadata_sign(seed, statement, b"sealed".to_vec())?), rekey: None,
+    /// };
+    /// let reader = RecordReader { user_id: "00000001-abcd-4abc-8abc-abcdefabcdef".into(), keys: me };
+    /// // No family chain committed here: nothing is copied out on its word.
+    /// let refused = AreaLedger::new()
+    ///     .copy_form("0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), reader, vec![], record, None)
+    ///     .unwrap_err();
+    /// assert_eq!(refused.to_string(), NOT_THIS_FAMILYS);
+    /// # Ok::<(), hushos_core::CoreError>(())
+    /// ```
+    pub fn copy_form(
+        &self,
+        group_id: String,
+        reader: RecordReader,
+        writers: Vec<GroupWriter>,
+        record: ServedRecord,
+        cache: Option<Arc<SuccessionCache>>,
+    ) -> CoreResult<Integrity> {
+        let (judge, node_key) = {
+            let state = self.lock();
+            let (workspace_id, node_id) = record_node(&record.statement);
+            let listed =
+                state.chains.get(&group_id).is_some_and(|chain| chain.area_keys.contains_key(workspace_id));
+            let opened = state.opened.get(&group_id).is_some_and(|areas| areas.contains_key(workspace_id));
+            if !listed || !opened {
+                return Err(refused(NOT_THIS_FAMILYS));
+            }
+            let node_key =
+                record.key_epoch.and_then(|epoch| state.key_at_epoch(workspace_id, node_id, epoch));
+            (state.judge(&group_id, &record, reader, writers, false, cache), node_key)
+        };
+        let node_key = node_key.map(Zeroizing::new);
+        let verdict = match (&record.rekey, record.key_epoch) {
+            (Some(rekey), Some(key_epoch)) => {
+                let checked = judge.rekeyed(
+                    &record.statement,
+                    key_epoch,
+                    &record.envelope,
+                    rekey,
+                    record.signer.as_deref(),
+                    node_key.as_ref().map(|key| key.to_vec()),
+                );
+                // Bytes that do not bind to the writer's record: re-sealed, never vouched for.
+                if checked.bound != Some(true) {
+                    return Ok(Integrity::Resealed);
+                }
+                checked.origin.verdict
+            }
+            _ => {
+                judge
+                    .signed(
+                        &record.statement,
+                        &record.envelope,
+                        record.signer.as_deref(),
+                        record.signature.as_deref(),
+                    )
+                    .verdict
+            }
+        };
+        if matches!(verdict, GroupVerdict::KeyConflict | GroupVerdict::FormerMember) {
+            return Ok(Integrity::Resealed);
+        }
+        copy_prior(verdict)
     }
 
     /// The server took the batch: each node's fresh key is its own, the key it replaced its previous one.
@@ -1278,6 +1583,32 @@ impl AreaLedger {
 }
 
 impl AreaLedger {
+    /// A walk's key half alone, for the shared scenarios and the fuzz target
+    /// (Rust callers only, never exported to the apps): [`AreaLedger::rotate_node`]
+    /// with no records, the fresh key pending once it is wrapped.
+    #[doc(hidden)]
+    pub fn rotate_key(
+        &self,
+        workspace_id: String,
+        node: RotatingNodeKey,
+        target_epoch: u64,
+    ) -> CoreResult<RotatedKey> {
+        Ok(match self.lock().rotate_key_with(&workspace_id, &node, target_epoch, |_, _| Ok(()))? {
+            Rotation::Rewrap { key_envelope, key } => RotatedKey {
+                key_envelope,
+                rewrap: true,
+                old_key: Some(SecretBytes::new(key.to_vec())),
+                fresh_key: None,
+            },
+            Rotation::Fresh { key_envelope, old, fresh, .. } => RotatedKey {
+                key_envelope,
+                rewrap: false,
+                old_key: Some(SecretBytes::new(old.to_vec())),
+                fresh_key: Some(SecretBytes::new(fresh.to_vec())),
+            },
+        })
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         // A panic inside a call leaves nothing half-written that a later call would trust.
         self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1933,5 +2264,644 @@ mod tests {
         ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
         assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
         assert!(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 2, 2).is_ok());
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Core 2: a walk's records, and the verdicts that read them         */
+    /* ---------------------------------------------------------------- */
+
+    use crate::drive::{
+        metadata_seal, origin_key_wrap, origin_opening_key, version_rekey, version_seal, MetadataContext,
+        NodeMetadata, OriginKeyContext, OriginRecord, VersionContext,
+    };
+    use crate::group_trust::{GroupIntegrity, GroupRekeyedVerdict, WriterPin};
+    use crate::rotation_records::{RotatedRecord, RotatingVersion, ServedRekey};
+    use crate::signatures::{
+        metadata_sign, version_rekey_sign, version_sign, MetadataStatement, NodeKind, RecordOrigin,
+        ServedOrigin, TrustedKeys, VersionStatement,
+    };
+
+    /* The walk tests' family: 1 manages and walks, 2 writes, 3 was removed at roster 2, 4 reads. */
+    struct Family {
+        people: Vec<Person>,
+        chain: Arc<AcceptedRosters>,
+    }
+
+    fn family() -> Family {
+        let people: Vec<Person> = (1..=4).map(Person::new).collect();
+        let entries = |removed: bool| {
+            let mut out = vec![
+                people[0].entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active),
+                people[1].entry(&[], 1, MemberStatus::Active),
+                if removed {
+                    people[2].entry(&[], 2, MemberStatus::Left)
+                } else {
+                    people[2].entry(&[], 1, MemberStatus::Active)
+                },
+                people[3].entry(&[], 1, MemberStatus::Active),
+            ];
+            out.sort_by(|a, b| a.user_id.cmp(&b.user_id));
+            out
+        };
+        let row = |v: u64| RosterArea {
+            workspace_id: AREA.into(),
+            workspace_key_version: v,
+            commitment: area_key_commitment(&area_key_at(AREA, v)).unwrap(),
+            root_commitment: Some(area_root_commitment(&root_key(v)).unwrap()),
+            retired: false,
+        };
+        let mut signed: Vec<crate::groups::SignedGroupStatement> = vec![];
+        for (version, removed) in [(1u64, false), (2, true)] {
+            let roster = Roster {
+                group_id: GROUP.into(),
+                kind: GroupKind::Family,
+                roster_version: version,
+                previous_roster_digest: signed
+                    .last()
+                    .map(|s| roster_digest(s.statement.clone()))
+                    .unwrap_or_default(),
+                group_key_version: 1,
+                signer_user_id: people[0].user_id.clone(),
+                members: entries(removed),
+                areas: vec![row(version)],
+                format: 2,
+            };
+            signed.push(roster_sign(roster, group_seed_at(1), people[0].keys.clone()).unwrap());
+        }
+        let everyone: Vec<&Person> = people.iter().collect();
+        let chain = match accept_rosters(
+            GROUP.into(),
+            group_public_key(group_seed_at(1)).unwrap(),
+            true,
+            vec![],
+            signed,
+            vec![],
+            ml_dsa_keys(&everyone),
+            reader(),
+            None,
+        )
+        .unwrap()
+        {
+            RosterChain::Accepted { chain } => chain,
+            RosterChain::Fork { .. } => panic!("forked"),
+        };
+        Family { people, chain }
+    }
+
+    impl Family {
+        fn seed(&self, n: usize) -> Vec<u8> {
+            self.people[n - 1].keys.signing_seed.to_vec()
+        }
+        fn id(&self, n: usize) -> String {
+            self.people[n - 1].user_id.clone()
+        }
+        fn keys(&self, n: usize) -> TrustedKeys {
+            TrustedKeys { current: signing_public_key(self.seed(n)).unwrap(), retired: vec![] }
+        }
+        /* A ledger with the area writable at version 2 and its top level opened. */
+        fn ledger(&self) -> Arc<AreaLedger> {
+            let ledger = AreaLedger::new();
+            ledger.commit(Arc::clone(&self.chain)).unwrap();
+            open(&ledger, 2, 2);
+            ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
+            ledger
+        }
+        fn reader(&self, n: usize) -> RecordReader {
+            RecordReader { user_id: self.id(n), keys: self.keys(n) }
+        }
+        /* Every member as a writer, their personal keys known too. */
+        fn writers(&self) -> Vec<GroupWriter> {
+            (1..=4)
+                .map(|n| GroupWriter {
+                    user_id: self.id(n),
+                    pinned: None,
+                    served: None,
+                    links: None,
+                    personal: Some(self.keys(n)),
+                })
+                .collect()
+        }
+    }
+
+    const FILE: u32 = 2;
+    fn version_id(n: u32) -> String {
+        format!("5e5e5e5e-0000-4000-8000-{n:012x}")
+    }
+    fn object_id(n: u32) -> String {
+        format!("0b0b0b0b-0000-4000-8000-{n:012x}")
+    }
+    fn meta_statement() -> MetadataStatement {
+        MetadataStatement {
+            workspace_id: AREA.into(),
+            node_id: node(FILE),
+            kind: NodeKind::File,
+            metadata_version: 1,
+        }
+    }
+    fn version_ctx(n: u32) -> VersionContext {
+        VersionContext {
+            workspace_id: AREA.into(),
+            node_id: node(FILE),
+            version_id: version_id(n),
+            object_id: object_id(n),
+        }
+    }
+    fn version_statement(n: u32) -> VersionStatement {
+        VersionStatement {
+            workspace_id: AREA.into(),
+            node_id: node(FILE),
+            version_id: version_id(n),
+            object_id: object_id(n),
+            content_suite: 3,
+        }
+    }
+    /* Version `n` sealed under `under` (content key pattern n), signed by person `by` when given. */
+    fn version_by(f: &Family, n: u32, under: &[u8], by: Option<usize>) -> RotatingVersion {
+        let envelope = version_seal(version_ctx(n), under.to_vec(), vec![n as u8; 32], 100 * n as u64, 0)
+            .unwrap()
+            .envelope;
+        RotatingVersion {
+            version_id: version_id(n),
+            object_id: object_id(n),
+            content_suite: 3,
+            envelope: envelope.clone(),
+            signer: by.map(|who| f.id(who)),
+            signature: by.map(|who| version_sign(f.seed(who), version_statement(n), envelope).unwrap()),
+            rekey: None,
+        }
+    }
+    /*
+     * Version `n` as an earlier walk from epoch 1 (`first`) to 2 (`now`) left it: written by
+     * `writer` under `first`, re-keyed raw under `now`, attested by `rekeyer` at epoch 2.
+     */
+    fn version_rekeyed(
+        f: &Family,
+        n: u32,
+        first: &[u8],
+        now: &[u8],
+        writer: usize,
+        rekeyer: usize,
+    ) -> RotatingVersion {
+        let written = version_by(f, n, first, Some(writer));
+        let envelope =
+            version_rekey(version_ctx(n), 3, first.to_vec(), now.to_vec(), written.envelope.clone()).unwrap();
+        let key_envelope = origin_key_wrap(
+            OriginKeyContext {
+                workspace_id: AREA.into(),
+                node_id: node(FILE),
+                key_epoch: 2,
+                record: OriginRecord::Version { version_id: version_id(n) },
+                origin_envelope: written.envelope.clone(),
+            },
+            now.to_vec(),
+            origin_opening_key(written.envelope.clone(), first.to_vec()).unwrap(),
+        )
+        .unwrap();
+        let origin = RecordOrigin {
+            envelope: written.envelope.clone(),
+            signer_id: f.id(writer),
+            signature: written.signature.clone().unwrap(),
+            key_envelope: key_envelope.clone(),
+        };
+        let signature =
+            version_rekey_sign(f.seed(rekeyer), version_statement(n), 2, envelope.clone(), origin).unwrap();
+        RotatingVersion {
+            envelope,
+            signer: Some(f.id(rekeyer)),
+            signature: None,
+            rekey: Some(ServedRekey {
+                origin: ServedOrigin {
+                    envelope: written.envelope.clone(),
+                    signer_id: Some(f.id(writer)),
+                    signature: written.signature.clone(),
+                    key_envelope,
+                },
+                signature,
+            }),
+            ..written
+        }
+    }
+    /* The file node at `key_epoch` (key `key`) under the top level's key at `parent_epoch`, named by `by`. */
+    fn file_node(
+        f: &Family,
+        key: &[u8],
+        key_epoch: u64,
+        parent_epoch: u64,
+        by: Option<usize>,
+    ) -> RotatingNode {
+        let envelope = metadata_seal(
+            MetadataContext { workspace_id: AREA.into(), node_id: node(FILE), metadata_version: 1 },
+            key.to_vec(),
+            NodeMetadata { name: "plan.txt".into(), mime: None, size: None, modified: None },
+        )
+        .unwrap();
+        RotatingNode {
+            node_id: node(FILE),
+            parent_id: node(ROOT),
+            parent_key_epoch: 2,
+            key_epoch,
+            wrapped_parent_key_epoch: parent_epoch,
+            key_envelope: wrap(
+                &node(FILE),
+                &node(ROOT),
+                parent_epoch,
+                key_epoch,
+                &root_key(parent_epoch),
+                key,
+            ),
+            kind: NodeKind::File,
+            metadata_version: 1,
+            metadata_envelope: envelope.clone(),
+            metadata_signer: by.map(|who| f.id(who)),
+            metadata_signature: by.map(|who| metadata_sign(f.seed(who), meta_statement(), envelope).unwrap()),
+            metadata_rekey: None,
+            versions: vec![],
+            share_ids: vec![],
+            link_ids: vec![],
+        }
+    }
+    /* The node's key as a listing serves it, opened on `ledger`. */
+    fn list(ledger: &AreaLedger, n: &RotatingNode) {
+        ledger
+            .open_listed_node(
+                AREA.into(),
+                ServedNodeKey {
+                    node_id: n.node_id.clone(),
+                    parent_id: n.parent_id.clone(),
+                    parent_key_epoch: n.wrapped_parent_key_epoch,
+                    key_epoch: n.key_epoch,
+                    key_envelope: n.key_envelope.clone(),
+                    prev_key_envelope: None,
+                    prev_key_epoch: None,
+                    prev_parent_key_epoch: None,
+                },
+            )
+            .unwrap();
+    }
+    /*
+     * The origin the server keeps for each record of `before` once a walk re-keyed it: the origin
+     * it already carried, or the writer's record itself; none for an unsigned one.
+     */
+    fn kept_origins(before: &RotatingNode) -> Vec<Option<ServedOrigin>> {
+        let of = |envelope: &Vec<u8>,
+                  signer: &Option<String>,
+                  signature: &Option<Vec<u8>>,
+                  rekey: &Option<ServedRekey>| {
+            match (rekey, signer, signature) {
+                (Some(rekey), _, _) => Some(rekey.origin.clone()),
+                (None, Some(signer), Some(signature)) => Some(ServedOrigin {
+                    envelope: envelope.clone(),
+                    signer_id: Some(signer.clone()),
+                    signature: Some(signature.clone()),
+                    key_envelope: vec![],
+                }),
+                _ => None,
+            }
+        };
+        let mut out = vec![of(
+            &before.metadata_envelope,
+            &before.metadata_signer,
+            &before.metadata_signature,
+            &before.metadata_rekey,
+        )];
+        out.extend(before.versions.iter().map(|v| of(&v.envelope, &v.signer, &v.signature, &v.rekey)));
+        out
+    }
+    /* The records of `rotated` as a listing serves them once the server stored the walk. */
+    fn served_after(
+        f: &Family,
+        before: &RotatingNode,
+        rotated: &RotatedNode,
+        target: u64,
+        walker: usize,
+    ) -> Vec<ServedRecord> {
+        let origins = kept_origins(before);
+        let served = |statement: RecordStatement, record: &RotatedRecord, origin: &Option<ServedOrigin>| {
+            ServedRecord {
+                statement,
+                key_epoch: Some(target),
+                envelope: record.envelope.clone(),
+                signer: Some(f.id(walker)),
+                signature: record.signature.clone(),
+                rekey: record.rekey.as_ref().map(|out| ServedRekey {
+                    origin: ServedOrigin {
+                        key_envelope: out.origin_key_envelope.clone(),
+                        ..origin.clone().expect("a re-keyed record keeps an origin")
+                    },
+                    signature: out.signature.clone(),
+                }),
+            }
+        };
+        let mut out = vec![served(
+            RecordStatement::Metadata { statement: meta_statement() },
+            rotated.metadata.as_ref().unwrap(),
+            &origins[0],
+        )];
+        for (index, version) in rotated.versions.iter().enumerate() {
+            let n = u32::from_str_radix(&version.version_id[24..], 16).unwrap();
+            out.push(served(
+                RecordStatement::Version { statement: version_statement(n) },
+                &version.record,
+                &origins[index + 1],
+            ));
+        }
+        out
+    }
+    /* A member's fresh ledger holding the node's new key, opened from the walk's envelope under the top level. */
+    fn reading_ledger(f: &Family, rotated: &RotatedNode, target: u64) -> Arc<AreaLedger> {
+        let ledger = f.ledger();
+        ledger
+            .open_listed_node(
+                AREA.into(),
+                ServedNodeKey {
+                    node_id: node(FILE),
+                    parent_id: node(ROOT),
+                    parent_key_epoch: 2,
+                    key_epoch: target,
+                    key_envelope: rotated.key_envelope.clone(),
+                    prev_key_envelope: None,
+                    prev_key_epoch: None,
+                    prev_parent_key_epoch: None,
+                },
+            )
+            .unwrap();
+        ledger
+    }
+    fn read_all(
+        f: &Family,
+        ledger: &AreaLedger,
+        records: Vec<ServedRecord>,
+        reader: usize,
+    ) -> Vec<RecordVerdict> {
+        records
+            .into_iter()
+            .map(|record| {
+                ledger.record_verdict(GROUP.into(), f.reader(reader), f.writers(), false, record, None)
+            })
+            .collect()
+    }
+    fn side(verdict: GroupVerdict, via: bool) -> GroupIntegrity {
+        GroupIntegrity { verdict, via: via.then(|| GROUP.to_string()) }
+    }
+    fn rekeyed(origin: GroupIntegrity, rekeyer: GroupIntegrity, bound: Option<bool>) -> RecordVerdict {
+        RecordVerdict::Rekeyed { verdict: GroupRekeyedVerdict { origin, rekeyer, bound } }
+    }
+    fn signed(verdict: GroupVerdict) -> RecordVerdict {
+        RecordVerdict::Signed { verdict: side(verdict, false) }
+    }
+
+    #[test]
+    fn a_walk_keeps_each_writer_s_record_and_a_reader_names_the_writer_never_the_walker() {
+        let f = family();
+        let ledger = f.ledger();
+        // Named by person 3 (since removed), uploaded by person 2, a version nobody signed; under the
+        // top level's old key, as a removal's walk finds it.
+        let mut file = file_node(&f, &key(1), 1, 1, Some(3));
+        file.versions = vec![version_by(&f, 1, &key(1), Some(2)), version_by(&f, 5, &key(1), None)];
+        list(&ledger, &file);
+        let rotated = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
+        assert!(!rotated.rewrap);
+        let metadata = rotated.metadata.clone().unwrap();
+        assert!(metadata.rekey.is_some() && metadata.signature.is_none() && !metadata.drop_origin);
+        let uploaded = &rotated.versions[0].record;
+        assert!(uploaded.rekey.is_some() && uploaded.signature.is_none() && !uploaded.drop_origin);
+        let unsigned = &rotated.versions[1].record;
+        assert!(unsigned.rekey.is_none() && unsigned.signature.is_some() && !unsigned.drop_origin);
+        // Pending only: the fresh key is the node's once the server takes the batch.
+        assert!(ledger.key_at_epoch(AREA.into(), node(FILE), 2).is_none());
+        assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(FILE)]), 1);
+        assert!(ledger.key_at_epoch(AREA.into(), node(FILE), 2).is_some());
+        // Person 4 reads it on their own device: the removed member's name stays theirs.
+        let reading = reading_ledger(&f, &rotated, 2);
+        let verdicts = read_all(&f, &reading, served_after(&f, &file, &rotated, 2, 1), 4);
+        let walker = side(GroupVerdict::Verified, true);
+        assert_eq!(verdicts[0], rekeyed(side(GroupVerdict::FormerMember, false), walker.clone(), Some(true)));
+        assert_eq!(verdicts[1], rekeyed(side(GroupVerdict::Verified, true), walker, Some(true)));
+        assert_eq!(verdicts[2], signed(GroupVerdict::Resealed));
+        // The walker reading its own walk: its re-key judged by its own keys, the writers' by the roster.
+        let own = read_all(&f, &reading, served_after(&f, &file, &rotated, 2, 1), 1);
+        assert_eq!(
+            own[1],
+            rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, false), Some(true))
+        );
+        // Break-check: the origin swapped for another version's record no longer binds.
+        let mut swapped = served_after(&f, &file, &rotated, 2, 1);
+        let other = version_by(&f, 6, &key(1), Some(2));
+        if let Some(rekey) = swapped[1].rekey.as_mut() {
+            rekey.origin.envelope = other.envelope;
+            rekey.origin.signature = other.signature;
+        }
+        let RecordVerdict::Rekeyed { verdict } = &read_all(&f, &reading, swapped, 4)[1] else {
+            panic!("re-keyed")
+        };
+        assert_ne!(verdict.bound, Some(true));
+    }
+
+    #[test]
+    fn an_origin_kept_before_is_carried_only_when_it_binds_and_dropped_otherwise() {
+        let f = family();
+        let ledger = f.ledger();
+        // The file was walked once already (epoch 1 to 2, key 0 to key 1): its versions carry origins.
+        let mut file = file_node(&f, &key(1), 2, 1, None);
+        let carried = version_rekeyed(&f, 2, &key(0), &key(1), 2, 1);
+        let mut gone = version_rekeyed(&f, 3, &key(0), &key(1), 2, 1);
+        gone.rekey.as_mut().unwrap().origin.signer_id = None;
+        // Its current bytes are not its origin's: a dishonest earlier walker re-sealed something else.
+        let mut unbound = version_rekeyed(&f, 4, &key(0), &key(1), 2, 1);
+        unbound.envelope = version_seal(version_ctx(4), key(1), vec![9; 32], 1, 0).unwrap().envelope;
+        file.versions = vec![carried.clone(), gone, unbound];
+        list(&ledger, &file);
+        let rotated = ledger.rotate_node(AREA.into(), file.clone(), 3, f.seed(4)).unwrap();
+        let [kept, dropped_gone, dropped_unbound] =
+            [&rotated.versions[0].record, &rotated.versions[1].record, &rotated.versions[2].record];
+        assert!(kept.rekey.is_some() && !kept.drop_origin);
+        assert!(dropped_gone.rekey.is_none() && dropped_gone.drop_origin && dropped_gone.signature.is_some());
+        assert!(
+            dropped_unbound.rekey.is_none()
+                && dropped_unbound.drop_origin
+                && dropped_unbound.signature.is_some()
+        );
+        // The unsigned metadata is re-sealed, dropping nothing.
+        let metadata = rotated.metadata.clone().unwrap();
+        assert!(metadata.rekey.is_none() && !metadata.drop_origin);
+        ledger.rotate_commit(AREA.into(), vec![node(FILE)]);
+        // A row not yet walked is read with the node's key at its own epoch (the previous one now).
+        let before = ServedRecord {
+            statement: RecordStatement::Version { statement: version_statement(2) },
+            key_epoch: Some(2),
+            envelope: carried.envelope.clone(),
+            signer: carried.signer.clone(),
+            signature: None,
+            rekey: carried.rekey.clone(),
+        };
+        assert_eq!(
+            ledger.record_verdict(GROUP.into(), f.reader(1), f.writers(), false, before, None),
+            rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, false), Some(true))
+        );
+        let reading = reading_ledger(&f, &rotated, 3);
+        let verdicts = read_all(&f, &reading, served_after(&f, &file, &rotated, 3, 4), 1);
+        // Person 2's version, carried through two walks: still theirs, and bound.
+        assert_eq!(
+            verdicts[1],
+            rekeyed(side(GroupVerdict::Verified, true), side(GroupVerdict::Verified, true), Some(true))
+        );
+        assert_eq!(verdicts[2], signed(GroupVerdict::Resealed));
+        assert_eq!(verdicts[3], signed(GroupVerdict::Resealed));
+    }
+
+    #[test]
+    fn a_node_whose_records_do_not_re_key_leaves_no_pending_key_behind() {
+        let f = family();
+        let ledger = f.ledger();
+        let mut file = file_node(&f, &key(1), 1, 1, Some(2));
+        // A version sealed under another key than the node's: the walk cannot re-seal it.
+        file.versions = vec![version_by(&f, 1, &key(1), Some(2)), version_by(&f, 2, &key(7), Some(2))];
+        list(&ledger, &file);
+        assert!(ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).is_err());
+        // Nothing pending: no child goes under a fresh key nobody stored, nothing to commit or drop.
+        assert_eq!(ledger.rotate_drop_all(AREA.into()), 0);
+        assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(FILE)]), 0);
+        assert_eq!(message(ledger.new_node_key(AREA.into(), node(3), node(FILE), 2, 2)), KEY_CHANGE_PENDING);
+        // A carried origin whose current envelope the walker's key does not open stops it too.
+        let mut stale = file_node(&f, &key(1), 2, 1, None);
+        let mut wrong = version_rekeyed(&f, 3, &key(0), &key(1), 2, 1);
+        wrong.envelope = version_seal(version_ctx(3), key(8), vec![3; 32], 300, 0).unwrap().envelope;
+        stale.versions = vec![wrong];
+        let fresh_ledger = f.ledger();
+        list(&fresh_ledger, &stale);
+        assert!(fresh_ledger.rotate_node(AREA.into(), stale, 3, f.seed(1)).is_err());
+        assert_eq!(fresh_ledger.rotate_drop_all(AREA.into()), 0);
+        // A bad signing seed is refused before anything is made.
+        assert!(ledger.rotate_node(AREA.into(), file, 2, vec![1; 31]).is_err());
+        assert_eq!(ledger.rotate_drop_all(AREA.into()), 0);
+    }
+
+    #[test]
+    fn a_walk_refuses_shares_links_a_personal_workspace_and_the_top_level() {
+        let f = family();
+        let ledger = f.ledger();
+        let file = file_node(&f, &key(1), 1, 1, Some(2));
+        list(&ledger, &file);
+        let shared = RotatingNode { share_ids: vec![version_id(1)], ..file.clone() };
+        assert_eq!(message(ledger.rotate_node(AREA.into(), shared, 2, f.seed(1))), SHARED_IN_FAMILY);
+        let linked = RotatingNode { link_ids: vec![version_id(1)], ..file.clone() };
+        assert_eq!(message(ledger.rotate_node(AREA.into(), linked, 2, f.seed(1))), SHARED_IN_FAMILY);
+        assert_eq!(ledger.rotate_drop_all(AREA.into()), 0);
+        let personal = "f0f0f0f0-0000-4000-8000-00000000000f";
+        ledger.open_personal_workspace(personal.into(), 1, key(9)).unwrap();
+        let mine = RotatingNode { parent_id: personal.into(), ..file.clone() };
+        assert_eq!(message(ledger.rotate_node(personal.into(), mine, 2, f.seed(1))), NOT_A_FAMILY_FOLDER);
+        let top = RotatingNode {
+            node_id: node(ROOT),
+            parent_id: AREA.into(),
+            key_envelope: root_row(2).key_envelope,
+            key_epoch: 2,
+            wrapped_parent_key_epoch: 2,
+            ..file.clone()
+        };
+        assert_eq!(message(ledger.rotate_node(AREA.into(), top, 3, f.seed(1))), AREA_ROOT);
+        // And the walk goes once the node is what a family folder holds.
+        assert!(ledger.rotate_node(AREA.into(), file, 2, f.seed(1)).is_ok());
+    }
+
+    #[test]
+    fn a_node_already_at_the_target_is_re_wrapped_with_its_records_untouched() {
+        let f = family();
+        let ledger = f.ledger();
+        // Already at epoch 3, written under the top level's current key: only re-wrapped.
+        let file = file_node(&f, &key(4), 3, 2, Some(2));
+        list(&ledger, &file);
+        let rotated = ledger.rotate_node(AREA.into(), file, 3, f.seed(1)).unwrap();
+        assert!(rotated.rewrap && rotated.metadata.is_none() && rotated.versions.is_empty());
+        assert_eq!(
+            node_open(ctx(AREA, &node(FILE), &node(ROOT), 2, 3), root_key(2), rotated.key_envelope).unwrap(),
+            key(4)
+        );
+    }
+
+    #[test]
+    fn a_record_s_verdict_follows_the_committed_chain_or_a_fork_and_a_withheld_key_is_unchecked() {
+        let f = family();
+        let ledger = f.ledger();
+        let mut file = file_node(&f, &key(1), 1, 1, Some(3));
+        file.versions = vec![version_by(&f, 1, &key(1), Some(2))];
+        list(&ledger, &file);
+        let rotated = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
+        let reading = reading_ledger(&f, &rotated, 2);
+        let records = served_after(&f, &file, &rotated, 2, 1);
+        // The node key at another epoch than the record's: nothing can be confirmed.
+        let mut elsewhere = records[1].clone();
+        elsewhere.key_epoch = Some(5);
+        let RecordVerdict::Rekeyed { verdict } =
+            reading.record_verdict(GROUP.into(), f.reader(4), f.writers(), false, elsewhere, None)
+        else {
+            panic!("re-keyed")
+        };
+        assert_eq!((verdict.origin.verdict, verdict.bound), (GroupVerdict::Unchecked, None));
+        // A plain record by person 2: the roster's word; without the chain unchecked; forked, personal.
+        let plain = ServedRecord {
+            statement: RecordStatement::Version { statement: version_statement(1) },
+            key_epoch: Some(1),
+            envelope: file.versions[0].envelope.clone(),
+            signer: Some(f.id(2)),
+            signature: file.versions[0].signature.clone(),
+            rekey: None,
+        };
+        let judge = |ledger: &AreaLedger, forked: bool, reader: usize| {
+            ledger.record_verdict(GROUP.into(), f.reader(reader), f.writers(), forked, plain.clone(), None)
+        };
+        assert_eq!(
+            judge(&reading, false, 4),
+            RecordVerdict::Signed { verdict: side(GroupVerdict::Verified, true) }
+        );
+        reading.uncommit(GROUP.into());
+        assert_eq!(judge(&reading, false, 4), signed(GroupVerdict::Unchecked));
+        assert_eq!(judge(&reading, true, 4), signed(GroupVerdict::Verified));
+        // This account's own record is judged by its own keys, whatever the roster says.
+        assert_eq!(judge(&reading, false, 2), signed(GroupVerdict::Verified));
+        // A stripped signature is unsigned, before any trust is looked up.
+        let stripped = ServedRecord { signature: None, ..plain.clone() };
+        assert_eq!(
+            reading.record_verdict(GROUP.into(), f.reader(4), f.writers(), false, stripped, None),
+            signed(GroupVerdict::Unsigned)
+        );
+    }
+
+    #[test]
+    fn a_copy_vouches_only_for_what_verified_and_never_for_a_removed_member_s_record() {
+        let f = family();
+        let ledger = f.ledger();
+        let mut file = file_node(&f, &key(1), 1, 1, Some(3));
+        file.versions = vec![version_by(&f, 1, &key(1), Some(2)), version_by(&f, 5, &key(1), None)];
+        list(&ledger, &file);
+        let rotated = ledger.rotate_node(AREA.into(), file.clone(), 2, f.seed(1)).unwrap();
+        let reading = reading_ledger(&f, &rotated, 2);
+        let records = served_after(&f, &file, &rotated, 2, 1);
+        let form = |record: &ServedRecord, writers: Vec<GroupWriter>| {
+            reading.copy_form(GROUP.into(), f.reader(4), writers, record.clone(), None)
+        };
+        assert_eq!(form(&records[0], f.writers()), Ok(Integrity::Resealed), "a removed member's name");
+        assert_eq!(form(&records[1], f.writers()), Ok(Integrity::Verified));
+        assert_eq!(form(&records[2], f.writers()), Ok(Integrity::Resealed));
+        // A re-keyed record whose key epoch is not served is judged as the walker's own signature: none.
+        let no_epoch = ServedRecord { key_epoch: None, ..records[1].clone() };
+        assert_eq!(form(&no_epoch, f.writers()), Ok(Integrity::Resealed));
+        // Bytes that do not bind are never vouched for.
+        let mut unbound = records[1].clone();
+        unbound.rekey.as_mut().unwrap().origin.key_envelope[10] ^= 1;
+        assert_eq!(form(&unbound, f.writers()), Ok(Integrity::Resealed));
+        // A writer the reader cannot check (a pin with an empty origin) stops the copy.
+        let mut unsure = f.writers();
+        unsure[1].pinned = Some(WriterPin {
+            key_version: Some(1),
+            encryption_public_key: "x".into(),
+            signing_public_key: "x".into(),
+            ml_dsa_public_key_hash: "x".into(),
+            trusted_via: Some(String::new()),
+        });
+        assert!(form(&records[1], unsure).is_err());
+        // Only out of a folder this family's chain lists and this device opened.
+        reading.uncommit(GROUP.into());
+        assert_eq!(message(form(&records[1], f.writers())), NOT_THIS_FAMILYS);
     }
 }

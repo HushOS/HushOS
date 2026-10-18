@@ -49,6 +49,10 @@ export const groups = () => read('packages/crypto/src/__fixtures__/core-groups.j
 export const webGroups = () => read('crates/hushos-core/fixtures/web-groups.json');
 /* crates/hushos-core/fixtures/area-ledger-scenarios.json: the family write rules as steps. */
 export const ledgerScenarios = () => read('crates/hushos-core/fixtures/area-ledger-scenarios.json');
+/* packages/crypto/src/__fixtures__/core-area-ledger.json: the core's run of them, and the nodes it walked. */
+export const coreLedger = () => read('packages/crypto/src/__fixtures__/core-area-ledger.json');
+/* crates/hushos-core/fixtures/web-area-ledger.json: the same as this twin ran and walked them. */
+export const webLedger = () => read('crates/hushos-core/fixtures/web-area-ledger.json');
 
 type Served = {
     statement: string;

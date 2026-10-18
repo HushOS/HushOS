@@ -20,9 +20,6 @@ import {
     acceptRosters,
     firstRoster,
     foldInEntry,
-    groupIntegrityOf,
-    groupRekeyedIntegrityOf,
-    groupWriterTrust,
     joinCode,
     newRosterEntry,
     nextRoster,
@@ -33,7 +30,6 @@ import {
     type GroupChainCache,
     type GroupIntegrity,
     type GroupReading,
-    type GroupWriterTrust,
     type JoinMark,
     type RosterFork,
     type ServedIdentity,
@@ -93,17 +89,14 @@ import type {
 } from './session';
 import {
     digest,
-    integrityOf,
     metadataStatementAs,
     metadataStatements,
-    resealForm,
     signHybrid,
     signStatement,
     successionConsentStatement,
     versionStatements,
     HYBRID_SIGNATURE_BYTES,
     type HybridSigningKey,
-    type Integrity,
     type MetadataStatement,
     type RekeyedRecord,
     type SignatureForm,
@@ -112,6 +105,7 @@ import {
     type VersionStatement,
 } from './signatures';
 import { grantAreaKey, openAreaSelfGrant, type WorkspaceKeyEnvelope } from './workspace';
+import { judgeWith, recordVerdicts } from './group-verdicts';
 
 /*
  * The crypto worker's side of groups (milestone 1c; docs/groups-design.md 2.4
@@ -684,7 +678,7 @@ export type RecordJudge = (record: {
 }) => Promise<SignatureForm | null>;
 
 /* A family folder's rotation: re-keyed records only, nothing judged, so nothing unreadable stops it. */
-const rekeyOnly: RecordJudge = async () => null;
+export const rekeyOnly: RecordJudge = async () => null;
 
 /*
  * A re-keyed record as the reader checks it, from what the server serves: the
@@ -1425,11 +1419,7 @@ export function createGroupSession(host: GroupHost) {
         return accepted;
     }
 
-    /*
-     * A record's group verdict (design 2.8): this account's own records by its
-     * own keys, anyone else's as the roster says, personal keys where the
-     * roster does not speak. A check that throws is `unchecked`.
-     */
+    /* A record's group verdict (group-verdicts.ts), as this session's chain and keys judge it. */
     function verdicts(
         groupId: string,
         workspaceId: string,
@@ -1437,141 +1427,23 @@ export function createGroupSession(host: GroupHost) {
         writers: GroupWriter[],
         trusted: Map<string, TrustedSigner>,
     ) {
-        const me = host.identity().userId.toLowerCase();
-        const byId = new Map(writers.map((writer) => [writer.userId.toLowerCase(), writer]));
-        const areas = Object.fromEntries(
-            [...areasOf(groupId)].map(([at, area]) => [at, area.version]),
-        );
-        const trust = new Map<string, Promise<GroupWriterTrust | null>>();
-        const trustOf = (userId: string) => {
-            let held = trust.get(userId);
-            if (!held) {
-                const writer = byId.get(userId);
-                held = groupWriterTrust({
-                    groupId,
-                    areas,
-                    reading,
-                    workspaceId,
-                    writerUserId: userId,
-                    pinned: writer?.pinned ?? null,
-                    served: writer?.served ?? null,
-                    links: writer?.links ?? null,
-                    verified,
-                }).catch(() => null);
-                trust.set(userId, held);
-            }
-            return held;
-        };
-        /* Whose keys a re-keyed record's signer is judged under: their roster trust, or this account's own. */
-        const rekeyedTrustOf = async (
-            userId: string | null,
-        ): Promise<{ trust: GroupWriterTrust; personal: TrustedSigner | null }> => {
-            const id = userId?.toLowerCase() ?? null;
-            if (!id) return { trust: { trust: 'outside' }, personal: null };
-            if (id === me)
-                return { trust: { trust: 'outside' }, personal: trusted.get(id) ?? null };
-            return {
-                trust: (await trustOf(id)) ?? { trust: 'unchecked' },
-                personal: trusted.get(id) ?? null,
-            };
-        };
-        /*
-         * A re-keyed record's verdicts (design 2.8): its origin's, as its writer's
-         * trust says, and the re-keyer's, as theirs does. `nodeKey` is the node's
-         * key at the record's epoch, null when not held (unchecked).
-         */
-        const rekeyed = async (
-            record: RekeyedRecord,
-            nodeKey: Uint8Array | null,
-            rekeyer: string | null,
-        ) => {
-            try {
-                const origin = await rekeyedTrustOf(record.origin.signerId);
-                const by = await rekeyedTrustOf(rekeyer);
-                return await groupRekeyedIntegrityOf(record, nodeKey, {
-                    origin: origin.trust,
-                    originPersonal: origin.personal,
-                    rekeyer: by.trust,
-                    rekeyerPersonal: by.personal,
-                });
-            } catch {
-                return {
-                    origin: { integrity: 'unchecked' as const, via: null },
-                    rekeyer: { integrity: 'unchecked' as const, via: null },
-                    bound: null,
-                };
-            }
-        };
-        const check = async (
-            statements: () => Promise<StatementForms>,
-            signer: string | null,
-            signature: string | null,
-        ): Promise<{ integrity: GroupIntegrity; via: string | null }> => {
-            let bytes: Uint8Array | null = null;
-            if (signature)
-                try {
-                    bytes = decode(signature);
-                } catch {
-                    bytes = new Uint8Array(0);
-                }
-            // No signature is unsigned before any trust is looked up: a lookup that fails (and
-            // reads unchecked) must not hide a stripped one.
-            if (!bytes) return { integrity: 'unsigned', via: null };
-            try {
-                const id = signer?.toLowerCase() ?? null;
-                if (!id || id === me)
-                    return {
-                        integrity: await integrityOf(
-                            statements,
-                            bytes,
-                            id ? trusted.get(id) : null,
-                        ),
-                        via: null,
-                    };
-                const writerTrust = await trustOf(id);
-                if (!writerTrust) return { integrity: 'unchecked', via: null };
-                return await groupIntegrityOf(
-                    statements,
-                    bytes,
-                    writerTrust,
-                    trusted.get(id) ?? null,
-                );
-            } catch {
-                return { integrity: 'unchecked', via: null };
-            }
-        };
-        return Object.assign(check, { rekeyed });
+        return recordVerdicts({
+            groupId,
+            workspaceId,
+            reading,
+            writers,
+            trusted,
+            me: host.identity().userId,
+            areas: Object.fromEntries(
+                [...areasOf(groupId)].map(([at, area]) => [at, area.version]),
+            ),
+            verified,
+        });
     }
     function personalOf(writers: GroupWriter[]) {
         const signers: DriveSigners = {};
         for (const writer of writers) if (writer.personal) signers[writer.userId] = writer.personal;
         return host.personalSigners(signers);
-    }
-    /*
-     * How a copy in a group area signs a record: verified stays ordinary and
-     * saved stays saved; a former member's record and a key conflict's are
-     * re-sealed, as is anything else; an unchecked one is not copied at all
-     * (resealForm refuses).
-     */
-    function judgeWith(verdict: ReturnType<typeof verdicts>): RecordJudge {
-        return async (record) => {
-            let integrity: GroupIntegrity;
-            if (record.rekeyed) {
-                const checked = await verdict.rekeyed(
-                    record.rekeyed.record,
-                    record.rekeyed.nodeKey,
-                    record.rekeyed.rekeyer,
-                );
-                // Bytes that do not bind to the writer's record (a broken wrap, the wrong epoch,
-                // a key this device does not hold): the copy is re-sealed, never vouched for.
-                if (checked.bound !== true) return 'resealed';
-                integrity = checked.origin.integrity;
-            } else
-                integrity = (await verdict(record.statements, record.signer, record.signature))
-                    .integrity;
-            if (integrity === 'key-conflict' || integrity === 'former-member') return 'resealed';
-            return resealForm(integrity as Integrity);
-        };
     }
     /*
      * The reading a family folder's rotation or copy is judged on: the staged

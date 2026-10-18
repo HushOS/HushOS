@@ -1,11 +1,1902 @@
 {
     "generatedBy": "crates/hushos-core/examples/area_ledger_fixtures.rs",
+    "rotations": [
+        {
+            "expected": [
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "former-member",
+                            "via": null
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "integrity": "resealed",
+                        "kind": "signed",
+                        "via": null
+                    }
+                ]
+            ],
+            "key": null,
+            "name": "a removal walk keeps every writer record",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "O_wenVwp-49mu7V_iT16t-jlfvX7LR-3bYIS3QLG6ysucbXAYwmu1eyJAopyx5aGGSPDR-zil2-KEez2MsscdVk7aBbTb7ti",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "T3pUiaKHiMCi5t0IOj71vdCnYFBLpGUBY2ZVFkrMNneMGRq9B8pAJvLXog842VZf0-RhdWsLE08v2mOaXD4zY5zzPf7Lvw5fp6SMsmXd4GXNyPGmzcBroCKUoYvcgpf56HlYfwK-_82OMNRV4pO0X4MQhsUwSdvZtL0vpVkd12e34wo-ScWkycNu6MibOgwax5R0XBefzChovL45CVoxTCWGPq-kFqO1-Q1LpkDqT7OIuSq4j9GKQyHbbRYJ7geEbXOFbRAtnKZOIy9cg-jwwHud5u2h4humXDMUWs9kJqfJSpSn63TPGA2SfucusBmgibQwY1jNyRcYSdB6NpUjtoefdXyFYqgZoCaVa4otR7GEfmy1pvzu_uI9ioPkukFwH-l3pvQznfs",
+                    "metadataRekey": null,
+                    "metadataSignature": "86yOo3UWGxYwjLWV3SQZaD8saAmiYA-q8FdqZVdWMS6TTbXxqPZwx4uzp7W8yT9Jnwc1L1yZCE7XyKCYHUPYBA",
+                    "metadataSigner": "00000003-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [
+                        {
+                            "contentKeyEnvelope": "AqBefDwRPz6DKYKcJyQobl0sIevC4c2UFIIX5oB3V8rX4ua1zCJXXwl6SMRPUGoC4x86s5T6n9ysBd46FweKN71z1fQAkRFiPqGCWkQ3oDdU59KS",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000001",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000001",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": "2sKtmZTz310e-cOQU0n82Ij-T9p9eYD5TdBW74O-XiCJTEmsu7uFiwBTTu22takN_0rscCB8RnVCrmPvq3cFAw",
+                            "signer": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        {
+                            "contentKeyEnvelope": "FyjymrR6ACTyhUHf2obIruBOZa5lzGWTBBjmxt4NsjyZWAeiA5Z12BSvRZvPxxdu3QxN_ogKbPxzv2ZLtQsIZewzfE8NwWe5vY7uqPtab_f3tdNR",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000005",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000005",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": null,
+                            "signer": null
+                        }
+                    ],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 4,
+            "refused": null,
+            "rekeyedInputs": [
+                {
+                    "envelope": "SYHmMUyTGyEiM5KkEQG5OdvVv_QygcieQSjZmh4psJoivTMNO3FbNYKPZSfy6-Z-LhY4JGQgNhES-QsA4UHsyH61JqKaDDYhPfcZg4P2D8Gq4ih212xU_AfF6wpFRbLxIhmaAxrNWLh3MUPvdzoSBzce9w0Yl39VDhVSSKshdji0UdP6Dr1vOCByO2sD5OAYI64KjF0HgdEP8g7vx1UCKcVN7vIxLC8jlNBtWzoCjPxZxe8Qbvm9lpXQvyw0XG64_D2aAU1CYmtwA8-_LmwN7C3VjwVkpvh6yZCzGTKbbjGsuCl44hvXOjk5Bo5fhEKlhPg8atBGZs9HbZx-Q9i-Gh1Hh26cBr7Fr1MYQWxxJ31Red6DkxWyvcwUFpyR9sD-FmG4n_kBnn0",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "3Q0BjyODRTbaByWBOtbBHEdzz6sYyZdeP9mALsREyL4",
+                                "retired": []
+                            },
+                            "trust": "former-member"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "WPm69g5eu6bPi7vQ1MHnxIk3VXF78JjKd7etSDyzLvU",
+                    "origin": {
+                        "envelope": "T3pUiaKHiMCi5t0IOj71vdCnYFBLpGUBY2ZVFkrMNneMGRq9B8pAJvLXog842VZf0-RhdWsLE08v2mOaXD4zY5zzPf7Lvw5fp6SMsmXd4GXNyPGmzcBroCKUoYvcgpf56HlYfwK-_82OMNRV4pO0X4MQhsUwSdvZtL0vpVkd12e34wo-ScWkycNu6MibOgwax5R0XBefzChovL45CVoxTCWGPq-kFqO1-Q1LpkDqT7OIuSq4j9GKQyHbbRYJ7geEbXOFbRAtnKZOIy9cg-jwwHud5u2h4humXDMUWs9kJqfJSpSn63TPGA2SfucusBmgibQwY1jNyRcYSdB6NpUjtoefdXyFYqgZoCaVa4otR7GEfmy1pvzu_uI9ioPkukFwH-l3pvQznfs",
+                        "keyEnvelope": "xftTbSpsXkQn8DEWeUKV5gE-6AkrIuhRLyixRVLmIW5ZzJGjVyys8xoUcQt2PR4D7S5BLJ6LLQXFUt0K955QP6VV7eIMpu88",
+                        "signature": "86yOo3UWGxYwjLWV3SQZaD8saAmiYA-q8FdqZVdWMS6TTbXxqPZwx4uzp7W8yT9Jnwc1L1yZCE7XyKCYHUPYBA",
+                        "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "2Eucp2nYRLDscI6TVI9sCUuwU-kGIbdFJCrkIakgS2fmeUdN8pzrs5c0T6w5l4YIOEs9JEfCXUbxdJ73pWTpCA",
+                    "statement": {
+                        "kind": "file",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "67sTByWi3VmuQYveg7iZ6RyNwKtQXTGPrxZORv2ZM2MfmhjwSos67lfwIJ-Wauj_I1b0ZHh3cs_nHXBwgE6poIY8G_PszDe8ZS-jLxkbeklD1Xc-",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "WPm69g5eu6bPi7vQ1MHnxIk3VXF78JjKd7etSDyzLvU",
+                    "origin": {
+                        "envelope": "AqBefDwRPz6DKYKcJyQobl0sIevC4c2UFIIX5oB3V8rX4ua1zCJXXwl6SMRPUGoC4x86s5T6n9ysBd46FweKN71z1fQAkRFiPqGCWkQ3oDdU59KS",
+                        "keyEnvelope": "asAXm86NyuGA0NxtvGKsXoFdCG1fPmN5Ez-8uJiKn1BPhlbTuf6F9oL29h8rJ8ql9Q530RBd-NzA9R3RdayidS8B4f3z9xRT",
+                        "signature": "2sKtmZTz310e-cOQU0n82Ij-T9p9eYD5TdBW74O-XiCJTEmsu7uFiwBTTu22takN_0rscCB8RnVCrmPvq3cFAw",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "version",
+                    "rekeySignature": "wJFX5UZFFlRGGdyW5Evl9RERaRIql_McccFL2AavEPSXk0KRuTFCIpCHqkK3PPRRi6NvV-ntCusU6J018okUCQ",
+                    "statement": {
+                        "contentSuite": 3,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "objectId": "0b0b0b0b-0000-4000-8000-000000000001",
+                        "versionId": "5e5e5e5e-0000-4000-8000-000000000001",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                }
+            ],
+            "rotated": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "N7j0JNgmbxLdqprwb1rafBwvQjyVAL86pfpcFsDtd-xBumjgueBsUGICTyFvH6SYMgj6AnJSOywHoOzRWfjzn1O7fRDHm9Ip",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "SYHmMUyTGyEiM5KkEQG5OdvVv_QygcieQSjZmh4psJoivTMNO3FbNYKPZSfy6-Z-LhY4JGQgNhES-QsA4UHsyH61JqKaDDYhPfcZg4P2D8Gq4ih212xU_AfF6wpFRbLxIhmaAxrNWLh3MUPvdzoSBzce9w0Yl39VDhVSSKshdji0UdP6Dr1vOCByO2sD5OAYI64KjF0HgdEP8g7vx1UCKcVN7vIxLC8jlNBtWzoCjPxZxe8Qbvm9lpXQvyw0XG64_D2aAU1CYmtwA8-_LmwN7C3VjwVkpvh6yZCzGTKbbjGsuCl44hvXOjk5Bo5fhEKlhPg8atBGZs9HbZx-Q9i-Gh1Hh26cBr7Fr1MYQWxxJ31Red6DkxWyvcwUFpyR9sD-FmG4n_kBnn0",
+                        "rekey": {
+                            "originKeyEnvelope": "xftTbSpsXkQn8DEWeUKV5gE-6AkrIuhRLyixRVLmIW5ZzJGjVyys8xoUcQt2PR4D7S5BLJ6LLQXFUt0K955QP6VV7eIMpu88",
+                            "signature": "2Eucp2nYRLDscI6TVI9sCUuwU-kGIbdFJCrkIakgS2fmeUdN8pzrs5c0T6w5l4YIOEs9JEfCXUbxdJ73pWTpCA"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": [
+                        {
+                            "dropOrigin": false,
+                            "envelope": "67sTByWi3VmuQYveg7iZ6RyNwKtQXTGPrxZORv2ZM2MfmhjwSos67lfwIJ-Wauj_I1b0ZHh3cs_nHXBwgE6poIY8G_PszDe8ZS-jLxkbeklD1Xc-",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000001",
+                            "rekey": {
+                                "originKeyEnvelope": "asAXm86NyuGA0NxtvGKsXoFdCG1fPmN5Ez-8uJiKn1BPhlbTuf6F9oL29h8rJ8ql9Q530RBd-NzA9R3RdayidS8B4f3z9xRT",
+                                "signature": "wJFX5UZFFlRGGdyW5Evl9RERaRIql_McccFL2AavEPSXk0KRuTFCIpCHqkK3PPRRi6NvV-ntCusU6J018okUCQ"
+                            },
+                            "signature": null
+                        },
+                        {
+                            "dropOrigin": false,
+                            "envelope": "gdcQqgjsNLEhStPjC40E3Ao4SmO0qox4SqWJPQhMssnKQDAF3fxvgnLyUdU4Cmv-LOHUPtXVaTmHbQXBdUw7bXLZ6KaqZ7lvzswslc8ju7Gc2VkM",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000005",
+                            "rekey": null,
+                            "signature": "K-h_Ei2apAvnWPi2FstalVwT4tDgq6jx9nrau__-xjhqDx32uiWZOhzMTYlLkRqmH5DSI7HwdESjvkewWtxhBQ"
+                        }
+                    ]
+                }
+            ],
+            "served": [
+                [
+                    {
+                        "envelope": "SYHmMUyTGyEiM5KkEQG5OdvVv_QygcieQSjZmh4psJoivTMNO3FbNYKPZSfy6-Z-LhY4JGQgNhES-QsA4UHsyH61JqKaDDYhPfcZg4P2D8Gq4ih212xU_AfF6wpFRbLxIhmaAxrNWLh3MUPvdzoSBzce9w0Yl39VDhVSSKshdji0UdP6Dr1vOCByO2sD5OAYI64KjF0HgdEP8g7vx1UCKcVN7vIxLC8jlNBtWzoCjPxZxe8Qbvm9lpXQvyw0XG64_D2aAU1CYmtwA8-_LmwN7C3VjwVkpvh6yZCzGTKbbjGsuCl44hvXOjk5Bo5fhEKlhPg8atBGZs9HbZx-Q9i-Gh1Hh26cBr7Fr1MYQWxxJ31Red6DkxWyvcwUFpyR9sD-FmG4n_kBnn0",
+                        "keyEpoch": 2,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "T3pUiaKHiMCi5t0IOj71vdCnYFBLpGUBY2ZVFkrMNneMGRq9B8pAJvLXog842VZf0-RhdWsLE08v2mOaXD4zY5zzPf7Lvw5fp6SMsmXd4GXNyPGmzcBroCKUoYvcgpf56HlYfwK-_82OMNRV4pO0X4MQhsUwSdvZtL0vpVkd12e34wo-ScWkycNu6MibOgwax5R0XBefzChovL45CVoxTCWGPq-kFqO1-Q1LpkDqT7OIuSq4j9GKQyHbbRYJ7geEbXOFbRAtnKZOIy9cg-jwwHud5u2h4humXDMUWs9kJqfJSpSn63TPGA2SfucusBmgibQwY1jNyRcYSdB6NpUjtoefdXyFYqgZoCaVa4otR7GEfmy1pvzu_uI9ioPkukFwH-l3pvQznfs",
+                                "keyEnvelope": "xftTbSpsXkQn8DEWeUKV5gE-6AkrIuhRLyixRVLmIW5ZzJGjVyys8xoUcQt2PR4D7S5BLJ6LLQXFUt0K955QP6VV7eIMpu88",
+                                "signature": "86yOo3UWGxYwjLWV3SQZaD8saAmiYA-q8FdqZVdWMS6TTbXxqPZwx4uzp7W8yT9Jnwc1L1yZCE7XyKCYHUPYBA",
+                                "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "2Eucp2nYRLDscI6TVI9sCUuwU-kGIbdFJCrkIakgS2fmeUdN8pzrs5c0T6w5l4YIOEs9JEfCXUbxdJ73pWTpCA"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "file",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "67sTByWi3VmuQYveg7iZ6RyNwKtQXTGPrxZORv2ZM2MfmhjwSos67lfwIJ-Wauj_I1b0ZHh3cs_nHXBwgE6poIY8G_PszDe8ZS-jLxkbeklD1Xc-",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "AqBefDwRPz6DKYKcJyQobl0sIevC4c2UFIIX5oB3V8rX4ua1zCJXXwl6SMRPUGoC4x86s5T6n9ysBd46FweKN71z1fQAkRFiPqGCWkQ3oDdU59KS",
+                                "keyEnvelope": "asAXm86NyuGA0NxtvGKsXoFdCG1fPmN5Ez-8uJiKn1BPhlbTuf6F9oL29h8rJ8ql9Q530RBd-NzA9R3RdayidS8B4f3z9xRT",
+                                "signature": "2sKtmZTz310e-cOQU0n82Ij-T9p9eYD5TdBW74O-XiCJTEmsu7uFiwBTTu22takN_0rscCB8RnVCrmPvq3cFAw",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "wJFX5UZFFlRGGdyW5Evl9RERaRIql_McccFL2AavEPSXk0KRuTFCIpCHqkK3PPRRi6NvV-ntCusU6J018okUCQ"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000001",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000001",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "gdcQqgjsNLEhStPjC40E3Ao4SmO0qox4SqWJPQhMssnKQDAF3fxvgnLyUdU4Cmv-LOHUPtXVaTmHbQXBdUw7bXLZ6KaqZ7lvzswslc8ju7Gc2VkM",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": null,
+                        "signature": "K-h_Ei2apAvnWPi2FstalVwT4tDgq6jx9nrau__-xjhqDx32uiWZOhzMTYlLkRqmH5DSI7HwdESjvkewWtxhBQ",
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000005",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000005",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ]
+            ],
+            "shapes": [["rekeyed", "rekeyed", "resealed"]],
+            "stale": null,
+            "target": 2,
+            "walker": 1,
+            "webReseals": null,
+            "writes": null
+        },
+        {
+            "expected": [
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "integrity": "resealed",
+                        "kind": "signed",
+                        "via": null
+                    },
+                    {
+                        "integrity": "resealed",
+                        "kind": "signed",
+                        "via": null
+                    }
+                ]
+            ],
+            "key": null,
+            "name": "a second walk carries a bound origin and drops the rest",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "0MNsY-ckRBS6YDEV7UcLQJLYq9-_Oy_Q4NRohjAAOBTtFERriZ21W0M_idOsS2t2YhRSqNSyoXko2vGUW7yO9CEYh1HfPwil",
+                    "keyEpoch": 2,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "mWIFDDAksLWo24u-CxPgALrVg6l_xZCCLqh6T6kxlwyudS7f3Vjlw-sA4QbBpVXBMgif1EQNrLlvakxnlnydU7YRFEfVdkizHJ7GXc63YatvB7YKQ3at6CQxMTOjHr_ddN8wtvIC48PNh_g8Z8900c_-EFiUigtesL47Lv2QOMkC9C3ddH_Ex0vm1OOGAY-kEmY0ezd3ONTeTazAtAmQKfH-gowLZXal2SnEF6zxaqtBL_R9qfPM2tcQnGMVk94gdBSpEn2X0MaD9p-rwi4HyQ3qPX8iattSG6J2soTPaSZ80QZQgORyn7gpnp88CyJCzgHWfcdV8V53r0uxP274CkjP0tl88XxABkAOQbrswpvQ1aOK9E3WzmPpCaP-VdiDIEb4ZWcSZoc",
+                    "metadataRekey": {
+                        "origin": {
+                            "envelope": "U4IQoi_pnhZh-Ok5RVoN-QLfLQYhdora4p5FDXA7jEiUbALf8dve5qOAaztBK7Y8xggwUREOKcEHEygcp2l7aLRsAfLUKW2Jv00qUGKiUpWJOIWzUtHLqRtsfi_QWFhgdJtqCUBE7a6Edq7110OO53biDLKW115nIrgIW1O0Tt1xZyvhKZISlt3Q_TWa9tMBDW4C895iSoBpN58lVhnS28ekuIvfK_LZkPCRsT-kGogaFyXPZXbSMOaDaU5av9Sra5jQwBhYvSHEse-iQm29ev33OzIPYEws_-Nl-VAtFCFqU3uA3U4-weY-jqbh_BW1gN7xoUxkHkxJTjRT2SlM-Ri5fa5pGnKdvjnuyjxVN91TLgZo2Qm_kN-AB9u_4IjxMEJZlBnvjFs",
+                            "keyEnvelope": "-JNPLQFAjbpgSXffc3WWTfqjoXelHJ9oStDWoCLpyQpuo5kzmqbe1m91cWtlWosRNEJIpW9ghEk4a8QC7UF5TLdjXoeubffM",
+                            "signature": "spiUDMhROUYDzYsKeMdBQsBB3vsSClGm7_yyWnUjniJmhbCI6KxaxD69N90dSsi_H_gE_nv1wvqGuT-f6apHBg",
+                            "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        "signature": "TxBNy2eWBLxPIOL1lVrVe5XII10Ae3omJeG_FNQ5Q2gs9wrp6w5u3VIJvhRLRpKVYqPJuJEa0UC5H4Um4J8RCA"
+                    },
+                    "metadataSignature": null,
+                    "metadataSigner": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [
+                        {
+                            "contentKeyEnvelope": "lAHBDGGO_cO818JRTN718DtCjM_ngPC043d1__EFOH9rvjT2seEOX5o2kIxefBMKNSKqc884yybv-zNjX1hKhRI079kYNJEQHMdUPxVWIzbIXalz",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000002",
+                            "plaintextSize": null,
+                            "rekey": {
+                                "origin": {
+                                    "envelope": "VXdbmSiacB5sVZfRxxZMcjT_etezu0mJrSLk_JF6NWmjsbgxzrwtSHJFEvUWHW8rIq4ZlAtYhzkBBIX9W15E857aDnVHxDb3dvgKIYZ8nZSD53Z9",
+                                    "keyEnvelope": "GVcvvP1QLXp3wgfm-8eJ1dWmyXJMTupFhabTvPDKLKu2gyjhlvMXFok_d5jluAXFim5gkMhR1VJMr20cExzxeCkEJfXmhtm7",
+                                    "signature": "LFmC-FH1ZV6DsUsCvE3WwJ07OzyFyUng3vFjJS97uge80TEQbDbGOcBl1WMFVLxQHDSdYUlcB3td2BOGLWG_Bg",
+                                    "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                                },
+                                "signature": "BU4itfXrgiH7XlnkQKPSMCqPnuVZZSjBmnRCWC4EJkLFGGHvmDYTVYKgXT0hIE4lL-AJgcRBS_fY7r_ldRoLAQ"
+                            },
+                            "signature": null,
+                            "signer": "00000001-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        {
+                            "contentKeyEnvelope": "8mJENburDAqEURgvZhOdlpQcw4PEY9GxpLfDY6JcRmVSRyalA4PHKPTQjY5RnHoljml4orXqwLHsBu7ZbEoTI7qZWlHvyLOJUEuYvPyZn20_biky",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000003",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000003",
+                            "plaintextSize": null,
+                            "rekey": {
+                                "origin": {
+                                    "envelope": "0eUDeUoZbZYYpsWiOfz5bDXshNBoRa64Q2JMLCr8fXj3UIX4g3_05hWvXAAlS6pY7f1HXnTbn7ZulvZrOOwDnmkatVoKoxEicr5sspCqOPYHhqBP",
+                                    "keyEnvelope": "NvwEiYZmu9YgSfyK_WVbTlt4ObZpbRFnh8OqqC6pF40HSPjKy12t_jYdWMwChJRjv8zT3-xz0712dXAVdG0JlgkaUJBUxW6H",
+                                    "signature": "sipXnjSaCSlhDPjBe_W3JlDEv5d5ErJEiQcsxxTSC9re9HHQabgBZfYFADlVTuGVqiLuDXqZv4vCHTShWp9ECg",
+                                    "signerId": null
+                                },
+                                "signature": "0pz1whWbkIV4pEUeR85p2b5ZMVv_25N_xkpRck0L7jFdqaGiz6snly9zx6vF2CtxvQbPxnTH8m8UIlPB1n53Dw"
+                            },
+                            "signature": null,
+                            "signer": "00000001-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        {
+                            "contentKeyEnvelope": "v3qxwXCEUvEiUXjmilID-h9T2HRRWUgZvTJy28XdFb-_Kk4SSykQt_OzW4rXKy2jIy9StHX1DoKmRsJsJbkvpyjrWKLA0cZCkdiEk_1KM074t12C",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000004",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000004",
+                            "plaintextSize": null,
+                            "rekey": {
+                                "origin": {
+                                    "envelope": "d-tzjQf4_rYLaCr7KG6867yMs8DXr4LMS3LaI2mEK5MmQkYmxpbktoQ56o2Z_z0yRqts8eoHaB6eVoNyRc_6B3up2WgvxkdL9s2oy7BTlBUcW2_Q",
+                                    "keyEnvelope": "cu_hhNcV6rHxD-jOz-kA3gv9hhVYf57jEOKagy6qcOgk8Ft4ZxhpC-qAle_-m2oQjdvP06c0xnI4fd8CZEty-QgThPmflyYM",
+                                    "signature": "M13G8FvnbuSc2-ayN4dt1G5WWxoO92noQ7eFlDzqqTGsNSajV2SrjKxbmtw-QEAfqWHHpGM5LLzBcipckeN3AA",
+                                    "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                                },
+                                "signature": "1ew5M9Pq_Z06hEI-C_f-6nLyzEsWDH5WTeSHZCs3HulGwcycCW87b6fmWznQgwO5PPrvCqxWt5GfePry-lLWBw"
+                            },
+                            "signature": null,
+                            "signer": "00000001-abcd-4abc-8abc-abcdefabcdef"
+                        }
+                    ],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 1,
+            "refused": null,
+            "rekeyedInputs": [
+                {
+                    "envelope": "yCCLgslSBMkFcBpeJYDo99FPKUek7tILlUgabS1dq73FijVegDeQMKMVQ6ZpfMq2PUaA6m213M9lRNgqc71ni7hkbqFzWVoEd_vw52S17k3QpSSCLTcyHDj5eXrNXhC5DUn6fK7fUx71krl_ItPCy4V-McUBj2aYnOLTAbD0mZbrEfmWB7mASfLme_SFgTrHJMKBxzBqz9O3KaB_ujyjeHLJM8DG3MZMLxbI3AFN9rC-d0y9KkX5wn4c4HLDeruqAPb2UQkoJ4c-9cxyqgn6G-krhpD5CuA0hdmQkvqof1qRDjiMvMnFKFRmZrUkVPJbSVbYM5aiM8ma80_686tBMeZdwU8sqezYeGNc_ojfeWuWw-wuDI57RzgvNChfxWJmBut06Pbp9-A",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "4yNGJ6kdpREd82B8HfYKtXh7gZkYHjFQa9f83d_QUkg",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 3,
+                    "nodeKey": "ICwSpEG63okJvOUs4g-ukYmqlfCBwsJVl-VhJi00xHk",
+                    "origin": {
+                        "envelope": "U4IQoi_pnhZh-Ok5RVoN-QLfLQYhdora4p5FDXA7jEiUbALf8dve5qOAaztBK7Y8xggwUREOKcEHEygcp2l7aLRsAfLUKW2Jv00qUGKiUpWJOIWzUtHLqRtsfi_QWFhgdJtqCUBE7a6Edq7110OO53biDLKW115nIrgIW1O0Tt1xZyvhKZISlt3Q_TWa9tMBDW4C895iSoBpN58lVhnS28ekuIvfK_LZkPCRsT-kGogaFyXPZXbSMOaDaU5av9Sra5jQwBhYvSHEse-iQm29ev33OzIPYEws_-Nl-VAtFCFqU3uA3U4-weY-jqbh_BW1gN7xoUxkHkxJTjRT2SlM-Ri5fa5pGnKdvjnuyjxVN91TLgZo2Qm_kN-AB9u_4IjxMEJZlBnvjFs",
+                        "keyEnvelope": "ePF596ea-dMBCvRW_lezodM0rtqJ4i-QNXt9AbliU6eZjq2YfiCYjFs-1D_xkX6dFKAdjxasx5VfOs3Uvt7_BLOcNXXEXV7_",
+                        "signature": "spiUDMhROUYDzYsKeMdBQsBB3vsSClGm7_yyWnUjniJmhbCI6KxaxD69N90dSsi_H_gE_nv1wvqGuT-f6apHBg",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "EeRqD7-mdMkz-oa-Jo9EAsGsflb4muAjfoZSUvpyl4mWgNPod-mbJESQXJqASFc40gJ2BLljwYjji2f6noBKCA",
+                    "statement": {
+                        "kind": "file",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "6yV4fOh8WYqDbv2p_GTE0CiyNvs4Uj8fosRBb6clAY2XJwkm-0AvBEclG0Pen1hWxsIRcZd2DnGsBtVU8ix-m3lgQFP09fy3xIdRdYcvCytMZvRG",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "4yNGJ6kdpREd82B8HfYKtXh7gZkYHjFQa9f83d_QUkg",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 3,
+                    "nodeKey": "ICwSpEG63okJvOUs4g-ukYmqlfCBwsJVl-VhJi00xHk",
+                    "origin": {
+                        "envelope": "VXdbmSiacB5sVZfRxxZMcjT_etezu0mJrSLk_JF6NWmjsbgxzrwtSHJFEvUWHW8rIq4ZlAtYhzkBBIX9W15E857aDnVHxDb3dvgKIYZ8nZSD53Z9",
+                        "keyEnvelope": "raZKcxzNBb4YIhNGA7aow3Z2ZT2H5NzDQ-Ij7THvuZdmLOy7hDp5ROoGXZfti76JdxEo-eaoVDlqgNxsL-Qp_cDSBIZD9abe",
+                        "signature": "LFmC-FH1ZV6DsUsCvE3WwJ07OzyFyUng3vFjJS97uge80TEQbDbGOcBl1WMFVLxQHDSdYUlcB3td2BOGLWG_Bg",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "version",
+                    "rekeySignature": "eqk8H1bRReElr_CYInBZIb2vFXOIAoGVvXDEaxXZD8-sTG0CSMRUR6M81PtWtdEoE1iZPGLi6DP6UrcFKjqPDA",
+                    "statement": {
+                        "contentSuite": 3,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "objectId": "0b0b0b0b-0000-4000-8000-000000000002",
+                        "versionId": "5e5e5e5e-0000-4000-8000-000000000002",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                }
+            ],
+            "rotated": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "qAgt-7FvwjNxZz1aQM-GeSTCn6yyvFcEBJSaMGz9Uxu6-BlxIp20gFukhPoCZWMkG6z9NQEGsDfM_J_n1wPJy6sdwBr29L8_",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "yCCLgslSBMkFcBpeJYDo99FPKUek7tILlUgabS1dq73FijVegDeQMKMVQ6ZpfMq2PUaA6m213M9lRNgqc71ni7hkbqFzWVoEd_vw52S17k3QpSSCLTcyHDj5eXrNXhC5DUn6fK7fUx71krl_ItPCy4V-McUBj2aYnOLTAbD0mZbrEfmWB7mASfLme_SFgTrHJMKBxzBqz9O3KaB_ujyjeHLJM8DG3MZMLxbI3AFN9rC-d0y9KkX5wn4c4HLDeruqAPb2UQkoJ4c-9cxyqgn6G-krhpD5CuA0hdmQkvqof1qRDjiMvMnFKFRmZrUkVPJbSVbYM5aiM8ma80_686tBMeZdwU8sqezYeGNc_ojfeWuWw-wuDI57RzgvNChfxWJmBut06Pbp9-A",
+                        "rekey": {
+                            "originKeyEnvelope": "ePF596ea-dMBCvRW_lezodM0rtqJ4i-QNXt9AbliU6eZjq2YfiCYjFs-1D_xkX6dFKAdjxasx5VfOs3Uvt7_BLOcNXXEXV7_",
+                            "signature": "EeRqD7-mdMkz-oa-Jo9EAsGsflb4muAjfoZSUvpyl4mWgNPod-mbJESQXJqASFc40gJ2BLljwYjji2f6noBKCA"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": [
+                        {
+                            "dropOrigin": false,
+                            "envelope": "6yV4fOh8WYqDbv2p_GTE0CiyNvs4Uj8fosRBb6clAY2XJwkm-0AvBEclG0Pen1hWxsIRcZd2DnGsBtVU8ix-m3lgQFP09fy3xIdRdYcvCytMZvRG",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000002",
+                            "rekey": {
+                                "originKeyEnvelope": "raZKcxzNBb4YIhNGA7aow3Z2ZT2H5NzDQ-Ij7THvuZdmLOy7hDp5ROoGXZfti76JdxEo-eaoVDlqgNxsL-Qp_cDSBIZD9abe",
+                                "signature": "eqk8H1bRReElr_CYInBZIb2vFXOIAoGVvXDEaxXZD8-sTG0CSMRUR6M81PtWtdEoE1iZPGLi6DP6UrcFKjqPDA"
+                            },
+                            "signature": null
+                        },
+                        {
+                            "dropOrigin": true,
+                            "envelope": "7jbqmizMrt9-15W0g_hu4PWp7cyqctTzbNp6JY-0IIGZeOyAhL3vzNsXEKUyXbEAuLhDyLdULaCyvLUcFy2gQRvw-xnCgAhWurvg3jvQCWFsP2ri",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000003",
+                            "rekey": null,
+                            "signature": "CGPx7w5F9DOoTO9NPaa5r93WqvC8JWsx3EHJf2v0dvxcLSKeHNGH64XCBuADtkr0CmNK37KSv8ygU20HKVmOAQ"
+                        },
+                        {
+                            "dropOrigin": true,
+                            "envelope": "L4H4OiSFx0F0htKVAmbz4Sdx6KdVCytwgGAPnRl6VhJ5h6OWtfZfwwK9IQnAAnvar0AN9WqNXoFFutzQ3IoV0M2U7fk4rR4uN55biXNyc87qF0fi",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000004",
+                            "rekey": null,
+                            "signature": "gkjP3XSyIpULacG7hV7GBwQWjehe1JrJr2laM4Zom-2FMe5M7WnrnmjHzFfArC1kVrznvLNzkSC_k_w7jz_8CA"
+                        }
+                    ]
+                }
+            ],
+            "served": [
+                [
+                    {
+                        "envelope": "yCCLgslSBMkFcBpeJYDo99FPKUek7tILlUgabS1dq73FijVegDeQMKMVQ6ZpfMq2PUaA6m213M9lRNgqc71ni7hkbqFzWVoEd_vw52S17k3QpSSCLTcyHDj5eXrNXhC5DUn6fK7fUx71krl_ItPCy4V-McUBj2aYnOLTAbD0mZbrEfmWB7mASfLme_SFgTrHJMKBxzBqz9O3KaB_ujyjeHLJM8DG3MZMLxbI3AFN9rC-d0y9KkX5wn4c4HLDeruqAPb2UQkoJ4c-9cxyqgn6G-krhpD5CuA0hdmQkvqof1qRDjiMvMnFKFRmZrUkVPJbSVbYM5aiM8ma80_686tBMeZdwU8sqezYeGNc_ojfeWuWw-wuDI57RzgvNChfxWJmBut06Pbp9-A",
+                        "keyEpoch": 3,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "U4IQoi_pnhZh-Ok5RVoN-QLfLQYhdora4p5FDXA7jEiUbALf8dve5qOAaztBK7Y8xggwUREOKcEHEygcp2l7aLRsAfLUKW2Jv00qUGKiUpWJOIWzUtHLqRtsfi_QWFhgdJtqCUBE7a6Edq7110OO53biDLKW115nIrgIW1O0Tt1xZyvhKZISlt3Q_TWa9tMBDW4C895iSoBpN58lVhnS28ekuIvfK_LZkPCRsT-kGogaFyXPZXbSMOaDaU5av9Sra5jQwBhYvSHEse-iQm29ev33OzIPYEws_-Nl-VAtFCFqU3uA3U4-weY-jqbh_BW1gN7xoUxkHkxJTjRT2SlM-Ri5fa5pGnKdvjnuyjxVN91TLgZo2Qm_kN-AB9u_4IjxMEJZlBnvjFs",
+                                "keyEnvelope": "ePF596ea-dMBCvRW_lezodM0rtqJ4i-QNXt9AbliU6eZjq2YfiCYjFs-1D_xkX6dFKAdjxasx5VfOs3Uvt7_BLOcNXXEXV7_",
+                                "signature": "spiUDMhROUYDzYsKeMdBQsBB3vsSClGm7_yyWnUjniJmhbCI6KxaxD69N90dSsi_H_gE_nv1wvqGuT-f6apHBg",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "EeRqD7-mdMkz-oa-Jo9EAsGsflb4muAjfoZSUvpyl4mWgNPod-mbJESQXJqASFc40gJ2BLljwYjji2f6noBKCA"
+                        },
+                        "signature": null,
+                        "signer": "00000004-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "file",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "6yV4fOh8WYqDbv2p_GTE0CiyNvs4Uj8fosRBb6clAY2XJwkm-0AvBEclG0Pen1hWxsIRcZd2DnGsBtVU8ix-m3lgQFP09fy3xIdRdYcvCytMZvRG",
+                        "keyEpoch": 3,
+                        "record": "version",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "VXdbmSiacB5sVZfRxxZMcjT_etezu0mJrSLk_JF6NWmjsbgxzrwtSHJFEvUWHW8rIq4ZlAtYhzkBBIX9W15E857aDnVHxDb3dvgKIYZ8nZSD53Z9",
+                                "keyEnvelope": "raZKcxzNBb4YIhNGA7aow3Z2ZT2H5NzDQ-Ij7THvuZdmLOy7hDp5ROoGXZfti76JdxEo-eaoVDlqgNxsL-Qp_cDSBIZD9abe",
+                                "signature": "LFmC-FH1ZV6DsUsCvE3WwJ07OzyFyUng3vFjJS97uge80TEQbDbGOcBl1WMFVLxQHDSdYUlcB3td2BOGLWG_Bg",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "eqk8H1bRReElr_CYInBZIb2vFXOIAoGVvXDEaxXZD8-sTG0CSMRUR6M81PtWtdEoE1iZPGLi6DP6UrcFKjqPDA"
+                        },
+                        "signature": null,
+                        "signer": "00000004-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000002",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000002",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "7jbqmizMrt9-15W0g_hu4PWp7cyqctTzbNp6JY-0IIGZeOyAhL3vzNsXEKUyXbEAuLhDyLdULaCyvLUcFy2gQRvw-xnCgAhWurvg3jvQCWFsP2ri",
+                        "keyEpoch": 3,
+                        "record": "version",
+                        "rekey": null,
+                        "signature": "CGPx7w5F9DOoTO9NPaa5r93WqvC8JWsx3EHJf2v0dvxcLSKeHNGH64XCBuADtkr0CmNK37KSv8ygU20HKVmOAQ",
+                        "signer": "00000004-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000003",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000003",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "L4H4OiSFx0F0htKVAmbz4Sdx6KdVCytwgGAPnRl6VhJ5h6OWtfZfwwK9IQnAAnvar0AN9WqNXoFFutzQ3IoV0M2U7fk4rR4uN55biXNyc87qF0fi",
+                        "keyEpoch": 3,
+                        "record": "version",
+                        "rekey": null,
+                        "signature": "gkjP3XSyIpULacG7hV7GBwQWjehe1JrJr2laM4Zom-2FMe5M7WnrnmjHzFfArC1kVrznvLNzkSC_k_w7jz_8CA",
+                        "signer": "00000004-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000004",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000004",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ]
+            ],
+            "shapes": [["rekeyed", "rekeyed", "dropped", "dropped"]],
+            "stale": null,
+            "target": 3,
+            "walker": 4,
+            "webReseals": null,
+            "writes": null
+        },
+        {
+            "expected": [
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "former-member",
+                            "via": null
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": null
+                        }
+                    },
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": null
+                        }
+                    },
+                    {
+                        "integrity": "resealed",
+                        "kind": "signed",
+                        "via": null
+                    }
+                ]
+            ],
+            "key": null,
+            "name": "the walker reads its own walk",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "MreGnMNLpiXvsUBGSn3enYuenmWVG6C3WNyt9gfq7va4op_IUHTyRdEjQXvyUNtThrmi8YEcqdxX26yQG_kc0aXkVWFcGRu_",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "jP22ETUKNmAH8G2CW-8gxE1B0fri16_zukVC4VWM_GfmGwWPAAAOhBVkqUJ4xFJqfo9D_HtzY2ZBUJbNpHT_CMOriQj3azDQPXLm0bfCvVwGzBvcsGDBKEOWbzhw2llRxBV3O1YmaGgzcTSe_w3Jr94NdFSvrMMtc3vi8_vufgaWnSn7fLHZG_JI-Bx4nu552rzjkJNmu9jYqpJ1fYVXOgqqwabp4N4E_QOg1UBasuZu1SFK5XtJL4jpvg5uAI4UafivBF4TyR6k2f9138d95URHdIZPHhpcbwQX8k3ChDv-HupUCkeWLA8-UfAuX6ESVhTYKRHr_EWUYPvmio0dxyJEMHNHuPUgrNh5wYlgnDzjw2hRIV5Ot_BSb0qoZBREaxMnWtzstk4",
+                    "metadataRekey": null,
+                    "metadataSignature": "AFJU7wkxs5nxYBgg1cZLMHsOCDCaK-CC4MybcPegMWA_x_C-jwOSFMkKzMDZObnl6tRnlpyYFnuDnzAdWLDPDQ",
+                    "metadataSigner": "00000003-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [
+                        {
+                            "contentKeyEnvelope": "tp23FqaTNOQHYkFNh8tzaP0m1fcAksdglWXETb6tspyNfhc-UY1rzmFaM5dDYxStpXuTzmdDJE4OIvAUKM0TX1W5rh1RO-5tc3TBZs-YNPC6T7VA",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000001",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000001",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": "yIf_gQ9ufITXgp-UotGK6XUmDPJxFetQJ3pzktOZYZ4t_rgAqGFxH0VYfsdpnZgdihGA47GVfpHNIuooL-owDw",
+                            "signer": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        {
+                            "contentKeyEnvelope": "V0w0PiFwRAdduE_fCjQW3znfUHBH-0FGvGU8SvSyDn1ss0_NwtHv8qiqsho4yR1rNEwJasVbpjV4Rx-NdGjcVI3Y5unihB3u9n7djg45-QQS2Uhn",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000005",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000005",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": null,
+                            "signer": null
+                        }
+                    ],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 1,
+            "refused": null,
+            "rekeyedInputs": [
+                {
+                    "envelope": "JuDN55ot4Eicp9C-WHOhJsaIgLCEWlcSbX6Kbne1ne7fwkzbVMVGQD7SHKRZQys7rNBlsWU68DT6vYQCI_-GPCFFmTVAlGXP5oRbz_wdrikevmnWKZ99UQor3XRFgF-TCorO20VSHF1J7Zc-OTtxo0XhtexQ3dr8zg8TIvSylFTiytxUViycYjXi0ckiSCZbE2X24-HVN2WL4uR2pUSjPopL2JQAbFFp1xsPZMoAZi6SCmtddsxdpUolaS9VFci_Rr-26tYaE_rd0iOyQmdnO50L2AchOrr_Y9LRAT_v3TUWtYhGnmJBX3DUbkl4s_awH90lMhB3NAODbUf6IBR5YnobaMQPjCAJAq8fctCsa3xTQveFf_HafIfOkJz0U4d1xxDHqsW8NgI",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "3Q0BjyODRTbaByWBOtbBHEdzz6sYyZdeP9mALsREyL4",
+                                "retired": []
+                            },
+                            "trust": "former-member"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "LscFecVtKhv8aJFp21QiCNVzu6r6t84p-b3XaaM1g78",
+                    "origin": {
+                        "envelope": "jP22ETUKNmAH8G2CW-8gxE1B0fri16_zukVC4VWM_GfmGwWPAAAOhBVkqUJ4xFJqfo9D_HtzY2ZBUJbNpHT_CMOriQj3azDQPXLm0bfCvVwGzBvcsGDBKEOWbzhw2llRxBV3O1YmaGgzcTSe_w3Jr94NdFSvrMMtc3vi8_vufgaWnSn7fLHZG_JI-Bx4nu552rzjkJNmu9jYqpJ1fYVXOgqqwabp4N4E_QOg1UBasuZu1SFK5XtJL4jpvg5uAI4UafivBF4TyR6k2f9138d95URHdIZPHhpcbwQX8k3ChDv-HupUCkeWLA8-UfAuX6ESVhTYKRHr_EWUYPvmio0dxyJEMHNHuPUgrNh5wYlgnDzjw2hRIV5Ot_BSb0qoZBREaxMnWtzstk4",
+                        "keyEnvelope": "gbPFLh7DBFvzK8oYs3hysuS_UccI1XMWRxCcEiBq_4mtMuZb6R_xotXklGx6qPTp-fye3nTfAOcUdg6pIbny9XoHRkNOLldW",
+                        "signature": "AFJU7wkxs5nxYBgg1cZLMHsOCDCaK-CC4MybcPegMWA_x_C-jwOSFMkKzMDZObnl6tRnlpyYFnuDnzAdWLDPDQ",
+                        "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "FjS72f4Dq9YU5jaE_jQ7D0USsqsnr48NJ8Jwnm0GVzrYxsMwdJkwpMFR_mB1Q-XYsAH5uLwONbHy56FgSzcJCQ",
+                    "statement": {
+                        "kind": "file",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "Zzec4BKJq4YvdF_AUZN40NeVyEt3r-DrhMfam4ShRsJJ8dpc-CnPY_83ZjvnSmYr_bQBl1snSgauuqp5ZJlDFZ-1kvCQQZmLGUVXi06Vo6Jjtmd7",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "LscFecVtKhv8aJFp21QiCNVzu6r6t84p-b3XaaM1g78",
+                    "origin": {
+                        "envelope": "tp23FqaTNOQHYkFNh8tzaP0m1fcAksdglWXETb6tspyNfhc-UY1rzmFaM5dDYxStpXuTzmdDJE4OIvAUKM0TX1W5rh1RO-5tc3TBZs-YNPC6T7VA",
+                        "keyEnvelope": "yblJKSuQBx1_vpyAaGlnLsJuv87jbNsLO8sXrkN690ituFFtv8UQTFkbs0k58J_A-Btw-NN-mawrjC_PVLBKU0M3NIKdgqVb",
+                        "signature": "yIf_gQ9ufITXgp-UotGK6XUmDPJxFetQJ3pzktOZYZ4t_rgAqGFxH0VYfsdpnZgdihGA47GVfpHNIuooL-owDw",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "version",
+                    "rekeySignature": "_pU5Dzgj7nWsXNvJhsZLbRjX1ObEfLP2YXcgzM018x6tuRcbzlA1jYRFK3gggfa1Tdmjxj77h-KUtXTOOuWbAg",
+                    "statement": {
+                        "contentSuite": 3,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "objectId": "0b0b0b0b-0000-4000-8000-000000000001",
+                        "versionId": "5e5e5e5e-0000-4000-8000-000000000001",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                }
+            ],
+            "rotated": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "10FJ8M82UzaIw_KcGY7FG3yVYF7kBdLkO4Pv2yoHVYr8ATHOVaqvslrpDW-pQis-UVhoeJccHhmGzgkea6b26L4MdZ7ixmZU",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "JuDN55ot4Eicp9C-WHOhJsaIgLCEWlcSbX6Kbne1ne7fwkzbVMVGQD7SHKRZQys7rNBlsWU68DT6vYQCI_-GPCFFmTVAlGXP5oRbz_wdrikevmnWKZ99UQor3XRFgF-TCorO20VSHF1J7Zc-OTtxo0XhtexQ3dr8zg8TIvSylFTiytxUViycYjXi0ckiSCZbE2X24-HVN2WL4uR2pUSjPopL2JQAbFFp1xsPZMoAZi6SCmtddsxdpUolaS9VFci_Rr-26tYaE_rd0iOyQmdnO50L2AchOrr_Y9LRAT_v3TUWtYhGnmJBX3DUbkl4s_awH90lMhB3NAODbUf6IBR5YnobaMQPjCAJAq8fctCsa3xTQveFf_HafIfOkJz0U4d1xxDHqsW8NgI",
+                        "rekey": {
+                            "originKeyEnvelope": "gbPFLh7DBFvzK8oYs3hysuS_UccI1XMWRxCcEiBq_4mtMuZb6R_xotXklGx6qPTp-fye3nTfAOcUdg6pIbny9XoHRkNOLldW",
+                            "signature": "FjS72f4Dq9YU5jaE_jQ7D0USsqsnr48NJ8Jwnm0GVzrYxsMwdJkwpMFR_mB1Q-XYsAH5uLwONbHy56FgSzcJCQ"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": [
+                        {
+                            "dropOrigin": false,
+                            "envelope": "Zzec4BKJq4YvdF_AUZN40NeVyEt3r-DrhMfam4ShRsJJ8dpc-CnPY_83ZjvnSmYr_bQBl1snSgauuqp5ZJlDFZ-1kvCQQZmLGUVXi06Vo6Jjtmd7",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000001",
+                            "rekey": {
+                                "originKeyEnvelope": "yblJKSuQBx1_vpyAaGlnLsJuv87jbNsLO8sXrkN690ituFFtv8UQTFkbs0k58J_A-Btw-NN-mawrjC_PVLBKU0M3NIKdgqVb",
+                                "signature": "_pU5Dzgj7nWsXNvJhsZLbRjX1ObEfLP2YXcgzM018x6tuRcbzlA1jYRFK3gggfa1Tdmjxj77h-KUtXTOOuWbAg"
+                            },
+                            "signature": null
+                        },
+                        {
+                            "dropOrigin": false,
+                            "envelope": "5hHvzTfgkdS_XmfHZMuWaNM8DJQ8w3rUvI_YyeNozLnWfJoBOqzj3f5p-ZXLleGZMU6ukS0O-7YfOiH4qgMS0e9E8gBB_qUMlOP7h9yOUPnuRDoH",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000005",
+                            "rekey": null,
+                            "signature": "-Rn4NGPenHAuv9gNV-Vv2TRFRfZcqV1VNhD8PpTIH2VvhMmZ6Q9tAEJzAu1ZZAASEYPYqGhWPBLqqdTABlxmBA"
+                        }
+                    ]
+                }
+            ],
+            "served": [
+                [
+                    {
+                        "envelope": "JuDN55ot4Eicp9C-WHOhJsaIgLCEWlcSbX6Kbne1ne7fwkzbVMVGQD7SHKRZQys7rNBlsWU68DT6vYQCI_-GPCFFmTVAlGXP5oRbz_wdrikevmnWKZ99UQor3XRFgF-TCorO20VSHF1J7Zc-OTtxo0XhtexQ3dr8zg8TIvSylFTiytxUViycYjXi0ckiSCZbE2X24-HVN2WL4uR2pUSjPopL2JQAbFFp1xsPZMoAZi6SCmtddsxdpUolaS9VFci_Rr-26tYaE_rd0iOyQmdnO50L2AchOrr_Y9LRAT_v3TUWtYhGnmJBX3DUbkl4s_awH90lMhB3NAODbUf6IBR5YnobaMQPjCAJAq8fctCsa3xTQveFf_HafIfOkJz0U4d1xxDHqsW8NgI",
+                        "keyEpoch": 2,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "jP22ETUKNmAH8G2CW-8gxE1B0fri16_zukVC4VWM_GfmGwWPAAAOhBVkqUJ4xFJqfo9D_HtzY2ZBUJbNpHT_CMOriQj3azDQPXLm0bfCvVwGzBvcsGDBKEOWbzhw2llRxBV3O1YmaGgzcTSe_w3Jr94NdFSvrMMtc3vi8_vufgaWnSn7fLHZG_JI-Bx4nu552rzjkJNmu9jYqpJ1fYVXOgqqwabp4N4E_QOg1UBasuZu1SFK5XtJL4jpvg5uAI4UafivBF4TyR6k2f9138d95URHdIZPHhpcbwQX8k3ChDv-HupUCkeWLA8-UfAuX6ESVhTYKRHr_EWUYPvmio0dxyJEMHNHuPUgrNh5wYlgnDzjw2hRIV5Ot_BSb0qoZBREaxMnWtzstk4",
+                                "keyEnvelope": "gbPFLh7DBFvzK8oYs3hysuS_UccI1XMWRxCcEiBq_4mtMuZb6R_xotXklGx6qPTp-fye3nTfAOcUdg6pIbny9XoHRkNOLldW",
+                                "signature": "AFJU7wkxs5nxYBgg1cZLMHsOCDCaK-CC4MybcPegMWA_x_C-jwOSFMkKzMDZObnl6tRnlpyYFnuDnzAdWLDPDQ",
+                                "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "FjS72f4Dq9YU5jaE_jQ7D0USsqsnr48NJ8Jwnm0GVzrYxsMwdJkwpMFR_mB1Q-XYsAH5uLwONbHy56FgSzcJCQ"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "file",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "Zzec4BKJq4YvdF_AUZN40NeVyEt3r-DrhMfam4ShRsJJ8dpc-CnPY_83ZjvnSmYr_bQBl1snSgauuqp5ZJlDFZ-1kvCQQZmLGUVXi06Vo6Jjtmd7",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "tp23FqaTNOQHYkFNh8tzaP0m1fcAksdglWXETb6tspyNfhc-UY1rzmFaM5dDYxStpXuTzmdDJE4OIvAUKM0TX1W5rh1RO-5tc3TBZs-YNPC6T7VA",
+                                "keyEnvelope": "yblJKSuQBx1_vpyAaGlnLsJuv87jbNsLO8sXrkN690ituFFtv8UQTFkbs0k58J_A-Btw-NN-mawrjC_PVLBKU0M3NIKdgqVb",
+                                "signature": "yIf_gQ9ufITXgp-UotGK6XUmDPJxFetQJ3pzktOZYZ4t_rgAqGFxH0VYfsdpnZgdihGA47GVfpHNIuooL-owDw",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "_pU5Dzgj7nWsXNvJhsZLbRjX1ObEfLP2YXcgzM018x6tuRcbzlA1jYRFK3gggfa1Tdmjxj77h-KUtXTOOuWbAg"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000001",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000001",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "5hHvzTfgkdS_XmfHZMuWaNM8DJQ8w3rUvI_YyeNozLnWfJoBOqzj3f5p-ZXLleGZMU6ukS0O-7YfOiH4qgMS0e9E8gBB_qUMlOP7h9yOUPnuRDoH",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": null,
+                        "signature": "-Rn4NGPenHAuv9gNV-Vv2TRFRfZcqV1VNhD8PpTIH2VvhMmZ6Q9tAEJzAu1ZZAASEYPYqGhWPBLqqdTABlxmBA",
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000005",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000005",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ]
+            ],
+            "shapes": [["rekeyed", "rekeyed", "resealed"]],
+            "stale": null,
+            "target": 2,
+            "walker": 1,
+            "webReseals": null,
+            "writes": null
+        },
+        {
+            "expected": [[]],
+            "key": "k:4",
+            "name": "a node already at the target is only re-wrapped",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "os2JiS6eJ8bns65pR8jq2DG0Ed89OGzjYNYU97YNyo7gnZJ2mn33lC-S9AoCePnz2i0EEo57dRLCTbIMm1ayIbvhC_5Ejz1P",
+                    "keyEpoch": 3,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "jsCwyVRrUzDV-JlTL02LcYADSDcfZcriruybjbkHTSm8gBpkR9qt14x0PpyfSXEx1ulLx2xE1zd2CMZA9CCFXvV6CZThGGS352Lg4Wfjxd3Hnir72HlAyzXEjJnR-tYGjKieick_IDixif1ibzdhD_Gul4sz2j-h9AFkoxH9RkKYsFYifPQ3aYuqfWRahM-O8I_QcDvQlbs6k7rGDOg8eMuZjSzYZoxz6jDM51c9-0FeCxr754t5hasBnjUxLrwGk8r6zVzIL0E75XgDYGRmxaQx-l0MtLiuTtSW9Ta1UIdZdcWSKf_yXEvy_UNtxAyhslNUUkzwcWkHPLyleeGVDtxvjuv3dxjOf-olUkL5ZQfcSv5CsfQgWgNAzA-dbLA10kBBLPj1z1s",
+                    "metadataRekey": null,
+                    "metadataSignature": "eCrd5qZT_825sD9KXIeyVh3TmfXWRDfzjUPs3lEbRpeYUohZtpNq4orRjwVGwXoyCUrkVQtAwFUlW4okv7nTCQ",
+                    "metadataSigner": "00000002-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [],
+                    "wrappedParentKeyEpoch": 2
+                }
+            ],
+            "reader": 2,
+            "refused": null,
+            "rekeyedInputs": [],
+            "rotated": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "ZC2RQZmReSt97c5ULkscH0nw7WYQfe1BnBoVQI7iNaT4-JWh8-ieFkpNBni1pbdbdfTK6SPhXUIx2PWfAB1Tp01TvelKvhj1",
+                    "links": 0,
+                    "metadata": null,
+                    "rewrap": true,
+                    "shares": 0,
+                    "versions": []
+                }
+            ],
+            "served": [[]],
+            "shapes": [[]],
+            "stale": null,
+            "target": 3,
+            "walker": 1,
+            "webReseals": null,
+            "writes": null
+        },
+        {
+            "expected": [
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    }
+                ],
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    }
+                ],
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "former-member",
+                            "via": null
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "integrity": "resealed",
+                        "kind": "signed",
+                        "via": null
+                    }
+                ]
+            ],
+            "key": null,
+            "name": "a folder walk wraps its children under its pending key",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "keyEnvelope": "D-f_Ty0ZgrTwCsYG-k9hElqlO8lN29HhMSWeeKkoxPdQ6lOuCaktjh6o2lK9wtP4y0JpLz6vWx-Dg4Q8e_fTnqXhRCWELB7p",
+                    "keyEpoch": 1,
+                    "kind": "folder",
+                    "links": [],
+                    "metadataEnvelope": "z3UdPn3hTjtli8wlsXKLO4pIWLP90I7TEE86F7EboNMsYFhgVjEU1VWiHIyWqAY4XdnrvJDDDoES-lSfOPrntLFk0Bdr-qjb-WCpsNjHLGWCJjPSTRTV11Tnpx3t6LO4d-t8FHBKz-tnVHp1NuY9tvik4bbbBNRNYvvP7R2IQzG2G1bj-RXm9xbgzRnpJeXaMkf8XQiZixKnBoQcKM_JfZ6F3r4cSL9HfxAql7tE-AeKBXmWNOwx1VD1hzolnvs0YS4ddoBTN742D7vNHRCd9HwyhnouM5usgP19pm23z-hJCgDZU5kSiyAgzD1n5-IrCsVDxl1guc9SMUHifmLg31tEyOpUtsN5wvoLOTCDGt42MA-ZW978yfWFNNffZcDNTOdUh9k7n98",
+                    "metadataRekey": null,
+                    "metadataSignature": "7b5cnzP2W50il0x1oNH3JeFwqKRi-3v89ew-fWlTk2qMiVtN4UsxZDWpnHNaUOjwD7bj5WYbLtZpmb04UQ7yAg",
+                    "metadataSigner": "00000002-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [],
+                    "wrappedParentKeyEpoch": 1
+                },
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000004",
+                    "keyEnvelope": "mUhxHCsKALa_1ArsKKOEl62Ktd74m-M1euiPV-1EhFUWeweuWwyVGx0Hd08X2kQSkToERvWEtjAhRQBIveZq3Yxp7pCEOMpS",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "g0JIGqIiSlureqp0m4RXMU2hpD8jRN4dJxwOTAQEn7KktYGc6kDweXbFdB7-YmTQmKgPmVujIhjhzeWaD95H3OOO8VcX2SRicY16nQtafkC6atlUrUWSfjwyXlPxp7q85fCtZIRLw9rq0qS2qgdSNcP-sVjwpSzuQHh5QWgS_FMY4XJe9Gy_NjjJkZkIr9gfB5kRTnduhsfYVajUqhjzTAp-eBFiCogFRpKjUL42hYyQnSHIDNqmjqx823f2ma1FYs5OFgqybWc4Gj8Ot0Q81-XZJf9L8Q-r3nRPHX819V1KJjLHNNr3iOWaUCah2vh9PL_nMs0uOc75VultYU--Lfq8Za3eTIZSmGKuHbJOZpt50-zP7gBPtMlxxUmJQaPMJ5mBnzeMlbM",
+                    "metadataRekey": null,
+                    "metadataSignature": "2SjCedhOFDIOBkDaCUNn195AgDBylkPF1Rvm57zzEs8Tjp5AETR3msbS1odb88r1-ZW3P35czTNA0nDnCFK_DQ",
+                    "metadataSigner": "00000002-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [
+                        {
+                            "contentKeyEnvelope": "jJji0aAD_prLbAbt603McsU6oIBbsbhx5l7Cn7Bt0TgG1_WDR9bYZFCoXGhnGwCaO-rV79TaHwGpux1msLXrOYc-s5MgXZLOy6W6bRTumLw2w9aj",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-00000000000b",
+                            "objectId": "0b0b0b0b-0000-4000-8000-00000000000b",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": "V9XbYWS15bsNH4PD7ZXnZIQIrpwjPb9O4xn5TK4vqcUOI1l99pgQI_PURILmAbz_banCeXRLS8tyXCM2fR2eCg",
+                            "signer": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                        }
+                    ],
+                    "wrappedParentKeyEpoch": 1
+                },
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000005",
+                    "keyEnvelope": "ICFbro_7cEbIcn4io1Owb8T8PedEtuTkpIWasQ-CLSGOJ7KebEMDninEWBOBCzBCQ3L1MuSw_EYiDgykVrq9LhJ3iTRapsyv",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "S0zOGgcKpRtQfnkDgM-wreMJjk8OEB99kdjBT-HhTGG4Kb_5KrPPvibduwQTvpAJU_Cxz1vrPPRpf7L13fS_OCum0kxSrareZbxEKZ9JSQd9L6MaWZ5zrwmra3rPeWgdZ69-P9isCrzyCvf7R0uc2wDbE1J4Q8hW-AeOjKZFl1EIZBLnddX8N36f4C8YrkCFWsaIeZV9mpClH4FhYqeCcOnMkCKE7nxnw_KwQyCKn5gIhVdhjSNOBsqtcXk5YZbrLlzDvTJp5TpYPW1n9ZTJjtyqQCPE1O-mTfRAGrq5vPll4SPVhhuINJTgoaOsQxTRyBm5WIq-h6bYSSQfKk0liw9X4xE8Lf8YDV9RfvQH4eYFq8yloqfdIFo3-kPzm2FnT3yQFwMupDQ",
+                    "metadataRekey": null,
+                    "metadataSignature": "iWVbATbEmjRRBCLY0goMsMrbQ5pxClr7FGvdGmDfTQvapHrY7QYu4Lx5IJTfYx2Nn7IatrVRjCL6QLLFVL38AQ",
+                    "metadataSigner": "00000003-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [
+                        {
+                            "contentKeyEnvelope": "yJO8SHSKf6yu-AVzjq9OMn3t_olmnsimpkOJJ-rizyJESQwxYTzym-59NA3dmz23HIZAgNewD1DEmKNcjSoFHOMAOjjvqFpwsJBJhIfgJ9hONi75",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-00000000000c",
+                            "objectId": "0b0b0b0b-0000-4000-8000-00000000000c",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": null,
+                            "signer": null
+                        }
+                    ],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 4,
+            "refused": null,
+            "rekeyedInputs": [
+                {
+                    "envelope": "HYECBTOkeLMhaxQo3BpB_n4UR4eXmUoDrIX2ago_fNWPcG2tWh5dQue8lkzfhPVu2b4cnjEmeEoVIsnqGNILTiIgmoss4YobklPDlUq0TOTUwa5n81RbKAboTYUx8xnd2HkZpHaY9CvLWFaO28I8DulqzYu7vdfmf9mfyzajMOhsyZ-UYGfEofJdFR7JY84dl7mEQWBCFsBQpE6AYXcdLuFNXl2lKm3cXoD_7P-aIg5YYKsd0uAGMW---_qdzyCSlHHYYWOJgWScUIPhL5Mh4ztwzss-eXFTe1Sxz2aZxIMpRQxSE2A7cdfH-8CGzVDRpP9-iR2qXGTTfWGuBiuMGLBhyAmdKQad0S3QFO_7swcqR4-tJX5N_EsWWrMoC2NOetjMIPRCekQ",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "6qtyMCkCuhrF__Lkg0iZLDMy7ffKWNuNP7Jca_LaT4o",
+                    "origin": {
+                        "envelope": "z3UdPn3hTjtli8wlsXKLO4pIWLP90I7TEE86F7EboNMsYFhgVjEU1VWiHIyWqAY4XdnrvJDDDoES-lSfOPrntLFk0Bdr-qjb-WCpsNjHLGWCJjPSTRTV11Tnpx3t6LO4d-t8FHBKz-tnVHp1NuY9tvik4bbbBNRNYvvP7R2IQzG2G1bj-RXm9xbgzRnpJeXaMkf8XQiZixKnBoQcKM_JfZ6F3r4cSL9HfxAql7tE-AeKBXmWNOwx1VD1hzolnvs0YS4ddoBTN742D7vNHRCd9HwyhnouM5usgP19pm23z-hJCgDZU5kSiyAgzD1n5-IrCsVDxl1guc9SMUHifmLg31tEyOpUtsN5wvoLOTCDGt42MA-ZW978yfWFNNffZcDNTOdUh9k7n98",
+                        "keyEnvelope": "73HmwxRSgfR9E9gZCkjAms4Z0cDxqwStcsl4VOlh00nNDoSraeJUC1LEjrSSWjqRlFCSYCxe9ib4khT0RIFtYWSHlvBXp4Kn",
+                        "signature": "7b5cnzP2W50il0x1oNH3JeFwqKRi-3v89ew-fWlTk2qMiVtN4UsxZDWpnHNaUOjwD7bj5WYbLtZpmb04UQ7yAg",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "PjMXK6xsYUu6VjPgHDVLyjbYfp-ayCa3HX5CCMs6bz0jpseP7dc4d9ABXz9veUJaTdwqVLR58ZZ9H0__QbJABw",
+                    "statement": {
+                        "kind": "folder",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "MafFKdeTa5rpuUzQaheWCFBYIRRv7Gdz0cjXUTqEI_DglFdLOaBEjwxUfumIIwL5LtrXzyyIJ0YSn86mArY3e6RlP5xLZTPPKb0S0vlUdzoMano0LeK1lfoMCW6oLsCvTHhIhEJvAOxON_j609pNlZcpTyuSKkHQKCVgigzQFA4foA3nX6dCPB21_M_9BKOFT4nkMMzNXm3fKFYF713udV-iVR_PEn1fpJLEPFOgruh8iWza44PYvMshEsFES3vtGOOXxEAZrBj2jgtWLBedmQs8QRj2S_aLr9PmbmDTPJtKmp7pIunVGnVdztX4rOgOwd1B5dAazGgQ4ZSmXQCKAUIagEAIerCGfPPqw1V83ZKi-_SaJEKNrNo3syRcodKxSoOchGBZAPs",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "LUo4oN13POy8WAM5Ojp3kSo_Gc4UOtO7G9XIzymf8hs",
+                    "origin": {
+                        "envelope": "g0JIGqIiSlureqp0m4RXMU2hpD8jRN4dJxwOTAQEn7KktYGc6kDweXbFdB7-YmTQmKgPmVujIhjhzeWaD95H3OOO8VcX2SRicY16nQtafkC6atlUrUWSfjwyXlPxp7q85fCtZIRLw9rq0qS2qgdSNcP-sVjwpSzuQHh5QWgS_FMY4XJe9Gy_NjjJkZkIr9gfB5kRTnduhsfYVajUqhjzTAp-eBFiCogFRpKjUL42hYyQnSHIDNqmjqx823f2ma1FYs5OFgqybWc4Gj8Ot0Q81-XZJf9L8Q-r3nRPHX819V1KJjLHNNr3iOWaUCah2vh9PL_nMs0uOc75VultYU--Lfq8Za3eTIZSmGKuHbJOZpt50-zP7gBPtMlxxUmJQaPMJ5mBnzeMlbM",
+                        "keyEnvelope": "4XlcrUsj43p3zhka06L7HC-2Czf4VIuqblpt-yJGcxDthX50JP7sN8OQhHeFSfh-fZsvTBQo_pPZjmsQbm4gXT2K5BRnxjlI",
+                        "signature": "2SjCedhOFDIOBkDaCUNn195AgDBylkPF1Rvm57zzEs8Tjp5AETR3msbS1odb88r1-ZW3P35czTNA0nDnCFK_DQ",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "ERdwlDRjM_JVtBf2PiUb941x-9umtFgTlQqhZfPeulNQHEN5xE73P_1c-Fo1S85JVJzviDsvPtCMwIPKAgOtDQ",
+                    "statement": {
+                        "kind": "file",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "DfsioLmwiYmE8L4m5t6Z7oY7nDIcMnkXtJzyToeFaNrks4mk67fEKK83UPBPOfwAl6xU50EVFXbXjpcFGq2kqSd4-uhpH0Nrfn9nuP0-VdQjsNOc",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "LUo4oN13POy8WAM5Ojp3kSo_Gc4UOtO7G9XIzymf8hs",
+                    "origin": {
+                        "envelope": "jJji0aAD_prLbAbt603McsU6oIBbsbhx5l7Cn7Bt0TgG1_WDR9bYZFCoXGhnGwCaO-rV79TaHwGpux1msLXrOYc-s5MgXZLOy6W6bRTumLw2w9aj",
+                        "keyEnvelope": "UMz97wEevgIMpgQV5hXN8y8XASKT-ABckOFiEsXrX64TytgeGUj1ptdkn5bZqYeNEV7qnt5JVe-59GfvU6cxWJ_DpuOBa1d_",
+                        "signature": "V9XbYWS15bsNH4PD7ZXnZIQIrpwjPb9O4xn5TK4vqcUOI1l99pgQI_PURILmAbz_banCeXRLS8tyXCM2fR2eCg",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "version",
+                    "rekeySignature": "6KcBcfW_mV948XvgGaxyeph74R7da_vNNr_bJ_ybTRQA5M8mcQl8T_2DFNA5f0nqUArCY5zPFQgezTRUs-kfBQ",
+                    "statement": {
+                        "contentSuite": 3,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                        "objectId": "0b0b0b0b-0000-4000-8000-00000000000b",
+                        "versionId": "5e5e5e5e-0000-4000-8000-00000000000b",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "DNzLFynP6HFLPi-RGjmJnliHTaCUGcXOI085-tbORe4Lv2QhEfsB7yYjgpAmyk7aACstMgSqWG2Vp_giYXOdvRnRvO3eoYu93nXYDdcZFK7_S2iFJEfFWXaSN7z8WNXQDvnYr5hSTOigz0Emp1GEBUAyLiV5bYqHCq2OFHLQ_qLc5QaVEKLQ_jwju0OINPUaZKZq9aRFTz8eHoC_PrEwtyJyH4w_c-8ED_gUkeeVJbnhjdO1-Z1Z7yOiYBgCuJQq1HNdUxsiGuvcle9i9d54hBsdRs6B6UO_CFOAOPZuVTRivwSWhkjj9l1COtJbv6BwXNKHby4Qe041xfxLnvccgwJ9teUzVvqS-aESG6DiYtyDYKnghNLB8wA_h42t6GY6EtZwtXOyUh4",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "3Q0BjyODRTbaByWBOtbBHEdzz6sYyZdeP9mALsREyL4",
+                                "retired": []
+                            },
+                            "trust": "former-member"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "IhhvShWSsR41pQ52eHEQbc7KTenIHQLp5dIXPG7FQ7Q",
+                    "origin": {
+                        "envelope": "S0zOGgcKpRtQfnkDgM-wreMJjk8OEB99kdjBT-HhTGG4Kb_5KrPPvibduwQTvpAJU_Cxz1vrPPRpf7L13fS_OCum0kxSrareZbxEKZ9JSQd9L6MaWZ5zrwmra3rPeWgdZ69-P9isCrzyCvf7R0uc2wDbE1J4Q8hW-AeOjKZFl1EIZBLnddX8N36f4C8YrkCFWsaIeZV9mpClH4FhYqeCcOnMkCKE7nxnw_KwQyCKn5gIhVdhjSNOBsqtcXk5YZbrLlzDvTJp5TpYPW1n9ZTJjtyqQCPE1O-mTfRAGrq5vPll4SPVhhuINJTgoaOsQxTRyBm5WIq-h6bYSSQfKk0liw9X4xE8Lf8YDV9RfvQH4eYFq8yloqfdIFo3-kPzm2FnT3yQFwMupDQ",
+                        "keyEnvelope": "ke2vowTqBVfUc0rMH7QznijhdO9UbhLbpZnDMwxSrtsYbLmDGbH185UdxaiQmmqdXxnxR2bGiENFt6EUDs7NQn0Q4RxxcI9q",
+                        "signature": "iWVbATbEmjRRBCLY0goMsMrbQ5pxClr7FGvdGmDfTQvapHrY7QYu4Lx5IJTfYx2Nn7IatrVRjCL6QLLFVL38AQ",
+                        "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "Fwrcs5P2LEkeQc9VivXIdfSm59D-3hsZ-_olzhVd0BT4WJ3ommLHaJog1aY7H-26Q9l5s7NWJvIKaFp3X0jSDA",
+                    "statement": {
+                        "kind": "file",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                }
+            ],
+            "rotated": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000003",
+                    "keyEnvelope": "kz0EpNLMO4DFdD8ZfH13pgKqYXQ6DpBpXG-2onwH7z9PFDhKXA_rtUm7p6aiiGnYzVI1W2aTL7DedHbxkGEMxzJs62SRYPDE",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "HYECBTOkeLMhaxQo3BpB_n4UR4eXmUoDrIX2ago_fNWPcG2tWh5dQue8lkzfhPVu2b4cnjEmeEoVIsnqGNILTiIgmoss4YobklPDlUq0TOTUwa5n81RbKAboTYUx8xnd2HkZpHaY9CvLWFaO28I8DulqzYu7vdfmf9mfyzajMOhsyZ-UYGfEofJdFR7JY84dl7mEQWBCFsBQpE6AYXcdLuFNXl2lKm3cXoD_7P-aIg5YYKsd0uAGMW---_qdzyCSlHHYYWOJgWScUIPhL5Mh4ztwzss-eXFTe1Sxz2aZxIMpRQxSE2A7cdfH-8CGzVDRpP9-iR2qXGTTfWGuBiuMGLBhyAmdKQad0S3QFO_7swcqR4-tJX5N_EsWWrMoC2NOetjMIPRCekQ",
+                        "rekey": {
+                            "originKeyEnvelope": "73HmwxRSgfR9E9gZCkjAms4Z0cDxqwStcsl4VOlh00nNDoSraeJUC1LEjrSSWjqRlFCSYCxe9ib4khT0RIFtYWSHlvBXp4Kn",
+                            "signature": "PjMXK6xsYUu6VjPgHDVLyjbYfp-ayCa3HX5CCMs6bz0jpseP7dc4d9ABXz9veUJaTdwqVLR58ZZ9H0__QbJABw"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": []
+                },
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000004",
+                    "keyEnvelope": "t9-vZEcv5eBkwBUwdzWXQJWKMY2EDoMj_ONff6_uttpLybS0MVbqBy6ysc69EN3sLTOKjSh4i-tmnohcCzVfZJM1_H8DMIqf",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "MafFKdeTa5rpuUzQaheWCFBYIRRv7Gdz0cjXUTqEI_DglFdLOaBEjwxUfumIIwL5LtrXzyyIJ0YSn86mArY3e6RlP5xLZTPPKb0S0vlUdzoMano0LeK1lfoMCW6oLsCvTHhIhEJvAOxON_j609pNlZcpTyuSKkHQKCVgigzQFA4foA3nX6dCPB21_M_9BKOFT4nkMMzNXm3fKFYF713udV-iVR_PEn1fpJLEPFOgruh8iWza44PYvMshEsFES3vtGOOXxEAZrBj2jgtWLBedmQs8QRj2S_aLr9PmbmDTPJtKmp7pIunVGnVdztX4rOgOwd1B5dAazGgQ4ZSmXQCKAUIagEAIerCGfPPqw1V83ZKi-_SaJEKNrNo3syRcodKxSoOchGBZAPs",
+                        "rekey": {
+                            "originKeyEnvelope": "4XlcrUsj43p3zhka06L7HC-2Czf4VIuqblpt-yJGcxDthX50JP7sN8OQhHeFSfh-fZsvTBQo_pPZjmsQbm4gXT2K5BRnxjlI",
+                            "signature": "ERdwlDRjM_JVtBf2PiUb941x-9umtFgTlQqhZfPeulNQHEN5xE73P_1c-Fo1S85JVJzviDsvPtCMwIPKAgOtDQ"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": [
+                        {
+                            "dropOrigin": false,
+                            "envelope": "DfsioLmwiYmE8L4m5t6Z7oY7nDIcMnkXtJzyToeFaNrks4mk67fEKK83UPBPOfwAl6xU50EVFXbXjpcFGq2kqSd4-uhpH0Nrfn9nuP0-VdQjsNOc",
+                            "id": "5e5e5e5e-0000-4000-8000-00000000000b",
+                            "rekey": {
+                                "originKeyEnvelope": "UMz97wEevgIMpgQV5hXN8y8XASKT-ABckOFiEsXrX64TytgeGUj1ptdkn5bZqYeNEV7qnt5JVe-59GfvU6cxWJ_DpuOBa1d_",
+                                "signature": "6KcBcfW_mV948XvgGaxyeph74R7da_vNNr_bJ_ybTRQA5M8mcQl8T_2DFNA5f0nqUArCY5zPFQgezTRUs-kfBQ"
+                            },
+                            "signature": null
+                        }
+                    ]
+                },
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000005",
+                    "keyEnvelope": "o-FVN9iR-GeVAgBvCeB3K1OZK3YbeIKqB2X0QXEU-IMDPJu5HEDjmOsRGYeoxSxLSZ6rjSnaNGlirKA332uGROx8vRuSFQlG",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "DNzLFynP6HFLPi-RGjmJnliHTaCUGcXOI085-tbORe4Lv2QhEfsB7yYjgpAmyk7aACstMgSqWG2Vp_giYXOdvRnRvO3eoYu93nXYDdcZFK7_S2iFJEfFWXaSN7z8WNXQDvnYr5hSTOigz0Emp1GEBUAyLiV5bYqHCq2OFHLQ_qLc5QaVEKLQ_jwju0OINPUaZKZq9aRFTz8eHoC_PrEwtyJyH4w_c-8ED_gUkeeVJbnhjdO1-Z1Z7yOiYBgCuJQq1HNdUxsiGuvcle9i9d54hBsdRs6B6UO_CFOAOPZuVTRivwSWhkjj9l1COtJbv6BwXNKHby4Qe041xfxLnvccgwJ9teUzVvqS-aESG6DiYtyDYKnghNLB8wA_h42t6GY6EtZwtXOyUh4",
+                        "rekey": {
+                            "originKeyEnvelope": "ke2vowTqBVfUc0rMH7QznijhdO9UbhLbpZnDMwxSrtsYbLmDGbH185UdxaiQmmqdXxnxR2bGiENFt6EUDs7NQn0Q4RxxcI9q",
+                            "signature": "Fwrcs5P2LEkeQc9VivXIdfSm59D-3hsZ-_olzhVd0BT4WJ3ommLHaJog1aY7H-26Q9l5s7NWJvIKaFp3X0jSDA"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": [
+                        {
+                            "dropOrigin": false,
+                            "envelope": "SRtWgSn73oCtAPdm4qz5FZjEl4PyGVru0m9Vxui8-fA0wvHGmt-dztcA3mBllMQwJpCrv790pHGMnMd_WbFE1d7usQB66TQ8BiDREIE3J3Bu_f0T",
+                            "id": "5e5e5e5e-0000-4000-8000-00000000000c",
+                            "rekey": null,
+                            "signature": "CLaZgi7biZCVZLL4uaO7LDcukcXQUpAFNHfoXF4FnZW8JLXJ2w-cavUjOic9J_Iu64zCAKdZ-3gkoCQko3qdCQ"
+                        }
+                    ]
+                }
+            ],
+            "served": [
+                [
+                    {
+                        "envelope": "HYECBTOkeLMhaxQo3BpB_n4UR4eXmUoDrIX2ago_fNWPcG2tWh5dQue8lkzfhPVu2b4cnjEmeEoVIsnqGNILTiIgmoss4YobklPDlUq0TOTUwa5n81RbKAboTYUx8xnd2HkZpHaY9CvLWFaO28I8DulqzYu7vdfmf9mfyzajMOhsyZ-UYGfEofJdFR7JY84dl7mEQWBCFsBQpE6AYXcdLuFNXl2lKm3cXoD_7P-aIg5YYKsd0uAGMW---_qdzyCSlHHYYWOJgWScUIPhL5Mh4ztwzss-eXFTe1Sxz2aZxIMpRQxSE2A7cdfH-8CGzVDRpP9-iR2qXGTTfWGuBiuMGLBhyAmdKQad0S3QFO_7swcqR4-tJX5N_EsWWrMoC2NOetjMIPRCekQ",
+                        "keyEpoch": 2,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "z3UdPn3hTjtli8wlsXKLO4pIWLP90I7TEE86F7EboNMsYFhgVjEU1VWiHIyWqAY4XdnrvJDDDoES-lSfOPrntLFk0Bdr-qjb-WCpsNjHLGWCJjPSTRTV11Tnpx3t6LO4d-t8FHBKz-tnVHp1NuY9tvik4bbbBNRNYvvP7R2IQzG2G1bj-RXm9xbgzRnpJeXaMkf8XQiZixKnBoQcKM_JfZ6F3r4cSL9HfxAql7tE-AeKBXmWNOwx1VD1hzolnvs0YS4ddoBTN742D7vNHRCd9HwyhnouM5usgP19pm23z-hJCgDZU5kSiyAgzD1n5-IrCsVDxl1guc9SMUHifmLg31tEyOpUtsN5wvoLOTCDGt42MA-ZW978yfWFNNffZcDNTOdUh9k7n98",
+                                "keyEnvelope": "73HmwxRSgfR9E9gZCkjAms4Z0cDxqwStcsl4VOlh00nNDoSraeJUC1LEjrSSWjqRlFCSYCxe9ib4khT0RIFtYWSHlvBXp4Kn",
+                                "signature": "7b5cnzP2W50il0x1oNH3JeFwqKRi-3v89ew-fWlTk2qMiVtN4UsxZDWpnHNaUOjwD7bj5WYbLtZpmb04UQ7yAg",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "PjMXK6xsYUu6VjPgHDVLyjbYfp-ayCa3HX5CCMs6bz0jpseP7dc4d9ABXz9veUJaTdwqVLR58ZZ9H0__QbJABw"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "folder",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ],
+                [
+                    {
+                        "envelope": "MafFKdeTa5rpuUzQaheWCFBYIRRv7Gdz0cjXUTqEI_DglFdLOaBEjwxUfumIIwL5LtrXzyyIJ0YSn86mArY3e6RlP5xLZTPPKb0S0vlUdzoMano0LeK1lfoMCW6oLsCvTHhIhEJvAOxON_j609pNlZcpTyuSKkHQKCVgigzQFA4foA3nX6dCPB21_M_9BKOFT4nkMMzNXm3fKFYF713udV-iVR_PEn1fpJLEPFOgruh8iWza44PYvMshEsFES3vtGOOXxEAZrBj2jgtWLBedmQs8QRj2S_aLr9PmbmDTPJtKmp7pIunVGnVdztX4rOgOwd1B5dAazGgQ4ZSmXQCKAUIagEAIerCGfPPqw1V83ZKi-_SaJEKNrNo3syRcodKxSoOchGBZAPs",
+                        "keyEpoch": 2,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "g0JIGqIiSlureqp0m4RXMU2hpD8jRN4dJxwOTAQEn7KktYGc6kDweXbFdB7-YmTQmKgPmVujIhjhzeWaD95H3OOO8VcX2SRicY16nQtafkC6atlUrUWSfjwyXlPxp7q85fCtZIRLw9rq0qS2qgdSNcP-sVjwpSzuQHh5QWgS_FMY4XJe9Gy_NjjJkZkIr9gfB5kRTnduhsfYVajUqhjzTAp-eBFiCogFRpKjUL42hYyQnSHIDNqmjqx823f2ma1FYs5OFgqybWc4Gj8Ot0Q81-XZJf9L8Q-r3nRPHX819V1KJjLHNNr3iOWaUCah2vh9PL_nMs0uOc75VultYU--Lfq8Za3eTIZSmGKuHbJOZpt50-zP7gBPtMlxxUmJQaPMJ5mBnzeMlbM",
+                                "keyEnvelope": "4XlcrUsj43p3zhka06L7HC-2Czf4VIuqblpt-yJGcxDthX50JP7sN8OQhHeFSfh-fZsvTBQo_pPZjmsQbm4gXT2K5BRnxjlI",
+                                "signature": "2SjCedhOFDIOBkDaCUNn195AgDBylkPF1Rvm57zzEs8Tjp5AETR3msbS1odb88r1-ZW3P35czTNA0nDnCFK_DQ",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "ERdwlDRjM_JVtBf2PiUb941x-9umtFgTlQqhZfPeulNQHEN5xE73P_1c-Fo1S85JVJzviDsvPtCMwIPKAgOtDQ"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "file",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "DfsioLmwiYmE8L4m5t6Z7oY7nDIcMnkXtJzyToeFaNrks4mk67fEKK83UPBPOfwAl6xU50EVFXbXjpcFGq2kqSd4-uhpH0Nrfn9nuP0-VdQjsNOc",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "jJji0aAD_prLbAbt603McsU6oIBbsbhx5l7Cn7Bt0TgG1_WDR9bYZFCoXGhnGwCaO-rV79TaHwGpux1msLXrOYc-s5MgXZLOy6W6bRTumLw2w9aj",
+                                "keyEnvelope": "UMz97wEevgIMpgQV5hXN8y8XASKT-ABckOFiEsXrX64TytgeGUj1ptdkn5bZqYeNEV7qnt5JVe-59GfvU6cxWJ_DpuOBa1d_",
+                                "signature": "V9XbYWS15bsNH4PD7ZXnZIQIrpwjPb9O4xn5TK4vqcUOI1l99pgQI_PURILmAbz_banCeXRLS8tyXCM2fR2eCg",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "6KcBcfW_mV948XvgGaxyeph74R7da_vNNr_bJ_ybTRQA5M8mcQl8T_2DFNA5f0nqUArCY5zPFQgezTRUs-kfBQ"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
+                            "objectId": "0b0b0b0b-0000-4000-8000-00000000000b",
+                            "versionId": "5e5e5e5e-0000-4000-8000-00000000000b",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ],
+                [
+                    {
+                        "envelope": "DNzLFynP6HFLPi-RGjmJnliHTaCUGcXOI085-tbORe4Lv2QhEfsB7yYjgpAmyk7aACstMgSqWG2Vp_giYXOdvRnRvO3eoYu93nXYDdcZFK7_S2iFJEfFWXaSN7z8WNXQDvnYr5hSTOigz0Emp1GEBUAyLiV5bYqHCq2OFHLQ_qLc5QaVEKLQ_jwju0OINPUaZKZq9aRFTz8eHoC_PrEwtyJyH4w_c-8ED_gUkeeVJbnhjdO1-Z1Z7yOiYBgCuJQq1HNdUxsiGuvcle9i9d54hBsdRs6B6UO_CFOAOPZuVTRivwSWhkjj9l1COtJbv6BwXNKHby4Qe041xfxLnvccgwJ9teUzVvqS-aESG6DiYtyDYKnghNLB8wA_h42t6GY6EtZwtXOyUh4",
+                        "keyEpoch": 2,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "S0zOGgcKpRtQfnkDgM-wreMJjk8OEB99kdjBT-HhTGG4Kb_5KrPPvibduwQTvpAJU_Cxz1vrPPRpf7L13fS_OCum0kxSrareZbxEKZ9JSQd9L6MaWZ5zrwmra3rPeWgdZ69-P9isCrzyCvf7R0uc2wDbE1J4Q8hW-AeOjKZFl1EIZBLnddX8N36f4C8YrkCFWsaIeZV9mpClH4FhYqeCcOnMkCKE7nxnw_KwQyCKn5gIhVdhjSNOBsqtcXk5YZbrLlzDvTJp5TpYPW1n9ZTJjtyqQCPE1O-mTfRAGrq5vPll4SPVhhuINJTgoaOsQxTRyBm5WIq-h6bYSSQfKk0liw9X4xE8Lf8YDV9RfvQH4eYFq8yloqfdIFo3-kPzm2FnT3yQFwMupDQ",
+                                "keyEnvelope": "ke2vowTqBVfUc0rMH7QznijhdO9UbhLbpZnDMwxSrtsYbLmDGbH185UdxaiQmmqdXxnxR2bGiENFt6EUDs7NQn0Q4RxxcI9q",
+                                "signature": "iWVbATbEmjRRBCLY0goMsMrbQ5pxClr7FGvdGmDfTQvapHrY7QYu4Lx5IJTfYx2Nn7IatrVRjCL6QLLFVL38AQ",
+                                "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "Fwrcs5P2LEkeQc9VivXIdfSm59D-3hsZ-_olzhVd0BT4WJ3ommLHaJog1aY7H-26Q9l5s7NWJvIKaFp3X0jSDA"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "file",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "SRtWgSn73oCtAPdm4qz5FZjEl4PyGVru0m9Vxui8-fA0wvHGmt-dztcA3mBllMQwJpCrv790pHGMnMd_WbFE1d7usQB66TQ8BiDREIE3J3Bu_f0T",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": null,
+                        "signature": "CLaZgi7biZCVZLL4uaO7LDcukcXQUpAFNHfoXF4FnZW8JLXJ2w-cavUjOic9J_Iu64zCAKdZ-3gkoCQko3qdCQ",
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
+                            "objectId": "0b0b0b0b-0000-4000-8000-00000000000c",
+                            "versionId": "5e5e5e5e-0000-4000-8000-00000000000c",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ]
+            ],
+            "shapes": [["rekeyed"], ["rekeyed", "rekeyed"], ["rekeyed", "resealed"]],
+            "stale": {
+                "id": "0e0e0e0e-0000-4000-8000-000000000006",
+                "keyEnvelope": "GdI1FvY6YU8E375tgedtLQU5pcoqrBbItueOF-nvbaQ33RPl_Q02rzPtsbZQeS4kbCwzgJ_yA3DtzUzjNbm9iOwzx3IlRRn0",
+                "keyEpoch": 1,
+                "parentId": "0e0e0e0e-0000-4000-8000-000000000003",
+                "parentKeyEpoch": 1
+            },
+            "target": 2,
+            "walker": 1,
+            "webReseals": null,
+            "writes": {
+                "stale": "key-change-pending",
+                "under": "key-change-pending",
+                "walked": "writable"
+            }
+        },
+        {
+            "expected": [
+                [
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "bound": true,
+                        "kind": "rekeyed",
+                        "origin": {
+                            "integrity": "former-member",
+                            "via": null
+                        },
+                        "rekeyer": {
+                            "integrity": "verified",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        }
+                    },
+                    {
+                        "integrity": "resealed",
+                        "kind": "signed",
+                        "via": null
+                    }
+                ]
+            ],
+            "key": null,
+            "name": "a file with three versions, one by a writer since gone",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "q6eH79CgLDWiEkMD_Kw74Ajwoy9xDDAhy0v8J7GwbEfXd8AHiiS8qnbwZV-ntJv9AXa7HLF3Fcl1vwWE6wb8HKa7gNfUSLv8",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "z7GaC8rc1PRvEc6uDuHc3Bg6ZphzHW4FRvulTbKOfiT_jO2_fSEy-nedaeBcf6Ivk-ULBEdfJUypnh8X4FMgGDWMsmppo3XAONljnboNIgVA6bbqenKSp2847yTDKQjTw6CvcPqwMUYLRWaAwN6z68lzQ_NlXLQl9yZScaogALWtGbw5JzaEXJzqmPPJzCTNxuXEWrDctj8uvmLqxKi0LATwF4bNeq070bQl0FwI7BV5Knx1m-KllQu4A9QLJ1-ZX6F-VjfeB1vJotbbTxAmMRKrduz6G5WiOn5TJRbm5Y9pETmNA2YRa0coJxkW2KC9ouTnomMVDTHE35Bp4Q8MZ_qyveKDxCOSkoY7fhOYHTjmRiDvykMCgydamhB_VyOhgejexhidios",
+                    "metadataRekey": null,
+                    "metadataSignature": "sz0kJmBPELw3iEOwdqjXZdKNGxVWHdpgRPCspvJePiDgq5XqapqTbXPSYb_6PCvYjfZ3s36mYxuUDGclukfzBg",
+                    "metadataSigner": "00000002-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [
+                        {
+                            "contentKeyEnvelope": "hJ6tO8VwcYPfLqjDyueRj66Af99X5X3mr5MBZ4NyaRGqMljwML9NdXCUmECG4QQtXs655EzbYb9i5LnJA4GQpnH1_R-2rIlxCPvaBDQaV1WnSooS",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000015",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000015",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": "e3KzprLCGVdQm5d_sa72l0RtvzQoOt7lPZl-wK-VhkFJeI6TZSWfr6-ntvm8oj4pfxojAxSHDPuhpTgf1gtKBA",
+                            "signer": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        {
+                            "contentKeyEnvelope": "Gwuvp6wXQpp2kGAI3kvDVaa7acxx4dPld3mwlC6MeZKuTRHrpHKXnY3vMdbDXgqFrw15OnUfzFT1E0yTn_Su7_aqrt04AtqVnDDB9-etBee19ebN",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000016",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000016",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": "F8RRp8_FFO89tqDZ9fCrH_w4BY4eh7CpTBTQFISqJgvpKszqNtaSpUe6T-mFZxmTaH4io7vkdByXl1ilvgyzBg",
+                            "signer": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                        },
+                        {
+                            "contentKeyEnvelope": "wtPb2-DsQZ1Tf2XzVcXr4s736oDeFEBD8jS0bYHhyJq3djKKxlUoAxbtPE-8SI9VmvrCcSmNsy6Xilmn4PkXmnCtsbH8tSkbLms0ucaltWE_lVNu",
+                            "contentSuite": 3,
+                            "id": "5e5e5e5e-0000-4000-8000-000000000017",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000017",
+                            "plaintextSize": null,
+                            "rekey": null,
+                            "signature": "AsBhrLo0D8qyxQDY45vOAvaU70IZJuc6ZdZlciijuFnOOiKHLh6ASN0ZXlUS2DU0Vziegw1SWBNUhUFsRJmCDA",
+                            "signer": null
+                        }
+                    ],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 4,
+            "refused": null,
+            "rekeyedInputs": [
+                {
+                    "envelope": "W7nefnCbXXgsThMnYlQDpaK7RSzCqrcQ4cTNdLPWaxktjYDDW2ddgW9RtVcaxtAflgLB5jmCyVbrxNFpxdtdlxEmta2d5R3SLfMvrJDXPbRPmGiGRU3pyymLGl3pueHnetbbi1bi9H-JAi5iiQwOm8OMKGtxQaLruJ2gkpajptkRL590mRXd0NZbJ3uZwxdTE8RE4MhDyIgVLyFzz7ZB1tpLSlYnRjlYYmjYPn6puKzwTZU5Q_jlaEwrVEToX9tR1olqYYYtHuDrg9IkckhAelixuhf3Li-h5K3N3UwAZA8YWL7s8QhbQvCmmEswDoTft8YH7I2i4JCN-4cS5OieLXiXW3KYPwY48DJdf8-w98PNOhMIi155Zcjn_i-zoX71SN26SMVNLs8",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "xNVdbJaJ9roZ1vbKsAQut2GCYm0elpvl4v4SDefBC0k",
+                    "origin": {
+                        "envelope": "z7GaC8rc1PRvEc6uDuHc3Bg6ZphzHW4FRvulTbKOfiT_jO2_fSEy-nedaeBcf6Ivk-ULBEdfJUypnh8X4FMgGDWMsmppo3XAONljnboNIgVA6bbqenKSp2847yTDKQjTw6CvcPqwMUYLRWaAwN6z68lzQ_NlXLQl9yZScaogALWtGbw5JzaEXJzqmPPJzCTNxuXEWrDctj8uvmLqxKi0LATwF4bNeq070bQl0FwI7BV5Knx1m-KllQu4A9QLJ1-ZX6F-VjfeB1vJotbbTxAmMRKrduz6G5WiOn5TJRbm5Y9pETmNA2YRa0coJxkW2KC9ouTnomMVDTHE35Bp4Q8MZ_qyveKDxCOSkoY7fhOYHTjmRiDvykMCgydamhB_VyOhgejexhidios",
+                        "keyEnvelope": "wBkO1tCHtem0qxKI1kdNhvccCB7hqM6NzDAzvBe-_I_Z5YrtDKcrp__d4z_e1YqTu-iCfi5uLKYhZt7FKV31eJxZnzoNSVts",
+                        "signature": "sz0kJmBPELw3iEOwdqjXZdKNGxVWHdpgRPCspvJePiDgq5XqapqTbXPSYb_6PCvYjfZ3s36mYxuUDGclukfzBg",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "metadata",
+                    "rekeySignature": "YfKkyD3YV6KVvQ-CFyTxX29R6rvepzApsq56Mqt4qfwKgxdmUC2aPuEMsEohjG17INdYYOR2iTGEBph06d5NAw",
+                    "statement": {
+                        "kind": "file",
+                        "metadataVersion": 1,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "PODDcpvTpLrLt7GOCX4qLALTLN6pKitLHDqwlPjZGDkswA9MHRG-mpgUcKfuCTc1ofG7rRLUL6yZddq6YUUZiny7838posStapyngwlw9j1DukKg",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "R6tJ-UO2_h_xWONvtLEsCv7NW9O639OHN99GnjqS_YY",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "xNVdbJaJ9roZ1vbKsAQut2GCYm0elpvl4v4SDefBC0k",
+                    "origin": {
+                        "envelope": "hJ6tO8VwcYPfLqjDyueRj66Af99X5X3mr5MBZ4NyaRGqMljwML9NdXCUmECG4QQtXs655EzbYb9i5LnJA4GQpnH1_R-2rIlxCPvaBDQaV1WnSooS",
+                        "keyEnvelope": "Tu4R9A89FTjF2MRKbyrOZCVExsN1hz3_BaCMEsAcGukaNy4KTGDailpQXAegEk7bZKn311XcUbLdR7hyiYe3YhMjEGsDncH9",
+                        "signature": "e3KzprLCGVdQm5d_sa72l0RtvzQoOt7lPZl-wK-VhkFJeI6TZSWfr6-ntvm8oj4pfxojAxSHDPuhpTgf1gtKBA",
+                        "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "version",
+                    "rekeySignature": "safDxBPQGcU14cAs_rWVxiJ33etw9cAgpTw4DghubmwpUD9ZXqx2YFen-n_EKb_qBgy2nDH3mvfVGqyNgXaoCA",
+                    "statement": {
+                        "contentSuite": 3,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "objectId": "0b0b0b0b-0000-4000-8000-000000000015",
+                        "versionId": "5e5e5e5e-0000-4000-8000-000000000015",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                },
+                {
+                    "envelope": "pyZJb4zR3tfRIERG1gMdEub6rT_HukgG6_Bs3fCDkppoujbFBZMPouPRTVx-bIJd02yFzeIKtcVcaHuamm94QldSjwO32R9xQccSdbdjh724NhKA",
+                    "group": {
+                        "origin": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "3Q0BjyODRTbaByWBOtbBHEdzz6sYyZdeP9mALsREyL4",
+                                "retired": []
+                            },
+                            "trust": "former-member"
+                        },
+                        "originPersonal": null,
+                        "rekeyer": {
+                            "linksLoaded": true,
+                            "signer": {
+                                "current": "7qcsoK_66gEOELjsnRZz93LEuKnROUBkZiquR8h7xak",
+                                "retired": []
+                            },
+                            "trust": "roster",
+                            "via": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+                        },
+                        "rekeyerPersonal": null
+                    },
+                    "keyEpoch": 2,
+                    "nodeKey": "xNVdbJaJ9roZ1vbKsAQut2GCYm0elpvl4v4SDefBC0k",
+                    "origin": {
+                        "envelope": "Gwuvp6wXQpp2kGAI3kvDVaa7acxx4dPld3mwlC6MeZKuTRHrpHKXnY3vMdbDXgqFrw15OnUfzFT1E0yTn_Su7_aqrt04AtqVnDDB9-etBee19ebN",
+                        "keyEnvelope": "hprb3iO1TqJEjQLzt2sjBIB1nk1r3VBaqHDQ4rwNJCQ23REvarVqmvjFRUeMH_DPM32r5Z7NUiBGPxg8S5dFrNvSKtXPj68J",
+                        "signature": "F8RRp8_FFO89tqDZ9fCrH_w4BY4eh7CpTBTQFISqJgvpKszqNtaSpUe6T-mFZxmTaH4io7vkdByXl1ilvgyzBg",
+                        "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                    },
+                    "record": "version",
+                    "rekeySignature": "SB_o8CVhUmmCQsDPeexQRPdUR_2KjX0bN83_B8WsZEY5ds0xnRFqjioQ9_4hK-cEmBM51nVZFRUooisXOUK9Ag",
+                    "statement": {
+                        "contentSuite": 3,
+                        "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                        "objectId": "0b0b0b0b-0000-4000-8000-000000000016",
+                        "versionId": "5e5e5e5e-0000-4000-8000-000000000016",
+                        "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                    }
+                }
+            ],
+            "rotated": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "g4X7k2p8lLlOpaJC3W_2gEfeIYxwq2uVUvVLcDCMKlWAJ6jTgDyzUnQYVNYtnB9LZ9RY8I16TtQLwtKmLbbAJ8_Ry0CmiFQ7",
+                    "links": 0,
+                    "metadata": {
+                        "dropOrigin": false,
+                        "envelope": "W7nefnCbXXgsThMnYlQDpaK7RSzCqrcQ4cTNdLPWaxktjYDDW2ddgW9RtVcaxtAflgLB5jmCyVbrxNFpxdtdlxEmta2d5R3SLfMvrJDXPbRPmGiGRU3pyymLGl3pueHnetbbi1bi9H-JAi5iiQwOm8OMKGtxQaLruJ2gkpajptkRL590mRXd0NZbJ3uZwxdTE8RE4MhDyIgVLyFzz7ZB1tpLSlYnRjlYYmjYPn6puKzwTZU5Q_jlaEwrVEToX9tR1olqYYYtHuDrg9IkckhAelixuhf3Li-h5K3N3UwAZA8YWL7s8QhbQvCmmEswDoTft8YH7I2i4JCN-4cS5OieLXiXW3KYPwY48DJdf8-w98PNOhMIi155Zcjn_i-zoX71SN26SMVNLs8",
+                        "rekey": {
+                            "originKeyEnvelope": "wBkO1tCHtem0qxKI1kdNhvccCB7hqM6NzDAzvBe-_I_Z5YrtDKcrp__d4z_e1YqTu-iCfi5uLKYhZt7FKV31eJxZnzoNSVts",
+                            "signature": "YfKkyD3YV6KVvQ-CFyTxX29R6rvepzApsq56Mqt4qfwKgxdmUC2aPuEMsEohjG17INdYYOR2iTGEBph06d5NAw"
+                        },
+                        "signature": null
+                    },
+                    "rewrap": false,
+                    "shares": 0,
+                    "versions": [
+                        {
+                            "dropOrigin": false,
+                            "envelope": "PODDcpvTpLrLt7GOCX4qLALTLN6pKitLHDqwlPjZGDkswA9MHRG-mpgUcKfuCTc1ofG7rRLUL6yZddq6YUUZiny7838posStapyngwlw9j1DukKg",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000015",
+                            "rekey": {
+                                "originKeyEnvelope": "Tu4R9A89FTjF2MRKbyrOZCVExsN1hz3_BaCMEsAcGukaNy4KTGDailpQXAegEk7bZKn311XcUbLdR7hyiYe3YhMjEGsDncH9",
+                                "signature": "safDxBPQGcU14cAs_rWVxiJ33etw9cAgpTw4DghubmwpUD9ZXqx2YFen-n_EKb_qBgy2nDH3mvfVGqyNgXaoCA"
+                            },
+                            "signature": null
+                        },
+                        {
+                            "dropOrigin": false,
+                            "envelope": "pyZJb4zR3tfRIERG1gMdEub6rT_HukgG6_Bs3fCDkppoujbFBZMPouPRTVx-bIJd02yFzeIKtcVcaHuamm94QldSjwO32R9xQccSdbdjh724NhKA",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000016",
+                            "rekey": {
+                                "originKeyEnvelope": "hprb3iO1TqJEjQLzt2sjBIB1nk1r3VBaqHDQ4rwNJCQ23REvarVqmvjFRUeMH_DPM32r5Z7NUiBGPxg8S5dFrNvSKtXPj68J",
+                                "signature": "SB_o8CVhUmmCQsDPeexQRPdUR_2KjX0bN83_B8WsZEY5ds0xnRFqjioQ9_4hK-cEmBM51nVZFRUooisXOUK9Ag"
+                            },
+                            "signature": null
+                        },
+                        {
+                            "dropOrigin": false,
+                            "envelope": "BnzdxrFx-8Uzy0FgV3ZrORqCkSJzq77d7cVAL-omKzmmrFWMPqVhYE01WVaxp2_Bw61bNkDFDjHGF1RZnXwp2kQo629E8zBZ8UowvX4FrUpcUbPI",
+                            "id": "5e5e5e5e-0000-4000-8000-000000000017",
+                            "rekey": null,
+                            "signature": "h0WBpMtWCXVmnvxpZum1Zdaz6ZjKwEV0z_X1IHru1WR16lYd5VtN5FbNm4qbqtZ6wQy-fbl6zOv-fzcYAvdUCg"
+                        }
+                    ]
+                }
+            ],
+            "served": [
+                [
+                    {
+                        "envelope": "W7nefnCbXXgsThMnYlQDpaK7RSzCqrcQ4cTNdLPWaxktjYDDW2ddgW9RtVcaxtAflgLB5jmCyVbrxNFpxdtdlxEmta2d5R3SLfMvrJDXPbRPmGiGRU3pyymLGl3pueHnetbbi1bi9H-JAi5iiQwOm8OMKGtxQaLruJ2gkpajptkRL590mRXd0NZbJ3uZwxdTE8RE4MhDyIgVLyFzz7ZB1tpLSlYnRjlYYmjYPn6puKzwTZU5Q_jlaEwrVEToX9tR1olqYYYtHuDrg9IkckhAelixuhf3Li-h5K3N3UwAZA8YWL7s8QhbQvCmmEswDoTft8YH7I2i4JCN-4cS5OieLXiXW3KYPwY48DJdf8-w98PNOhMIi155Zcjn_i-zoX71SN26SMVNLs8",
+                        "keyEpoch": 2,
+                        "record": "metadata",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "z7GaC8rc1PRvEc6uDuHc3Bg6ZphzHW4FRvulTbKOfiT_jO2_fSEy-nedaeBcf6Ivk-ULBEdfJUypnh8X4FMgGDWMsmppo3XAONljnboNIgVA6bbqenKSp2847yTDKQjTw6CvcPqwMUYLRWaAwN6z68lzQ_NlXLQl9yZScaogALWtGbw5JzaEXJzqmPPJzCTNxuXEWrDctj8uvmLqxKi0LATwF4bNeq070bQl0FwI7BV5Knx1m-KllQu4A9QLJ1-ZX6F-VjfeB1vJotbbTxAmMRKrduz6G5WiOn5TJRbm5Y9pETmNA2YRa0coJxkW2KC9ouTnomMVDTHE35Bp4Q8MZ_qyveKDxCOSkoY7fhOYHTjmRiDvykMCgydamhB_VyOhgejexhidios",
+                                "keyEnvelope": "wBkO1tCHtem0qxKI1kdNhvccCB7hqM6NzDAzvBe-_I_Z5YrtDKcrp__d4z_e1YqTu-iCfi5uLKYhZt7FKV31eJxZnzoNSVts",
+                                "signature": "sz0kJmBPELw3iEOwdqjXZdKNGxVWHdpgRPCspvJePiDgq5XqapqTbXPSYb_6PCvYjfZ3s36mYxuUDGclukfzBg",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "YfKkyD3YV6KVvQ-CFyTxX29R6rvepzApsq56Mqt4qfwKgxdmUC2aPuEMsEohjG17INdYYOR2iTGEBph06d5NAw"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "kind": "file",
+                            "metadataVersion": 1,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "PODDcpvTpLrLt7GOCX4qLALTLN6pKitLHDqwlPjZGDkswA9MHRG-mpgUcKfuCTc1ofG7rRLUL6yZddq6YUUZiny7838posStapyngwlw9j1DukKg",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "hJ6tO8VwcYPfLqjDyueRj66Af99X5X3mr5MBZ4NyaRGqMljwML9NdXCUmECG4QQtXs655EzbYb9i5LnJA4GQpnH1_R-2rIlxCPvaBDQaV1WnSooS",
+                                "keyEnvelope": "Tu4R9A89FTjF2MRKbyrOZCVExsN1hz3_BaCMEsAcGukaNy4KTGDailpQXAegEk7bZKn311XcUbLdR7hyiYe3YhMjEGsDncH9",
+                                "signature": "e3KzprLCGVdQm5d_sa72l0RtvzQoOt7lPZl-wK-VhkFJeI6TZSWfr6-ntvm8oj4pfxojAxSHDPuhpTgf1gtKBA",
+                                "signerId": "00000002-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "safDxBPQGcU14cAs_rWVxiJ33etw9cAgpTw4DghubmwpUD9ZXqx2YFen-n_EKb_qBgy2nDH3mvfVGqyNgXaoCA"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000015",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000015",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "pyZJb4zR3tfRIERG1gMdEub6rT_HukgG6_Bs3fCDkppoujbFBZMPouPRTVx-bIJd02yFzeIKtcVcaHuamm94QldSjwO32R9xQccSdbdjh724NhKA",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": {
+                            "origin": {
+                                "envelope": "Gwuvp6wXQpp2kGAI3kvDVaa7acxx4dPld3mwlC6MeZKuTRHrpHKXnY3vMdbDXgqFrw15OnUfzFT1E0yTn_Su7_aqrt04AtqVnDDB9-etBee19ebN",
+                                "keyEnvelope": "hprb3iO1TqJEjQLzt2sjBIB1nk1r3VBaqHDQ4rwNJCQ23REvarVqmvjFRUeMH_DPM32r5Z7NUiBGPxg8S5dFrNvSKtXPj68J",
+                                "signature": "F8RRp8_FFO89tqDZ9fCrH_w4BY4eh7CpTBTQFISqJgvpKszqNtaSpUe6T-mFZxmTaH4io7vkdByXl1ilvgyzBg",
+                                "signerId": "00000003-abcd-4abc-8abc-abcdefabcdef"
+                            },
+                            "signature": "SB_o8CVhUmmCQsDPeexQRPdUR_2KjX0bN83_B8WsZEY5ds0xnRFqjioQ9_4hK-cEmBM51nVZFRUooisXOUK9Ag"
+                        },
+                        "signature": null,
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000016",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000016",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    },
+                    {
+                        "envelope": "BnzdxrFx-8Uzy0FgV3ZrORqCkSJzq77d7cVAL-omKzmmrFWMPqVhYE01WVaxp2_Bw61bNkDFDjHGF1RZnXwp2kQo629E8zBZ8UowvX4FrUpcUbPI",
+                        "keyEpoch": 2,
+                        "record": "version",
+                        "rekey": null,
+                        "signature": "h0WBpMtWCXVmnvxpZum1Zdaz6ZjKwEV0z_X1IHru1WR16lYd5VtN5FbNm4qbqtZ6wQy-fbl6zOv-fzcYAvdUCg",
+                        "signer": "00000001-abcd-4abc-8abc-abcdefabcdef",
+                        "statement": {
+                            "contentSuite": 3,
+                            "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
+                            "objectId": "0b0b0b0b-0000-4000-8000-000000000017",
+                            "versionId": "5e5e5e5e-0000-4000-8000-000000000017",
+                            "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
+                        }
+                    }
+                ]
+            ],
+            "shapes": [["rekeyed", "rekeyed", "rekeyed", "resealed"]],
+            "stale": null,
+            "target": 2,
+            "walker": 1,
+            "webReseals": null,
+            "writes": null
+        },
+        {
+            "expected": [],
+            "key": null,
+            "name": "a shared node in a family folder is refused by the core",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "AD1tv4hV1C6mbFXsSn6TQSaAWu_kARfVX90YcA53ANbsyRiDoDFwx06-pDfVbZZXq081m1dTVAgAx8SyKHb9PVsFjx-dLeoD",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [],
+                    "metadataEnvelope": "KO5vQ01clGAcEazTqlucj1YoBP9_lcmhO_mZGvUt3U4N96psQhsAtV2aijvmiWczjOwa0in2mGvs5BJ5Ub68cX1hUn1WmWPwMH1-QVCjeW6Ylgl7r9mN4bY19v62eQx8jhAgaXJ2Sr0CJJznNnpSsy1CaYo_xi1W9ghQkUm1-Gu5ob2db2XJikPOWVQVsVFIEiwkT9v1RFkyrvmL7Aggq_cJWn6FVG-2Dbl8xp0npBzTdQByJVXJeJekMXY6L1Y3e-siVAFRXRrR3vfJkKI_vv78KdJz4YkIPqfm1Nx5jL3KFvp6mxCwu9GGnejEFKyCgfoCNk51DyqPLIAvvDS0ftJ-wNySq72DXwIUjrPwzGtR_NmQUBpHvmhOGJjDOmfe9QV-G2UfDfM",
+                    "metadataRekey": null,
+                    "metadataSignature": "0_UA7dAG_aoSSuu6GLfIQhZjnj_GFAylTv9NoETgGeWTBvir03Ce3-bzdtkqYcQSd349satukbbGtwDvQxsTCw",
+                    "metadataSigner": "00000002-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [
+                        {
+                            "granteeKemPublicKey": "2WB40cS-lVxD0sIPaCxYcxZ749peffAO_jB-1NJi9oV5gvGktSFgvZEWt-qKxeIFu1LCmSd5c8x2F8iDObF0vXyqsmd50IEuVWdZvnxpdwMNyjekJtQqWdTJF9ykazOUjMZfeHJWsIVptkhyKaRlAEFtWUBzThdjSnI4V_d1mQUoXqG6y7UFAlJJZVBN_jqQmVMDPflueirJtizNCOPJjvtnc4xYSRe7uywydwIl1wKcpvqp0JQ9h7K0HJZFK9uW7ltpKRpuHiS7vsxiC-Ol2So8K5Cm6SRclDzFsssMtUMjmDU950QQP6drvTC2FORVv6iHiKC33zMbrmyjxoiYs8RYdqjIbFx2WeprmUmSp_Y4YnGN1Kl1-QeK5Cu7YwoMzRGwzdhqRoImvBg2EUllyGM-D_uiLau627BIfsZNuOpF4Sh0WdAbkqy9OIMFpDd7REScNzhCr4gdB6XI-ysUQ-Kuf1Y3yPtTr4GRnjwdzcSR43N948Syp-XHCJtctql3IgWaO-JmLAmH8ZdrpOZOJmq6gBVjV7XFaJHIuhx3E6pHo8qdjXGAPyFQweYDtgCkORuWI6l_GHBjx-MMd2ZmHuQJB4WrddS9O9Zz-VgzS6WGKfU_MJQogSNEx6lsXxCwFpkFFVQFYIbGlfIXqahm1_gvPhWOUHW6iTOfW5tuqWa_ieC6qRiZnLpCCjahHOMdYTt3ZtQcsixg_HRB2NuuAOWPrKHAALaDSlM06HEBapeNJokVv7gkMjQyUMSV8KPJtiiZqFkEFIdNIJdG3MKHAMRIZ_Q1LVcnhfBUS-ZGrSpwdUFgDhRKxAd7-rVzbwNaKjMfjaxGYPqRHZnI5vilGMbNJ-xpI8xbiMudsGI37pY-8XyBhWwacNNu2xghqMdozHgzwkuHD6o6NkWOtncptRWR3mWWXsSB1fWq0ZkWGggTWzCzTFJRq6ABC9UHywCRzCxP-KJcDRXHt8YWYryPMUPPdvm6tcsn2WW5QANpFZAs6wDGCNAGEpWdudKaRjJcq3g4w0Kvh1ASfCofxEu7K1RkQIEt07VCkOaJKWkxlDFI08tCrndvBihvw5B_ItMEh7YuhPOwS0YUZ9s7GpNxNyQ18kDHlncn5_wf12Uje6cKEGcfk-ElMtRPaZla2SdW6iq6iuaWeqGR9qZwYVYtbMXHLvjNeVtgS7SD-xQlXqWbKuo1Iqc9UUkoyAK4ELRMA6EMCvLGZ2sjYTyAAjp4zZESf-tY2usFypyJ8EaljNQu19UwHrNCvzVl5CGLX-qfE8CHWpgyWuxHbqCpOBF6tHvMKbYJzCKeAIAZYHh08_Yq5ptDitxOrWMvZbHPCptzpTwoS1IZePO7WUtmVvPOesQQ0HOfjDeU2AMcGsoG9iB3Tth1WqdBK2dPGfMOU_QYLEcOPFtKlZVOlHXMnaTGHiO43Cq8w6VM4rh0YNsKcHQQ_6wDpkhshIQAuKmgq3oU7EaxC3WUUke7Yet7opudZqaqi8EB9ffMESJdCAsc-Scb-xl-YEfIl7UDyPSt2-quN-DS_DAlBppTWZ_36mQ5kKpp5wvU7FkEM-reCtATC0A",
+                            "granteePublicKey": "6-azP_GluE_eWa6uoEjMBnEeZVOaxgnGZz3r12gJHB4",
+                            "granteeUserId": "00000003-abcd-4abc-8abc-abcdefabcdef",
+                            "id": "5a5a5a5a-0000-4000-8000-000000000001"
+                        }
+                    ],
+                    "versions": [],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 4,
+            "refused": "This item has shares or links, which a family folder never has, so it was not re-keyed.",
+            "rekeyedInputs": [],
+            "rotated": [],
+            "served": [],
+            "shapes": [],
+            "stale": null,
+            "target": 2,
+            "walker": 1,
+            "webReseals": {
+                "links": 0,
+                "shares": 1
+            },
+            "writes": null
+        },
+        {
+            "expected": [],
+            "key": null,
+            "name": "a linked node in a family folder is refused by the core",
+            "nodes": [
+                {
+                    "id": "0e0e0e0e-0000-4000-8000-000000000002",
+                    "keyEnvelope": "pCiPYIdNNCWzouJbPkNzlX6hKugWMFB0qbGXaRoMfam2R9xyv9O-R9vuts7MtIIEn24NJrJaxLhMmBWzHJ0qlhywSywNrXee",
+                    "keyEpoch": 1,
+                    "kind": "file",
+                    "links": [
+                        {
+                            "hasPassword": false,
+                            "id": "1e1e1e1e-0000-4000-8000-000000000001",
+                            "secretEnvelope": null
+                        }
+                    ],
+                    "metadataEnvelope": "K37Ve4Rl0dGy1d2O-4v49HV5ytgCNKD6_WM84HbzYXn5taG41EtzfdwMjjB8x1sejltJycT8GY5-DFI6ThT8rUaBwv8q4TAfjgyBdsZQY14cTLSdTi4ez1KY4tqWZ8Mdpxfdmi-EUFzx6QZXESaO9Qu4rJMHm_qX_e4lymCfmdBhpzasC8upQwX50DZyaxR9D1vRfSErK1PMXO_OxFHnbIIuDvI8pdmqVBNO4akngVPIt294KfhXj0SUrBAF98i3u073iZh6r1G-OD6IlOvk3rpaJ5h5gtCBOCa6TZlugffttg2JDqIbgcJBvIuY1w5xb30IGkKx4GK52Q9lZT7IQ8DVLg5ZH0WYmmCJRpV-IZltpELyeT-CGYzScSE5gBdIZ9ELMu52C68",
+                    "metadataRekey": null,
+                    "metadataSignature": "MGEYSoL4JtrW6rcPI8hMDhEHyVhKwJd4zBGSl9Gm9i_NJ8_jwkDxMU1qTvPWok-nzADsJf_qwtZiPmDgqlMxCw",
+                    "metadataSigner": "00000002-abcd-4abc-8abc-abcdefabcdef",
+                    "metadataVersion": 1,
+                    "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
+                    "parentKeyEpoch": 2,
+                    "shares": [],
+                    "versions": [],
+                    "wrappedParentKeyEpoch": 1
+                }
+            ],
+            "reader": 4,
+            "refused": "This item has shares or links, which a family folder never has, so it was not re-keyed.",
+            "rekeyedInputs": [],
+            "rotated": [],
+            "served": [],
+            "shapes": [],
+            "stale": null,
+            "target": 2,
+            "walker": 1,
+            "webReseals": {
+                "links": 1,
+                "shares": 0
+            },
+            "writes": null
+        }
+    ],
     "scenarios": [
         {
             "made": [
                 {
-                    "key": "IL1do6UePTkhcEJLylH6eIAFFHyqiLdkcyWsZG3XrLE",
-                    "keyEnvelope": "fOz1zBqqxeVI-q2AN--e8kWnzQEruvdx9C4Pwy1vJ5rvMQVP-euzT70WPwKeMPctJ6VbQcOUUOzACEaA8hhGWTkfbvVFH6y8",
+                    "key": "__eUAV8xH4IfgMk16v2E4JcUBgD6UCsklUiDmPj1Vw0",
+                    "keyEnvelope": "HJcEAccq2STWTkcJHV6Bp01rD9POU3VKO08xMch4TfSTlg-OJ7VxdJcvw3V5M4OExMl-IRJGW-tM6eNlg9vYYySzDYwy0g0Q",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -15,23 +1906,23 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "EgE5XLKrKDnMytxOU3dPPDMdNyd9g0jV0RhCIgdjzOE",
-                    "keyEnvelope": "3aAGbA-o6AHG0-g8GKwvY1CAt2SQ03_7q7RFWs2c1eLgeepHm_6KGCar0YMiLcNhdp1vWVSL6jJaDfGdzcjhiiz3vvuBXCeI",
+                    "key": "POMSbCTLQrrnx18JXnfC4uJsWdogeXQ0q9qdWPdIRcU",
+                    "keyEnvelope": "2EN9ybD3AJhRx5zQptN4Bo-O8UURdPod9UJrc-eObz6bUWZdPU-rAOYD7wHayeGGofUfPuX8GdJMLCWZsIssSgSIcKc4jk7W",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "IL1do6UePTkhcEJLylH6eIAFFHyqiLdkcyWsZG3XrLE",
+                    "parentKey": "__eUAV8xH4IfgMk16v2E4JcUBgD6UCsklUiDmPj1Vw0",
                     "parentKeyEpoch": 1,
                     "step": 11,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
                     "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
-                    "keyEnvelope": "nQ-0vgNEyvxng8xBIWawmtcjtxubj7a5tKh4s6w_3lUDP8OKZvwwE9aBIxsUpU0LnK23KjCu7e9K-W8eLpDhMUURW8NP7qGW",
+                    "keyEnvelope": "9P8TBej4OttKXDoZXjQHSjGALM94aK45RswqnI1-o9uHAY4KGEvOaBjjpZ6C5O7JC8_oqPwewC-R7aZ6B7_bvgN0hNzrWpRK",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000003",
-                    "parentKey": "EgE5XLKrKDnMytxOU3dPPDMdNyd9g0jV0RhCIgdjzOE",
+                    "parentKey": "POMSbCTLQrrnx18JXnfC4uJsWdogeXQ0q9qdWPdIRcU",
                     "parentKeyEpoch": 1,
                     "step": 15,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -121,7 +2012,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "cSvVC-zw3X825FfCofOfqHCzRVazXX2ouT5c_Hib1yBmbNoXWn6azTFPa48aMXOuZqrjVXnEL5zzd6l1y_DvtXq-5UagZ5ro",
+                    "keyEnvelope": "81k249AJR1UNYRWNVYBnmrMg7CLi27_XRb5U2YcT9fmSRDWFck7LWHflPoMvRlsYuO5hLZ7OBmseyCmgNrUUPpeZjJOobhZM",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -132,12 +2023,12 @@
                 },
                 {
                     "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
-                    "keyEnvelope": "uJsisqic_COhkAZvU_JDA06RtHZOF6wcOWK3it3_4g2-HOoxs9UvHhHfNEOKPz5M6TtAGmAisiozkPLb5MaS6g1pelZ7_IEw",
+                    "keyEnvelope": "FQHT3-GfyE0X4ymGbDw8QDP3PWT_xeiRFVOTmiHmrrzvHmRc4yB9rHm3GArXuJvuHVAQe1EXLuh9cm6atqfLq-MZx3GfCi_i",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "IL1do6UePTkhcEJLylH6eIAFFHyqiLdkcyWsZG3XrLE",
+                    "parentKey": "__eUAV8xH4IfgMk16v2E4JcUBgD6UCsklUiDmPj1Vw0",
                     "parentKeyEpoch": 1,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 }
@@ -199,7 +2090,7 @@
             "served": [
                 {
                     "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
-                    "keyEnvelope": "J-lqgO7IyiV0rEtBrPuiGyA9FvHCCtZGt8b1QrwH6i2KcCw1SQ0fhUUexoQSaY1RocmBoVOCflARjzyBxLj76OYhHBdvc_Rh",
+                    "keyEnvelope": "AQzIzOM_V4AAgZ60eskM_caw5PnlwyA9UoqGvwIT_J7sJ_pcU5GfoMMbsQnrj07Fu-hx9tsEymXaQ-pAsHqs0FAUvICghWIi",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -210,7 +2101,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "654u3uBs9bwMkzyJZJrDC9wYAWw4aoECE5iHNdpHc-B5e9Q70ZmfaoVl1gRdc1bZ-pTgc7AkTyoE_HRp-X2LV0TRoRIH4JSQ",
+                    "keyEnvelope": "MpW18IPk6KD-zUBSDnMW-nAVr4yyuhoKCAjgytiUAenCaV8Efv9onOKcBPL4iW_DiU0jA3AyHhPAI1ToDNlKTpaekUOlcnoh",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -221,7 +2112,7 @@
                 },
                 {
                     "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
-                    "keyEnvelope": "wMwUOYYvQfLgGNHWqFP-82jOs3I1F_968eUE-79afGnhkM767717_gUFz4mBSIBi2c0OPyUkwderaJLdgCFrHoikTDJCO456",
+                    "keyEnvelope": "BlXuDSpAHjFWrtvhEw9kEUKu7wqum5YdN4zNuEKC_Ed_xpoU5xUGltvK1uGUDLs0PscTW2OcAH4sYFNRoU-nlA850hIb-T3i",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -301,7 +2192,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "w5HK-4l2J2e8gZD-ErRs0e6QQ5muwb3Ee1A06zsaVxFL4CRgeBDGERt6j1RE55eE8OwAM5-GfGsfsjYj__EkcAalWusn0if-",
+                    "keyEnvelope": "NhsAp3vgWPy3QPbhzR2KyIHGSLYidHEj5F6pR2s5yRnw3XW_gu-rxXNEbYGHVK766IZ9yrI_BxwobZPWiLt34lSrThWouU9K",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -315,8 +2206,8 @@
         {
             "made": [
                 {
-                    "key": "FdqFGDATYAMBLdFEVM2JKWidWqq1V_KJLlo5TH7XeSs",
-                    "keyEnvelope": "m9W5D6GB4rk0KUJsbROR7AYWmbHMsAbvqHkXGm56NqmxD8cfxtH6RQX6GdS74XZb67w6Pm-pkJ7_A2Iz8S5zax9coPYkciVM",
+                    "key": "8jfNIijwTDvofu1xT-Ym-prgqI4I3EKq0jZH4dDplSQ",
+                    "keyEnvelope": "OKdgRS0pOKgIDLD-ZN96YWvb_vh_RnZ3i34hGUDCBnLjUQQEOdBP69APr3QRfDkyK2PS3GdExR6rj8sAl1HXByWkNRk22BbH",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -378,7 +2269,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "WXlso9yZlrKv7GPLK7s1Sq5WPnkIQpjPEgGItIha2Rs2KJTmEAChtTxMGsI1wR1FzS6lnVhTLwkq8CkiXzfYJLpykZyzLdBf",
+                    "keyEnvelope": "R0aQqYwuG8Hzk8FRfOqUKf1ZDn75_K7FiwdvXXkQ4YHuyHV-y7tBwJi6rTCBmKrEbCPneNXyECWUMylgYWrE8r75mVc-N-QD",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -389,7 +2280,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "fsTlXxmsekpgoPhiwzMxkfffvfPhrmwdo9Y4PyK4ceeAZaxAkuSTlVJQksEcSa9UMvXZVeFSJ_27-1dIT4h18MFqt_TIYaKH",
+                    "keyEnvelope": "_Hnkh1qgXbp9e4Z0onK4KFEET-eKXZAvIh34G_7SNnUI7IbgZJw_aFX_g6ouZw69YhyQhtfAQKz34JjFlqv9ZjTNBRiCGzHv",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -400,7 +2291,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "eehlwDr2Qb6SUCD4_D7IqRtWftrE9n3dV3qWNkRVI6a_1X_Z04ARB96hPCVGRR1fAJGGQesQTD4UUPimvv9CnYVE96xfUBDi",
+                    "keyEnvelope": "SXn8VrHb5vWe1i0VnpPP8w7MLUXw9Px2OumQO0GNDTdGQpW8oFUUt8KfasWqpZvXQerIQo638yMdaIaeNqNzvZpJEdGsVj2E",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -414,8 +2305,8 @@
         {
             "made": [
                 {
-                    "key": "2yI83Z9AD1TUnCpyd-KX60BVowZQx1d_KSqN58ictak",
-                    "keyEnvelope": "L6FKDTKg-zzqllL8q81fwV7cQopkpH5X05xpGGKfY9qZ-IBvxZLJ4LodJeAMxdfcFcuxVyRXxB0A4HFK4wMVFoGZEKhla2dW",
+                    "key": "9mlrpM0-ha9YIXYChSi9VKBo86Izy2WeaGz8VfCHgMY",
+                    "keyEnvelope": "yuaBt2q8GNWTCyRnE9vvR8ZL0unaIrZ5_6_dSHksTt5E-CZtEV-MOptbRCZvtfZTX39GYA4R_HO7m3fw5_ER8VSI0TfIXSyu",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -425,12 +2316,12 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "YRHv0pCvmcZDR9uOVKZf6cUJSPG1TDox20tG2BASR00",
-                    "keyEnvelope": "85CuDspYpkrVMccfZ2sFor0r9yf-SXP4tl2KJ8exH8ocNxugUdiEV_qZIQCVZsc4lg70Xz2BWZ8JItY_6HfYZ4Tf1FUPzGhH",
+                    "key": "WqXWMMTDKJfScFHOQmSK7zy4rk2n5KoClXgyRKI7u5M",
+                    "keyEnvelope": "tBoAXghlgIQdJCg4kozT497BpfPX-nhilotbvr97r9DMqP0Gj07fHNSGGCYooYPTba3-MKcks51geNiM8rpb2OISToKTYgwR",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "2yI83Z9AD1TUnCpyd-KX60BVowZQx1d_KSqN58ictak",
+                    "parentKey": "9mlrpM0-ha9YIXYChSi9VKBo86Izy2WeaGz8VfCHgMY",
                     "parentKeyEpoch": 2,
                     "step": 5,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -493,7 +2384,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "kB-ge0wKv-zEX0m8C1A0Nnf8vlg_WfBXRLvJMbepdrL2XxDcDnmHAKTmMOTUzlRkvgRMgPRdxAwxQUPC-scOMIl3xRT-6gEC",
+                    "keyEnvelope": "OnZsRPDUgi6HlzH6JyARYfiPVTtnIQ3IzL3ruSNb5X8KltBYIIWDyLXIjLcmGTaQP8GZiVP31mxdkTI4EZBj1aemZ85t5fYD",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -504,7 +2395,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "ViEzd-2wuVZqiKCr3nWCL0GDm4yOE3wOYRZFlWEzgNQxWYeCHpM1VIE2ru-0KwBiLP8rIHWVAeuzrbgtMnO8isj8oyIwwK2R",
+                    "keyEnvelope": "SPScyfs6hPoZR-cgHvo3eZT9__Q2jCzB6g-Nxz_TDHbNlj720mlydqwGmdQkWtes2UOPAOxbAS0sjczVvomVEOwJRuJWJ8dz",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -515,7 +2406,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "KVUF_Xb514ifRv4mLrpFag0974g0PqewYxsYWy6DKUzMHVSmS-O0wywgkKm3wRkoBuB7rjMZO54FwFcrsoRyqiv09mMe1p_2",
+                    "keyEnvelope": "_AQMrz5-ijAvbEMrAjkdoFP_JYDhfZEEWOQjTviUAQJvdc47WCJFxiPK9TNHhIyiDnfxxnejzCV4XHEbpx0bXMrPs8n2Y62y",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -526,7 +2417,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "aez-gEQL5HhQDXYVV3V84l24WfnkpKgo9QLWEQ8--zV_N1VJV2OzpgB_CV8uKulBMFAj6XNwRwEF8eytFkZ5vBzTb-Vihxgy",
+                    "keyEnvelope": "D87n2lSgV2PUOQP0VEo0xel80jqCJ-aK4s2B9IYMbiPV0KiyuSL3k3txCxO7BDDZY1iOUYJ_a3knHnUvCIld6jXEKfI0awVc",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -540,8 +2431,8 @@
         {
             "made": [
                 {
-                    "key": "GNDwTvHXIBQ038ijsHwS3aUe75VIFMcKSKUk-GwRGp8",
-                    "keyEnvelope": "ZGvuTpXSz0wgd66yX8NP5GSlE7BMliRVYlquv9A-UR9j7giteWleKGX9u4fvuh1hchGHmkBsmWTCCVbZKZwt84qYAQRQD2HF",
+                    "key": "P8Qbf2xyfQQKawJTfx1las1G3hR0BHDt5bCzjoiShac",
+                    "keyEnvelope": "JssO_jfPWK3BtzY8uDLQXYAk0bp1RgJYE80hkAe0WozWYqnwaCiRGAjnfC1w-h1zXiCIAstGTMELJJ6vpM0lGuyz3FTrsi--",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -594,7 +2485,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "TGzUIO8wagfixDr4SgbtVZyZaMQv3u1mRM9hnzMVZT-0VwQvt2Y2C6kwHVjx5Sza10WPqgRxxJTr0KMbn9ShTxyGOHJA9QbN",
+                    "keyEnvelope": "UrLqW3pUVUYnvEAm-FYOP-y5qkraqH26uiOI393s22FWxMPOtC-XLEQkll1P5w1a8gOLkPjKJGTlUVp_ver3_RPGW82SvkHs",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -605,7 +2496,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "MeWU2BtRfSCHlraZKlSlcONW90kS0Bp8uqSWk8rfiMyXo1E192VWDnkbi-YGiiAbhVR_7T-n3DxXmaNC6GWM53U5QIynNbCV",
+                    "keyEnvelope": "Wd-EI9TFw6QFxcybil1a3XJWHcQMWAtLsdqYY-KBAbufnRkmAooD_pkb8XPRqEmXRy75L_-mX2xnUKZaCzr_OusK_9GiulNd",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -616,7 +2507,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "JLUYSh7YHjLWmcwsTyJUXAIojpHvW9s8hoXRsXMN3oAqbv59qj5le_XWly1ga5PnuLgAd-n56PgCUExO0pKCDMjTnz1IpFUY",
+                    "keyEnvelope": "d1EOKQ7bVv6oH7Q8XYu7b-2i22w5gDWHMsoeyYnwbS_PWlE1w7xDTQKPEvNUZmproi71Gg6TBjUWYKioBDjGJrPPms8ExzjM",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -627,7 +2518,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "oxdaPSQnNfjKzt9i_I9L6yM8IvBiM6xLRRbsGJWyDVjwiEzV_TS3IMmy7nUiOupz8Xq-t-5h0JR-o_DlsKoU8uWNPaSa6evT",
+                    "keyEnvelope": "saRdNhMIKEha8o-jldRfrNSFF7T4ZYmaq9GT9mykdr23voYD0ZYzl7GT-YuhE9B_U_kaDcZD-F3Itf5vkuCdGFFHpb9_rrTs",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -641,8 +2532,8 @@
         {
             "made": [
                 {
-                    "key": "oJwo_jWbCf4z_6cbnQuANOZv2DEcu7ZOWKTVLsFYFT4",
-                    "keyEnvelope": "T8M51YnsxO8VaFWppu3TDmjhs8hm2HNjl8SrquSz4SOIeSUP-4OIfid2-qfNcFCbUGzCUh3loSgJC-QVcFfA-bJ60tkVKJhg",
+                    "key": "2jN5nKSxoIzgy74y-jcsCARWKrCIzpk_VA0f_om6BjQ",
+                    "keyEnvelope": "EvYnWN2CdYjDc9bitrREr7AS5ycfvExyxGeV9Y6Vqd4QJXLgkraomcXwWMSNBZ9EgNGj2GgueYyuy6ihrMFgWSssznmQNkyQ",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -704,7 +2595,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "9IQ917aOXb0s6v9wFpGSnQ-EcRBPcsw4w3Qixn-FsFYks8fcveSOcpXhrui2OQmAYPQPf66E4wnq4paW1MFA6ltUdrReY1ed",
+                    "keyEnvelope": "fy5sB9rb-2FxTmMJtA8ZMi289a6J9G4d0DnkZ1jToXMtoj-BcW3Ou9pRqge_w7FJZRma35qtYSobU8HY_rIO6A0lnW_Ch0_7",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -715,7 +2606,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "_iOycJSw2C9WORDo8r6c-MJFC6RtsWfcoQliuoHJW_9KW3km24AO3tkGy3KxJ64TcpDof7O1h62MkE7jVNcbRXfqr6r852mg",
+                    "keyEnvelope": "Vvxi2cYiFdB3PtquZY3AJYmpF1K5UDsn4_IPxPJsCYIUkLRv-5cT-5DMgfytzp-4H-HfpcruJ4agjilk4GjLc26R4z2yt7Ha",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -726,7 +2617,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "vi0LNNRruAE031VL9yW82iKmvQJc0BupUbwvhMmYS3K7iO8kyPPi8GwlLOok8Dn1PUbm9RPXC75ywT8bWUjtYACfdw_rBdVu",
+                    "keyEnvelope": "xmVOKDbnmCts2gDrMba6RWgCX4fkUKdEgzQ-E7XSkbBPAC4PouMuhvxcdajes48bWuuvSAYv8CQkTL029fLf00-vKAaZhJ82",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -737,7 +2628,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "l1kth8j1KADU_uEqmcSjP9fI9xcBQSXUSnPxU4ccdAC9fX1mBF6WNNiAEMzSSnqTa6LyxkXAQSee3mT1b4QMiM7PAiqXa18H",
+                    "keyEnvelope": "0DdX4rCLY_QQlwHeiV1WPnki9trZcIiTzLohVn4QJmdbLNkcj1N6gtwQjuoo4YZU7DzoUQvl3GlgVNFgHN7Bf7hsDPwun9DP",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -748,7 +2639,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "FsIXYKB8camUZE0P5op2MZRSBqxg4cmSYGIR6V8JzH65v97IWtrRaAvs720Cr7EJcLbjoR3ey26ygB-qLg7CnnX9rcVTU3Cx",
+                    "keyEnvelope": "-T4H67MAa5WgKayDiR-vkYMEfCX6tFUsjwz-hYyklhVkWi2FDxkLRZwvAPSzUnY9KvJp3riQ5qEcOGJW5VpkKRI4FCQrzcI6",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -762,8 +2653,8 @@
         {
             "made": [
                 {
-                    "key": "WHlKyhMGGwAopJssIsBCg7eHHH1FwRq09TAd8c0Ywc0",
-                    "keyEnvelope": "QQBGLfFL_lyFx0eHmpvBpqqsYcI_Umbp-IZbyhY2cL405fsf64440WbpUwYyVT0izo92i2hK5zEgbuEP0LBPzraLkdV3fut7",
+                    "key": "Cmd1WfRXzQUtbRpSpRdJDW5INVg3Clmf8gtuwiPPEis",
+                    "keyEnvelope": "D5D2-SBnzeYYp_e99DhdCeOame7GI9AhIqw-RnS2oyGH0YqTZghZtv9wI1lHfkbsQ_hkpq3P4QgQoq5nLKjclRAyh477GCm9",
                     "keyEpoch": 3,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -774,11 +2665,11 @@
                 },
                 {
                     "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
-                    "keyEnvelope": "P-BMx-IRUz1SYRHvBO7nJNhFxrUe3O4ynybkZqGGBhSHmcbrJGMfiL2-xTqMliDKsKzIpSdwvQvyJnVt_FnmXoQG-ChRVIjT",
+                    "keyEnvelope": "Bsxc4uP-yI7QoApxnjKrn-7x7U777xqgUfsK-wo95zQ7gYwWpykK2nxddtbrWcz07mc3xiINMENGSlnzVDPUjqnsxWB1oqQE",
                     "keyEpoch": 3,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "WHlKyhMGGwAopJssIsBCg7eHHH1FwRq09TAd8c0Ywc0",
+                    "parentKey": "Cmd1WfRXzQUtbRpSpRdJDW5INVg3Clmf8gtuwiPPEis",
                     "parentKeyEpoch": 3,
                     "step": 7,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -831,7 +2722,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "cTWvhfnjAgqbAM6Q4MDUbyLJLVIFIG53VW9D0wuT5vGcVXU_A6BVVQkHF6s7X4_2oYozpqRuefqDyHdE0lDnrMJ94T4tqMi7",
+                    "keyEnvelope": "VAKMX5AXsEy7-eDujhWD1bswxWjoGGy4EzihphmOJ0MSP-VVjNuacGVS0n7JNY0nM7fYJSBIPe8zgaJv_xaLJEMEwvIIoSNg",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -842,7 +2733,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "Y9rLr7FV3P7_VKhj8MgCRVSNor3-RYcihkrA3g-b8bVzSCvd9zeCj6qabYw3jS77uXmhezymiO-DO55HbgWh1ZNCT0SxUpJ4",
+                    "keyEnvelope": "5TzUUyBai6bP0sthUUe3i8U2gVIx5i2N2EtIXFtsevPCRLyHXmFZUk8WeGEEAsKfGqu7a-nkrdbwm_T50fT2-2qonIYa-8QA",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -853,7 +2744,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "XgRWyyUttgPCBrH88apPsQBD2YRlJlo01tbFxbB0-boMgZobqIuAeRV7QELR04z-Z62n29XANnEtN2CCQMC8s-qVc1Hu-JJA",
+                    "keyEnvelope": "6VsTBTUJKIDOwQertB97Kzut7oeXNainN3JcTeCp5bT865J17KseaF3fZRHtz06zau5dX4U9BWHQg5gl3G0WicNv0tP5_H0z",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -864,7 +2755,7 @@
                 },
                 {
                     "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
-                    "keyEnvelope": "Bw-_Jds0qcJlgOAraz1TuPv3Nre89LPqezAlFKivU6x_saYhdxrvfdJqLzZhfjEPF7qAAniFv-605DvyKoEKIkHgt626rwBu",
+                    "keyEnvelope": "S7FRf5VcekN9Dq61jX9dsGDmmD6k1yCYHLFslvQaEON7tLbgn7PDiyXgKLRzR6mxPsE6diRIdUJYLafE0rxwhd8qUVuD8B3m",
                     "keyEpoch": 3,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
@@ -875,7 +2766,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "iJNA9OJJA5gsIvNajCGipX5xAXA84IEB5PojuKe-Wxgi6K26EjA-uaQ-7pEE58g6CaxWOG0jyeK2fryuIMWMdR7hyFMYLUM7",
+                    "keyEnvelope": "WNvBiHRQlZvf56r6OOpBaI-luCDUVpALl68vZiwvoy3wMWj2K5Mh6lBiPCc8U_e9D_aBVhXi15i2ccQ58yCqtSIOLrRSWF3s",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -886,18 +2777,18 @@
                 },
                 {
                     "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
-                    "keyEnvelope": "jPIG6rEQcAbVHuGGbaJaAL7t6OhR_BMzMoVEkmd-nnd48-70i03iY-S1vkB3gn53yddCRdUELDTcaV9YTuvU-KvWdYDuc616",
+                    "keyEnvelope": "HMoQgoQAuwTDRPwit0c0RR4rdtPZDCDXcY9gXTA9XpW6FPqehjrOSzyatUavEVZd_xo0zVNRkOxWnI7uvyI5NRHRQ0TOIGuK",
                     "keyEpoch": 3,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "WHlKyhMGGwAopJssIsBCg7eHHH1FwRq09TAd8c0Ywc0",
+                    "parentKey": "Cmd1WfRXzQUtbRpSpRdJDW5INVg3Clmf8gtuwiPPEis",
                     "parentKeyEpoch": 3,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
                     "key": "sOkiW5TNBj94seojXJXOB0B5suskXZbPCEF6s-wlXpc",
-                    "keyEnvelope": "5yzQBWmcUaAT7c2glqRCO884gPrkqD5NCTNtNyrNa2bOl0g7K5ua1TGj8RX2_V1Kbzy4e0YGFK3tIDFuXdevkJqnF3bW_43F",
+                    "keyEnvelope": "ACF40PjJTWelz_znLCpntp8yfRVEJLm6qoGfJJq_iz-IFzQnLbJGZHiN4biUS9GkzZpXgUnUiVUvBA-27hhYDp_4PZJTLVsA",
                     "keyEpoch": 3,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
@@ -908,7 +2799,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "wpViyPoIDn-kU-SVTHKMs5qontjgzV5CE8MAkDfq1COqKMh6BmAw-_FgojUU5V63EsOPjVvAaVKIFRRP-vDB3KiQtvKUkphi",
+                    "keyEnvelope": "nC5pk5rpb3HX3hAcvrvKl9aMDMjQaW3tFQcj5V8S7OEXXkRfeAeavgu93rAgC6X742Cg12tCpDJ0JPlVGhyo8qClu3rRT9QJ",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -922,8 +2813,8 @@
         {
             "made": [
                 {
-                    "key": "yqdxVr3axhp164rliHEpY5Cq8GPS93nJaC2jtjWC5Hg",
-                    "keyEnvelope": "NjuRcY8SYMu3vx81c81sEq0JlIRyoCO4NIWgOFUFfBjHQB6h8mpO-n3HsFPP3O6Ct5-d6qkK8KFxQYqFBWnzpg7VIh5BsOVk",
+                    "key": "FQ3CYMukCqTGfMqmXSG4yaCMNULgeOn-dyudpH9SRPY",
+                    "keyEnvelope": "2vNGe4aPfz9PiquTVDoJbtkfFheMAGS0f1sbU9FgqYCGiH5JtMJjG4YlpN9EwQNK3MoCE-biwQU1V0dtljEUtQPIMjYzG4k6",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -990,7 +2881,7 @@
             "served": [
                 {
                     "key": "t_ApYpvUDUaAufIrZJ3WD0mCu_QtZp_YEkuEvfYvaKE",
-                    "keyEnvelope": "8yyB3Ew3qwDbd-BnhtwqeeNJfampAkzdLzt4BOf_UXm3Umxy-mfKD48pHxoVdTrkMvE1tIc4M5gmm0vYqfpyWExY87YXrN2p",
+                    "keyEnvelope": "yAISedhBq8hDhPhCcPPypBnCjpRpuxT14Voa5PfJKJCYortGCxiol0tQKbwRKACg_V5L-AX7oaRpuY5qR0dOHTXHWSZpBb_G",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1001,7 +2892,7 @@
                 },
                 {
                     "key": "t_ApYpvUDUaAufIrZJ3WD0mCu_QtZp_YEkuEvfYvaKE",
-                    "keyEnvelope": "lLt3FNl2QSi0OzzgzyBT9WMs4s-84g8AynKCyILnSceRqvaEYO1Ab_6O32EzanhCJWJzM9QX2JRa3wDQu0v_nVBw8niN-hOG",
+                    "keyEnvelope": "jW8lepJjq80wzIUk3FEUZ7l2gYbkpOLusLp4IkccCOV4JHX_E-LlGPBfSsNuPPQc3JgHW4Rr53NiwP9qo6gObEAqNl-kEUy_",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1012,7 +2903,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "on0gT5a-0Ctb8v5Ze7tv1sNNGimuFdZscAMD2KYeoSI0ZtR4O_XbnTEpkcBNj8re4YNgBYWaNRtd3KZ9o0FO2e8tq6zZUqwq",
+                    "keyEnvelope": "NbLxF5livhnlGT6r4dzWgUInwQ1-CYomGfr929-gplvjr9F8eNSCwKI-xdkMiqm5wVeBIWQOByWvcl6NC72RPrzG_pI0pfPo",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1026,8 +2917,8 @@
         {
             "made": [
                 {
-                    "key": "Gr7FMkH8RXOfHtCloJQIGrNfUhQunYSyeyklp6I7Yp8",
-                    "keyEnvelope": "dP1q5I7jLXDkU01t5hPoWMx9Meoz00jarW9zkJs1BXXp78IvtGu4xJtpcdEq2bJKJIoMiaq7uKrYSKyzA5iiFrcaKbvcPLmE",
+                    "key": "hZNQcStuJjftooNL-S2Sx4MhqPRYA5wTITBITmHtC-Y",
+                    "keyEnvelope": "sXhLDtNBbWqtfcBu1o2hYZdkSJefAPEjgnCg5THK7MgiYI4bvI6sp8HqNJ9c5yv8Kbp-_bxAHR-ODkJV8qRFW5xrJBHsXprQ",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1082,7 +2973,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "XbeV4q297H6i4Gt-5eYdXglF7Qjp-uHE11nucntAkPI_PAMqDc2vWNLK7TTmXNiS0JesFkc7RnB5neDcVLVKVLNUq-CpFtsM",
+                    "keyEnvelope": "SAyP1t7XZUPC2IP00HY5cwbrwqhyc9lix-TGbLjs8j05n0KDLj_wHSI2Q6P6926XEdDkEE76YqL5wNq5KVHxxdm8YbkKY_5n",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1096,8 +2987,8 @@
         {
             "made": [
                 {
-                    "key": "T9hfCZ1sM15_xs_1qbku2eGyr3dMcaQfS15vB7Uxido",
-                    "keyEnvelope": "2dkX6Icjullyj4ssKfnx73wTlIMkeBbybOzwgrygFPtcnl9hZHf90-51ccfx7eXFFAPLjSFu-x90IGYWHSCO5pvV0unde68x",
+                    "key": "UNyk-n-pN2Sf6TVUT_pbSmUdRei4SIxuPDmYN3ntbqk",
+                    "keyEnvelope": "b8RKTuhAHOkPft0939Nmj-rLhL67_KhPObdvL9QX1Zmy72VU-9ztEhvLnNDkmS9YmXwxSebR-xBTJBT3wLhkGy9e43hx76OU",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1107,12 +2998,12 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "VE_X7oizE8FCAO1WEXd2OmaCg833NSpkbXuqwQNPsc0",
-                    "keyEnvelope": "5sMLwb6x13XSNUotrf-HsfRAKzyQ_vh94fmgkryk6mS9BskPlR5nUzhGBiD-SJbS1J2HtPsFBnnjtriaD6CAYXjWKZFQxHDs",
+                    "key": "bfqB1Oc6NBrKWLClIs5pcRzAnGQO_5l5B6c9jTjE_y4",
+                    "keyEnvelope": "Rko94Yd0tOW0c9ynm8yWu3oL4HZYdCeK3eS0tpa4nMQ98KFXMfk2n-GH4RdaDHmdBU5zMDXx3cBgqkG5J_p0ryMASLZPh7YJ",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "T9hfCZ1sM15_xs_1qbku2eGyr3dMcaQfS15vB7Uxido",
+                    "parentKey": "UNyk-n-pN2Sf6TVUT_pbSmUdRei4SIxuPDmYN3ntbqk",
                     "parentKeyEpoch": 1,
                     "step": 9,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -1183,7 +3074,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "ulqkcUVFHDR7giJaQMgokC5sejQ-GY1YPsyi_B_AN1ltmHxOYI7vz5kaLFkpfD6jqGDmQPuGTGWdGc8XUiyWbINqOsyhKk-x",
+                    "keyEnvelope": "_7GOLZ_nNw1494uHQZbD9ZCXzKleloiFY8uG0-570ejaLSXpna1VRxpdjBWQmXvi0AEHshHAY4ajIEGx2QPMuAzA3CwKRdIY",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1197,8 +3088,8 @@
         {
             "made": [
                 {
-                    "key": "ezcADdawkP7ItWrfRklzgPeGBt9tSfgfIiIyHgI24Yo",
-                    "keyEnvelope": "jzyFm6HwtFfTlKGZB1pjbmKKyEWTWhHC6hLhyZxzFJu9JwAf5ep-m9Z-96NL_1obgWafrKWrhYlS9dW5rDnI7_GRLxde-rsP",
+                    "key": "ZjmYYiZtZnQe0z7icewOzEitprxuVJ5l6uH69rQdf2Y",
+                    "keyEnvelope": "jbsD7vTiCyoyCv9JkJPY2f7Ff5ZrnpCMhJo_z7rh1AvieQrtaH-XmzzL895IJKKRaDpBBY4H8kGIQnwndCatcgSlcCQyDt9k",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1276,7 +3167,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "-ElW7xRB9BqZm43AnrOVoe4R-6_041rLdCNnxLtR3L0p49NZ0W4r0lq0P1TAQgydbyTDpM_MlCL-95DZKYXGhOCORWxMFiuW",
+                    "keyEnvelope": "knQZV-UG6Cf7GB1NqXyiQrZy3PpT-ZgSHqR3EU7tFchhHuZ8lUtng52ITmxdoxpdfMID-O2SL-Q18Ad1ok9ZNtVwaJVREhGm",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1287,7 +3178,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "A2htZlSpXU8NOLRhZIR6Yr9WaawHTBXOqL2OgHJgRuZNG1Sy-YIThbG8MekpD5LOvPVKeN54LPTyoFk-WEdSWgDulMXlGeSw",
+                    "keyEnvelope": "YlCTXNo5I6d-rofrfAGdhMPHz3qat6M7nyvxRxfiA9SgLT-iHKLGz14GU__YJ5tYe17uUwA0rx8KJ-fE0ZNzYA9Ox-0vmkw6",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1298,7 +3189,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "GWq15_t3qfDJW6in2ksMpMKkMGcdNLlAy9cdi5abownOq9eD78Oi79EzU7SmmqriuyMpt4RezAJU2OQAVVDC0o_lbRkvwWbO",
+                    "keyEnvelope": "rF63WEPxE3WBveMkNngJmXl1Wmbboh2nx89lTPrIbGfX5VfojahKfy4Erqe6lHOy5Njpg_O5-SM0u31XH10c4E4xgiGlAnuO",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1309,7 +3200,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "9C61m18EEsukFGLD-44tOsqBaey5_8lK12G9tSsS2xEXsrgENqqCtOpD-IHFsNqWkOIHgTnlVR8XP_tx7NRoagZM6Pg9c828",
+                    "keyEnvelope": "1JNhzc3qc5X_lcjTvJNxGppBoLwj6hyrsF0HAVh5qnRC2_coctXYXefg9NlHos6wVjxuFg41-R1qiCn0clCPSS9e4ZTKHM8j",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1365,7 +3256,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "M4gv79CparKBsTn430aMAoIMO3VKZQ9yTBRMS-1qkrzP81D90sRj43ACw-y5TQ2YnvJaKIktuZP-pfN1f6dFP3wxLsjWtakf",
+                    "keyEnvelope": "bZ2gTj0VBI_cFMoSGfptBj6cjAPoufkVbtVcSK4b0QqNh7VpPxjbYjhFN3LKBvebY1lCnI303GKoujyl-a7i3qTPBzds-0Gy",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1376,7 +3267,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "c9fC7ZKGLp3TAl65H4sneDLr5APMhoyg5ccNFpthN-2Iqq4SHI0nudBCnskQC3ooyEOqid4Yc8BiaicVtD-eo-O2D2YflDvY",
+                    "keyEnvelope": "dGHRxAenysfNwxsUFiexiZu7SVdt0L_MVojsAgJCGRKuCAYABH4OK2U5xhw5G9oq7zDR4A_VISm5c1wSs-FBUsds-ebmCfUJ",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1387,7 +3278,7 @@
                 },
                 {
                     "key": "lMwFPXau5x9YkMkBOnKr4xxUjcX-Nm-n4BhRicL6M2s",
-                    "keyEnvelope": "VAYgZLKXC5Qcrg5LuRiyiciHuDlncXFEbRsJaMlDvLqmE8By6SSgH2cYi0a5tL-QHocwBWoIeAiixwEkQctw_6Xfk46GtoKU",
+                    "keyEnvelope": "4APKsk3yVGW-LmjnOP9YO66XAqiRJb8SZNePU0WVEAnw9Ru9xiuMn8u7wWNNRHZ3CJG2ONTWxQ9R7ni0wzkEWWXy9SUOeCzE",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1398,7 +3289,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "wahVX6Fknq-RY-Go2wT3SMkrAC1sFBVuUnmE7WzC411x01UZkcRbvPXDpovGLSWJfeERv78p6Qse053EJHQ015EDRaosThAR",
+                    "keyEnvelope": "ezWjwearFsbTBrSLFNPHT2H9htWeN7x6IHzS5nuec0dNPJHP6UdYAN5VxGNqMfeKaOT4_nLH3PpEXRp7oGyMKLhfC3tHZsqo",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -1409,7 +3300,7 @@
                 },
                 {
                     "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
-                    "keyEnvelope": "kNYdh-l6UUYsrviWyBGoEV8bCajz-axuLGZ3pbJC4ecJnVkXypebyQmh6wjZRqsOGOa-R1kImYlH6FBm0RjWXYjxnkw5bfvP",
+                    "keyEnvelope": "VVkWMdo1A4O79N81SVDsHeWHTWbzQpr7_FU8kpBdmUiplWrmNW_TUM8O-H6Zgzcu9Gt5emv89hBiE6Bgj14R07nKNszMFr3x",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
@@ -1463,7 +3354,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "J4WVgpGrht_NJvhDKsiuLoA7bo8UImjPhukmGY6qrpE6g30PUSrRuI5i_lbFX_9Pmg3pOotVn_3JWhMhGN9N58ocXvcoC2Mo",
+                    "keyEnvelope": "0M9TLZNDO_SA2R9Cunn7CwIdjQvYzjBXXuEUlVOGGvt2XkUo7_knKmokGwLkJXPUtAKpLASGOxzdW4T8mv3vhMAi3mXkKy6t",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1474,7 +3365,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "Qwh3Y9_tYALJFpgz15aR8Fdfh21TIQ6zaY3yd10a74fptEJ6V6bxDjvv_hPtbvsItxxUd6n807Xjp0BhMzg3rUNAyuEbXlZl",
+                    "keyEnvelope": "gCgk0s6pwzXBChrYpRYuGHUmUNUQlWiBMf3W1XxYQ_7dctoxPPhnXaJGcSwpHA3NEBUkfsH5Bpy27BPseAC606Wvpg5FI6OZ",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1512,7 +3403,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "9uc8F2UVgDSnkSr73OkoPG--6-yWey9T4IM_tIkP2M0y4dl-u5oGpmcq2zM-1FE4BaIaALDcBxjvwggtsWxu13agQqqzJhoB",
+                    "keyEnvelope": "XKkhovBKZVYe5dGLCMqilIK1c2j6QLhOjsa3zrrV05xfH9wTZHsKUZdAp9rdzY52qA1_7k_-jICMmXZTvwsSzdrdln1Ez3bz",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1523,7 +3414,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "p2qkC5UozUqAWmsca4IDHHhuXfil1ENzStcTUF9UGpW0RJF00_UB1hKqEbD-wlrVDCtTw188tldfrelc2lms5-i8gYMnThKk",
+                    "keyEnvelope": "_ApttUgpMSWUXyipNWpP7DXH2vwP8Ve1S1ZMN5R4jI34xw_3BOsW2Sx7K3pERnJLmFqp5UkBqOb9e4a68Yz1I6tI7zMlJJdh",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1534,7 +3425,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "SgRg79Gg09c8-yHNcuGe0pqyxf30BotWfcgAzXQB-4dTMyKOPGhN9f6FVQ4nFv2yQQxQ7rHbf4ighE1yDM-hVJ8jz9Jeat1E",
+                    "keyEnvelope": "S9Y2_JjbpDClnVqFsKVllWA9BfR4I1cdQlzSq5ASJ6pEE2SWsokEMfLv5GgnvxNY2WJSi3XLzFe-2N9vpd6-8VbkTeXGvHdQ",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1591,7 +3482,7 @@
             "served": [
                 {
                     "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
-                    "keyEnvelope": "DX93jj4minIC-7nQfI2QQoeBEUqjz1MJtq9xYFaWlAptIgnYf0pdisyi-7i9pINooFwMLQgzUNKzzqPCFaex1xj0dlapI5hw",
+                    "keyEnvelope": "UGkAkEPhiAOcST04wDXLhLqSZVsioGrUN7xoBZVa7W3CpQr3r8fbAt1vmBrnXU9bVsMdWizE1geIT9hxcagmKrRwGFCLUU0Q",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1602,7 +3493,7 @@
                 },
                 {
                     "key": "otoTTIW99i9ooNkSS4O89S5mn9gRSYK79CxlntcPSIE",
-                    "keyEnvelope": "CHvwcrV_61Fholv9AYjJfTx30jK51IQe3rdTD4QNUDYwGZELRu1mEl-KCCKiGOonYBlxu4XtS5Hsj0s40uMe84smXply2ft4",
+                    "keyEnvelope": "_Sw_ayBHmyaeda965aHyA174gD5WPBe2lfHPaSx2xi6cMYMrCjU21ltaGM8XlobA-Xoix1q7_zCNt9nl4pQOMoMXeSu84qzO",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1616,8 +3507,8 @@
         {
             "made": [
                 {
-                    "key": "XzdgIN404oE7ffxtoGpw6-DXsbZ52RhARxwYSALPosY",
-                    "keyEnvelope": "YsTPMM1yu7nQ5EkEvz1hQOevOnjaCIaMa66ZTkpU8XDJwvgF0LCOOEErSuyKTBDE972eAQMBjCwM8rMZjWsHtOKEgHEnQZ8P",
+                    "key": "b9n3HLA0Y2TwM0RfRXom1egJNAAPXzQfxuC3TrMC6TA",
+                    "keyEnvelope": "QCRQnyC2nYy12RQEaXqePxONpSB6EPwKhiONw0rFF5vb1RQHjz9OC-HyHIsp3Q0LrZmSMR10nvvj23AI3tt8pBbvz6rItq5x",
                     "keyEpoch": 3,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000005",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -1672,7 +3563,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "7S54AMpAbcoJDvbs6JJCGfXfdgU-VB22hbpwQKJ4g3FNZb00pRP0snC0Y_HOoKBKYIGNBdUk1qHKIJ8YI1_B1LBzAuI1ueiD",
+                    "keyEnvelope": "7kPYZJFfACWIFodppTERzOU-qrL6GCS_ZFfRIwi8Nzn-q2eCFYvv6VyrileQ2P8UoBuTE8hNZbWsOW7Cxovu0xOHTY-49bpC",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1683,7 +3574,7 @@
                 },
                 {
                     "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
-                    "keyEnvelope": "qneISlGgjcW0SRgrs2N8aiIvuUvZlmkmDqX-WEKcTpqJbpGM_IOh7QSLS_f-pF4yALF835BhWcSHCHsQ0slpo1H59Z2g35nZ",
+                    "keyEnvelope": "5C6nZyW0lWW4qWmyEPNjxjeKf1OLVBeOLYjP7E85jTf6AxGLN63rKjkQFuBSb-yNQdu765cgr5Ici_bRP10DbUQF5NKXcIgl",
                     "keyEpoch": 3,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -1694,7 +3585,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "fjvZrP9cd7Y_CtMtiFJBtqgK24APlO89eoec7jUhv8mySE3GHXkgNtr8kfySqHr7UwU12XSFeP21qtjvwuekgCAI3Q4hUtCa",
+                    "keyEnvelope": "5t0kOn_PhRraordzEH95d-6n03dQengToGFeuluAOP4EPX8RZJDBoMy7d-ibDDDNf4oDb4pvxtoiAdYqU65z7PN1gmBLXreY",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -1705,7 +3596,7 @@
                 },
                 {
                     "key": "jcX9Nm6m3xdQiMD5MWmi2hNLg7z0LGWd1g5Gf7fvKGA",
-                    "keyEnvelope": "xAsmvICIxqqrVL3WaHjPM8bv10F5UmWn6-tQ3HHIbFvXyr5Df7NaLH14W2balgg9uvXBjWx1Ha20ha2CrnF_X0jgJ2fCOZm4",
+                    "keyEnvelope": "DxJd1wx_k9g_b6Y_LDd5fEsxub6cldmKIB2NK_jaJJYjuelCXZ-P2zAZvgMhjtTM6M4YeLcqLeorncg-rpSyv3msd4-yY4Jt",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
@@ -1719,8 +3610,8 @@
         {
             "made": [
                 {
-                    "key": "Jhy1dFeHTgukFjmgKInVsUUChvbgqrViYMTR_IDsIEQ",
-                    "keyEnvelope": "nhlA3sJvZ6WYPu8KhoMs0FWw8Ifz4XPlYN5yJ2-IW2_r0uJJxXHxKMaAmpYFhC0l3FvHJBBQJEKInAq9sgyLQr1erfCff1hO",
+                    "key": "o-rfBkGkJTYcUkrlkrwuLCnivCC-aR26qcoGdc4fSHI",
+                    "keyEnvelope": "gh6R0HtFgt3VIvLiSs5Ic-F9l6keOTY-0nv43EHLsLbcBAePagI8MA5fsTsRPVwMFwRVmZJPTrrtmSESOhev7zGz8iwkl_KM",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1820,7 +3711,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "Xtfjipflt2UX1xzHzVspCIxWOFiLO5bSIW9oYKtVWEd5Q84mSGcbAKzQaoQP2MCXVfld84OX_Fayn3EOaJWTAlLOsYcGrMVf",
+                    "keyEnvelope": "MJG8cM6bU1R6MTFIE6M2MnRA2fDx8ctosTD-fgplirWiB4-MYCE1yqSPozVcltFoUgGw-iJcxtf5ix-GmAxQMO_0Qbmls-dQ",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1831,7 +3722,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "H4h8Dk7u0sTlyoowkCiIw7MDWetx9opAkpgB6MKlZnV2G7I3B14yrqjjJbBnjTPkQNDLtnZNl6LyMkuRe7KpMY2R6CPKWpl0",
+                    "keyEnvelope": "7UXxWQFbHt443XOZInb7edoR5ONDFahJv0_m26KgrdUKrteeqymV9lYWYFMATMefdpQ6wYk61eEt53YT4Wibt1t-Fr1Bp0Pj",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1842,7 +3733,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "2gzYYPWKs8M7q26uzFgwSyT2EFR2NMoGGn-f0k2qquwEIr9xkLeuKczHiXiAWHny4uPIEmlyVojMJKWBwfDXJmPsQIih2URU",
+                    "keyEnvelope": "_9UwmUsyDqwMNhEuyZA4PC8Kcx52kWbNJE1cFN7vcqDNZBmXLf_UpM3ybfixxge-p4DGOiuUqms7FCck6Xcu2sz-JxjXMxD7",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1856,8 +3747,8 @@
         {
             "made": [
                 {
-                    "key": "YnV6g9n3ZHIcrFeFk9Q6SSSRHWjyH3rxJNbcmFznkfo",
-                    "keyEnvelope": "4rUTunawle4oZM1ET43ug5O-hRKm9qiLC3Ub2imBlaIsixlPUnn5aZL76ctBR4YNWZGviEEwubvMjAk5Tl3ucWtHJVi-uh0B",
+                    "key": "4XB1zHUFNrZaRSTJ8CVRwY0_D5lEzAvR7exn1ebsXT0",
+                    "keyEnvelope": "v9TkaF4dQZYk5KAOALQpQsoI3P3YYL1UEqN0LPflzxrWHQJtv74_wv6jV9IOXq5x3OB6FkFEqm4zgY48h_aPl8sC3ZxMNDkF",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1867,12 +3758,12 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "zi7nRMnKLWAPPMfuM8CAQr8cDrsFMC_8HX-aMnT2bY0",
-                    "keyEnvelope": "iKagQ6gh20Fyn8W44FlIl866wjA-uaXEEwbXx7jfMR33Zy0nURbT2TFHy7FwZo9gfCf0qPmdHUNa6QHObSgD8qMmcSuJfZ2m",
+                    "key": "ugi1OmR0rPxwWxhsBGFLwN1DtGINfs3581zq7wEcETg",
+                    "keyEnvelope": "cCsOXGAhc6XPhsWjexIO1Bsy_zFohiXHOa-Z6I0mXRE4RfcA6kX9SIp5NxE3Z36y8q9zjXoAEzRCcff367PXvWb0AqVfCMcZ",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "YnV6g9n3ZHIcrFeFk9Q6SSSRHWjyH3rxJNbcmFznkfo",
+                    "parentKey": "4XB1zHUFNrZaRSTJ8CVRwY0_D5lEzAvR7exn1ebsXT0",
                     "parentKeyEpoch": 1,
                     "step": 6,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -1923,7 +3814,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "YLReRTHaVZx6WBPw_msyga5UnApvrQMao_f1O0XtoNGB2MuBWzMpqwg_WYAkLCvsLaz1qwZeh-FSImRPPqDtHqzcsdnXyFJ7",
+                    "keyEnvelope": "bseXB0vQLTlw3XxOsFGJAfTrWzLxeHoxS6BNNjUgYTNKTLjQKDs_qBnJtPPU3PXC6kn9VJ94Zk090y-CDA1k2Aa1dl1LtfTr",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -1973,8 +3864,8 @@
         {
             "made": [
                 {
-                    "key": "1R1nX-w-w9LTOJ6xmyxp5l23X4rd_qw2QMeqmA75jz8",
-                    "keyEnvelope": "7AGsKS99dA5N0GYEAcy4UXmnthFFSqrxvhYhFRo1PwAfIjsGiD2zScORl0zgEJezzW4g2kI1uSQONjcAgLB4sh1E9nlvJFgY",
+                    "key": "gL3r1gAbH5z2H29KsKI2ZKmik-QF9XIwSkWjeY3rEbc",
+                    "keyEnvelope": "YT8O18KB9kCUHoak7FTe1SHWufpnobcCei4TCUMCVekX6xn93kXqpxkYM8XsaophBIoJbgux4ySWm74DWadRxaRGtNi1uHJl",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2032,7 +3923,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "MMY06nGN89FvYLvktRdvuJcZEMBhXLJKdLqH4kXwUkOHccuRpXGz3iSoycjfRZ_qaRZ-4JSWdrbHYAFjluMzoPWi08gp-4fB",
+                    "keyEnvelope": "_89Krwcq8z37xgbi-jwcKG883AXoWVU1B0dYZD2G4JqE4YWnbaJtHz0oeVxTTbr2x-eHZsWvynDL8pUVxl5d0h1JhkcnHdUf",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000008",
@@ -2043,7 +3934,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "IF1HML2rLIZjCTLxkesqc22C3hiQn_EplHI1ZwAkoEucnJCRDg2JlT9TTOvAzCF4La1_6_dRK0Rv5PoSnCNepOm9vB2R-m2E",
+                    "keyEnvelope": "piCulq0GJobNtpI4-h1V7kytW55XUXp2mpS4-5lIZUiL5y-vy22gBHB--uy_w8OI1bomL8fVcOBKUWbOOxu4FXHhfaO5Iziz",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2054,7 +3945,7 @@
                 },
                 {
                     "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
-                    "keyEnvelope": "kq28BpqyqwnEODe0zgRSQr65UdFgNXLri8zlHvJSsckMYtMh4CvTIoDMm3b6jy_mBWA0NeFXtCnqpSaFcG6apDS92PuhYsUI",
+                    "keyEnvelope": "aprTZ5sWBe9BIOb3-O8UFCU4PGN6UZf0ve8qM_PoEFP19WnNcgeVE1S5Thc58V6-xdJcJngaZdps29H5m6ezWDvlV6xnsI3R",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000008",
@@ -2068,8 +3959,8 @@
         {
             "made": [
                 {
-                    "key": "9BNiPu7_H_9QqGz7LV-p6ciTBviTeO6RAlYVHGJJ1xg",
-                    "keyEnvelope": "hYm5Xxh13l8KcrYiG1i3Fu-MF92DzN863XNH8dVorYYb9RVcd6Z9fbZ-XPM-o0-jza36jWZrgEMf4imi7z0U2IGtwLVouUY-",
+                    "key": "POtkUqeyOfiXZiWW3t84MkcFTyq82_ChPM7sfabwss8",
+                    "keyEnvelope": "JKYLY2cj2eyjeeegKlvuu7LEjjkAC76ZQUxU1RN5WYpIBG6GBCUS3mDvuIUWrUGQSVMANdHweutEFwWPBHu5DP2xltSVDgsO",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2079,12 +3970,12 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "xryfQBkEjYxppRJsrGrhLuJ9-hIiREhkxWQ1mwicT0Q",
-                    "keyEnvelope": "bZ6wKHy6AdBMGBU9wNs3L7g1_KoBeYMaBdsPaFLAO78iWv-FD3BnxhB0xKP2FxjBPyEeT84-KUh2LJYRoP8y0YNj-hLlSWI0",
+                    "key": "6LolNtzAKiLphKZ56xAtqY5t6IQrA_Ux2RzlE0Yi2lg",
+                    "keyEnvelope": "qD9nHLYzAy9saiyWx80IcJaqmzHoB2AVN8twqz0Di_Wm3Xfb01NBxzNeCyXZmST4RETIcVcp4JKhM2Qg5QM68aSLW_X3ajLU",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "9BNiPu7_H_9QqGz7LV-p6ciTBviTeO6RAlYVHGJJ1xg",
+                    "parentKey": "POtkUqeyOfiXZiWW3t84MkcFTyq82_ChPM7sfabwss8",
                     "parentKeyEpoch": 1,
                     "step": 9,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -2138,7 +4029,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "q-Aylnc5CeRAbuRH4KkCcYI3PNyfktV3udhg2t5ecaAUK4KY7KuknpbKMUb5ODBpW6I8B8MkmTR6v__OpbGsW6RYR2Mp3zmB",
+                    "keyEnvelope": "ew0mSqj4od6NLiuR_wI4RQ-jIQPNLbEe3OGeZW1PEJWHodI3w3do3LgMoeU49gL2AAzE2rp-nyFKAmDxf6n7-S_r54sEbUvZ",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2152,8 +4043,8 @@
         {
             "made": [
                 {
-                    "key": "CzbiVtfLqQNP9CH3MrfsnS9VozivLzHjzob5_hJBJMg",
-                    "keyEnvelope": "JeaD1BatlRFwKzf4bOf63zBV6nv_HVeB2oEyk18s_kldJ1dH9q8t5Vk6K9c4g3moVDn6dq7GZqVFkROaoIrM2nCkBa0AeJQD",
+                    "key": "5l8KOABhp5BN5TLIFQA18DXLI0NK8qwhFBINXmHNz6s",
+                    "keyEnvelope": "TyDgkWOkbvnoF0wPKWx35wetw4QEbP8OfTsaubx9rKKuHueJITvFMNotzsQHwcaV0JU_4nPcsAE6-6E32ZetX00tle-asJjz",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2163,12 +4054,12 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "P-GyMbg9Y1Mu5DQIfuZFIswsA8VrMNSc4x6JIRu3Hpw",
-                    "keyEnvelope": "Q__2TunCxtWjdF6IpJnQi2AhPTVdlyvuuyzhJqaqmpDDkDG6g74iWVhokmfig-7-W6IRnQQ5-c6T5-mlmeW9Cv2-frPOxFl7",
+                    "key": "N44eXCNEPdfXTAqna8yRrUp0lJ_NaBfUB_xivtIDWu8",
+                    "keyEnvelope": "OFpYJt1kFw0S2Yaz_76R-BHKZX-HBWtqFHPwb-OqUjdc96X6VxVQwTS0XKPdGwp-86X99RxO74oszGRPcjWSZ4zvLB_ts0Nx",
                     "keyEpoch": 1,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000002",
-                    "parentKey": "CzbiVtfLqQNP9CH3MrfsnS9VozivLzHjzob5_hJBJMg",
+                    "parentKey": "5l8KOABhp5BN5TLIFQA18DXLI0NK8qwhFBINXmHNz6s",
                     "parentKeyEpoch": 1,
                     "step": 10,
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
@@ -2224,7 +4115,7 @@
             "served": [
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "th3TQN97z1H7aehsy15EuHefez26ln6EtJHrF7ui31pYT30Oay0CVIaam0AqLfFsxcEcrnayPuo-iLKsWswrxayHsgzaQF7F",
+                    "keyEnvelope": "xgMKfQwzkb-ZPAJX5rFQ6l6HvSnR9wjePOZMK61J3c8bAvwNF6h8qbx0qFh_6ISZ4FucduVMT9pdA4MvDizPjK5Nx4XwCqcF",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2286,7 +4177,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "Tg46CRBR5PoCV3RkiY-HLF91RLUTF6lCdWMhnAeW708_mWhBHxEk3hT8PWokd9ff_rEjEfRLRqP778vXbBpxwSwJoO945cov",
+                    "keyEnvelope": "bdMKPwqyyEOcLetHfZgLkrnIosxyq5sr3p49Pljw3GfAFSqVZig2Tmpmh70kJORqHyB9XIGm-fDRWXQsCUGlsoCyEv-5ddcK",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2362,7 +4253,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "Ag30BK2whRZbT5-B6f5562TRlVm3xgWKwKlfDsrh7WMrtz27Q_kzI6YGAUdubr8p0iWcQteWAR7reIqCpzD5kZ1gaewsUZbF",
+                    "keyEnvelope": "xtnoIWPV6aR_K0f7D0KfvEAMbY81xYMs4957chxMYWf8GH-qcLr4ZWQxJwAEdkGE5mFll-hE9WVC7NGx_NfGK2Y9OhiDwF6D",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2373,7 +4264,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "RVOi28ubxqeul9YX7hWSleePKwqI_qtp2ToTvKiGJmL-oqJ7TxaVi_HyrGBDPI_NCxTet3hw2BKmg4BZC0tSgPdfoDN9rRI0",
+                    "keyEnvelope": "lOuRcFhXosj4_fPzHF3m2fQOPraZRTi2LlgFkxkRV7lmsCW0mFzxzr29QT1bb81XyoCgFnZGq1njK1gQ39i6p8oJlJ8HQzb9",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2384,7 +4275,7 @@
                 },
                 {
                     "key": "m9MMRH227idgmNEJQnuz7CVdls4HQHix6iJbk8wFPXY",
-                    "keyEnvelope": "WiEZHwxxZ2BUc7YMFZMpqDStrGAHCM9HJ__1WZKWXxEVVOW9wTHSDZgJlLyO-dZuOvHHsOBQN9uHbjoqMbzpcH9hPcJHt0Ov",
+                    "keyEnvelope": "UHXd04FVfXPJfT_6BUc5O7y1s4ev0ukVG8nsa2vFwplwZ_YmuzyOHIRTiNwvpawHzozsMiK0aIwm-mtpHxWL26Mc4Nx_3G35",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000008",
@@ -2395,7 +4286,7 @@
                 },
                 {
                     "key": "otoTTIW99i9ooNkSS4O89S5mn9gRSYK79CxlntcPSIE",
-                    "keyEnvelope": "bhAS70FuGDT7N8BW-q-DCFofORx6zxEp2FN_8w3onD4V6Np6dSRZc3mhxWe2SgZk3LyKo7n5F_rkKELY9byQwIsewY1OPLTb",
+                    "keyEnvelope": "5Dj6lvLuJU7ZRxlBLfL8n-GU9U-KAhYR4Vh_Mkgwg7VOtt9d0Rfzx8hxjGFU4x1E4I8say6850m3xOVJbRhLgfvy3ycz9KUu",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2409,8 +4300,8 @@
         {
             "made": [
                 {
-                    "key": "hY6oEPe86G37bjWgwupo2842TLGrAvCPaoqXTRgZEmE",
-                    "keyEnvelope": "dpAaX5SFPgnSA2IG20SIvf_RbcbntEV9pbqclg8rfwflmE4f6jYU1nWYL-lgXCgd4f-_kyofbTpOWGtV2GIgq4owOmSspyRM",
+                    "key": "xSSb0SfB2_RfvoPXjLAH1xAfaf_8a8PgTFFIVn--Xuc",
+                    "keyEnvelope": "UAP7JBg4Oj6WxA-llpMzAaaip00HcHbFjzyj1Ciik1BAzJEKGAFYDgZiQcsGj15EhnDUoPSyVizzgyTpZVXd3Y-qy7CTS0sp",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2420,8 +4311,8 @@
                     "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5"
                 },
                 {
-                    "key": "AWmC3rYE7hhFNHyG9Xi_MZtlKgxAESpokjByXAoM27g",
-                    "keyEnvelope": "n-oyO39vk8Qc9PMrhFQb4fyUxBOF9Pv1NkE5V0PZn7D64JMxZM3DNu3mCcul2GPnyENo3QwVr5pN4nXPwICAshcym_kwYkau",
+                    "key": "FpFw6VhluAXvxZbaIFQQ0oBC4tB6coSW1E9cdDLonkU",
+                    "keyEnvelope": "cuFQKk_o1sPvGRYFRbyQOVfGOQEZooAeHq_jmvPXirzEhr21b4W7lU9uCxvMI7egfTpFzVVLHdye77lteSasQ1usfR351HAu",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2497,7 +4388,7 @@
             "served": [
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "bCi7DijBbMyFK-4agN7MlqYQy8rRLm5IUxLYL3KfyQQFcSjy0otzdrjKqUqvnolBJQrhsuGLYfcf-0-JellRWRarxWKtfiaW",
+                    "keyEnvelope": "fiDb-U1FYQdnbDtux7YQhoj70uzaS6pLuBlEoF7sfWggO2ecvwqB2ip3JayePyTpTpmNMRlwYp9xm5xOa1iaGh26Iq_6kzd7",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2508,7 +4399,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "D3rNiHFl027BKsgMzGGpvxekbggQVwyXWUaaW5Ff6KwFJtGoXvOjiX4yFRtQsbPygcWV5VyBWJH6eCat-XKrjg8Msriu5U1O",
+                    "keyEnvelope": "llKcO9M3zj7PkwMm2Lq-K7omFvfw16jcy4XXEai-ak_eTk4z4zoM_NQ5XDrZVt0fIyZn3yywohIUsl8hi2lbTbDuKkLYRMT8",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2519,7 +4410,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "RijGxYdN6pDYU-Ya06niWb8sMqSAxrCGEKlYTvYZuAzkGC8VEeKrOh2PIB2mDEz6JMRoTDUFE0nP_x2jWaSm9Lrnc7FGdBg7",
+                    "keyEnvelope": "bkNupcgs5T4G8PUDvLqz-YUu-tMb4lR3LeS3Gj3olLG2b_GsUdWcqfH8iEjc8LSGRujo5M3EnJh_4SFzgMEESbR2Z9-6HTxb",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2530,7 +4421,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "5z6sff1JrAMhmbuhs2OnIMCH9uhxuL7ejmdGguLPDGmbnQr0EnU1ZaYRPAcfU0kpR7z0nyl1pIZ_x4VI-bG6EMG7oZiFTWte",
+                    "keyEnvelope": "ezegQ6Gb5iq8A_CEnXwAav3-m2odxbQPvBwNs9A3KTuWXiXuu0EOel306Jyia7dZ9QZsHNgjI5iN9uaj_qyA9z6j_bVtU6Wc",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2541,7 +4432,7 @@
                 },
                 {
                     "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
-                    "keyEnvelope": "RdaROfNTF6cWCnlDtzCX7odyUITWwWQtSnyZLS7O6wy_poiC-RTAOVHVBqHJYrLzAWoo-k7nFzmqiGg3ACxTLPbPtsbytBLW",
+                    "keyEnvelope": "CKtQvsxdOaLDOsIhvqpgZn4KNFRBk1O8Idx1C7Ivffxc2WgATQqfRcr2kHwdD0a_gMmJNy3Mpzo2wcTDeO9NGuhiT8OboDSm",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
@@ -2552,7 +4443,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "E-Y3mj-Z_e9gHiEePg1Vb58AdBf6596qsCrOIPz7fI-Uzf0WzZ0r6m8wV5hyXhX0ru4NUBrLu_000Y5Ptkrjk1IOUf6IH2lY",
+                    "keyEnvelope": "SMDV6atpx88mR1ibmv68KNoLzIY4UhuKgHXUTU-9h3_oBvrBaZvL_iddii350v83ZY0tjHu783C6-feZbqeaAp6Lr1_HlQb0",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2563,7 +4454,7 @@
                 },
                 {
                     "key": "hr72Lmef1w9IgLjwKWGZ0QpCerLrI1uTzAQ8dK3lHVU",
-                    "keyEnvelope": "YWzLYVYBM4jCVEXO5sYPnFNMa5fB0SBP-2usteS7Cro9QV6gwFO06qqkPg8r0hawCz2MeIUJ6IbAKxnYSCevZMJiGamZXnd_",
+                    "keyEnvelope": "1bq15NZhVdQWiZqdDX-17tRZERthcaQwxABJsDJ0T-99koxV2ewYMsnZUaKDjNUPtOkIF9mvn7DVLpgWxU_c2eS2WW46zrni",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000003",
@@ -2610,7 +4501,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "1cipppeWQRubt4BfIUMZLOIZtF8V21J2SrWXLPnnYhLreh9gIx5gMaWlvicgrqTw0-pDjdgmCwOgo2O7yZDNIvuhsb3BIWkt",
+                    "keyEnvelope": "LMDrSEtMBFHRbGd8f1BW0HLXbCubIaMjSGpzY2srBRWKcpeVq6TcaCC45JbbFstotU3bKlwM404FPC60C8cc4FXCzSjdkyB3",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2621,7 +4512,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "rCPQj7R79C2ku7cxWNr6HgyYvgzalBmh8VezoNWCDHBaO8TE56dHQkFrikTpQkEyQ0EV-w_Euk2bUjH7Sp837dzgjso0f9o_",
+                    "keyEnvelope": "DAFVZQKrOBksVVfHbn80eIdEm9ky6MXMz_2qO-Po-6GVOPs_h2w4oDMhHt0P7xvmqMShICbjDmSfhM7aTaeLnrTzwWyZcQDE",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2632,7 +4523,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "1lbzmmho16ex8ht0R23w8IKNbFddfwpph1EEcPRCsbfakKG2Rr40B1NPqtrgIfBA0AUhOiBIDgOU61zO8svKeFqJpG8Bk043",
+                    "keyEnvelope": "bO6jdcvnGQXsEvuXzQZ3WMkTHVxuOTYOcbwgMXeCMFBrsCPNiU5fS-kLPwj49SETAnE8EfXnRlDB2yoKmt_Vz52nLwJQ5Eye",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2643,7 +4534,7 @@
                 },
                 {
                     "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
-                    "keyEnvelope": "INwmU_wUALbEgH-zE4wBamK_5ocnr5BLIuN7rl86DzpFKQDIeoAM3Ei6d3BwAvByynKzFxfV-jCAou0gIJocEbv2SIPSI7rN",
+                    "keyEnvelope": "D7aOkNOeTCNwCjH9j_OyTAwc-BikTthi9fS2DZ7lD0FTTsALPlXrWdHx1OZKHlc57MLihFANUoq1s_Yb3Gfabjwumj7A1OV6",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
@@ -2654,7 +4545,7 @@
                 },
                 {
                     "key": "qeEaU4zF_jdwqOEaU4zF_jdvqOEaU4zF_jZvqOEaU4w",
-                    "keyEnvelope": "sA12cGniyb9mZKVnJdWcTA0cdmMYtrjwEPe5MMlklibbhxbJY94m1l06Dt8OFgk3yRUXAnlgAGslnUyDKd4OPj4qgAvQGhbn",
+                    "keyEnvelope": "IMEbEPhQJGeFRAUvEN2gsF0pr_y0jhdjU2zYpxRMck0REXtd_6TkW9Q0k_3CDd2d1-xWwkRckpG71uMH2rqxaEKWHxtd2Zwq",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000004",
@@ -2668,8 +4559,8 @@
         {
             "made": [
                 {
-                    "key": "4WaN87Y7dUVvAYpPiSfwYrV-3FtlBWEVieqH7G7UwX0",
-                    "keyEnvelope": "hp7fjucGgulr8IaDTKyIIQrZYZKtoYHV2R7fq2TE50f0ZuTDNzakdsevu5R_npI2BWRrm2bkIQ5q8CTLa8uTfZ5JF4RDLQyO",
+                    "key": "b2IFljQKLQN_LbRCce8NrOgho7j9lWGQFTuekiIUt8M",
+                    "keyEnvelope": "eeIjhdHYWWU2HoG1Fu0wk6aBEP-c3P-lm_bhsu1S6drIsOElP1z-7iGEpjv9BTPpx8CnaNthtJCznK2swAVIQcul8jsWihqB",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2735,7 +4626,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "L3quNJlXXz53Tn9EFt4PmN4I_LbkRgdyv-eErf80eXl8HK37sB5MFdYTENnA8ETQ58c-jHMOxEuqLY3lIfXX6wlbZEi8ERGh",
+                    "keyEnvelope": "bcY7W9ECa4utvwNEbv_bA1nxq39IODIGXo9ywjKM0KIZOGjCukXmWXYVtZo1c7ULiWpBYjBuhPTtGN0Nnm78zDONpstIQdIi",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2746,7 +4637,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "bkLICtfOTrCmphDUWZCRAn7ucvzvvpbcWVDalqlOxnamjXxT-oDvA004miLlLRJzRuH8qzTuMBcIlEEAW_XV9G423amUVSap",
+                    "keyEnvelope": "GYsOl9HtOudkVqUegXl_TxluRSIKAMI6qpwoQ9Vw_kPpQL4TesMq5UOZUd1k-6qvcrAtm_PDMdLTE_lc4QC5WEyp86mHqBDk",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2757,7 +4648,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "Rmmo4bitCJ7NRbyXS5eBSH_UaT_a690QY3FYBTR9iQ_aCxLs9SD2UNJUXUz2U_rO62KoD56_7efyWqzU3s1pa7JpQIZFKneR",
+                    "keyEnvelope": "CGYzAzv523Y83A-2Lla4I3Pfd4vy1tdfMt5D8sz3_BwCH4mLVhrRgcvXtS791GNtjFCw7V7qwNBDvJBsAcVGKImS0ZRjEHsr",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2768,7 +4659,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "-h1QT7dtM0YAM0bjlNbaVrdONlPmX9EnTNbZzOXteqYsBn9NNIuiG9e2xA3Tlg_Jz9XxjnIyRx-91OQGglzSoJaOaXCoyROO",
+                    "keyEnvelope": "bUE5uUyzOftumdFnQ57LDgUT4R9iofnjykISxXaKFQyZ7JVtk0lmoZZSq4LxtHe9WbVWGHN7C67_aShB6YZ6QKCAN0hrVzTt",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2779,7 +4670,7 @@
                 },
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "4kP5dYU3gk45k0KDLHQKrYnhesTAE5CP1egxHyETzYVnl69REHXR3b26Mhd-Zv3WNuvO07bcjO6J0ZzfE5QjKOEi0ovxwrq1",
+                    "keyEnvelope": "O4olICQzx3uJF-is-dFr8grJpwIbxVOeyUjEd2M2I8raSWg2X_dSgXq7_vylYXVIYQlN99D9rijYVgs9bEO2ELnot_eJ_W1P",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2790,7 +4681,7 @@
                 },
                 {
                     "key": "IVKEtugaTH6w4RNFd6nbDT9wotQGOGqczv8xY5XH-Ss",
-                    "keyEnvelope": "rmhqANAUIyFT6kOCsn9vcVeMaUX6mnkg7rff8uhYopjTo_q172BVZBhh012FgeQw98zThKErs6R0JSvILCT-EviHG54OYw3t",
+                    "keyEnvelope": "prG4arvT0PrbTrkhQuB7yUggxE2haEiFxsMoWTAXPWpR1YfUubOsTrillIwLW3RfQQhkYNBoe3VcudpnzgH2A5b6LFlFBNmk",
                     "keyEpoch": 1,
                     "label": "previous-root",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2801,7 +4692,7 @@
                 },
                 {
                     "key": "f7fvJ1-XzwdAeLDoIFiQyAE5canhGVGJwvoyaqLaEko",
-                    "keyEnvelope": "ZTN-1sJZuJOLXXqs0JvZoG9vp-aJNMyj68dJREG0AjmcqSBJ21u6in8C9RlJBLfeH8dxc-E69_qy6cbK7F95MWOAUqI3ws_t",
+                    "keyEnvelope": "p_qaSd16H4Bp8R4h4zkYYbDviaXDH6vxCw2DXXwstpyhcE61MXpLOIm_Z6o-DV0HpwGxkh8kepy5hECW-dXbpxR3hSs1MamU",
                     "keyEpoch": 1,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
@@ -2815,8 +4706,8 @@
         {
             "made": [
                 {
-                    "key": "e6LqGwdwDHL9ewcBzkqiXJ9bmN72FRzVN-Cpq8KTzDk",
-                    "keyEnvelope": "0S-14H0X5PJj62t-A78apkBwjErprxew3fPuvKbnnNRj0hond_VB7JgVhKWw0bgGY5o7ogRF_eoGrJ26_P8Dip7qOSoe_Zfy",
+                    "key": "Jz9DHxJze3GrAHeA_dd0NOP_6WAyqJIpPHUTVNb8fGQ",
+                    "keyEnvelope": "zkO1Dpt3ISgcfEmEeNZvp8sT2WXlrbb6C76iGvPihGrUlLFu_gLtQxZln6kAX-b5hnACnOw_5jY4LWLj5JK3wWn--7woubA7",
                     "keyEpoch": 2,
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000002",
                     "parentId": "0e0e0e0e-0000-4000-8000-000000000001",
@@ -2879,7 +4770,7 @@
             "served": [
                 {
                     "key": "KFqMvvAiVIa46hxOgLLkFkh6rN4QQnSm2Ao8bqDSBDY",
-                    "keyEnvelope": "2vFtKCp5_ofiFEXsNlPBYEOpOlL5HBHqKbB2pA8KmID7mhn8x7Tw5yegSHkj6ZUH1cG-OuDb6d3MeanitmaoXMqNmCvmE09v",
+                    "keyEnvelope": "lbnR-a1RyEXIYBFndKtL8SQfJl26vmF2JaudPQmDKsuBC0_2g-6GiS58aLzcKsTqqG7_z4WVJ1DaBhsuqlRXZjKKCmCzTICJ",
                     "keyEpoch": 2,
                     "label": "node",
                     "nodeId": "0e0e0e0e-0000-4000-8000-000000000001",
