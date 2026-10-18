@@ -14,6 +14,10 @@ default = ["uniffi"]
 uniffi = ["dep:uniffi"]
 # The statement grammar's parser and encoder, public for the fuzz targets in fuzz/ only.
 fuzzing = []
+# Test-only doors (injected join draws, any device store, the bare typed-words rule) for the shared
+# fixtures, the integration tests and the fuzz targets; never in an app build. The dev-dependency
+# on this crate below turns it on for tests and examples.
+fixtures = []
 
 [dependencies]
 opaque-ke = { version = "4.0.0", features = ["argon2"] }
@@ -45,3 +49,4 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 rand = "0.8"
+hushos-core = { path = ".", default-features = false, features = ["fixtures"] }

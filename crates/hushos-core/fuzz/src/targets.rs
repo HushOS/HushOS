@@ -346,6 +346,12 @@ fn optional<T>(value: &Value, key: &str, read: impl Fn(&Value) -> Option<T>) -> 
  * and `links`, whether that chain holds.
  */
 pub fn succession(value: &Value) -> Option<Value> {
+    match value.get("kind").map(Value::as_str) {
+        Some(Some("consent_due")) => return consent_due(value),
+        Some(Some("consent_sign")) => return consent_sign(value),
+        Some(Some(_)) => return None,
+        _ => {}
+    }
     let user = text(value, "userId")?;
     let link = shape::link(value.get("link")?)?;
     let signer = optional(value, "signer", shape::signer)?;
@@ -388,6 +394,95 @@ pub fn succession(value: &Value) -> Option<Value> {
         "consent": consent,
         "chain": chain,
     })))
+}
+
+/* Key versions both twins read exactly: JavaScript's numbers are exact only to 2^53 - 1. */
+const MAX_SAFE: u64 = (1 << 53) - 1;
+
+fn links_of(value: &Value) -> Option<Vec<SuccessionLink>> {
+    let links = value.get("links")?.as_array()?.iter().map(shape::link).collect::<Option<Vec<_>>>()?;
+    links.iter().all(|l| l.old_key_version <= MAX_SAFE && l.new_key_version <= MAX_SAFE).then_some(links)
+}
+
+fn envelopes_of(value: &Value) -> Option<Vec<IdentityEnvelope>> {
+    let envelopes =
+        value.get("identities")?.as_array()?.iter().map(shape::envelope).collect::<Option<Vec<_>>>()?;
+    envelopes.iter().all(|e| e.key_version <= MAX_SAFE).then_some(envelopes)
+}
+
+/*
+ * The links among `links` that need consent, with `identities` as the
+ * account's (served shapes): each offered link's old key version and the
+ * places of its two identities, which the web's linksNeedingConsent must
+ * give. Invariant: an offered link has no consent and joins two version 2
+ * identities at its own key versions.
+ */
+fn consent_due(value: &Value) -> Option<Value> {
+    let links = links_of(value)?;
+    let identities = envelopes_of(value)?;
+    let place = |envelope: &IdentityEnvelope| identities.iter().position(|e| e == envelope).unwrap();
+    let due = links_needing_consent(links, identities.clone());
+    for d in &due {
+        assert!(d.link.consent.as_deref().is_none_or(str::is_empty), "a link with consent offered");
+        assert!(d.old_identity.version == 2 && d.next_identity.version == 2, "a version 1 identity offered");
+        assert_eq!(d.old_identity.key_version, d.link.old_key_version, "the old identity at its key version");
+        assert_eq!(
+            d.next_identity.key_version, d.link.new_key_version,
+            "the next identity at its key version"
+        );
+    }
+    Some(ok(Value::Array(
+        due.iter()
+            .map(|d| json!({ "oldKeyVersion": d.link.old_key_version, "old": place(&d.old_identity), "next": place(&d.next_identity) }))
+            .collect(),
+    )))
+}
+
+/*
+ * Consent for `link` from `old` to `next` (served envelopes) by the join
+ * fixtures' consent account, unlocked with the first of `me` open and the
+ * rest its history: signed or refused, as the worker's identityConsent
+ * decides. Invariant: what is signed holds for the link between the two
+ * envelopes, and the link is one the old identity signed.
+ */
+fn consent_sign(value: &Value) -> Option<Value> {
+    use crate::join::{consent_root, link_between, CONSENT_USER};
+    let old = shape::envelope(value.get("old")?)?;
+    let next = shape::envelope(value.get("next")?)?;
+    let link = shape::link(value.get("link")?)?;
+    let me = value.get("me")?.as_array()?.iter().map(shape::served).collect::<Option<Vec<_>>>()?;
+    // An app always holds at least its current identity, the one the account opened.
+    if me.is_empty()
+        || old.key_version > MAX_SAFE
+        || next.key_version > MAX_SAFE
+        || link.old_key_version > MAX_SAFE
+        || link.new_key_version > MAX_SAFE
+        || me.iter().any(|k| k.key_version > MAX_SAFE)
+    {
+        return None;
+    }
+    let signing = base64url_decode(me[0].signing_public_key.clone()).ok().filter(|key| key.len() == 32)?;
+    let ledger = AreaLedger::new();
+    ledger.open_account(CONSENT_USER.into(), signing, consent_root()).ok()?;
+    let me = OwnIdentities { user_id: CONSENT_USER.into(), identities: me };
+    Some(match ledger.succession_consent_sign(me, link.clone(), old.clone(), next.clone()) {
+        Ok(consent) => {
+            assert!(
+                succession_consent_verify(CONSENT_USER.into(), link_between(&old, &next, "", Some(&consent))),
+                "a consent signed that does not hold"
+            );
+            let signer = SuccessionSigner {
+                signing_public_key: old.signing_public_key.clone(),
+                ml_dsa_public_key: old.ml_dsa.as_ref().map(|k| k.public_key.clone()).unwrap_or_default(),
+            };
+            assert!(
+                succession_verify(CONSENT_USER.into(), link, signer),
+                "a consent for a link the account never made"
+            );
+            ok(json!("signed"))
+        }
+        Err(_) => refused(),
+    })
 }
 
 const HYBRID_SIGNATURE_BYTES: usize = 3373;
@@ -574,8 +669,356 @@ pub fn pins(value: &Value) -> Option<Value> {
             either(group_fingerprint(text(value, "groupId")?, key), |print| json!(print))
         }
         "device_record" => return device_record(value),
+        "join_check" => return join_check_kind(value),
+        "join_preview" => return join_preview_kind(value),
+        "join_draws" => return join_draws_kind(value),
+        "join_session" => return join_session_kind(value),
         _ => return None,
     })
+}
+
+/* A list of strings; anything else does not fit. */
+fn strings_of(value: &Value, key: &str) -> Option<Vec<String>> {
+    value.get(key)?.as_array()?.iter().map(|v| v.as_str().map(str::to_string)).collect()
+}
+
+/*
+ * The typed words of a join code (`code`, `hidden`, `typed`, any values the
+ * types hold): the bare rule's answer, which the web's joinCheck must give.
+ * Invariant: a match depends on the order of the two words, unless the code
+ * has the same word at both positions.
+ */
+fn join_check_kind(value: &Value) -> Option<Value> {
+    let code = strings_of(value, "code")?;
+    let typed = strings_of(value, "typed")?;
+    let hidden = value
+        .get("hidden")?
+        .as_array()?
+        .iter()
+        .map(|v| shape::unsigned(v).and_then(|n| u32::try_from(n).ok()))
+        .collect::<Option<Vec<u32>>>()?;
+    Some(match join_words(code.clone(), hidden.clone(), typed.clone()) {
+        Ok(JoinWords::Match) => {
+            if code[hidden[0] as usize] != code[hidden[1] as usize] {
+                let swapped = vec![typed[1].clone(), typed[0].clone()];
+                assert_eq!(
+                    join_words(code, hidden, swapped),
+                    Ok(JoinWords::NoMatch),
+                    "the order of the two words"
+                );
+            }
+            ok(json!("match"))
+        }
+        Ok(JoinWords::NoMatch) => ok(json!("no-match")),
+        Ok(JoinWords::Incomplete) => ok(json!("incomplete")),
+        Err(_) => refused(),
+    })
+}
+
+/* A showing is twelve words at a roster no later than the head served, with two ascending positions in 0..=11. */
+fn shown_well(outcome: &Value, through: u64) {
+    if outcome["status"] != "code" && outcome["status"] != "changed" {
+        return;
+    }
+    let code: Vec<String> = serde_json::from_value(outcome["code"].clone()).unwrap();
+    let hidden: Vec<u32> = serde_json::from_value(outcome["hidden"].clone()).unwrap();
+    let ends = vec![code[0].clone(), code[11].clone()];
+    assert_eq!(join_words(code, vec![0, 11], ends), Ok(JoinWords::Match), "a code is twelve words");
+    assert!(hidden.len() == 2 && hidden[0] < hidden[1] && hidden[1] <= 11, "hidden positions");
+    assert!(outcome["rosterVersion"].as_u64().unwrap() <= through, "a code past the head served");
+}
+
+/*
+ * A join preview by person 2 of the join fixtures over one of the core's
+ * histories (`history`, rosters `after` to `through`), with the settings
+ * `settings` (`none`, `pin-main-2`, `not-open`), a chain or a fork this
+ * session holds (`held`), a served roster cut (`cut`: `beside` or
+ * `bad-signature`) and `record` (any JSON, sealed as person 2's chain
+ * record), positions from the fixtures' draws; with `words` ("right",
+ * "misheard", "blank") "They match" on the same served chain and record, and
+ * with `join` the join: the full outcome, which the worker must match.
+ * Invariants: every showing is twelve words and two positions at a roster no
+ * later than the head served; a join commits only a code the check matched.
+ */
+fn join_preview_kind(value: &Value) -> Option<Value> {
+    use crate::join;
+    let base = &fixtures::core_join()["joinPreviews"];
+    let history = text(value, "history")?;
+    if !["main", "other", "succ", "madeUp"].contains(&history.as_str()) {
+        return None;
+    }
+    let length = base["histories"][&history]["rosters"].as_array()?.len() as u64;
+    let through = number(value, "through")?;
+    let after = shape::optional_number(value, "after")?.unwrap_or(0);
+    let settings = text(value, "settings")?;
+    let held = shape::optional_text(value, "held")?;
+    let cut = shape::optional_text(value, "cut")?;
+    let words = shape::optional_text(value, "words")?;
+    let join_too = match value.get("join") {
+        None | Some(Value::Null) => false,
+        Some(flag) => flag.as_bool()?,
+    };
+    let fits = (1..=length).contains(&through)
+        && after <= through
+        && ["none", "pin-main-2", "not-open"].contains(&settings.as_str())
+        && held.as_deref().is_none_or(|held| ["chain", "fork"].contains(&held))
+        && match cut.as_deref() {
+            None => true,
+            Some("beside") => after <= 2 && through >= 2,
+            Some("bad-signature") => through > after,
+            Some(_) => false,
+        }
+        && words
+            .as_deref()
+            .is_none_or(|words| ["right", "misheard", "blank"].contains(&words) && held.is_none())
+        && (!join_too || words.is_some());
+    if !fits {
+        return None;
+    }
+    let mut doc = base.clone();
+    let record = value.get("record").map(|record| {
+        let f = join::family();
+        chain_record_seal_value(&crate::device_records::root(), &f.p2.user_id, crate::groups::GROUP, record)
+            .unwrap()
+    });
+    doc["records"]["fuzz"] = json!(record);
+    let case = json!({
+        "name": "fuzz",
+        "settings": settings,
+        "record": record.as_ref().map(|_| "fuzz"),
+        "held": held,
+        "served": { "history": history, "after": after, "through": through, "cut": cut },
+        "words": words,
+        "join": join_too,
+    });
+    if words.is_none() {
+        let outcome = join::run_preview(&doc, &case);
+        shown_well(&outcome, through);
+        return Some(ok(outcome));
+    }
+    let flow = join::run_preview_flow(&doc, &case);
+    shown_well(&flow["preview"], through);
+    if flow["check"]["status"] == "changed" {
+        shown_well(&flow["check"], through);
+    }
+    // A join commits only a code the check matched, and never below the roster that let them in.
+    if flow["join"]["status"] == "accepted" {
+        assert_eq!(flow["check"]["status"], "matched", "a join without a match");
+        assert!(flow["join"]["rosterVersion"].as_u64() >= flow["preview"]["rosterVersion"].as_u64());
+    }
+    Some(ok(flow))
+}
+
+/*
+ * Hidden positions from `draws` (up to 64 values a u32 holds), as a ledger
+ * drawing them would take them: the two positions, or none when the draws
+ * ran out first. Invariant: two ascending positions in 0..=11, and only draws
+ * below the last whole run of twelve count.
+ */
+fn join_draws_kind(value: &Value) -> Option<Value> {
+    let draws = value
+        .get("draws")?
+        .as_array()?
+        .iter()
+        .map(|v| shape::unsigned(v).and_then(|n| u32::try_from(n).ok()))
+        .collect::<Option<Vec<u32>>>()?;
+    if draws.len() > 64 {
+        return None;
+    }
+    let positions = join_draw_positions(draws.clone());
+    if let Some(p) = &positions {
+        assert!(p.len() == 2 && p[0] < p[1] && p[1] <= 11, "hidden positions");
+        // Only draws below the last whole run of twelve count: dropping the others changes nothing.
+        let fair: Vec<u32> = draws.iter().copied().filter(|d| *d < u32::MAX - 3).collect();
+        assert_eq!(join_draw_positions(fair).as_ref(), Some(p), "a draw past the last whole run counted");
+    }
+    Some(ok(json!(positions)))
+}
+
+const SESSION_HISTORIES: [&str; 4] = ["main", "other", "succ", "madeUp"];
+const FORGED: [&str; 4] = ["outbox", "other-family", "earlier-version", "newer-version"];
+
+/* One step of a `join_session` input, with only the fields its op reads; None when it does not fit. */
+fn session_step(step: &Value, at: usize, lengths: &[u64; 4]) -> Option<Value> {
+    let served = |step: &Value| -> Option<Value> {
+        let served = step.get("served")?;
+        let history = text(served, "history")?;
+        let length = lengths[SESSION_HISTORIES.iter().position(|h| *h == history)?];
+        let through = number(served, "through")?;
+        let cut = shape::optional_text(served, "cut")?;
+        let fits = (1..=length).contains(&through)
+            && match cut.as_deref() {
+                None => true,
+                Some("bad-signature") => true,
+                Some("beside") => through >= 2,
+                Some(_) => false,
+            };
+        fits.then(|| json!({ "history": history, "through": through, "cut": cut }))
+    };
+    let earlier = |key: &str| number(step, key).filter(|i| (*i as usize) < at);
+    let op = text(step, "op")?;
+    Some(match op.as_str() {
+        "show" | "sync" => json!({ "op": op, "served": served(step)? }),
+        "check" => {
+            let words =
+                text(step, "words").filter(|w| ["right", "misheard", "blank"].contains(&w.as_str()))?;
+            json!({ "op": op, "session": earlier("session")?, "words": words, "served": served(step)? })
+        }
+        "accept" => match (step.get("matched"), text(step, "record")) {
+            (Some(_), None) => json!({ "op": op, "matched": earlier("matched")?, "served": served(step)? }),
+            (None, Some(record)) => {
+                let fits = match record.strip_prefix("own:") {
+                    Some(i) => i.parse::<usize>().is_ok_and(|i| i < at && i.to_string() == record[4..]),
+                    None => FORGED.contains(&record.as_str()),
+                };
+                if !fits {
+                    return None;
+                }
+                json!({ "op": op, "record": record, "served": served(step)? })
+            }
+            _ => return None,
+        },
+        "relaunch" | "lock" => json!({ "op": op, "restore": step.get("restore")?.as_bool()? }),
+        "restore" => json!({ "op": op, "from": earlier("from")? }),
+        "holds" | "forget" => json!({ "op": op }),
+        _ => return None,
+    })
+}
+
+/*
+ * A session of joining as an app drives it: `settings` (`none` or
+ * `pin-main-2`) and up to sixteen `steps` (the shared session scenarios'
+ * ops: show, check, accept, sync, holds, lock, relaunch, restore, forget)
+ * over the core's join histories, positions from the fixtures' draws: every
+ * step's outcome, which the worker must match. Invariants (session_rules):
+ * held positions never move until a match, after a restore too, which only
+ * ever holds more; the first wrong pair is calm and every later one the
+ * alarm until a match; a check of a showing from before a lock is refused;
+ * the escalation is kept exactly while something is held; nothing joins
+ * without a match, and a match joins once per unlock.
+ */
+fn join_session_kind(value: &Value) -> Option<Value> {
+    use crate::join;
+    let base = &fixtures::core_join()["joinPreviews"];
+    let settings = text(value, "settings").filter(|s| ["none", "pin-main-2"].contains(&s.as_str()))?;
+    let lengths =
+        SESSION_HISTORIES.map(|h| base["histories"][h]["rosters"].as_array().map_or(0, Vec::len) as u64);
+    let steps = value.get("steps")?.as_array()?;
+    if steps.is_empty() || steps.len() > 16 {
+        return None;
+    }
+    let steps = steps
+        .iter()
+        .enumerate()
+        .map(|(at, step)| session_step(step, at, &lengths))
+        .collect::<Option<Vec<_>>>()?;
+    let scenario = json!({ "name": "fuzz", "settings": settings, "steps": steps });
+    let run = join::run_session(base, &scenario);
+    session_rules(&settings, &steps, &run.outcomes);
+    Some(ok(json!(run.outcomes)))
+}
+
+/*
+ * The rules every join session keeps, checked over its steps and their
+ * outcomes (join_session_kind). `book` is what the ledger holds now, `kept`
+ * what the app last stored (each check's escalation), which a lock or a
+ * relaunch restores, and `after` what was stored after each step.
+ */
+fn session_rules(settings: &str, steps: &[Value], outcomes: &[Value]) {
+    use std::collections::{HashMap, HashSet};
+    #[derive(Clone, Default)]
+    struct Book {
+        held: HashMap<String, Value>,
+        tried: bool,
+    }
+    let key = |o: &Value| format!("{}:{}", o["rosterVersion"], o["code"]);
+    let showing = |status: &Value| status == "code" || status == "changed";
+    let mut book = Book::default();
+    let mut kept = Book::default();
+    let mut after: Vec<Book> = vec![];
+    let mut pending: Option<Book> = None;
+    let mut life = 0usize;
+    let mut shown_in: HashMap<usize, usize> = HashMap::new();
+    let mut joined = false;
+    let mut used: HashSet<usize> = HashSet::new();
+    for (at, (step, outcome)) in steps.iter().zip(outcomes).enumerate() {
+        let status = &outcome["status"];
+        let op = step["op"].as_str().unwrap();
+        // A restore folds in only what is not held here: only ever more held.
+        if op == "show" || (op == "check" && status != "skipped") {
+            if let Some(restored) = pending.take() {
+                for (k, positions) in restored.held {
+                    book.held.entry(k).or_insert(positions);
+                }
+                book.tried |= restored.tried;
+            }
+        }
+        if showing(status) {
+            if let Some(held) = book.held.get(&key(outcome)) {
+                assert_eq!(&outcome["hidden"], held, "step {at}: held positions moved");
+            }
+            shown_in.insert(at, life);
+        }
+        match op {
+            "check" if status != "skipped" => {
+                let i = step["session"].as_u64().unwrap() as usize;
+                let shown = &outcomes[i];
+                if shown_in.get(&i) != Some(&life) {
+                    assert_eq!(status, "refused", "step {at}: a showing from before a lock was checked");
+                }
+                match status.as_str().unwrap() {
+                    "wrong-words" | "mismatch" => {
+                        let alarm = book.tried || book.held.contains_key(&key(shown));
+                        assert_eq!(status == "mismatch", alarm, "step {at}: the calm try and the alarm");
+                        book.held.insert(key(shown), shown["hidden"].clone());
+                        book.tried = true;
+                    }
+                    "matched" => {
+                        book.held.remove(&key(shown));
+                        book.tried = false;
+                    }
+                    _ => {}
+                }
+                if outcome.get("kept").is_some() {
+                    assert_eq!(outcome["kept"] == true, !book.held.is_empty(), "step {at}: kept while held");
+                    kept = book.clone();
+                }
+            }
+            "accept" if status == "accepted" => {
+                let from = match (step["matched"].as_u64(), step["record"].as_str()) {
+                    (Some(i), _) => i as usize,
+                    (None, Some(record)) => record
+                        .strip_prefix("own:")
+                        .and_then(|i| i.parse().ok())
+                        .unwrap_or_else(|| panic!("step {at}: a forged joins record joined")),
+                    _ => unreachable!(),
+                };
+                assert_eq!(outcomes[from]["status"], "matched", "step {at}: a join without a match");
+                assert!(used.insert(from), "step {at}: a match joined twice in one unlock");
+                joined = true;
+            }
+            // Without a settings pin, only a join gives this device a mark.
+            "sync" if status == "accepted" && settings == "none" => {
+                assert!(joined, "step {at}: a family accepted before any join")
+            }
+            "relaunch" | "lock" => {
+                life += 1;
+                pending = (step["restore"] == true).then(|| kept.clone());
+                book = Book::default();
+                joined = false;
+                used.clear();
+            }
+            "restore" if status != "skipped" => {
+                pending = Some(after[step["from"].as_u64().unwrap() as usize].clone());
+            }
+            "forget" => {
+                joined = false;
+                used.clear();
+            }
+            _ => {}
+        }
+        after.push(kept.clone());
+    }
 }
 
 /*

@@ -28,6 +28,11 @@ pub mod area_ledger;
 #[path = "../../tests/common/device_records.rs"]
 pub mod device_records;
 
+/// Join previews, typed-words checks and consent, run as the fixture tests run them.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/join.rs"]
+pub mod join;
+
 /// Runs `target` on `data` with every invariant asserted: what a fuzz target calls.
 pub fn check(target: &str, data: &[u8]) {
     targets::verdict(target, data).expect("a known target");

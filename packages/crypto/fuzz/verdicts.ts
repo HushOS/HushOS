@@ -73,11 +73,31 @@ import {
     family as deviceFamily,
     run as runDeviceCase,
 } from '../src/device-record-testkit';
-import { sealDeviceRecord } from '../src/session-groups';
+import {
+    createGroupSession,
+    sealDeviceRecord,
+    type GroupHost,
+    type GroupMessage,
+    type GroupResults,
+} from '../src/session-groups';
+import { createAreaLedger } from '../src/area-ledger';
+import { linksNeedingConsent } from '../src/consent-due';
+import { joinCheck } from '../src/join-check';
+import {
+    CONSENT_ROOT,
+    CONSENT_USER,
+    family as joinFamily,
+    linkBetween,
+    runPreview,
+    runPreviewFlow,
+    runSession,
+} from '../src/join-testkit';
+import { drawPositions } from '../src/join-session';
 import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
 import {
     chain,
     core,
+    coreJoin,
     coreLedger,
     groups,
     people,
@@ -699,6 +719,11 @@ async function identity(value: Doc): Promise<Verdict | undefined> {
 }
 
 async function succession(value: Doc): Promise<Verdict | undefined> {
+    if (typeof value.kind === 'string') {
+        if (value.kind === 'consent_due') return consentDue(value);
+        if (value.kind === 'consent_sign') return consentSign(value);
+        return undefined;
+    }
     const userId = text(value, 'userId');
     const link = linkOf(value.link);
     const signer = nullable(value, 'signer', signerOf);
@@ -739,6 +764,110 @@ async function succession(value: Doc): Promise<Verdict | undefined> {
         }
     }
     return ok({ statement, verified, consent, chain: chainHolds });
+}
+
+/* Key versions both twins read exactly: JavaScript's numbers are exact only to 2^53 - 1. */
+const exact = (keyVersion: number) => keyVersion <= Number.MAX_SAFE_INTEGER;
+/* Whether `text` is base64url of exactly `length` bytes, as the core decodes it. */
+const holdsBytes = (text: string, length: number) => {
+    try {
+        decode(text, length);
+        return true;
+    } catch (error) {
+        if (error instanceof CryptoError) return false;
+        throw error;
+    }
+};
+
+function listOf<T>(value: unknown, read: (item: unknown) => T | undefined) {
+    if (!Array.isArray(value)) return undefined;
+    const out = value.map(read);
+    return out.includes(undefined) ? undefined : (out as T[]);
+}
+
+/*
+ * The links among `links` that need consent, with `identities` as the
+ * account's: each offered link's old key version and the places of its two
+ * identities, which the core's links_needing_consent must give. Invariant: an
+ * offered link has no consent and joins two version 2 identities at its own
+ * key versions.
+ */
+async function consentDue(value: Doc): Promise<Verdict | undefined> {
+    const links = listOf(value.links, linkOf);
+    const identities = listOf(value.identities, envelopeOf);
+    if (!links || !identities) return undefined;
+    if (!links.every((l) => exact(l.oldKeyVersion) && exact(l.newKeyVersion))) return undefined;
+    if (!identities.every((e) => exact(e.keyVersion))) return undefined;
+    const due = linksNeedingConsent(links, identities);
+    for (const d of due) {
+        invariant(!d.link.consent, 'a link with consent offered');
+        invariant(d.old.version === 2 && d.next.version === 2, 'a version 1 identity offered');
+        invariant(d.old.keyVersion === d.link.oldKeyVersion, 'the old identity at its key version');
+        invariant(
+            d.next.keyVersion === d.link.newKeyVersion,
+            'the next identity at its key version',
+        );
+    }
+    return ok(
+        due.map((d) => ({
+            oldKeyVersion: d.link.oldKeyVersion,
+            old: identities.indexOf(d.old),
+            next: identities.indexOf(d.next),
+        })),
+    );
+}
+
+/*
+ * Consent for `link` from `old` to `next` by the join fixtures' consent
+ * account, unlocked with the first of `me` open and the rest its history:
+ * signed or refused, as the core's succession_consent_sign decides.
+ * Invariant: what is signed holds for the link between the two envelopes,
+ * and the link is one the old identity signed.
+ */
+async function consentSign(value: Doc): Promise<Verdict | undefined> {
+    const old = envelopeOf(value.old);
+    const next = envelopeOf(value.next);
+    const link = linkOf(value.link);
+    const me = listOf(value.me, servedOf);
+    // An app always holds at least its current identity, the one the account opened.
+    if (!old || !next || !link || !me || me.length === 0) return undefined;
+    if (
+        !exact(old.keyVersion) ||
+        !exact(next.keyVersion) ||
+        !exact(link.oldKeyVersion) ||
+        !exact(link.newKeyVersion) ||
+        !me.every((k) => exact(k.keyVersion))
+    )
+        return undefined;
+    // The core's ledger opens only with a 32-byte signing key.
+    if (!holdsBytes(me[0]!.signingPublicKey, 32)) return undefined;
+    const host = {
+        unlocked: () => ({ userId: CONSENT_USER, root: CONSENT_ROOT.slice(), keyVersion: 1 }),
+        identity: () => ({ userId: CONSENT_USER, served: me[0], history: me.slice(1) }),
+        ledger: createAreaLedger(),
+    } as unknown as GroupHost;
+    return either(
+        async () =>
+            (await createGroupSession(host).handle({
+                id: 1,
+                operation: 'identityConsent',
+                input: { userId: CONSENT_USER, link, old, next },
+            } as GroupMessage)) as GroupResults['identityConsent'],
+        async ({ consent }) => {
+            invariant(
+                await verifySuccessionConsent(CONSENT_USER, linkBetween(old, next, '', consent)),
+                'a consent signed that does not hold',
+            );
+            invariant(
+                await verifySuccessionLink(CONSENT_USER, link, {
+                    signingPublicKey: old.signingPublicKey,
+                    mlDsaPublicKey: old.mlDsa?.publicKey ?? '',
+                }),
+                'a consent for a link the account never made',
+            );
+            return 'signed';
+        },
+    );
 }
 
 async function share(data: Uint8Array) {
@@ -946,8 +1075,374 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
         }
         case 'device_record':
             return deviceRecord(value);
+        case 'join_check':
+            return joinCheckKind(value);
+        case 'join_preview':
+            return joinPreviewKind(value);
+        case 'join_draws':
+            return joinDrawsKind(value);
+        case 'join_session':
+            return joinSessionKind(value);
         default:
             return undefined;
+    }
+}
+
+/* A list of strings; anything else does not fit. */
+function stringsOf(value: Doc, key: string) {
+    const list = value[key];
+    return Array.isArray(list) && list.every((item) => typeof item === 'string')
+        ? (list as string[])
+        : undefined;
+}
+
+/*
+ * The typed words of a join code (`code`, `hidden`, `typed`): joinCheck's
+ * answer, which the core's join_check must give. Invariant: a match depends
+ * on the order of the two words, unless the code has the same word at both
+ * positions.
+ */
+async function joinCheckKind(value: Doc): Promise<Verdict | undefined> {
+    const code = stringsOf(value, 'code');
+    const typed = stringsOf(value, 'typed');
+    const list = value.hidden;
+    if (!code || !typed || !Array.isArray(list)) return undefined;
+    const hidden = list.map((at) => {
+        const n = unsigned(at);
+        return n !== undefined && n <= 0xffff_ffff ? n : undefined;
+    });
+    if (hidden.includes(undefined)) return undefined;
+    const at = hidden as number[];
+    return either(
+        () => joinCheck(code, at, typed),
+        (result) => {
+            if (result === 'match' && code[at[0]!] !== code[at[1]!])
+                invariant(
+                    joinCheck(code, at, [typed[1]!, typed[0]!]) === 'no-match',
+                    'the order of the two words',
+                );
+            return result;
+        },
+    );
+}
+
+/* A showing is twelve words at a roster no later than the head served, with two ascending positions in 0..=11. */
+function shownWell(outcome: Json, through: number) {
+    if (outcome.status !== 'code' && outcome.status !== 'changed') return;
+    const code = outcome.code as string[];
+    const hidden = outcome.hidden as number[];
+    invariant(
+        joinCheck(code, [0, 11], [code[0]!, code[11]!]) === 'match',
+        'a code is twelve words',
+    );
+    invariant(
+        hidden.length === 2 && hidden[0]! < hidden[1]! && hidden[1]! <= 11,
+        'hidden positions',
+    );
+    invariant(outcome.rosterVersion <= through, 'a code past the head served');
+}
+
+/*
+ * A join preview by person 2 of the join fixtures over one of the core's
+ * histories (`history`, rosters `after` to `through`), with `settings`,
+ * `held`, `cut` and `record` (any JSON, sealed as person 2's chain record),
+ * positions from the fixtures' draws; with `words` "They match" on the same
+ * served chain and record, and with `join` the join: the full outcome, which
+ * the core must match. Invariants: every showing is twelve words and two
+ * positions at a roster no later than the head served; a join commits only a
+ * code the check matched.
+ */
+async function joinPreviewKind(value: Doc): Promise<Verdict | undefined> {
+    const base = coreJoin().joinPreviews;
+    const history = text(value, 'history');
+    if (history === undefined || !['main', 'other', 'succ', 'madeUp'].includes(history))
+        return undefined;
+    const length = base.histories[history].rosters.length as number;
+    const through = number(value, 'through');
+    const after = optionalNumber(value, 'after');
+    const settings = text(value, 'settings');
+    const held = optionalText(value, 'held');
+    const cut = optionalText(value, 'cut');
+    const words = optionalText(value, 'words');
+    const joinToo =
+        value.join === undefined || value.join === null
+            ? false
+            : typeof value.join === 'boolean'
+              ? value.join
+              : undefined;
+    if (
+        through === undefined ||
+        after === undefined ||
+        settings === undefined ||
+        held === undefined ||
+        cut === undefined ||
+        words === undefined ||
+        joinToo === undefined
+    )
+        return undefined;
+    const from = after ?? 0;
+    const fits =
+        through >= 1 &&
+        through <= length &&
+        from <= through &&
+        ['none', 'pin-main-2', 'not-open'].includes(settings) &&
+        (held === null || ['chain', 'fork'].includes(held)) &&
+        (cut === null ||
+            (cut === 'beside' && from <= 2 && through >= 2) ||
+            (cut === 'bad-signature' && through > from)) &&
+        (words === null || (['right', 'misheard', 'blank'].includes(words) && held === null)) &&
+        (!joinToo || words !== null);
+    if (!fits) return undefined;
+    const doc = structuredClone(base);
+    const f = await joinFamily();
+    const record =
+        value.record === undefined
+            ? null
+            : await sealDeviceRecord(
+                  DEVICE_ROOT.slice(),
+                  f.p2.userId,
+                  GROUP,
+                  'chains',
+                  value.record,
+              );
+    doc.records.fuzz = record;
+    const c = {
+        name: 'fuzz',
+        settings,
+        record: record === null ? null : 'fuzz',
+        held,
+        served: { history, after: from, through, cut },
+        words,
+        join: joinToo,
+    };
+    if (words === null) {
+        const outcome = await runPreview(doc, c);
+        shownWell(outcome, through);
+        return ok(outcome);
+    }
+    const flow = await runPreviewFlow(doc, c);
+    shownWell(flow.preview, through);
+    if (flow.check?.status === 'changed') shownWell(flow.check, through);
+    // A join commits only a code the check matched, and never below the roster that let them in.
+    if (flow.join?.status === 'accepted') {
+        invariant(flow.check.status === 'matched', 'a join without a match');
+        invariant(flow.join.rosterVersion >= flow.preview.rosterVersion, 'a join below the code');
+    }
+    return ok(flow);
+}
+
+/*
+ * Hidden positions from `draws` (up to 64 values a u32 holds), as a session
+ * drawing them would take them: the two positions, or null when the draws ran
+ * out first. Invariant: two ascending positions in 0..=11, and only draws
+ * below the last whole run of twelve count.
+ */
+async function joinDrawsKind(value: Doc): Promise<Verdict | undefined> {
+    const list = value.draws;
+    if (!Array.isArray(list) || list.length > 64) return undefined;
+    const draws = list.map((draw) => {
+        const n = unsigned(draw);
+        return n !== undefined && n <= 0xffff_ffff ? n : undefined;
+    });
+    if (draws.includes(undefined)) return undefined;
+    const positions = drawPositions(draws as number[]);
+    if (positions) {
+        invariant(
+            positions[0] < positions[1] && positions[1] <= 11 && positions[0] >= 0,
+            'hidden positions',
+        );
+        const fair = (draws as number[]).filter((draw) => draw < 0xffff_ffff - 3);
+        invariant(
+            isDeepStrictEqual(drawPositions(fair), positions),
+            'a draw past the last whole run counted',
+        );
+    }
+    return ok(positions);
+}
+
+const SESSION_HISTORIES = ['main', 'other', 'succ', 'madeUp'];
+const FORGED = ['outbox', 'other-family', 'earlier-version', 'newer-version'];
+
+/* One step of a `join_session` input, with only the fields its op reads; undefined when it does not fit. */
+function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefined {
+    if (!isObject(step)) return undefined;
+    const served = () => {
+        const served = step.served;
+        if (!isObject(served)) return undefined;
+        const history = text(served, 'history');
+        const which = history === undefined ? -1 : SESSION_HISTORIES.indexOf(history);
+        const through = number(served, 'through');
+        const cut = optionalText(served, 'cut');
+        if (which < 0 || through === undefined || cut === undefined) return undefined;
+        const fits =
+            through >= 1 &&
+            through <= lengths[which]! &&
+            (cut === null || cut === 'bad-signature' || (cut === 'beside' && through >= 2));
+        return fits ? { history, through, cut } : undefined;
+    };
+    const earlier = (key: string) => {
+        const n = number(step, key);
+        return n !== undefined && n < at ? n : undefined;
+    };
+    const op = text(step, 'op');
+    const need = (...parts: unknown[]) => parts.every((part) => part !== undefined);
+    switch (op) {
+        case 'show':
+        case 'sync': {
+            const where = served();
+            return need(where) ? { op, served: where } : undefined;
+        }
+        case 'check': {
+            const words = text(step, 'words');
+            const where = served();
+            const session = earlier('session');
+            if (words === undefined || !['right', 'misheard', 'blank'].includes(words))
+                return undefined;
+            return need(where, session) ? { op, session, words, served: where } : undefined;
+        }
+        case 'accept': {
+            const record = text(step, 'record');
+            const where = served();
+            if (step.matched !== undefined && record === undefined) {
+                const matched = earlier('matched');
+                return need(where, matched) ? { op, matched, served: where } : undefined;
+            }
+            if (step.matched !== undefined || record === undefined) return undefined;
+            const own = /^own:(0|[1-9][0-9]*)$/.exec(record);
+            const fits = own ? Number(own[1]) < at : FORGED.includes(record);
+            return fits && need(where) ? { op, record, served: where } : undefined;
+        }
+        case 'relaunch':
+        case 'lock':
+            return typeof step.restore === 'boolean' ? { op, restore: step.restore } : undefined;
+        case 'restore': {
+            const from = earlier('from');
+            return from === undefined ? undefined : { op, from };
+        }
+        case 'holds':
+        case 'forget':
+            return { op };
+        default:
+            return undefined;
+    }
+}
+
+/*
+ * A session of joining as the web drives it: `settings` (`none` or
+ * `pin-main-2`) and up to sixteen `steps` (the shared session scenarios'
+ * ops) over the core's join histories, positions from the fixtures' draws:
+ * every step's outcome, which the core must match. Invariants
+ * (sessionRules): held positions never move until a match, after a restore
+ * too, which only ever holds more; the first wrong pair is calm and every
+ * later one the alarm until a match; a check of a showing from before a lock
+ * is refused; the escalation is kept exactly while something is held;
+ * nothing joins without a match, and a match joins once per unlock.
+ */
+async function joinSessionKind(value: Doc): Promise<Verdict | undefined> {
+    const base = coreJoin().joinPreviews;
+    const settings = text(value, 'settings');
+    if (settings === undefined || !['none', 'pin-main-2'].includes(settings)) return undefined;
+    const lengths = SESSION_HISTORIES.map((h) => base.histories[h].rosters.length as number);
+    const list = value.steps;
+    if (!Array.isArray(list) || list.length === 0 || list.length > 16) return undefined;
+    const steps = list.map((step, at) => sessionStep(step, at, lengths));
+    if (steps.includes(undefined)) return undefined;
+    const run = await runSession(base, { name: 'fuzz', settings, steps });
+    sessionRules(settings, steps as Json[], run.outcomes);
+    return ok(run.outcomes);
+}
+
+/*
+ * The rules every join session keeps, checked over its steps and their
+ * outcomes (joinSessionKind). `book` is what the session holds now, `kept`
+ * what the page last stored (each check's escalation), which a lock or a
+ * relaunch restores, and `after` what was stored after each step.
+ */
+function sessionRules(settings: string, steps: Json[], outcomes: Json[]) {
+    type Book = { held: Map<string, string>; tried: boolean };
+    const empty = (): Book => ({ held: new Map(), tried: false });
+    const copy = (b: Book): Book => ({ held: new Map(b.held), tried: b.tried });
+    const key = (o: Json) => `${o.rosterVersion}:${JSON.stringify(o.code)}`;
+    const showing = (status: unknown) => status === 'code' || status === 'changed';
+    let book = empty();
+    let kept = empty();
+    const after: Book[] = [];
+    let pending: Book | null = null;
+    let life = 0;
+    const shownIn = new Map<number, number>();
+    let joined = false;
+    const used = new Set<number>();
+    for (const [at, step] of steps.entries()) {
+        const outcome = outcomes[at]!;
+        const status = outcome.status;
+        // A restore folds in only what is not held here: only ever more held.
+        if (step.op === 'show' || (step.op === 'check' && status !== 'skipped')) {
+            if (pending) {
+                for (const [k, positions] of pending.held)
+                    if (!book.held.has(k)) book.held.set(k, positions);
+                book.tried ||= pending.tried;
+                pending = null;
+            }
+        }
+        if (showing(status)) {
+            const held = book.held.get(key(outcome));
+            if (held !== undefined)
+                invariant(
+                    JSON.stringify(outcome.hidden) === held,
+                    `step ${at}: held positions moved`,
+                );
+            shownIn.set(at, life);
+        }
+        if (step.op === 'check' && status !== 'skipped') {
+            const shown = outcomes[step.session]!;
+            if (shownIn.get(step.session) !== life)
+                invariant(
+                    status === 'refused',
+                    `step ${at}: a showing from before a lock was checked`,
+                );
+            if (status === 'wrong-words' || status === 'mismatch') {
+                const alarm = book.tried || book.held.has(key(shown));
+                invariant(
+                    (status === 'mismatch') === alarm,
+                    `step ${at}: the calm try and the alarm`,
+                );
+                book.held.set(key(shown), JSON.stringify(shown.hidden));
+                book.tried = true;
+            } else if (status === 'matched') {
+                book.held.delete(key(shown));
+                book.tried = false;
+            }
+            if ('kept' in outcome) {
+                invariant(outcome.kept === book.held.size > 0, `step ${at}: kept while held`);
+                kept = copy(book);
+            }
+        } else if (step.op === 'accept' && status === 'accepted') {
+            const from =
+                typeof step.matched === 'number' ? step.matched : Number(step.record.slice(4));
+            invariant(
+                typeof step.matched === 'number' || step.record.startsWith('own:'),
+                `step ${at}: a forged joins record joined`,
+            );
+            invariant(outcomes[from]!.status === 'matched', `step ${at}: a join without a match`);
+            invariant(!used.has(from), `step ${at}: a match joined twice in one unlock`);
+            used.add(from);
+            joined = true;
+        } else if (step.op === 'sync' && status === 'accepted' && settings === 'none') {
+            // Without a settings pin, only a join gives this device a mark.
+            invariant(joined, `step ${at}: a family accepted before any join`);
+        } else if (step.op === 'relaunch' || step.op === 'lock') {
+            life += 1;
+            pending = step.restore === true ? copy(kept) : null;
+            book = empty();
+            joined = false;
+            used.clear();
+        } else if (step.op === 'restore' && status !== 'skipped') {
+            pending = copy(after[step.from]!);
+        } else if (step.op === 'forget') {
+            joined = false;
+            used.clear();
+        }
+        after.push(copy(kept));
     }
 }
 

@@ -39,6 +39,24 @@ async function run(recordVersion: number | null, answers: Answer[]) {
 }
 
 describe('the order acceptance runs in', () => {
+    test('every attempt but the last says it is retried, so the worker keeps the family committed until the last refusal', async () => {
+        const flags = async (recordVersion: number | null, answers: Answer[]) => {
+            const seen: boolean[] = [];
+            let at = 0;
+            await acceptFromRecord(recordVersion, async (_after, _withoutCache, retried) => {
+                seen.push(retried);
+                const answer = answers[at++]!;
+                if (answer instanceof Error) throw answer;
+                return answer;
+            }).catch(() => undefined);
+            return seen;
+        };
+        expect(await flags(5, [refused(), refused(), refused()])).toEqual([true, true, false]);
+        expect(await flags(0, [refused(), refused()])).toEqual([true, false]);
+        // Without a record the one attempt is the last: its refusal uncommits.
+        expect(await flags(null, [refused()])).toEqual([false]);
+    });
+
     test('without a record, once, from version 1, whatever it answers', async () => {
         const { error, attempts } = await run(null, [refused()]);
         expect(attempts).toEqual(['0']);

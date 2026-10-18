@@ -18,7 +18,12 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
  *   accepts again from version 1 against the settings pin alone. Outbox and
  *   joins records that do not open are deleted too, and the person told.
  * - `outbox`: roster calls not yet known to have landed (outbox.ts).
- * - `joins`: a newcomer's words check, kept across a reload (join.ts).
+ * - `joins`: the code a newcomer compared and matched, sealed by the worker
+ *   only, kept between "They match" and the join's end (join.ts).
+ * - `holds`: a newcomer's join escalation (the held positions and the
+ *   family's wrong pair), sealed by the worker, so a reload or a lock keeps
+ *   them. Deleted only when the worker hands back none or says it does not
+ *   open; a family wipe leaves it, so a join on screen keeps its alarm.
  *
  * Group ids sit in the keys, so the database says which families this device
  * holds; the account's own server knows that anyway, and sign-out deletes it.
@@ -37,6 +42,7 @@ export type ChainRow = {
 };
 export type OutboxRow = { id: string; userId: string; groupId: string; envelope: string };
 export type JoinRow = { userId: string; groupId: string; envelope: string };
+export type HoldsRow = { userId: string; groupId: string; envelope: string };
 
 export interface GroupStore {
     chain(userId: string, groupId: string): Promise<ChainRow | null>;
@@ -54,7 +60,10 @@ export interface GroupStore {
     join(userId: string, groupId: string): Promise<JoinRow | null>;
     putJoin(row: JoinRow): Promise<void>;
     deleteJoin(userId: string, groupId: string): Promise<void>;
-    /* Everything kept of one group: its record, outbox and pending join. */
+    holds(userId: string, groupId: string): Promise<HoldsRow | null>;
+    putHolds(row: HoldsRow): Promise<void>;
+    deleteHolds(userId: string, groupId: string): Promise<void>;
+    /* Everything kept of one group: its record, outbox and pending join (never its join escalation). */
     forgetGroup(userId: string, groupId: string): Promise<void>;
 }
 
@@ -64,19 +73,25 @@ interface Schema extends DBSchema {
     chains: { key: string; value: ChainRow & { key: string } };
     outbox: { key: string; value: OutboxRow & { group: string }; indexes: { group: string } };
     joins: { key: string; value: JoinRow & { key: string } };
+    holds: { key: string; value: HoldsRow & { key: string } };
 }
 
-function createStores(db: IDBPDatabase<Schema>) {
-    db.createObjectStore('chains', { keyPath: 'key' });
-    db.createObjectStore('outbox', { keyPath: 'id' }).createIndex('group', 'group');
-    db.createObjectStore('joins', { keyPath: 'key' });
+/* Version 2 added `holds`; a version 1 database keeps its stores and gains it. */
+const DATABASE_VERSION = 2;
+function createStores(db: IDBPDatabase<Schema>, oldVersion: number) {
+    if (oldVersion < 1) {
+        db.createObjectStore('chains', { keyPath: 'key' });
+        db.createObjectStore('outbox', { keyPath: 'id' }).createIndex('group', 'group');
+        db.createObjectStore('joins', { keyPath: 'key' });
+    }
+    if (oldVersion < 2) db.createObjectStore('holds', { keyPath: 'key' });
 }
 
 export function createIndexedDbGroupStore(name = GROUPS_DATABASE): GroupStore {
     let database: Promise<IDBPDatabase<Schema>> | undefined;
     const open = () =>
-        (database ??= openDB<Schema>(name, 1, {
-            upgrade: createStores,
+        (database ??= openDB<Schema>(name, DATABASE_VERSION, {
+            upgrade: (db, oldVersion) => createStores(db, oldVersion),
             // Sign-out in another tab deletes the database: let it go rather than block it.
             blocking(_current, _next, event) {
                 (event.target as IDBDatabase).close();
@@ -129,6 +144,18 @@ export function createIndexedDbGroupStore(name = GROUPS_DATABASE): GroupStore {
         async deleteJoin(userId, groupId) {
             await (await open()).delete('joins', keyOf(userId, groupId));
         },
+        async holds(userId, groupId) {
+            const row = await (await open()).get('holds', keyOf(userId, groupId));
+            if (!row) return null;
+            const { key: _key, ...rest } = row;
+            return rest;
+        },
+        async putHolds(row) {
+            await (await open()).put('holds', { ...row, key: keyOf(row.userId, row.groupId) });
+        },
+        async deleteHolds(userId, groupId) {
+            await (await open()).delete('holds', keyOf(userId, groupId));
+        },
         async forgetGroup(userId, groupId) {
             const db = await open();
             const tx = db.transaction(['chains', 'outbox', 'joins'], 'readwrite');
@@ -151,6 +178,7 @@ export function createMemoryGroupStore(): GroupStore {
     const chains = new Map<string, ChainRow>();
     const outbox = new Map<string, OutboxRow>();
     const joins = new Map<string, JoinRow>();
+    const holds = new Map<string, HoldsRow>();
     const copy = <T>(value: T) => structuredClone(value);
     return {
         chain: async (userId, groupId) => copy(chains.get(keyOf(userId, groupId)) ?? null),
@@ -169,6 +197,9 @@ export function createMemoryGroupStore(): GroupStore {
         join: async (userId, groupId) => copy(joins.get(keyOf(userId, groupId)) ?? null),
         putJoin: async (row) => void joins.set(keyOf(row.userId, row.groupId), copy(row)),
         deleteJoin: async (userId, groupId) => void joins.delete(keyOf(userId, groupId)),
+        holds: async (userId, groupId) => copy(holds.get(keyOf(userId, groupId)) ?? null),
+        putHolds: async (row) => void holds.set(keyOf(row.userId, row.groupId), copy(row)),
+        deleteHolds: async (userId, groupId) => void holds.delete(keyOf(userId, groupId)),
         forgetGroup: async (userId, groupId) => {
             chains.delete(keyOf(userId, groupId));
             joins.delete(keyOf(userId, groupId));
@@ -200,6 +231,9 @@ export function createUnavailableGroupStore(): GroupStore {
         join: async () => null,
         putJoin: refuse,
         deleteJoin: async () => {},
+        holds: async () => null,
+        putHolds: refuse,
+        deleteHolds: async () => {},
         forgetGroup: async () => {},
     };
 }
@@ -250,7 +284,9 @@ export async function deleteGroupDevice(known: () => Promise<string[]> = knownAr
 
 /* Every family folder the device records name, read before the database goes. */
 async function knownAreas() {
-    const db = await openDB<Schema>(GROUPS_DATABASE, 1, { upgrade: createStores });
+    const db = await openDB<Schema>(GROUPS_DATABASE, DATABASE_VERSION, {
+        upgrade: (database, oldVersion) => createStores(database, oldVersion),
+    });
     try {
         return (await db.getAll('chains')).flatMap((row) => row.areas);
     } finally {

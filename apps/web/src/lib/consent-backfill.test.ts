@@ -60,7 +60,7 @@ function run(links: SuccessionLink[], own: IdentityEnvelope[]) {
     const done = backfillConsent({
         links: async () => links,
         identities: async () => ({ identity: own.at(-1)!, history: own.slice(0, -1) }),
-        consent: async (old, next) => {
+        consent: async (_link, old, next) => {
             signed.push([old.keyVersion, next.keyVersion]);
             return `consent-${old.keyVersion}-${next.keyVersion}`;
         },

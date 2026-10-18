@@ -16,7 +16,13 @@ import {
 } from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
-import { accountIdentities, accountIdentityHistory } from './schema';
+import {
+    accountIdentities,
+    accountIdentityHistory,
+    opaqueCredentials,
+    sessions,
+    users,
+} from './schema';
 import {
     successionConsentHolds,
     successionConsentStatement,
@@ -502,5 +508,177 @@ describe('the consent statement', () => {
         expect(
             successionConsentHolds(inputOf(genuine.userId, genuine.link), flip(consent, 6745)),
         ).toBe(false);
+    });
+});
+
+/*
+ * Consent the Rust core signed for an earlier link (the phones' backfill,
+ * succession_consent_sign; crates/hushos-core/examples/join_fixtures.rs):
+ * the server must store it as it stores the web's, or every phone's backfill
+ * upload is refused. The account is the fixture's own (its user id is in
+ * every statement), its history rows the core's identities and links, so the
+ * statement the server builds is checked against signatures no web code made.
+ */
+describe('consent the native core signed', () => {
+    type Envelope = {
+        version: number;
+        keyVersion: number;
+        wrappingSalt: string;
+        encryptionPublicKey: string;
+        encryptionPrivateKeyNonce: string;
+        encryptedEncryptionPrivateKey: string;
+        signingPublicKey: string;
+        signingSeedNonce: string;
+        encryptedSigningSeed: string;
+        kem: { publicKey: string; seedNonce: string; encryptedSeed: string };
+        mlDsa: { publicKey: string; seedNonce: string; encryptedSeed: string };
+        keysSignature: string;
+    };
+    type SignCase = {
+        name: string;
+        old: string;
+        next: string;
+        outcome: { status: string; consent?: string };
+    };
+    const { consents } = JSON.parse(
+        readFileSync(
+            new URL('../../crypto/src/__fixtures__/core-join.json', import.meta.url),
+            'utf8',
+        ),
+    ) as {
+        consents: {
+            userId: string;
+            identities: Record<string, Envelope>;
+            links: Record<string, { signature: string }>;
+            signs: SignCase[];
+        };
+    };
+    const b = (text: string) => Buffer.from(text, 'base64url');
+    const linkOf = (c: SignCase, userId = consents.userId): SuccessionStatementInput => {
+        const old = consents.identities[c.old]!;
+        const next = consents.identities[c.next]!;
+        return {
+            userId,
+            oldKeyVersion: old.keyVersion,
+            newKeyVersion: next.keyVersion,
+            oldEncryptionPublicKey: b(old.encryptionPublicKey),
+            oldSigningPublicKey: b(old.signingPublicKey),
+            oldMlDsaPublicKey: b(old.mlDsa.publicKey),
+            newEncryptionPublicKey: b(next.encryptionPublicKey),
+            newSigningPublicKey: b(next.signingPublicKey),
+            newMlDsaPublicKey: b(next.mlDsa.publicKey),
+            newKemPublicKey: b(next.kem.publicKey),
+        };
+    };
+    /* The history row of `old`, replaced by `next` through `link`, as /succession stored it, without consent. */
+    const historyRow = (old: Envelope, next: Envelope, signature: string) => ({
+        userId: consents.userId,
+        version: 2,
+        keyVersion: old.keyVersion,
+        wrappingSalt: b(old.wrappingSalt),
+        encryptionPublicKey: b(old.encryptionPublicKey),
+        encryptionPrivateKeyNonce: b(old.encryptionPrivateKeyNonce),
+        encryptedEncryptionPrivateKey: b(old.encryptedEncryptionPrivateKey),
+        signingPublicKey: b(old.signingPublicKey),
+        signingSeedNonce: b(old.signingSeedNonce),
+        encryptedSigningSeed: b(old.encryptedSigningSeed),
+        kemPublicKey: b(old.kem.publicKey),
+        kemSeedNonce: b(old.kem.seedNonce),
+        encryptedKemSeed: b(old.kem.encryptedSeed),
+        kemSignature: null,
+        mlDsaPublicKey: b(old.mlDsa.publicKey),
+        mlDsaSeedNonce: b(old.mlDsa.seedNonce),
+        encryptedMlDsaSeed: b(old.mlDsa.encryptedSeed),
+        keysSignature: b(old.keysSignature),
+        createdAt: new Date(),
+        replacedByKeyVersion: next.keyVersion,
+        newEncryptionPublicKey: b(next.encryptionPublicKey),
+        newSigningPublicKey: b(next.signingPublicKey),
+        newKemPublicKey: b(next.kem.publicKey),
+        newMlDsaPublicKey: b(next.mlDsa.publicKey),
+        successionSignature: b(signature),
+    });
+
+    test('is stored by the backfill for its own link, and refused for any other', async () => {
+        const userId = consents.userId;
+        const email = 'core-consent@hushos.test';
+        await db.insert(users).values({
+            id: userId,
+            name: 'Core',
+            email,
+            normalizedEmail: email,
+            emailVerifiedAt: new Date(),
+        });
+        await db.insert(opaqueCredentials).values({
+            userId,
+            registrationRecord: 'record',
+            profileVersion: 1,
+            serverSetupId: 'primary',
+        });
+        const { a, b: second, c } = consents.identities as Record<string, Envelope>;
+        await db
+            .insert(accountIdentityHistory)
+            .values([
+                historyRow(a!, second!, consents.links.ab!.signature),
+                historyRow(second!, c!, consents.links.bc!.signature),
+            ]);
+        // A current session, as backfillSuccessionConsent checks one: the row itself (the account
+        // has no key rows to sign in through, and the backfill reads none).
+        const sessionTokenHash = bytes(32);
+        await db.insert(sessions).values({
+            userId,
+            tokenHash: sessionTokenHash,
+            credentialVersion: 1,
+            expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        });
+        const backfill = (oldKeyVersion: number, consent: Buffer) =>
+            auth.backfillSuccessionConsent({
+                userId,
+                credentialVersion: 1,
+                sessionTokenHash,
+                oldKeyVersion,
+                consent,
+            });
+        const signed = consents.signs.filter((k) => k.outcome.status === 'signed');
+        expect(signed.map((k) => [k.old, k.next])).toEqual([
+            ['a', 'b'],
+            ['b', 'c'],
+        ]);
+        const [ab, bc] = signed.map((k) => b(k.outcome.consent!)) as [Buffer, Buffer];
+        expect(ab).toHaveLength(6746);
+        // Each consent holds for its own link and account only.
+        expect(successionConsentHolds(linkOf(signed[0]!), ab)).toBe(true);
+        expect(
+            successionConsentHolds(linkOf(signed[0]!, '22222222-2222-4222-8222-222222222222'), ab),
+        ).toBe(false);
+        // Refused before anything is stored: a byte flipped, the halves swapped, another link's.
+        expect(await backfill(1, flip(ab, 3373 + 1000))).toEqual({ status: 'bad-signature' });
+        expect(await backfill(1, Buffer.concat([ab.subarray(3373), ab.subarray(0, 3373)]))).toEqual(
+            { status: 'bad-signature' },
+        );
+        expect(await backfill(1, bc)).toEqual({ status: 'bad-signature' });
+        expect(await backfill(2, ab)).toEqual({ status: 'bad-signature' });
+        // Stored, each at its own key version, and served with its link.
+        expect(await backfill(1, ab)).toEqual({ status: 'ok', stored: true });
+        expect(await backfill(2, bc)).toEqual({ status: 'ok', stored: true });
+        const rows = await db
+            .select({
+                keyVersion: accountIdentityHistory.keyVersion,
+                consent: accountIdentityHistory.successionConsent,
+            })
+            .from(accountIdentityHistory)
+            .where(eq(accountIdentityHistory.userId, userId))
+            .orderBy(accountIdentityHistory.keyVersion);
+        expect(
+            rows.map((row) => [
+                row.keyVersion,
+                row.consent?.equals(row.keyVersion === 1 ? ab : bc),
+            ]),
+        ).toEqual([
+            [1, true],
+            [2, true],
+        ]);
+        // A stored consent is never replaced: the other one, even holding, stores nothing more.
+        expect(await backfill(1, ab)).toEqual({ status: 'ok', stored: false });
     });
 });

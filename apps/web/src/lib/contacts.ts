@@ -185,8 +185,8 @@ export function backfillOwnConsent(userId: string) {
                     ]);
                     return { identity, history };
                 },
-                consent: async (old, next) =>
-                    (await authClient.rpc('identityConsent', { userId, old, next })).consent,
+                consent: async (link, old, next) =>
+                    (await authClient.rpc('identityConsent', { userId, link, old, next })).consent,
                 upload: (oldKeyVersion, consent) =>
                     authClient.backfillSuccessionConsent({ oldKeyVersion, consent }),
             });

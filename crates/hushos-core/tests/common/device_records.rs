@@ -594,13 +594,18 @@ pub fn store_rows() -> Value {
 pub fn open_row(envelope: &str, row: &Value) -> Value {
     let f = family();
     let open = &row["open"];
+    let who = if open["userId"] == json!(f.p2.user_id) { &f.p2 } else { &f.p1 };
+    let root = base64url_decode(open["root"].as_str().unwrap().into()).unwrap();
     let store = match open["store"].as_str().unwrap() {
         "outbox" => DeviceStore::Outbox,
-        "joins" => DeviceStore::Joins,
-        other => panic!("a store {other}"),
+        // The core's own stores are no app's to open: read as the fixtures read them.
+        other => {
+            let group = open["groupId"].as_str().unwrap();
+            return device_store_open_value(&root, &who.user_id, group, other, envelope)
+                .unwrap_or(Value::Null);
+        }
     };
-    let who = if open["userId"] == json!(f.p2.user_id) { &f.p2 } else { &f.p1 };
-    let ledger = ledger_of(who, base64url_decode(open["root"].as_str().unwrap().into()).unwrap());
+    let ledger = ledger_of(who, root);
     match ledger.group_device_record_open(open["groupId"].as_str().unwrap().into(), store, envelope.into()) {
         Ok(text) => serde_json::from_str(&text).unwrap(),
         Err(CoreError::Sealed(_)) => Value::Null,

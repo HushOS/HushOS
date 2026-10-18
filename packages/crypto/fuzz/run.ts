@@ -57,7 +57,8 @@ const MAX_LEN: Record<Target, number> = {
     key_seal_open: 8192,
     area_grant_open: 8192,
     key_seal_context: 8192,
-    pins: 8192,
+    // Chain records ride in join_preview and device_record inputs: whole, with room to grow.
+    pins: 32768,
     accept: 4096,
     record_integrity: 32768,
     origin_open: 8192,

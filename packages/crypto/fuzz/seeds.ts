@@ -5,12 +5,16 @@ import { GROUP } from '../src/group-testkit';
 import { parseRoster } from '../src/groups';
 import {
     core,
+    coreJoin,
     coreLedger,
     groups,
+    joinCheckCases,
+    joinSessionScenarios,
     ledgerScenarios,
     repository,
     web,
     webGroups,
+    webJoin,
     webLedger,
     type Json,
 } from './fixtures';
@@ -226,6 +230,37 @@ export function documents(target: Target): Uint8Array[] {
                         links: k.links,
                     }),
                 ),
+                // Each twin's account: the links needing consent, and consent signed or refused.
+                ...[coreJoin(), webJoin()].flatMap(({ consents: d }: Json) => {
+                    const keys = (name: string) => {
+                        const e = d.identities[name];
+                        return {
+                            keyVersion: e.keyVersion,
+                            encryptionPublicKey: e.encryptionPublicKey,
+                            signingPublicKey: e.signingPublicKey,
+                            mlDsaPublicKey: e.mlDsa.publicKey,
+                            kemPublicKey: e.kem.publicKey,
+                        };
+                    };
+                    return [
+                        ...d.due.map((k: Json) =>
+                            json({
+                                kind: 'consent_due',
+                                links: k.links.map((name: string) => d.links[name]),
+                                identities: k.identities.map((name: string) => d.identities[name]),
+                            }),
+                        ),
+                        ...d.signs.map((k: Json) =>
+                            json({
+                                kind: 'consent_sign',
+                                old: d.identities[k.old],
+                                next: d.identities[k.next],
+                                link: d.links[k.link],
+                                me: k.me.map(keys),
+                            }),
+                        ),
+                    ];
+                }),
             ];
         }
         case 'share_open':
@@ -301,6 +336,81 @@ export function documents(target: Target): Uint8Array[] {
                         ),
                 ),
                 json({ kind: 'device_record', settings: true, start: 0 }),
+                // The shared typed-words cases, and each twin's join previews (records as JSON).
+                ...joinCheckCases().cases.map((k: Json) =>
+                    json({
+                        kind: 'join_check',
+                        code: k.code ?? joinCheckCases().code,
+                        hidden: k.hidden,
+                        typed: k.typed,
+                    }),
+                ),
+                // Draws at the rejection boundary (2^32 - 4 and up), just below it, and the fixtures' own.
+                json({ kind: 'join_draws', draws: [0xffff_fffc, 0xffff_fffb, 0xffff_fffa] }),
+                json({ kind: 'join_draws', draws: [0xffff_fffd, 0xffff_ffff, 5, 5, 17] }),
+                json({ kind: 'join_draws', draws: [0xffff_fffe] }),
+                json({ kind: 'join_draws', draws: [0, 12, 24, 1] }),
+                // Every shared session scenario but the one checking a showing from elsewhere.
+                ...joinSessionScenarios()
+                    .scenarios.filter((k: Json) =>
+                        k.steps.every((step: Json) => step.session !== 'elsewhere'),
+                    )
+                    .map((k: Json) =>
+                        json({
+                            kind: 'join_session',
+                            settings: k.settings,
+                            steps: k.steps.map((step: Json) =>
+                                Object.fromEntries(
+                                    Object.entries(step).filter(([key]) => key !== 'expect'),
+                                ),
+                            ),
+                        }),
+                    ),
+                // "They match" and the join on the same served chain, right and misheard.
+                ...(
+                    [
+                        ['main', 2],
+                        ['main', 5],
+                        ['other', 3],
+                        ['succ', 3],
+                        ['madeUp', 3],
+                    ] as const
+                ).flatMap(([history, through]) =>
+                    ['right', 'misheard'].map((words) =>
+                        json({
+                            kind: 'join_preview',
+                            history,
+                            through,
+                            settings: 'none',
+                            words,
+                            join: words === 'right',
+                        }),
+                    ),
+                ),
+                json({
+                    kind: 'join_preview',
+                    history: 'main',
+                    through: 5,
+                    settings: 'pin-main-2',
+                    words: 'right',
+                    join: true,
+                }),
+                ...[coreJoin(), webJoin()].flatMap(({ joinPreviews: d }: Json) =>
+                    d.cases
+                        .filter((k: Json) => k.served.history !== 'dead')
+                        .map((k: Json) => {
+                            const value = k.record
+                                ? d.recordValues[k.record.slice(0, 1)]
+                                : undefined;
+                            return json({
+                                kind: 'join_preview',
+                                ...k.served,
+                                settings: k.settings,
+                                held: k.held,
+                                ...(value === undefined ? {} : { record: value }),
+                            });
+                        }),
+                ),
                 // A chain committed first (the floor), and a server serving short of it or of the record.
                 ...coreLedger()
                     .deviceRecords.cases.filter(

@@ -21,7 +21,7 @@ import {
     firstName,
 } from '@/lib/families';
 import type { JoinMark, RosterFork } from '@hushos/crypto';
-import { errorCopy, wrongWordsCopy } from '@/lib/groups/copy';
+import { errorCopy, mismatchCopy, wrongWordsCopy } from '@/lib/groups/copy';
 import { confirmJoin, joinStatus, type JoinOutcome } from '@/lib/groups/join';
 import { cue } from '@/lib/sounds';
 
@@ -60,6 +60,7 @@ type Step =
           kind: 'compare';
           mark: JoinMark;
           hidden: [number, number];
+          session: number;
           changed?: boolean;
           wrong?: boolean;
       }
@@ -131,6 +132,7 @@ function JoinFamily() {
                     kind: 'compare',
                     mark: outcome.mark,
                     hidden: outcome.hidden,
+                    session: outcome.session,
                     changed: outcome.changed,
                 });
             case 'wrong-words':
@@ -172,7 +174,14 @@ function JoinFamily() {
         setBusy(true);
         setError('');
         try {
-            show(await confirmJoin(ctx, groupId, step.mark, typed));
+            show(
+                await confirmJoin(
+                    ctx,
+                    groupId,
+                    { mark: step.mark, hidden: step.hidden, session: step.session },
+                    typed,
+                ),
+            );
         } catch (cause) {
             cue('error');
             setError(errorCopy(cause, { family }));
@@ -362,11 +371,7 @@ function JoinFamily() {
                             </h2>
                         </AlertTitle>
                         <AlertDescription>
-                            <p>
-                                The join code doesn’t match what {them} sees. HushOS may be showing
-                                you a different member list. Don’t use this family until you’ve
-                                sorted it out together.
-                            </p>
+                            <p>{mismatchCopy(them)}</p>
                             <p className="mt-2">
                                 First check that {them} is reading your join code, not someone
                                 else’s, and that you typed the two hidden words as they read them.

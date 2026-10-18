@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
-hushos-core = { path = "..", default-features = false, features = ["fuzzing"] }
+hushos-core = { path = "..", default-features = false, features = ["fuzzing", "fixtures"] }
 libfuzzer-sys = "0.4"
 serde_json = "1.0"
 # For tests/common/groups.rs, which the verdicts include by path.

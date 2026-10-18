@@ -211,6 +211,15 @@ export function createAreaLedger() {
         return families.length === 1 ? families[0] : undefined;
     }
     /*
+     * A family folder whose family has no chain committed here now: a refusal
+     * or a fork since it was opened (uncommit). None of its keys is handed out
+     * or used, held or listed, until a chain is committed again; forgetting
+     * the family drops them.
+     */
+    function heldBack(workspaceId: string) {
+        return openedBy(workspaceId).some((groupId) => !chains.has(groupId));
+    }
+    /*
      * Committed chains listing an area another family opened here, or one of
      * the account's own workspaces: what a hostile family's roster names,
      * ignored for every decision and listed for the person to hear about.
@@ -384,7 +393,7 @@ export function createAreaLedger() {
             } else areaWrite.set(key, version);
         }
     }
-    /* A refusal or a fork for the family: none of its areas is written until a chain is committed again. */
+    /* A refusal or a fork for the family: none of its areas is written, and none of their keys opens (heldBack), until a chain is committed again. */
     function uncommit(groupId: string) {
         for (const key of areaWrite.keys())
             if (key.startsWith(`${groupId}/`)) areaWrite.delete(key);
@@ -527,10 +536,12 @@ export function createAreaLedger() {
         return workspaceKeys.has(workspaceId) ? ownPrevNodeKeys : guestPrevNodeKeys;
     }
     function nodeKey(workspaceId: string, nodeId: string) {
+        if (heldBack(workspaceId)) return undefined;
         return nodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
     }
     /* The previous key held for a node (and whether this device opened it itself). */
     function prevNodeKey(workspaceId: string, nodeId: string) {
+        if (heldBack(workspaceId)) return undefined;
         return prevNodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
     }
     /* A node key made in a batch that failed: dropped (the caller zeroes it). */
@@ -543,9 +554,10 @@ export function createAreaLedger() {
      * check; null when it holds neither at that epoch, which reads unchecked.
      */
     function keyAtEpoch(workspaceId: string, nodeId: string, epoch: number) {
+        // Through the held-back gates of nodeKey and prevNodeKey.
         const current = nodeKey(workspaceId, nodeId);
         if (current?.epoch === epoch) return current.key;
-        const previous = prevNodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
+        const previous = prevNodeKey(workspaceId, nodeId);
         return previous?.epoch === epoch ? previous.key : null;
     }
     /* A share, link or report naming one of this account's own workspaces: a key planted, never taken. */
@@ -572,6 +584,7 @@ export function createAreaLedger() {
         parentId: string,
         parentKeyEpoch: number,
     ): { key: Uint8Array<ArrayBuffer>; rootedAt: number | null } {
+        // Reached only behind a held-back gate: openListedNode's, or requireWritable's for writes.
         if (parentId === workspaceId) {
             const workspace = workspaceKeys.get(workspaceId);
             if (!workspace) throw new CryptoError('Open Drive again to continue.');
@@ -608,6 +621,7 @@ export function createAreaLedger() {
      * through a previous key a removed member may hold.
      */
     function writableNodeKey(workspaceId: string, nodeId: string) {
+        if (heldBack(workspaceId)) throw new CryptoError(NO_CHAIN);
         const node = nodeKey(workspaceId, nodeId);
         if (node && isArea(workspaceId) && !rootedAtWriteVersion(workspaceId, nodeId))
             throw new CryptoError(KEY_CHANGE_PENDING);
@@ -706,6 +720,7 @@ export function createAreaLedger() {
      * refused. Returns the node's key, held by the session.
      */
     async function openListedNode(workspaceId: string, node: ServedNodeKey) {
+        if (heldBack(workspaceId)) throw new CryptoError(NO_CHAIN);
         const cached = nodeKey(workspaceId, node.id);
         const at = slot(workspaceId, node.id);
         // A group area's root is taken from the cache only under the area key
@@ -748,6 +763,12 @@ export function createAreaLedger() {
             } catch (error) {
                 heldPrevious?.fill(0);
                 throw error;
+            }
+            // Uncommitted while the envelope opened: neither kept nor handed out.
+            if (heldBack(workspaceId)) {
+                key.fill(0);
+                heldPrevious?.fill(0);
+                throw new CryptoError(NO_CHAIN);
             }
             rememberNodeKey(workspaceId, node.id, key, node.keyEpoch, rootedAt);
             if (areaRoot) rootOpenedUnder.set(at, node.parentKeyEpoch);
@@ -814,6 +835,8 @@ export function createAreaLedger() {
                 rememberPrevNodeKey(workspaceId, node.id, previous, node.prevKeyEpoch);
         }
         heldPrevious?.fill(0);
+        // Uncommitted during the awaits above (the root's check, the previous key): not handed out.
+        if (heldBack(workspaceId)) throw new CryptoError(NO_CHAIN);
         return key;
     }
     /*

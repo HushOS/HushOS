@@ -44,6 +44,12 @@ pub fn core_ledger() -> &'static Value {
     LEDGER.get_or_init(|| read("packages/crypto/src/__fixtures__/core-area-ledger.json"))
 }
 
+/// `packages/crypto/src/__fixtures__/core-join.json`: the core's join previews, checks and consents.
+pub fn core_join() -> &'static Value {
+    static JOIN: OnceLock<Value> = OnceLock::new();
+    JOIN.get_or_init(|| read("packages/crypto/src/__fixtures__/core-join.json"))
+}
+
 /// The four people of the group fixtures, derived from the shared seeds.
 pub fn people() -> &'static [Person] {
     static PEOPLE: OnceLock<Vec<Person>> = OnceLock::new();

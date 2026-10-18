@@ -541,7 +541,7 @@ export async function run(c: DeviceCase): Promise<{ outcome: Outcome; record: st
     const settings = (pin: GroupPin | null | undefined) =>
         session.useSettings(f.p1.userId, { groups: pin ? { [GROUP]: pin } : {} });
     let id = 0;
-    const accept = (served: Json, record: string | null, withoutCache: boolean) =>
+    const accept = (served: Json, record: string | null, withoutCache: boolean, retried: boolean) =>
         session.handle({
             id: ++id,
             operation: 'groupAccept',
@@ -557,11 +557,12 @@ export async function run(c: DeviceCase): Promise<{ outcome: Outcome; record: st
                 record,
                 checkedAt: CHECKED,
                 ...(withoutCache ? { withoutCache } : {}),
+                ...(retried ? { retried } : {}),
             },
         } as GroupMessage) as Promise<GroupResults['groupAccept']>;
     if (c.held) {
         settings(c.heldSettingsPin);
-        const held = await accept(c.held, null, false);
+        const held = await accept(c.held, null, false, false);
         if (held.status !== 'accepted')
             throw new Error(`${c.name}: the held chain was not accepted`);
     }
@@ -575,10 +576,13 @@ export async function run(c: DeviceCase): Promise<{ outcome: Outcome; record: st
     let fromVersionOne = false;
     try {
         // The first fetch continues from where the app stored the record (`start`), or from 1.
-        const result = await acceptFromRecord(c.record ? c.start : null, (after, withoutCache) => {
-            if (c.record && c.start > 0 && after === 0) fromVersionOne = true;
-            return accept(servedAfter(after), c.record, withoutCache);
-        });
+        const result = await acceptFromRecord(
+            c.record ? c.start : null,
+            (after, withoutCache, retried) => {
+                if (c.record && c.start > 0 && after === 0) fromVersionOne = true;
+                return accept(servedAfter(after), c.record, withoutCache, retried);
+            },
+        );
         if (result.status === 'accepted')
             return {
                 outcome: {

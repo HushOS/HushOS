@@ -46,8 +46,8 @@ use crate::canonical::{bytes_of, encode_statement, uuid};
 use crate::envelope::{open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::group_trust::{
-    accept_rosters, check_time, group_pin_check, pin_after, AcceptedRosters, CachedSuccession, ForkOf,
-    GroupChainCache, GroupPin, KeySet, MarkSide, OwnIdentities, RosterChain,
+    accept_rosters_joining, check_time, group_pin_check, pin_after, AcceptedRosters, CachedSuccession,
+    ForkOf, GroupChainCache, GroupPin, JoinMark, KeySet, MarkSide, OwnIdentities, RosterChain,
 };
 use crate::groups::{parse_roster, GroupPublicKey, SignedGroupStatement};
 use hkdf::Hkdf;
@@ -63,28 +63,61 @@ const STORE_VERSION: u8 = 1;
 /// A device store record that did not open: another account root (a master-key rotation), another
 /// account, family or store, or damaged bytes.
 pub const RECORD_UNREADABLE: &str = "This saved family record could not be opened on this account.";
-const BAD_CACHE: &str = "Invalid member list cache.";
+pub(crate) const BAD_CACHE: &str = "Invalid member list cache.";
+/* `me` does not hold the unlocked account's signing key: the worker's identity is not open. */
+pub(crate) const OPEN_IDENTITY: &str = "Open your identity first.";
 const BAD_PIN: &str = "Invalid group pin.";
 
 /// Which of the app's own device stores a record is kept in: part of its associated data, so a
-/// record never opens as another store's. The chain record (`chains`) is the core's alone:
-/// [`AreaLedger::accept_served`] seals and opens it.
+/// record never opens as another store's. The chain record (`chains`) is the core's alone
+/// ([`AreaLedger::accept_served`] seals and opens it), and so are a join's records (`joins`, the
+/// compared code, and `holds`, its escalation; [`crate::AreaLedger::join_check`]): an app that
+/// could seal a joins record could commit a family nobody compared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DeviceStore {
     /// The roster calls the app still has to send (Core 5a).
     Outbox,
-    /// A join in progress.
-    Joins,
 }
 
 impl DeviceStore {
     fn name(self) -> &'static str {
         match self {
             DeviceStore::Outbox => "outbox",
-            DeviceStore::Joins => "joins",
         }
     }
+}
+
+/// Any JSON sealed in any device store (the core's own included). For the
+/// shared fixtures and the fuzz targets only: a joins record of an app's
+/// making, or another family's, which the core must refuse.
+#[cfg(feature = "fixtures")]
+#[doc(hidden)]
+pub fn device_store_seal_value(
+    account_key: &[u8],
+    user_id: &str,
+    group_id: &str,
+    store: &str,
+    value: &Value,
+) -> CoreResult<String> {
+    let plaintext = Zeroizing::new(value.to_string().into_bytes());
+    seal_bytes(&*store_key(account_key)?, user_id, group_id, store, &plaintext)
+}
+
+/// Any device store record's JSON (the core's own stores included), or none
+/// when it does not open. For the shared fixtures only, beside
+/// [`chain_record_open_value`].
+#[cfg(feature = "fixtures")]
+#[doc(hidden)]
+pub fn device_store_open_value(
+    account_key: &[u8],
+    user_id: &str,
+    group_id: &str,
+    store: &str,
+    envelope: &str,
+) -> Option<Value> {
+    let plaintext = open_bytes(&*store_key(account_key).ok()?, user_id, group_id, store, envelope).ok()?;
+    serde_json::from_slice(&plaintext).ok()
 }
 
 const CHAINS: &str = "chains";
@@ -112,7 +145,7 @@ fn store_context(user_id: &str, group_id: &str, store: &str) -> CoreResult<Vec<u
 }
 
 /* Bytes sealed in the device store: base64url of [version][24-byte nonce][XChaCha20-Poly1305 of the bytes]. */
-fn seal_bytes(
+pub(crate) fn seal_bytes(
     key: &[u8; KEY_BYTES],
     user_id: &str,
     group_id: &str,
@@ -131,7 +164,7 @@ fn seal_bytes(
 
 /* The bytes a device store envelope holds, wiped when dropped. */
 /* Refused as `Sealed` (unreadable: the app deletes it) only for the envelope; bad ids are `Input`. */
-fn open_bytes(
+pub(crate) fn open_bytes(
     key: &[u8; KEY_BYTES],
     user_id: &str,
     group_id: &str,
@@ -442,7 +475,7 @@ pub(crate) fn chain_record_read(group_id: &str, value: &Value) -> Option<ChainRe
 }
 
 /* The chain record a committed acceptance leaves: its cache and the pin after it. */
-fn chain_record_seal(
+pub(crate) fn chain_record_seal(
     key: &[u8; KEY_BYTES],
     user_id: &str,
     group_id: &str,
@@ -551,7 +584,7 @@ pub fn served_race_message(split: bool) -> String {
  */
 pub(crate) fn account_error(error: &CoreError) -> bool {
     matches!(error, CoreError::Input(message)
-        if message == NOT_THIS_ACCOUNT || message == NO_ACCOUNT || message == OPEN_SETTINGS)
+        if message == NOT_THIS_ACCOUNT || message == NO_ACCOUNT || message == OPEN_SETTINGS || message == OPEN_IDENTITY)
 }
 
 /* Whether a refusal is a run another acceptance overtook. */
@@ -559,7 +592,7 @@ pub(crate) fn lost_race(error: &CoreError) -> bool {
     matches!(error, CoreError::Input(message) if message == OLDER_CHAIN || message == SPLIT_CHAIN)
 }
 
-fn overtaken(error: &CoreError) -> ServedAcceptance {
+pub(crate) fn overtaken(error: &CoreError) -> ServedAcceptance {
     ServedAcceptance::Overtaken {
         split: matches!(error, CoreError::Input(message) if message == SPLIT_CHAIN),
     }
@@ -585,11 +618,11 @@ fn served_head(served: &ServedChain, cache: &RecordCache) -> u64 {
 }
 
 /* The account an acceptance runs for, as the ledger held it when the acceptance began. */
-struct Reader<'a> {
-    account: &'a ServedAccount,
-    me: &'a OwnIdentities,
-    group_id: &'a str,
-    checked_at: &'a str,
+pub(crate) struct Reader<'a> {
+    pub(crate) account: &'a ServedAccount,
+    pub(crate) me: &'a OwnIdentities,
+    pub(crate) group_id: &'a str,
+    pub(crate) checked_at: &'a str,
 }
 
 impl AreaLedger {
@@ -599,16 +632,21 @@ impl AreaLedger {
      * and the record's), the cache given, then commit (under the account the
      * run began with, never below or beside the floor), the pin after, and the
      * record sealed. A refusal uncommits the family (keeping a fork a fork) but
-     * never its floor; a fork uncommits it as one. A run another overtook is
-     * `Err(OLDER_CHAIN | SPLIT_CHAIN)`.
+     * never its floor, unless the attempt is `retried` (the ladder tries again:
+     * the family stays committed under the chain held until the last attempt's
+     * refusal, the worker's `retried`); a fork uncommits it as one. A run
+     * another overtook is `Err(OLDER_CHAIN | SPLIT_CHAIN)`.
      */
-    fn accept_once(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn accept_once(
         &self,
         reader: &Reader<'_>,
         served: &ServedChain,
         cache: &RecordCache,
         settings_pin: Option<&GroupPin>,
         record_pin: &CoreResult<Option<GroupPin>>,
+        join_mark: Option<&JoinMark>,
+        retried: bool,
     ) -> CoreResult<ServedAcceptance> {
         let group_id = reader.group_id;
         let floor = self.floor(group_id);
@@ -624,7 +662,11 @@ impl AreaLedger {
         let generation = reader.account.generation;
         // A refusal uncommits the family, but only under the session the run began in.
         let refuse = |error: CoreError| {
-            self.uncommit_served(group_id, generation, None)?;
+            if retried {
+                self.still_the_session(generation)?;
+            } else {
+                self.uncommit_served(group_id, generation, None)?;
+            }
             Err(error)
         };
         // The person's pins in the worker's order (settings, then the record's), then the cache.
@@ -644,18 +686,23 @@ impl AreaLedger {
             RecordCache::Held(cache) => Some((**cache).clone()),
             RecordCache::Refused { .. } => return refuse(input(BAD_CACHE)),
         };
+        // A join vouches for the first keys, through its join mark, only where nothing marks the
+        // family (the worker's accept): with marks they decide, and the join mark adds to them.
+        let marked = !pins.is_empty() || cache.is_some() || self.holds_family(group_id);
+        let first_keys_checked = join_mark.is_some() && !marked;
         let mut marks = pins.to_vec();
         marks.extend(session_pin);
-        let accepted = accept_rosters(
+        let accepted = accept_rosters_joining(
             group_id.into(),
             served.first_keys.clone(),
-            false,
+            first_keys_checked,
             marks,
             served.rosters.clone(),
             served.successions.clone(),
             served.signer_keys.clone(),
             reader.me.clone(),
             cache,
+            join_mark.cloned(),
         );
         match accepted {
             Err(error) => refuse(error),
@@ -688,7 +735,8 @@ impl AreaLedger {
         record_pin: &CoreResult<Option<GroupPin>>,
         has_record: bool,
     ) -> CoreResult<ServedAcceptance> {
-        match self.accept_once(reader, served, cache, settings_pin, record_pin) {
+        // With a record a refusal here is always tried again (FetchFromVersionOne, or below).
+        match self.accept_once(reader, served, cache, settings_pin, record_pin, None, has_record) {
             Ok(outcome) => return Ok(outcome),
             // A lock or another account meanwhile: the caller's, never a reason to fetch again.
             Err(error) if account_error(&error) => return Err(error),
@@ -699,7 +747,7 @@ impl AreaLedger {
             Err(_) => {}
         }
         // From version 1 with the cache left out: the record's pin is still a mark.
-        match self.accept_once(reader, served, &RecordCache::None, settings_pin, record_pin) {
+        match self.accept_once(reader, served, &RecordCache::None, settings_pin, record_pin, None, false) {
             Err(error) if lost_race(&error) => Ok(overtaken(&error)),
             other => other,
         }
@@ -709,6 +757,48 @@ impl AreaLedger {
     fn account_for_records(&self) -> CoreResult<ServedAccount> {
         self.served_account().ok_or_else(|| input(NO_ACCOUNT))
     }
+
+    /*
+     * The person's marks for a family, as the worker's marksOf reads them: the
+     * unlocked account (refused unless `me` is it), this device's chain record
+     * opened, then the settings pin (refused before settings are open). `None`:
+     * the record did not open, the answer even before settings are open.
+     */
+    pub(crate) fn open_marks(
+        &self,
+        me: &OwnIdentities,
+        group_id: &str,
+        record: Option<String>,
+    ) -> CoreResult<Option<Marks>> {
+        let account = self.account_for_records()?;
+        // The worker's order: another account than the one unlocked first, then the record, then
+        // the settings, then the identity it opened.
+        if !me.user_id.eq_ignore_ascii_case(&account.user_id) {
+            return Err(input(NO_ACCOUNT));
+        }
+        let record = match record {
+            None => None,
+            Some(envelope) => {
+                match chain_record_open(&account.store_key, &account.user_id, group_id, &envelope)? {
+                    None => return Ok(None),
+                    Some(opened) => Some(opened),
+                }
+            }
+        };
+        let settings_pin = self.settings_pin(&account.user_id, group_id)?;
+        let own_key = encode(&account.signing_public_key);
+        if !me.identities.iter().any(|keys| keys.signing_public_key == own_key) {
+            return Err(input(OPEN_IDENTITY));
+        }
+        Ok(Some(Marks { account, record, settings_pin }))
+    }
+}
+
+/* What open_marks read: the account, the record (its cache and pin) and the settings pin. */
+pub(crate) struct Marks {
+    pub(crate) account: ServedAccount,
+    pub(crate) record: Option<ChainRecord>,
+    pub(crate) settings_pin: Option<GroupPin>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -783,25 +873,11 @@ impl AreaLedger {
         if record.is_none() && served.after > 0 {
             return Err(input("A continuation needs the record it continues: fetch from version 1."));
         }
-        let account = self.account_for_records()?;
-        let own_key = encode(&account.signing_public_key);
-        if !me.user_id.eq_ignore_ascii_case(&account.user_id)
-            || !me.identities.iter().any(|keys| keys.signing_public_key == own_key)
-        {
-            return Err(input(NOT_THIS_ACCOUNT));
-        }
         // The record first, then the settings, as the worker's marksOf: a record that does not open
         // is the answer even before settings are open.
-        let record = match record {
-            None => None,
-            Some(envelope) => {
-                match chain_record_open(&account.store_key, &account.user_id, &group_id, &envelope)? {
-                    None => return Ok(ServedAcceptance::RecordUnreadable),
-                    Some(opened) => Some(opened),
-                }
-            }
+        let Some(Marks { account, record, settings_pin }) = self.open_marks(&me, &group_id, record)? else {
+            return Ok(ServedAcceptance::RecordUnreadable);
         };
-        let settings_pin = self.settings_pin(&account.user_id, &group_id)?;
         let reader = Reader { account: &account, me: &me, group_id: &group_id, checked_at: &checked_at };
         let (cache, record_pin) = match &record {
             None => (RecordCache::None, Ok(None)),
@@ -824,7 +900,7 @@ impl AreaLedger {
     /// let sealed = ledger.group_device_record_seal(group.clone(), DeviceStore::Outbox, r#"{"calls":[]}"#.into())?;
     /// assert_eq!(ledger.group_device_record_open(group.clone(), DeviceStore::Outbox, sealed.clone())?, r#"{"calls":[]}"#);
     /// // Another store, or the same account after a master-key rotation: never readable.
-    /// assert!(ledger.group_device_record_open(group.clone(), DeviceStore::Joins, sealed.clone()).is_err());
+    /// assert!(ledger.group_device_record_open("0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b".into(), DeviceStore::Outbox, sealed.clone()).is_err());
     /// ledger.open_account(user, signing_public_key(vec![5u8; 32])?, vec![8u8; 32])?;
     /// assert!(ledger.group_device_record_open(group, DeviceStore::Outbox, sealed).is_err());
     /// # Ok(())
@@ -1024,6 +1100,7 @@ mod tests {
     use super::*;
     use crate::bytes::decode;
     use crate::envelope::open_with_nonce;
+    use crate::group_trust::accept_rosters;
     use crate::groups::tests::{
         area_key_at, ml_dsa_keys, History, Person, AREA, AREA_SEED, GROUP, OTHER_GROUP,
     };
@@ -1203,7 +1280,8 @@ mod tests {
             "account"
         );
         assert!(unreadable(open(&ledger, OTHER_GROUP, DeviceStore::Outbox, &sealed)), "another family");
-        assert!(unreadable(open(&ledger, GROUP, DeviceStore::Joins, &sealed)), "another store");
+        let other_store = open_bytes(&store_key(&ROOT).unwrap(), user, GROUP, "joins", &sealed);
+        assert!(matches!(other_store, Err(CoreError::Sealed(_))), "another store");
         // A flipped byte anywhere, the version byte included, and a cut envelope.
         let bytes = decode("r", &sealed, None).unwrap();
         for at in [0, 1, 25, bytes.len() - 1] {
@@ -1238,10 +1316,10 @@ mod tests {
         }
         ledger.open_account(user.into(), signing, ROOT.to_vec()).unwrap();
         let sealed =
-            ledger.group_device_record_seal(GROUP.into(), DeviceStore::Joins, OUTBOX.into()).unwrap();
+            ledger.group_device_record_seal(GROUP.into(), DeviceStore::Outbox, OUTBOX.into()).unwrap();
         ledger.clear();
         assert_eq!(
-            ledger.group_device_record_open(GROUP.into(), DeviceStore::Joins, sealed),
+            ledger.group_device_record_open(GROUP.into(), DeviceStore::Outbox, sealed),
             Err(input(NO_ACCOUNT))
         );
     }
@@ -1250,7 +1328,7 @@ mod tests {
     fn the_record_key_and_context_are_the_web_s_byte_for_byte() {
         let user = "11111111-1111-4111-8111-111111111111";
         let sealed = account_ledger(user, &ROOT)
-            .group_device_record_seal(GROUP.into(), DeviceStore::Joins, OUTBOX.into())
+            .group_device_record_seal(GROUP.into(), DeviceStore::Outbox, OUTBOX.into())
             .unwrap();
         let bytes = decode("r", &sealed, None).unwrap();
         assert_eq!(bytes[0], 1);
@@ -1259,10 +1337,10 @@ mod tests {
         Hkdf::<Sha256>::new(Some(&[0u8; 32]), &ROOT)
             .expand(b"hushos/group/device-store/v1", &mut key)
             .unwrap();
-        let context = format!(r#"["hushos/group/device-store",1,"{user}","{GROUP}","joins"]"#);
+        let context = format!(r#"["hushos/group/device-store",1,"{user}","{GROUP}","outbox"]"#);
         let opened = open_with_nonce(&key, &bytes[1..25], &bytes[25..], context.as_bytes()).unwrap();
         assert_eq!(opened, OUTBOX.as_bytes());
-        let other = format!(r#"["hushos/group/device-store",1,"{user}","{GROUP}","outbox"]"#);
+        let other = format!(r#"["hushos/group/device-store",1,"{user}","{GROUP}","joins"]"#);
         assert!(open_with_nonce(&key, &bytes[1..25], &bytes[25..], other.as_bytes()).is_err());
     }
 
@@ -1384,7 +1462,9 @@ mod tests {
             f.accept(&ledger, Some(&record), served).unwrap(),
             ServedAcceptance::FetchFromVersionOne
         ));
-        assert!(ledger.held_chain(GROUP).is_none(), "a refusal uncommits, as the worker does");
+        // The ladder tries again from version 1: the chain held stays committed meanwhile, as the
+        // worker keeps it for a `retried` attempt, so the family's folders read on.
+        assert!(ledger.held_chain(GROUP).is_some(), "a retried refusal uncommits nothing");
         // From version 1 the cache's digests are marks: the branch at 3 agrees with them through 2.
         assert_eq!(version_of(&f.accept(&ledger, Some(&record), other.served(0, 3)).unwrap()), Some(3));
     }
@@ -1493,17 +1573,15 @@ mod tests {
 
     #[test]
     fn a_refused_run_s_uncommit_keeps_the_floor_so_an_older_chain_is_never_taken_after_it() {
-        // The background committed roster 3; the foreground read the record at 2, gets junk claiming
-        // roster 3 (refused, uncommitted), and then the genuine rosters 1 and 2.
+        // The background committed roster 3; a run with no record gets junk claiming roster 3 (a
+        // last attempt: refused, uncommitted); then a run from the record at 2 is served the genuine
+        // rosters 1 and 2.
         let f = family(3);
         let record = f.record_through(2, 1);
         let ledger = f.held(3, None);
-        let mut junk = f.served(2, 3);
-        junk.rosters[0].signature.ed25519 = vec![0; 64];
-        assert!(matches!(
-            f.accept(&ledger, Some(&record), junk).unwrap(),
-            ServedAcceptance::FetchFromVersionOne
-        ));
+        let mut junk = f.served(0, 3);
+        junk.rosters[2].signature.ed25519 = vec![0; 64];
+        f.accept(&ledger, None, junk).unwrap_err();
         assert!(ledger.held_chain(GROUP).is_none(), "the refusal uncommitted the chain");
         assert!(matches!(
             f.accept(&ledger, Some(&record), f.served(0, 2)).unwrap(),
@@ -1705,7 +1783,17 @@ mod tests {
             f.served(0, 2),
             CHECKED.into(),
         );
-        assert_eq!(wrong.unwrap_err(), input(NOT_THIS_ACCOUNT));
+        assert_eq!(wrong.unwrap_err(), input(OPEN_IDENTITY));
+        // Another account than the one unlocked is refused before the record is read.
+        let someone = OwnIdentities { user_id: f.p2.user_id.clone(), identities: vec![f.p2.served_keys()] };
+        let other = f.ledger_with(Some(f.pin_at(1))).accept_served(
+            someone,
+            GROUP.into(),
+            None,
+            f.served(0, 2),
+            CHECKED.into(),
+        );
+        assert_eq!(other.unwrap_err(), input(NO_ACCOUNT));
         assert_eq!(f.accept(&AreaLedger::new(), None, f.served(0, 2)).unwrap_err(), input(NO_ACCOUNT));
     }
 

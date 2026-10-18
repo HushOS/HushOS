@@ -1,4 +1,5 @@
 import type { SuccessionLink } from '@hushos/crypto';
+import { linksNeedingConsent } from '@hushos/crypto/consent-due';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
 
 /*
@@ -22,43 +23,21 @@ export type ConsentBackfill = {
     links(): Promise<SuccessionLink[]>;
     /* The account's identity and its earlier ones, sealed under the root. */
     identities(): Promise<{ identity: IdentityEnvelope; history: IdentityEnvelope[] }>;
-    /* The worker's identityConsent: both halves, signed by each identity's opened keys. */
-    consent(old: IdentityEnvelope, next: IdentityEnvelope): Promise<string>;
+    /* The worker's identityConsent: both halves, signed by each identity's opened keys, for that link. */
+    consent(link: SuccessionLink, old: IdentityEnvelope, next: IdentityEnvelope): Promise<string>;
     /* POST /api/auth/identity/succession/consent. */
     upload(oldKeyVersion: number, consent: string): Promise<{ stored: boolean }>;
 };
 
-/* Whether `envelope` is the identity a link names on that side: every public key the consent covers. */
-function names(envelope: IdentityEnvelope, link: SuccessionLink, side: 'old' | 'new') {
-    if (envelope.version !== 2) return false;
-    if (side === 'old')
-        return (
-            envelope.keyVersion === link.oldKeyVersion &&
-            envelope.encryptionPublicKey === link.oldEncryptionPublicKey &&
-            envelope.signingPublicKey === link.oldSigningPublicKey &&
-            envelope.mlDsa.publicKey === link.oldMlDsaPublicKey
-        );
-    return (
-        envelope.keyVersion === link.newKeyVersion &&
-        envelope.encryptionPublicKey === link.newEncryptionPublicKey &&
-        envelope.signingPublicKey === link.newSigningPublicKey &&
-        envelope.mlDsa.publicKey === link.newMlDsaPublicKey &&
-        envelope.kem.publicKey === link.newKemPublicKey
-    );
-}
-
 export async function backfillConsent(deps: ConsentBackfill) {
-    const missing = (await deps.links()).filter((link) => !link.consent);
-    if (missing.length === 0) return { stored: 0 };
+    const links = await deps.links();
+    if (!links.some((link) => !link.consent)) return { stored: 0 };
     const { identity, history } = await deps.identities();
-    const own = [...history, identity];
     let stored = 0;
-    for (const link of missing) {
-        const old = own.find((envelope) => names(envelope, link, 'old'));
-        const next = own.find((envelope) => names(envelope, link, 'new'));
-        // A version 1 side, or keys that are not this account's envelopes: nothing to consent to.
-        if (!old || !next) continue;
-        const consent = await deps.consent(old, next);
+    // A version 1 side, or keys that are not this account's envelopes: nothing to consent to
+    // (linksNeedingConsent, the twin of the phones' links_needing_consent).
+    for (const { link, old, next } of linksNeedingConsent(links, [...history, identity])) {
+        const consent = await deps.consent(link, old, next);
         if ((await deps.upload(link.oldKeyVersion, consent)).stored) stored++;
     }
     return { stored };
