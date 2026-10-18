@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "e68cd747-46a0-427e-8205-b425e6b28faa",
+    "id": "bb04debe-1a1f-4664-a052-6c7d5e0b23a5",
     "prevIds": ["b2b2b243-cb3c-4c68-b2af-08c7a14f3a6e"],
     "ddl": [
         {
@@ -5917,6 +5917,32 @@
             "generated": null,
             "identity": null,
             "name": "reissue_stuck_reason",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "change_claim_until",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 1,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "uncredited_order_ids",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

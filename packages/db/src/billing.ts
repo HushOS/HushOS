@@ -520,6 +520,52 @@ export async function setReissueGaveUp(
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
+/*
+ * Claims the family's one plan change (a place purchase or an upgrade) until
+ * `until`: false while another holds it and hasn't run out.
+ */
+export async function claimPlanChange(subscriptionId: string, until: Date) {
+    const now = new Date(Date.now());
+    const rows = await db
+        .update(groupBillingSubscriptions)
+        .set({ changeClaimUntil: until, updatedAt: now })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                sql`(${groupBillingSubscriptions.changeClaimUntil} is null or ${groupBillingSubscriptions.changeClaimUntil} <= ${now.toISOString()}::timestamptz)`,
+            ),
+        )
+        .returning({ id: groupBillingSubscriptions.id });
+    return rows.length === 1;
+}
+
+export async function releasePlanChange(subscriptionId: string) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ changeClaimUntil: null, updatedAt: new Date() })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Records orders that must never count as paying for a tier (added to those already kept). */
+export async function addUncreditedOrders(subscriptionId: string, orderIds: string[]) {
+    if (!orderIds.length) return;
+    await db.transaction(async (tx) => {
+        const [row] = await tx
+            .select({ ids: groupBillingSubscriptions.uncreditedOrderIds })
+            .from(groupBillingSubscriptions)
+            .where(eq(groupBillingSubscriptions.id, subscriptionId))
+            .for('update');
+        if (!row) return;
+        await tx
+            .update(groupBillingSubscriptions)
+            .set({
+                uncreditedOrderIds: [...new Set([...(row.ids ?? []), ...orderIds])],
+                updatedAt: new Date(),
+            })
+            .where(eq(groupBillingSubscriptions.id, subscriptionId));
+    });
+}
+
 /* Lets a claimed retry go (its job could not be queued), so the next attempt may queue one. */
 export async function releaseReissueRetry(subscriptionId: string) {
     await db

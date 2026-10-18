@@ -197,6 +197,16 @@ export const groupBillingSubscriptions = pgTable(
          * longer offered, so there is nothing to move it back to).
          */
         reissueStuckReason: text('reissue_stuck_reason'),
+        /*
+         * A place purchase or an upgrade under way, until when: the two never run at once for
+         * a family, so a raise's order can't be taken for an unconfirmed upgrade's.
+         */
+        changeClaimUntil: timestamp('change_claim_until', { withTimezone: true }),
+        /*
+         * Orders HushOS refused to credit: a raise Polar billed on another product than the one
+         * it was asked on. They never count as paying for a tier.
+         */
+        uncreditedOrderIds: text('uncredited_order_ids').array(),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
