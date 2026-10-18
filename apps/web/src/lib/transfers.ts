@@ -105,6 +105,10 @@ async function keyChangePause(target: DriveNode, attempt: number) {
     await refreshKeyChange(target).catch(() => {});
 }
 
+// Stashes from before they were sealed held decrypted bytes on disk: they go, unread. An upload
+// that still names one is reported lost, as when its stash is gone.
+if (stashAvailable()) void uploadStash.dropPlaintext();
+
 export const transfers = createTransferManager({
     rpc: authClient.rpc,
     api: driveApi,

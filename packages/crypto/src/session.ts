@@ -120,6 +120,7 @@ import {
 } from './drive';
 import { client, ready } from '@serenity-kit/opaque';
 import { encryptKey, decryptKey } from './aead';
+import { deriveStashKey } from './stash';
 import { encode, decode, wrappingKey, checkProfile } from './keys';
 import {
     accountKeyContext,
@@ -597,6 +598,8 @@ type BaseRequests = {
         nodeId: string;
         version: (DriveVersionEnvelope & { contentNonce: string }) | null;
     };
+    /* The key that seals this account's stashed upload bytes on the device (stash.ts). */
+    driveStashKey: { userId: string };
 };
 export type CryptoRequests = BaseRequests & GroupRequests;
 export type DriveNodeInput = {
@@ -819,6 +822,8 @@ type BaseResults = {
         keyEpoch: number;
         content: ({ key: string; nonce: string } & DriveContentInfo) | null;
     };
+    /* Non-extractable: the page seals and opens with it and can never read it. */
+    driveStashKey: { key: CryptoKey };
 };
 export type CryptoResults = BaseResults & GroupResults;
 export type DownloadChunkResult =
@@ -3050,6 +3055,17 @@ export function createCryptoSession() {
                     opened.contentKey.fill(0);
                 }
                 return { nodeKey: encode(node.key), keyEpoch: node.epoch, content };
+            }
+            case 'driveStashKey': {
+                // Only the unlocked account's own key: a locked worker has nothing to derive from.
+                if (!accountKey || unlockedUserId !== message.input.userId)
+                    throw new CryptoError('Unlock your account first.');
+                const root = accountKey.slice();
+                try {
+                    return { key: await deriveStashKey(root, message.input.userId) };
+                } finally {
+                    root.fill(0);
+                }
             }
             case 'unlock': {
                 if (phase !== 'unlock')

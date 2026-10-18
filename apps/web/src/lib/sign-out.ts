@@ -4,7 +4,7 @@ import { forgetReturn } from '@/lib/return-to';
 /*
  * What Drive kept on this device between visits, which would otherwise outlive
  * the account here: unfinished uploads are stopped, their journal (file names
- * and chunk digests) emptied and their stashed bytes (decrypted copies)
+ * and chunk digests) emptied and their stashed bytes (sealed copies)
  * deleted; the mirrored tree (ciphertext, but its shape, sizes and times) is
  * dropped; families' sealed records and family folders' mirrors are deleted;
  * and a saved return to a link (its key in the fragment) goes. Drive
@@ -29,6 +29,8 @@ export async function clearDevice() {
     forgetReturn();
     await Promise.all([
         import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
+        // The sealed stash and the key for it, whatever the uploads left.
+        import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
         import('@/lib/drive').then(({ driveClient }) => driveClient.forgetMirror()),
         // Families: the sealed chain records, outbox and joins, and every family folder's
         // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
