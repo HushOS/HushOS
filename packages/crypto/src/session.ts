@@ -120,6 +120,7 @@ import {
 } from './drive';
 import { client, ready } from '@serenity-kit/opaque';
 import { encryptKey, decryptKey } from './aead';
+import { deriveStashKey, openStash, sealStash } from './stash';
 import { encode, decode, wrappingKey, checkProfile } from './keys';
 import {
     accountKeyContext,
@@ -597,6 +598,13 @@ type BaseRequests = {
         nodeId: string;
         version: (DriveVersionEnvelope & { contentNonce: string }) | null;
     };
+    /*
+     * Stashed upload bytes, sealed and opened here under a key derived from the
+     * account key (stash.ts), so the key never leaves the worker. The page
+     * writes what driveStashSeal returns and hands back what it stored.
+     */
+    driveStashSeal: { userId: string; name: string; bytes: Uint8Array };
+    driveStashOpen: { userId: string; name: string; stored: Blob };
 };
 export type CryptoRequests = BaseRequests & GroupRequests;
 export type DriveNodeInput = {
@@ -819,6 +827,8 @@ type BaseResults = {
         keyEpoch: number;
         content: ({ key: string; nonce: string } & DriveContentInfo) | null;
     };
+    driveStashSeal: { parts: Uint8Array<ArrayBuffer>[] };
+    driveStashOpen: { parts: Uint8Array<ArrayBuffer>[] };
 };
 export type CryptoResults = BaseResults & GroupResults;
 export type DownloadChunkResult =
@@ -954,6 +964,23 @@ export function createCryptoSession() {
     function forgetSettingsKey() {
         settingsKey?.key.fill(0);
         settingsKey = undefined;
+    }
+    /* The stash key, derived once per unlock and dropped with the Drive keys. */
+    let stashKey: { userId: string; key: Promise<CryptoKey> } | undefined;
+    function ownStashKey(userId: string) {
+        if (!accountKey || unlockedUserId !== userId)
+            throw new CryptoError('Unlock your account first.');
+        if (stashKey?.userId !== userId) {
+            const root = accountKey.slice();
+            const key = deriveStashKey(root, userId).finally(() => root.fill(0));
+            const held = { userId, key };
+            stashKey = held;
+            // A failed derivation isn't kept for the next call.
+            key.catch(() => {
+                if (stashKey === held) stashKey = undefined;
+            });
+        }
+        return stashKey.key;
     }
     function openedIdentity() {
         if (!identityKey) throw new CryptoError('Open your identity first.');
@@ -1157,6 +1184,7 @@ export function createCryptoSession() {
     function forgetDriveKeys() {
         forgetIdentity();
         forgetSettingsKey();
+        stashKey = undefined;
         groups.forget();
         ledger.clear();
         for (const objectId of uploads.keys()) forgetUpload(objectId);
@@ -3046,6 +3074,14 @@ export function createCryptoSession() {
                     opened.contentKey.fill(0);
                 }
                 return { nodeKey: encode(node.key), keyEpoch: node.epoch, content };
+            }
+            case 'driveStashSeal': {
+                const { userId, name, bytes } = message.input;
+                return { parts: await sealStash(await ownStashKey(userId), name, bytes) };
+            }
+            case 'driveStashOpen': {
+                const { userId, name, stored } = message.input;
+                return { parts: await openStash(await ownStashKey(userId), name, stored) };
             }
             case 'unlock': {
                 if (phase !== 'unlock')

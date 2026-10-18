@@ -13,7 +13,7 @@ import { transfers } from '@/lib/transfers';
  * share's key on this device and queued as an ordinary upload under the
  * person's own folder, fresh keys and all. Folders are walked and recreated.
  * Files are read whole first, so very large ones are refused rather than
- * held in memory. The bytes are also stashed in the browser's private storage,
+ * held in memory. The bytes are also stashed, sealed, in the browser's private storage,
  * because a copy has no file on disk to ask for again after a reload.
  *
  * Each copy is signed by where it came from (docs/integrity-design.md, "Saved

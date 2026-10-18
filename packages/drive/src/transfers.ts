@@ -113,8 +113,20 @@ export type EnqueueInput = {
 };
 
 /* Where the app keeps the bytes of uploads that have no file on disk, by name. */
+/* The stash's bytes are gone or won't open (not merely unreachable for now): the upload is lost. */
+export class StashGone extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'StashGone';
+    }
+}
+
 export type UploadStash = {
-    /* Reopens stashed bytes as the file the journal describes; rejects when the stash is gone. */
+    /*
+     * Reopens stashed bytes as the file the journal describes. Rejects with
+     * StashGone when they are gone or won't open; any other rejection (a lock,
+     * a busy disk) leaves the stash for a later try.
+     */
     open(name: string, file: JournalEntry['file']): Promise<File>;
     remove(name: string): Promise<void>;
     /* Drops every stash not named in `keep`, for stashes whose upload finished without cleanup. */
@@ -643,14 +655,19 @@ export function createTransferManager(options: TransferManagerOptions) {
         });
         options.onEvent?.({ type: 'lost', item: u.item });
     }
-    /* Reopens a restored upload's bytes from its stash, as the file the journal described. */
-    async function fromStash(u: Internal) {
+    /*
+     * Reopens a restored upload's bytes from its stash, as the file the journal
+     * described. Only a stash that is gone counts as lost; a lock pauses the
+     * upload as any lock does, and anything else keeps the stash for a retry.
+     */
+    async function fromStash(u: Internal): Promise<File | 'lost' | 'locked' | 'later'> {
         const described = u.entry?.file ?? u.queued?.file;
-        if (!u.stash || !options.stash || !described) return null;
+        if (!u.stash || !options.stash || !described) return 'lost';
         try {
             return await options.stash.open(u.stash, described);
-        } catch {
-            return null;
+        } catch (error) {
+            if (error instanceof StashGone) return 'lost';
+            return isLockError(error) ? 'locked' : 'later';
         }
     }
 
@@ -1604,11 +1621,13 @@ export function createTransferManager(options: TransferManagerOptions) {
             if (u.stash) {
                 const file = await fromStash(u);
                 if (u.item.status !== 'paused') return;
-                if (file) {
-                    await attachFile(id, file);
-                    return;
-                }
-                await lost(u);
+                if (typeof file !== 'string') await attachFile(id, file);
+                else if (file === 'lost') await lost(u);
+                else if (file === 'locked') {
+                    // Paused already, so locked() leaves it: it says why itself.
+                    locked();
+                    set(u, { error: 'Unlock this device to continue.' });
+                } else set(u, { error: 'This copy couldn’t be read just now. Try again.' });
                 return;
             }
             if (u.item.origin === 'copy') {

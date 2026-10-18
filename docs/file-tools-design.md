@@ -114,7 +114,7 @@ Editing and File tools write through one module over the transfer manager (`lib/
 What both modes add to the queue:
 
 - **Uploads from memory.** A produced file is held as an `ArrayBuffer`, and the engine gains an in-memory byte source beside `File`. Results are not wrapped in a `Blob`: Chrome can page large Blobs to its profile directory, which would put plaintext on disk.
-- **No stash, no journal rows with names.** Produced bytes are never written to the origin private file system (unlike Save a copy, which does today; see the open questions). The upload never resumes; an interrupted one starts over with fresh keys and nonce, which also keeps the journal's nonce rule trivially safe.
+- **No stash, no journal rows with names.** Produced bytes are never written to the origin private file system (Save a copy seals what it stashes, since the change that followed question 5). The upload never resumes; an interrupted one starts over with fresh keys and nonce, which also keeps the journal's nonce rule trivially safe.
     - A run keeps one journal row with ids only: run id, workspace, output folder or output node ids, and time. No names and no bytes.
     - After a reload, that row lets the next open offer "Extracting into a folder was interrupted. Delete what was made?" naming the folder from its encrypted metadata.
     - Queued results are lost on reload, with "Run it again" (the source is still in Drive).
@@ -532,6 +532,6 @@ The open questions above are answered as recommended, with two changes:
 - **Text over 8 MiB (12):** opens read only, with the large-file card offering editing behind a warning about memory and speed, up to the text ceiling.
 - **PDF writing:** `@cantoo/pdf-lib` (MIT; 2.7.1, actively released, though its maintainers promise support only for their own roadmap), pinned to an exact version and run in a worker; vendored if it goes quiet. pdf.js stays the reader (rendering, PDF to images, page thumbnails).
 - **HEIC (1):** convert only where the browser decodes HEIC; a software decoder waits for a licence and patent check. **wasm-vips and HEIC (2):** verified in that PR.
-- **Save a copy (5):** its plaintext stash moves to sealed storage in its own PR, soon.
+- **Save a copy (5):** its stash is sealed in the worker under a key derived from the account key and deleted on an explicit lock or sign-out (done; drive-design.md, the queued-upload journal). The copy being uploaded is still a Blob in the page until the in-memory byte source of section 2 replaces it.
 - **Out of room in someone else's share (6):** a clear "no room" message and a clean-up; the owner's free space is never revealed.
 - **Cancel (7):** all or nothing, Trash for editors. **Metadata (8):** One PDF drops image metadata by default; Convert keeps it unless asked. **Limits (9):** as above. **Stale save (10):** accepted until milestone 2. **Family members edit family files (11):** yes.
