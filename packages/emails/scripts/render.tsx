@@ -112,7 +112,7 @@ export const securityNotice = ${JSON.stringify(securityRendered, null, 4)} as co
 );
 console.info(`Rendered ${securityKinds.length} security notices.`);
 
-/* A family group invitation: who sent it, the group's name as its organiser typed it, the link. */
+/* A family invitation: who sent it, the family's name as its organiser typed it, the link. */
 export const INVITATION_PLACEHOLDERS = {
     inviterName: '{{inviterName}}',
     inviterEmail: '{{inviterEmail}}',

@@ -69,7 +69,8 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
         case 'pending':
             return {
                 status: 'pending',
-                message: `HushOS couldn’t finish this yet (${outcome.reason}) and tries again the next time you open ${family}.`,
+                // The outbox's reason is a sentence of its own (often the transport's), never spliced in.
+                message: `HushOS couldn’t finish this yet. This device keeps the change and sends it the next time you open ${family}.`,
             };
         case 'wiped':
             return { status: 'wiped' };

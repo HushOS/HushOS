@@ -48,16 +48,22 @@ export function isNotMember(error: unknown) {
     return error instanceof GroupApiError && error.status === 404 && error.code === 'not-member';
 }
 
-async function answer<R extends { data: unknown; error: unknown; status: number }>(
-    pending: Promise<R>,
-): Promise<NonNullable<R['data']>> {
+/* The same sentence errorCopy gives for status 0 (DESIGN.md, Errors). */
+export const NO_ANSWER = 'Couldn’t reach HushOS. Check your connection, then retry.';
+
+async function answer<
+    R extends { data: unknown; error: unknown; status: number; response?: unknown },
+>(pending: Promise<R>): Promise<NonNullable<R['data']>> {
     let settled: R;
     try {
         settled = await pending;
     } catch {
-        throw new GroupApiError('HushOS couldn’t reach the server. Try again.', 0, null, null);
+        throw new GroupApiError(NO_ANSWER, 0, null, null);
     }
-    const { data, error, status } = settled;
+    const { data, error, status, response } = settled;
+    // Eden turns a fetch that threw (offline, the timeout) into a 503 with no response: no answer.
+    // This relies on @elysia/eden 2.0.0-beta.5's thrown-fetch path; check it when Eden is upgraded.
+    if (error && response === undefined) throw new GroupApiError(NO_ANSWER, 0, null, null);
     if (error) {
         const value = (error as { value?: unknown }).value;
         const body =

@@ -1803,9 +1803,15 @@ async function refuseWhileHoldingGroups(userId: string) {
             'Your family has a plan that is still being paid for. Cancel it in Billing on the family’s page before deleting your account; the family keeps it until the end of the period.',
             409,
         );
+    // In DESIGN.md's words: an organizer can't leave, and nor can a family's last manager.
+    if (blockers.some((blocker) => blocker.reason === 'organizer'))
+        throw new AuthError(
+            'You’re the organizer of a family. Make someone else the organizer before deleting your account.',
+            409,
+        );
     if (blockers.length > 0)
         throw new AuthError(
-            'You organise a family group. Hand it over to another member, or leave it, before deleting your account.',
+            'You’re the only one who manages a family. Let someone else manage the family before deleting your account.',
             409,
         );
 }
@@ -1848,7 +1854,7 @@ export async function finishAccountDeletion(
     const stopped = beforeDelete ? 'Your plan was stopped, but your' : 'Your';
     if (deleted === 'group-holder')
         throw new AuthError(
-            `${stopped} account was not deleted: another member left your family group just now, so you organise it again. Hand it over or leave it, then delete your account.`,
+            `${stopped} account was not deleted: another member just left your family, and it needs someone else as its organizer or to manage it first. Hand that over, then delete your account.`,
             409,
         );
     if (deleted === 'unavailable')

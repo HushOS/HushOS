@@ -12,7 +12,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { familyKeys } from '@/lib/families';
-import { groupsApi } from '@/lib/groups/api';
+import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
 import { cue } from '@/lib/sounds';
 
@@ -39,6 +39,9 @@ export function InviteDialog({
     const [email, setEmail] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    // Only an address the server can't use marks the field: not a dropped connection, a full
+    // family, or an address that already has an open invitation (that one is cancelled instead).
+    const [badAddress, setBadAddress] = useState(false);
 
     async function submit(event: FormEvent) {
         event.preventDefault();
@@ -46,6 +49,7 @@ export function InviteDialog({
         if (!address) return;
         setPending(true);
         setError('');
+        setBadAddress(false);
         try {
             await groupsApi.invite(groupId, address, []);
             cue('success');
@@ -57,7 +61,13 @@ export function InviteDialog({
             onOpenChange(false);
         } catch (cause) {
             cue('error');
-            setError(errorCopy(cause, { family }));
+            const refused = cause instanceof GroupApiError ? cause.code : null;
+            setBadAddress(refused === 'invalid' || refused === 'already-member');
+            setError(
+                refused === 'invalid'
+                    ? 'Enter their whole email address, like them@example.com.'
+                    : errorCopy(cause, { family }),
+            );
         } finally {
             setPending(false);
         }
@@ -88,9 +98,14 @@ export function InviteDialog({
                             autoComplete="off"
                             spellCheck={false}
                             value={email}
-                            onChange={(event) => setEmail(event.target.value)}
+                            onChange={(event) => {
+                                // The message was about the address as it was: it goes as it changes.
+                                setEmail(event.target.value);
+                                setError('');
+                                setBadAddress(false);
+                            }}
                             placeholder="them@example.com"
-                            aria-invalid={Boolean(error) || undefined}
+                            aria-invalid={badAddress || undefined}
                             aria-describedby={`${id}-hint`}
                         />
                         <p
