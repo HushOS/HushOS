@@ -120,6 +120,22 @@ function creation(creator: Account, kind: GroupKind = 'family', name = 'Lindqvis
     };
 }
 
+/* How many other sessions wait on a lock, once at least `count` do (or about two seconds pass). */
+async function lockWaiters(client: Client, count: number) {
+    let waiting = 0;
+    for (let tries = 0; tries < 100 && waiting < count; tries++) {
+        if (tries > 0) await new Promise((resolve) => setTimeout(resolve, 20));
+        // Inside a transaction the activity view is a snapshot taken once: take a fresh one.
+        await client.query('select pg_stat_clear_snapshot()');
+        const { rows } = await client.query<{ waiting: number }>(
+            `select count(*)::int as waiting from pg_stat_activity
+             where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid()`,
+        );
+        waiting = rows[0]!.waiting;
+    }
+    return waiting;
+}
+
 async function person(): Promise<Account> {
     const account = await createTestAccount();
     await createTestIdentity(account.userId);
@@ -211,6 +227,7 @@ describe('creating a family', () => {
         // (here one) would otherwise answer first and say the wrong thing.
         expect(await groups.createGroup({ ...second.input, ownedLimit: 1 })).toEqual({
             status: 'in-family',
+            family: { groupId: first.groupId, name: 'Lindqvist family' },
         });
         expect(
             await db.select().from(groupsTable).where(eq(groupsTable.id, second.groupId)),
@@ -226,8 +243,43 @@ describe('creating a family', () => {
     test('a resend of the same creation in flight is still a replay, not a second family', async () => {
         const maya = await person();
         const { input } = creation(maya);
-        const results = await Promise.all([groups.createGroup(input), groups.createGroup(input)]);
+        // Maya's row, held here, queues both at the creator lock; the second then finds the first.
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let both: Promise<groups.CreateResult[]>;
+        try {
+            await blocker.query('begin');
+            await blocker.query('select id from users where id = $1 for update', [maya.userId]);
+            both = Promise.all([groups.createGroup(input), groups.createGroup(input)]);
+            expect(await lockWaiters(blocker, 2)).toBeGreaterThanOrEqual(2);
+        } finally {
+            await blocker.query('commit');
+            await blocker.end();
+        }
+        const results = await both;
         expect(results.map((result) => result.status).sort()).toEqual(['created', 'replayed']);
+    });
+
+    test('company groups keep the creation limit; one handed on and left no longer counts', async () => {
+        const maya = await person();
+        const company = (name: string) => ({ ...creation(maya, 'org', name).input, ownedLimit: 2 });
+        const first = company('Ortega & Co');
+        expect((await groups.createGroup(first)).status).toBe('created');
+        expect((await groups.createGroup(company('Berg & Co'))).status).toBe('created');
+        expect(await groups.createGroup(company('Holm & Co'))).toEqual({
+            status: 'group-limit',
+            limit: 2,
+        });
+        await db
+            .update(groupMemberships)
+            .set({ state: 'left', leftAt: new Date() })
+            .where(
+                and(
+                    eq(groupMemberships.groupId, first.id),
+                    eq(groupMemberships.userId, maya.userId),
+                ),
+            );
+        expect((await groups.createGroup(company('Holm & Co'))).status).toBe('created');
     });
 
     test('a family does not stop its member creating a company group, nor a company a family', async () => {
@@ -368,14 +420,8 @@ describe('letting someone in', () => {
                 groups.appendChain(admission(ortega, maya.userId, sam.userId)),
                 groups.appendChain(admission(berg, ana.userId, sam.userId)),
             ]);
-            for (let waited = 0; waited < 100; waited++) {
-                const { rows } = await blocker.query<{ waiting: number }>(
-                    `select count(*)::int as waiting from pg_stat_activity
-                     where datname = current_database() and wait_event_type = 'Lock' and pid <> pg_backend_pid()`,
-                );
-                if (rows[0]!.waiting >= 2) break;
-                await new Promise((resolve) => setTimeout(resolve, 20));
-            }
+            // Both waiting: each has passed its check, and neither has committed.
+            expect(await lockWaiters(blocker, 2)).toBeGreaterThanOrEqual(2);
             await blocker.query('commit');
             const results = await racing;
             expect(results.map((result) => result.status).sort()).toEqual(['in-family', 'ok']);

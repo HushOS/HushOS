@@ -1365,8 +1365,9 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
         case 'area-limit':
             throw new GroupError('area-limit', 'This group has no room for another folder.', 409);
         case 'in-family': {
-            // Admitted elsewhere between the check above and the write.
-            const now = await groupsRepository.familyOf(userId);
+            // Admitted elsewhere between the check above and the write. The index's answer
+            // names no family: read it, and if they've already left it too, let them retry.
+            const now = result.family ?? (await groupsRepository.familyOf(userId));
             if (now) throw inYourFamily(now);
             throw unavailable();
         }
@@ -1907,6 +1908,7 @@ export async function listPending(userId: string, groupId: string) {
                 roles: row.invitationRoles ?? [],
                 acceptedAt: row.acceptedAt?.toISOString() ?? null,
                 identity: current ? served(current) : null,
+                inFamily: row.inFamily,
             };
         }),
     };
@@ -1969,12 +1971,15 @@ export async function admit(
         { kind: 'admit', userId: targetId, seatLimitDefault: seatLimitDefault() },
         {
             admitIdentity: targetId,
-            beforeAppend: billingEnabled()
-                ? async () => {
-                      const seat = await ensureGroupSeat(groupId, userId);
-                      if (seat.status !== 'ok') throw seatRefusal(seat);
-                  }
-                : undefined,
+            beforeAppend: async () => {
+                // Again after the chain checks, right before the charge: what remains is the
+                // Polar call itself, which an admission elsewhere can still overtake.
+                if (await groupsRepository.waitingButInFamily(groupId, targetId))
+                    throw newcomerInFamily();
+                if (!billingEnabled()) return;
+                const seat = await ensureGroupSeat(groupId, userId);
+                if (seat.status !== 'ok') throw seatRefusal(seat);
+            },
         },
     );
 }

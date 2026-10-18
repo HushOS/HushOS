@@ -430,6 +430,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Cancel invitation (asks once: "Cancel the invitation to sam@example.com?", "The link in their email stops working. You can invite them again.", Keep invitation, Cancel invitation)
         - Waiting to join
         - Let them in ("They’ve joined another family since they accepted. They can join yours once they leave it." when they have, never naming that family)
+        - Already in a family (Waiting to join, in place of Let them in, for someone who joined or made another family since accepting)
         - Joining while in a family (the invitation's page, Accept disabled: "You’re in Lindqvist family. To join Ortega family, leave yours first, from its page. This invitation stays open until 26 October." then Open Lindqvist family)
         - Not now (asks once: "Turn Sam down?", Turn down)
         - They match

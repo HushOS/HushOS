@@ -354,7 +354,8 @@ const RACE_KEYS = new Set(['group_rosters_pkey', 'group_key_successions_pkey']);
 
 /*
  * Runs `work`, turning a Refusal into its result and database errors into
- * answers: a race on a roster or succession key goes to `onRace`; any other
+ * answers: a race on a roster or succession key goes to `onRace`; the
+ * one-family index to `onFamily`, for the callers that can hit it; any other
  * unique or foreign key is `invalid`, named by its constraint (a client that
  * re-signed on a stale answer for those would loop for ever); a deadlock or a
  * serialization failure is `unavailable`, which a client retries.
@@ -362,6 +363,7 @@ const RACE_KEYS = new Set(['group_rosters_pkey', 'group_key_successions_pkey']);
 async function answering<T>(
     work: () => Promise<T>,
     onRace: (constraint: string) => Promise<T>,
+    onFamily?: () => T,
 ): Promise<T> {
     try {
         return await work();
@@ -371,8 +373,7 @@ async function answering<T>(
         const constraint = pgConstraint(error) ?? 'unknown';
         if (code === '23505' && RACE_KEYS.has(constraint)) return onRace(constraint);
         // Another family took the person between the check and the write: the index is the backstop.
-        if (code === '23505' && constraint === ONE_FAMILY_INDEX)
-            return { status: 'in-family' } as T;
+        if (code === '23505' && constraint === ONE_FAMILY_INDEX && onFamily) return onFamily();
         // The constraint's name stays here: it is schema, not something a client acts on.
         if (code === '23505') return { status: 'invalid', reason: 'taken' } as T;
         if (code === '23503') return { status: 'invalid', reason: 'reference' } as T;
@@ -1146,8 +1147,11 @@ export type CreateResult =
     /* The creator already has as many groups as the instance allows. */
     | { status: 'area-limit'; limit: number }
     | { status: 'group-limit'; limit: number }
-    /* The creator is in a family already, and this is one (one family per account). */
-    | { status: 'in-family' }
+    /*
+     * The creator is in a family already, and this is one (one family per account):
+     * which, or null when the index refused a family that landed after the check.
+     */
+    | { status: 'in-family'; family: { groupId: string; name: string } | null }
     | { status: 'invalid'; reason: string };
 
 /*
@@ -1230,8 +1234,9 @@ export async function createGroup(input: {
                 if (landed) return refuse(await replay());
                 // Admissions elsewhere don't take that lock: group_memberships_one_family_idx
                 // refuses the loser of such a race, and `answering` reads it as in-family.
-                if (input.kind === 'family' && (await activeFamily(tx, input.creatorUserId)))
-                    refuse({ status: 'in-family' });
+                const family =
+                    input.kind === 'family' ? await activeFamily(tx, input.creatorUserId) : null;
+                if (family) refuse({ status: 'in-family', family });
                 if (input.ownedLimit !== undefined) {
                     // Only groups they are still in: one handed on and left is no longer theirs.
                     const [owned] = await tx
@@ -1296,6 +1301,7 @@ export async function createGroup(input: {
             }),
         // The group's id cannot reach here (on conflict do nothing); no other key races.
         async () => ({ status: 'invalid', reason: 'taken' }),
+        () => ({ status: 'in-family', family: null }),
     );
 }
 
@@ -1546,6 +1552,7 @@ export async function appendChain(input: {
                 return { status: 'ok' as const, ...head };
             }),
         () => staleResult(db, groupId, roster, succession),
+        () => ({ status: 'in-family' }),
     );
 }
 
@@ -2695,6 +2702,8 @@ export async function listPending(groupId: string) {
             email: users.email,
             acceptedAt: groupMemberships.acceptedAt,
             invitationRoles: groupInvitations.roles,
+            // In another family since they accepted: they can't be let in until they leave it.
+            inFamily: sql<boolean>`exists (select 1 from ${groupMemberships} other where other.user_id = ${groupMemberships.userId} and other.group_kind = 'family' and other.state = 'active' and other.group_id <> ${groupMemberships.groupId})`,
         })
         .from(groupMemberships)
         .innerJoin(users, eq(users.id, groupMemberships.userId))

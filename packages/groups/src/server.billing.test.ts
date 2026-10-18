@@ -2,6 +2,7 @@ import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { Member } from '../test/kit';
 import { createHash, randomBytes } from 'node:crypto';
 import { PolarClientError } from '@polar-sh/sdk';
+import { Client } from 'pg';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
 /*
@@ -159,7 +160,8 @@ const { groupsRepository, billingRepository, driveRepository, scopedId } =
     await import('@hushos/db');
 const { areaKeyCommitment } = await import('../../crypto/src/area-keys');
 const { tombstoneAt } = await import('../../crypto/src/group-testkit');
-const { closeDatabase, createTestAccount, resetDatabase } = await import('../../db/test/helpers');
+const { closeDatabase, createTestAccount, createTestFamily, resetDatabase } =
+    await import('../../db/test/helpers');
 const kit = await import('../test/kit');
 const groups = await import('./server');
 const billing = await import('@hushos/billing/server');
@@ -283,6 +285,42 @@ describe('admission with billing on', () => {
         expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
         expect(await kit.head(fam.groupId)).toEqual(before);
         expect((await groupsRepository.getGroupRow(fam.groupId))?.seatLimit).toBe(1);
+    });
+
+    test('someone who makes a family while the admission is being checked is still refused before the charge', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 1);
+        const newcomer = await kit.member();
+        const call = await admission(fam, newcomer);
+        polar.updates = [];
+        /*
+         * The route's first check passes (no family yet); then the chain checks wait on the
+         * chain cache, which this session holds. Meanwhile the newcomer's own family lands
+         * (rows written directly: it needs no chain cache). Let go, the admission must ask
+         * again before it charges.
+         */
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let admitting: Promise<unknown> | undefined;
+        try {
+            await blocker.query('begin');
+            await blocker.query('lock table group_chain_caches in access exclusive mode');
+            admitting = refusal(
+                groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call),
+            );
+            expect(await kit.lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            await createTestFamily({ organizerId: newcomer.userId });
+        } finally {
+            await blocker.query('commit');
+            await blocker.end();
+        }
+        expect(await admitting).toMatchObject({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'newcomer' },
+        });
+        expect(polar.updates).toEqual([]);
+        expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
     });
 
     test('an invitee in a family hears that before hearing the family has no plan', async () => {

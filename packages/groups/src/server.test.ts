@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { Client } from 'pg';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { rosterDigest } from '@hushos/crypto/groups';
 import {
@@ -60,10 +61,12 @@ import {
     documentEnvelope,
     entries,
     family,
+    familyBody,
     forgedRoster,
     grantWire,
     head,
     kitAreaKey,
+    lockWaiters,
     member,
     nextAreaRow,
     nextRoster,
@@ -846,7 +849,14 @@ describe('one family per account (families-shared-pool 3.2)', () => {
         const ortega = await family();
         const sam = await member();
         await accepted(ortega, sam);
+        const waiting = async () =>
+            (await groups.listPending(ortega.organizer.userId, ortega.groupId)).pending.map(
+                (p) => ({ userId: p.userId, inFamily: p.inFamily }),
+            );
+        expect(await waiting()).toEqual([{ userId: sam.userId, inFamily: false }]);
         await family(sam);
+        // The waiting list says so before anyone checks words (never which family).
+        expect(await waiting()).toEqual([{ userId: sam.userId, inFamily: true }]);
         const before = await head(ortega.groupId);
         // A call that would fail every check: the family rule answers first.
         const call = {
@@ -869,6 +879,64 @@ describe('one family per account (families-shared-pool 3.2)', () => {
             (await groupsRepository.membershipsOf(ortega.groupId, [sam.userId])).get(sam.userId)
                 ?.state,
         ).toBe('accepted');
+    });
+});
+
+describe('one family per account under races', () => {
+    test('a family made while its creator is let in elsewhere: the index refuses it, and the answer names the family that won', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        await accepted(ortega, sam);
+        const built = await familyBody(sam);
+        /*
+         * Sam's creation passes every check, its one-family check included, then waits on its
+         * area commitment, which this session has written and not committed. Meanwhile Ortega
+         * family lets Sam in; then the commitment is let go, and the creation's membership
+         * meets the index.
+         */
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let creating: Promise<unknown> | undefined;
+        try {
+            await blocker.query('begin');
+            await blocker.query(
+                'insert into group_area_commitments (commitment, group_id, roster_version) values ($1, $2, 1)',
+                [
+                    Buffer.from(await areaKeyCommitment(kitAreaKey(built.areaId, 1)), 'base64url'),
+                    randomUUID(),
+                ],
+            );
+            creating = refusal(groups.createGroup(sam.userId, built.body));
+            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            const { at, call } = await nextRoster(ortega, ortega.organizer, [
+                ...entries(ortega.h),
+                sam.who.entry([]),
+            ]);
+            await groups.admit(ortega.organizer.userId, ortega.groupId, sam.userId, {
+                ...call,
+                grants: [
+                    await grantWire(
+                        ortega.groupId,
+                        ortega.areaId,
+                        1,
+                        ortega.organizer.who,
+                        sam.who,
+                        at,
+                    ),
+                ],
+            });
+        } finally {
+            await blocker.query('rollback');
+            await blocker.end();
+        }
+        expect(await creating).toEqual({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'self', family: { groupId: ortega.groupId, name: 'Ortega family' } },
+        });
+        expect(await groupsRepository.getGroupRow(built.groupId)).toBeNull();
+        expect((await groupsRepository.familyOf(sam.userId))?.groupId).toBe(ortega.groupId);
     });
 });
 

@@ -358,6 +358,8 @@ One change per PR, squash-merged, each with the independent review and a `verify
 8. **feat(ios), feat(android): show where a family member's storage comes from** (section 9). Independent of 6 and 7; can run in parallel with the web steps.
 9. **Rollout on hushos.com:** confirm no account is in two families (section 4) and deploy the migration; run `polar:seed --update`; check one sandbox family end to end (a personal subscriber joining, a leave over quota, a downgrade refused); publish the post's correction and move the roadmap item back to `shipped`; then set `GROUPS_ENABLED=true`.
 
+After step 9, once no container older than step 2 runs anywhere that matters: **drop the default of `group_memberships.group_kind`** (`'family'`, added by step 2's migration only so containers of the release before it keep inserting memberships during a rollout). Every write names the kind; the default would otherwise outlive its reason and stand ready to mislabel a company membership the day company groups ship, which the composite foreign key would refuse, but only as a failed write.
+
 Before step 9, the announcement's pause line and the roadmap's move to `now` (7.6, 7.7) go out on their own, as soon as families are switched off.
 
 ## 12. Open questions for the owner
