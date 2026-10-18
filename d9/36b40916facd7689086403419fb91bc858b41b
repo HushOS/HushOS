@@ -1,0 +1,27 @@
+apps/web/src/components/app-sidebar.tsx
+  s_c56e31c87cddde::t_c5b8b4a7e30fb3 186-188,190-221,247-249,251-289,291-318,320-344,350-351,354
+apps/web/src/components/brand.tsx
+  s_c56e31c87cddde::t_11fba05f625d4a 49-52
+apps/web/src/hooks/use-mobile.ts
+  s_c56e31c87cddde::t_300a93e0f39048 4,6-7,9-13,18-28
+apps/web/src/lib/theme.ts
+  s_c56e31c87cddde::t_61e111757e6816 53-59
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_c56e31c87cddde::t_4bb0d791111c87 26,50-56,157-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d936b40916facd7689086403419fb91bc858b41b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
