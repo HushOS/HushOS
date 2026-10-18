@@ -1,3 +1,4 @@
+import { cn } from 'cn';
 import type { CatalogueHit } from '@hushos/drive/client';
 import { Link } from '@tanstack/react-router';
 import { useHotkey } from '@tanstack/react-hotkeys';
@@ -6,6 +7,7 @@ import type { DriveNode } from '@hushos/drive/client';
 import { RotateCcwIcon } from 'lucide-react';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import { useDrive } from '@/components/drive/drive-shell';
+import { LIST_COLUMN } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Highlight } from '@/components/drive/highlight';
@@ -51,7 +53,8 @@ export function SearchView({ query }: { query: string }) {
 
     const building = catalogue.phase === 'pulling' || catalogue.phase === 'opening';
     return (
-        <div className="flex flex-col">
+        // Columns by the list's own width, as in a folder (LIST_COLUMN).
+        <div className="@container/list flex flex-col">
             <PageHeader
                 title={query ? <>Results for “{query}”</> : 'Search My files'}
                 description="Names, tags, folders and file types, matched word by word on this device. Shared folders are not searched yet."
@@ -96,15 +99,15 @@ export function SearchView({ query }: { query: string }) {
                             <th scope="col" className="pl-5 text-left sm:pl-8">
                                 Name
                             </th>
-                            <th scope="col" className="hidden w-[22%] text-left lg:table-cell">
+                            <th scope="col" className={cn(LIST_COLUMN.access, 'w-44 text-left')}>
                                 Who can open
                             </th>
-                            <th scope="col" className="hidden w-40 text-left sm:table-cell">
+                            <th scope="col" className={cn(LIST_COLUMN.changed, 'w-40 text-left')}>
                                 Changed
                             </th>
                             <th
                                 scope="col"
-                                className="hidden w-28 pr-5 text-right sm:pr-8 md:table-cell"
+                                className={cn(LIST_COLUMN.size, 'w-28 pr-5 text-right sm:pr-8')}
                             >
                                 Size
                             </th>
@@ -129,7 +132,7 @@ export function SearchView({ query }: { query: string }) {
                                     className={`h-14 border-b border-rule ${index === focused ? 'bg-muted' : ''}`}
                                     onMouseEnter={() => setFocus({ query, index })}
                                 >
-                                    <td className="min-w-0 pr-5 pl-5 sm:pl-8 md:pr-0">
+                                    <td className="min-w-0 pr-5 pl-5 sm:pl-8">
                                         <span className="flex min-w-0 items-center gap-4">
                                             <Link
                                                 {...target}
@@ -148,16 +151,26 @@ export function SearchView({ query }: { query: string }) {
                                             <UnverifiedMark node={node} variant="icon" />
                                         </span>
                                     </td>
-                                    <td className="hidden min-w-0 pr-4 lg:table-cell">
+                                    <td className={cn(LIST_COLUMN.access, 'min-w-0 pr-4')}>
                                         <AccessCell
                                             access={access.get(node.id)}
                                             inherited={inherited(node)}
                                         />
                                     </td>
-                                    <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
+                                    <td
+                                        className={cn(
+                                            LIST_COLUMN.changed,
+                                            'text-[13px] text-muted-foreground tabular-nums',
+                                        )}
+                                    >
                                         {formatWhen(node.metadata?.modified ?? node.updatedAt)}
                                     </td>
-                                    <td className="hidden pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8 md:table-cell">
+                                    <td
+                                        className={cn(
+                                            LIST_COLUMN.size,
+                                            'pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8',
+                                        )}
+                                    >
                                         {node.kind === 'folder'
                                             ? '–'
                                             : Number.isNaN(size)

@@ -12,6 +12,7 @@ import { DetailsPanel } from '@/components/drive/details-panel';
 import { useDrive } from '@/components/drive/drive-shell';
 import {
     EmptyState,
+    LIST_COLUMN,
     MarqueeBox,
     RowName,
     SelectableMark,
@@ -418,7 +419,7 @@ export function HomeView() {
                         )}
                     </div>
                     <div className="flex min-h-0 flex-1">
-                        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        <div className="@container/list flex min-h-0 min-w-0 flex-1 flex-col">
                             {rows.length === 0 &&
                                 (building || top.isPending ? (
                                     <SkeletonRows rows={5} />
@@ -441,19 +442,25 @@ export function HomeView() {
                                             </th>
                                             <th
                                                 scope="col"
-                                                className="hidden w-[22%] text-left lg:table-cell"
+                                                className={cn(LIST_COLUMN.access, 'w-44 text-left')}
                                             >
                                                 Who can open
                                             </th>
                                             <th
                                                 scope="col"
-                                                className="hidden w-40 text-left sm:table-cell"
+                                                className={cn(
+                                                    LIST_COLUMN.changed,
+                                                    'w-40 text-left',
+                                                )}
                                             >
                                                 Changed
                                             </th>
                                             <th
                                                 scope="col"
-                                                className="hidden w-28 pr-2 text-right md:table-cell"
+                                                className={cn(
+                                                    LIST_COLUMN.size,
+                                                    'w-28 pr-2 text-right',
+                                                )}
                                             >
                                                 Size
                                             </th>
@@ -555,16 +562,31 @@ export function HomeView() {
                                                                 }
                                                             />
                                                         </td>
-                                                        <td className="hidden min-w-0 pr-4 lg:table-cell">
+                                                        <td
+                                                            className={cn(
+                                                                LIST_COLUMN.access,
+                                                                'min-w-0 pr-4',
+                                                            )}
+                                                        >
                                                             <AccessCell
                                                                 access={access.get(node.id)}
                                                                 inherited={inherited(node)}
                                                             />
                                                         </td>
-                                                        <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
+                                                        <td
+                                                            className={cn(
+                                                                LIST_COLUMN.changed,
+                                                                'text-[13px] text-muted-foreground tabular-nums',
+                                                            )}
+                                                        >
                                                             {formatWhen(node.updatedAt)}
                                                         </td>
-                                                        <td className="hidden pr-2 text-right text-[13px] text-muted-foreground tabular-nums md:table-cell">
+                                                        <td
+                                                            className={cn(
+                                                                LIST_COLUMN.size,
+                                                                'pr-2 text-right text-[13px] text-muted-foreground tabular-nums',
+                                                            )}
+                                                        >
                                                             <SizeText node={node} folderWord="–" />
                                                         </td>
                                                         <td className="pr-3 text-right sm:pr-5">
