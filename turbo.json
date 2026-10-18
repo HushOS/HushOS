@@ -132,6 +132,12 @@
             "passThroughEnv": ["DATABASE_URL", "TEST_DATABASE_URL"],
             "outputs": []
         },
+        "@hushos/web#build": {
+            "dependsOn": ["^build"],
+            "inputs": ["$TURBO_DEFAULT$", ".env*", "$TURBO_ROOT$/package.json"],
+            "outputs": [".output/**"],
+            "env": ["NODE_ENV"]
+        },
         "@hushos/emails#build": {
             "inputs": ["src/templates/**", "scripts/**"],
             "outputs": ["src/rendered/**"]

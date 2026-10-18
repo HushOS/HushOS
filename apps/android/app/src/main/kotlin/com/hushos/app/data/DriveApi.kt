@@ -12,8 +12,12 @@ class ApiError(val status: Int, message: String, val code: String? = null) : Exc
 class NotFound(message: String) : Exception(message)
 class Unreachable : Exception("Could not reach HushOS. Check your connection.")
 
-/* What every request says this client is: 3 since content suite 3, writer signatures and signed shares. */
-const val CLIENT_HEADER = "android/3"
+/*
+ * What every request says this client is: its HushOS version (versionName, set by the release pull request),
+ * which the server compares with its minimum for `android` (packages/drive's checkClient). Builds before 1.0.0
+ * sent the Drive protocol number here ("android/3").
+ */
+const val CLIENT_HEADER = "android/${com.hushos.app.BuildConfig.VERSION_NAME}"
 
 /*
  * Who the server says wrote a record: an account id alone (round 3). The signature is what this device checks, and a

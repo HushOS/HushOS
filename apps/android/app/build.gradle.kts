@@ -45,6 +45,17 @@ val uploadKey: Map<String, String>? = run {
     )
 }
 
+/*
+ * The build number (versionCode): -PbuildNumber, which scripts/bundle-release.sh takes from
+ * scripts/build-number.sh (the commit count on main, which only grows), or the same count here
+ * for builds that pass nothing, such as Android Studio's. A checkout without git history says 1.
+ */
+val buildNumber: Int = (project.findProperty("buildNumber") as String?)?.toInt()
+    ?: runCatching {
+        providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+            .standardOutput.asText.get().trim().toInt()
+    }.getOrDefault(1)
+
 android {
     namespace = "com.hushos.app"
     compileSdk = 37
@@ -53,8 +64,9 @@ android {
         applicationId = "com.hushos.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildNumber
+        // The product version (the root package.json): the release pull request sets it.
+        versionName = "0.1.0" // x-release-please-version
     }
 
     signingConfigs {

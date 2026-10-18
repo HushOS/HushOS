@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Archives HushOS for the App Store and uploads it to App Store Connect (TestFlight first).
 #
-#   DEVELOPMENT_TEAM=ABCDE12345 apps/ios/scripts/archive.sh 0.1.0 2
+#   DEVELOPMENT_TEAM=ABCDE12345 apps/ios/scripts/archive.sh
 #
-# The two arguments are the version people see (CFBundleShortVersionString) and the build
-# number (CFBundleVersion), written into all five targets in project.yml so they always match;
-# every upload needs a build number higher than the last one for that version. Commit the
-# project.yml change after a successful upload. Needs Xcode signed in (Settings > Accounts) to
-# the Apple Account that is Account Holder or Admin on the team; signing is automatic.
+# The version people see (CFBundleShortVersionString) is the product version: the root
+# package.json, which the release pull request also writes into project.yml's MARKETING_VERSION
+# (bun run check:versions holds them together). The build number (CFBundleVersion) is
+# scripts/build-number.sh, the commit count on main, passed to xcodebuild for the app and its
+# four extensions alike; nothing is edited or committed. Archive from main, best at a release
+# tag (git checkout v1.2.3). Needs Xcode signed in (Settings > Accounts) to the Apple Account
+# that is Account Holder or Admin on the team; signing is automatic.
 # UPLOAD=0 stops after the archive and export, leaving the .ipa in apps/ios/build/export.
 set -euo pipefail
 DIR=$(cd "$(dirname "$0")/.." && pwd)
 cd "$DIR"
-VERSION="${1:?Usage: archive.sh <version, e.g. 0.1.0> <build number, e.g. 2>}"
-BUILD="${2:?Usage: archive.sh <version, e.g. 0.1.0> <build number, e.g. 2>}"
 : "${DEVELOPMENT_TEAM:?Set DEVELOPMENT_TEAM to the 10-character Team ID (developer.apple.com/account, Membership details)}"
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "The version must look like 1.0 or 1.0.0" >&2; exit 1; }
-[[ "$BUILD" =~ ^[0-9]+$ ]] || { echo "The build number must be a whole number" >&2; exit 1; }
 [[ "$DEVELOPMENT_TEAM" =~ ^[A-Z0-9]{10}$ ]] || { echo "The Team ID is 10 capital letters and digits" >&2; exit 1; }
+[[ $# -eq 0 ]] || { echo "archive.sh takes no arguments: the version is package.json's, the build number scripts/build-number.sh's" >&2; exit 1; }
 
-# One version and one build number for the app and its four extensions (App Store Connect
-# refuses an upload whose extensions disagree with the app).
-sed -i '' -E "s/(CFBundleShortVersionString: )'[^']*'/\1'$VERSION'/; s/(CFBundleVersion: )'[^']*'/\1'$BUILD'/" project.yml
-echo "project.yml: $(grep -c "CFBundleVersion: '$BUILD'" project.yml) targets at $VERSION ($BUILD)"
+# Every copy of the version agrees with package.json, or nothing is archived.
+(cd ../.. && bun scripts/check-versions.ts)
+VERSION=$(cd ../.. && bun -p 'require("./package.json").version')
+BUILD=$(../../scripts/build-number.sh --store)
+echo "Archiving HushOS $VERSION ($BUILD)"
 
 [[ -d Packages/HushOSCore/HushOSCoreFFI.xcframework ]] || (cd ../.. && bun run core:apple)
 xcodegen generate --quiet
@@ -33,7 +33,7 @@ rm -rf "$ARCHIVE" "$EXPORT"
 xcodebuild -project HushOS.xcodeproj -scheme HushOS -configuration Release \
     -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" \
     -skipPackagePluginValidation -allowProvisioningUpdates \
-    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" archive
+    DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" CURRENT_PROJECT_VERSION="$BUILD" archive
 
 # The simulator-only File Provider testing mode must never reach a store build.
 if codesign -d --entitlements :- "$ARCHIVE/Products/Applications/HushOS.app" 2>/dev/null | grep -q fileprovider.testing-mode; then

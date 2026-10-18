@@ -100,23 +100,23 @@ https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-ne
 
 ## 7. Build and upload
 
-**Version numbers.** Use `1.0.0` for the first store version and build numbers from `1` upward; every upload needs a new, higher build. Android uses the same pair.
+**Version numbers.** The version is the product's: package.json, set by the release pull request (CONTRIBUTING.md, Releasing), so archive at a release tag (`git checkout v1.0.0`). The build number is the commit count on main (`scripts/build-number.sh`), which only grows; Android uses the same pair. Two uploads of one commit need `HUSHOS_BUILD_NUMBER` set above the last.
 
 From the repository root, on this Mac:
 
 ```sh
-DEVELOPMENT_TEAM=<<TEAMID>> bun run ios:archive 1.0.0 1
+DEVELOPMENT_TEAM=<<TEAMID>> bun run ios:archive
 ```
 
 `apps/ios/scripts/archive.sh`:
 
-1. sets the version and build in all five targets of `apps/ios/project.yml`;
+1. checks every copy of the version agrees with package.json and that the commit is on main, then passes the build number to all five targets;
 2. builds the Rust core if it's missing and regenerates the Xcode project;
 3. archives a Release build for devices with automatic signing;
 4. refuses an archive that carries the simulator-only File Provider entitlement;
 5. exports it and uploads it to App Store Connect.
 
-Commit the `project.yml` change afterwards.
+Nothing is edited, so there is nothing to commit afterwards.
 
 From Xcode instead: `bun run ios:project`, `bun run ios:open`, set the team on all five targets (or put `DEVELOPMENT_TEAM` in `project.yml`, signing.md), choose **Any iOS Device (arm64)**, **Product > Archive**. Then in the Organizer: **Distribute App > App Store Connect > Upload**.
 
@@ -245,4 +245,4 @@ Apple says most submissions are reviewed within 24 hours (https://developer.appl
 1. **Release** (manual release: the **Release This Version** button). Apple says it can take up to 24 hours to appear on the store.
 2. On a phone with the store build, tap a `https://hushos.com/s/…` link in Mail: it should open in HushOS. Apple's CDN fetches the association file within a day of first installs.
 3. Add the App Store link to hushos.com. The home page FAQ "Does it work on my phone?" still tells people to add the website to the home screen.
-4. Every later update: `DEVELOPMENT_TEAM=… bun run ios:archive <new version> <next build>`, TestFlight, then a new version page with **What's New**.
+4. Every later update: check out the release tag, `DEVELOPMENT_TEAM=… bun run ios:archive`, TestFlight, then a new version page with **What's New** (the GitHub release's notes are the starting point).

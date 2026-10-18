@@ -2,19 +2,19 @@
 
 How HushOS, Inc. gets the iPhone and Android apps onto the App Store and Google Play: the order, what can run at the same time, and how long each wait is. Written 2026-10-05; store rules were checked that day on Apple's and Google's own pages.
 
-| Document                                  | What it's for                                                                                                                                    |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [checklist.md](checklist.md)              | The single list to finish before submitting. **Start here**: it lists the decisions only you can make and the app changes that block submission. |
-| [apple.md](apple.md)                      | Apple, click by click: enrollment, signing, App Store Connect, TestFlight, review.                                                               |
-| [google.md](google.md)                    | Google Play, click by click: developer account, app content, internal testing, production.                                                       |
-| [signing.md](signing.md)                  | Certificates, bundle IDs, the app group, the Android upload key, and where the Team ID and fingerprints go.                                      |
-| [store-listing.md](store-listing.md)      | Ready-to-paste copy, the screenshot plan, and what the apps may say about plans.                                                                 |
-| [privacy-answers.md](privacy-answers.md)  | Apple App Privacy and Google Data safety answers, each with its reason from the code; the iOS privacy manifest.                                  |
-| `scripts/release-wizard.sh`               | Walks you through the steps only you can do, one at a time, and checks what a Mac can check. Run it again any time.                              |
-| `scripts/store-screenshots.sh`            | Takes the store screenshots from the simulator and emulator, guided.                                                                             |
-| `bun run ios:archive <version> <build>`   | Archives and uploads the iPhone app (`apps/ios/scripts/archive.sh`).                                                                             |
-| `bun run android:bundle <version> <code>` | Builds the signed Android App Bundle (`apps/android/scripts/bundle-release.sh`).                                                                 |
-| `bun run --cwd apps/web store:graphics`   | Remakes the Play icon and feature graphic in `assets/`.                                                                                          |
+| Document                                 | What it's for                                                                                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [checklist.md](checklist.md)             | The single list to finish before submitting. **Start here**: it lists the decisions only you can make and the app changes that block submission. |
+| [apple.md](apple.md)                     | Apple, click by click: enrollment, signing, App Store Connect, TestFlight, review.                                                               |
+| [google.md](google.md)                   | Google Play, click by click: developer account, app content, internal testing, production.                                                       |
+| [signing.md](signing.md)                 | Certificates, bundle IDs, the app group, the Android upload key, and where the Team ID and fingerprints go.                                      |
+| [store-listing.md](store-listing.md)     | Ready-to-paste copy, the screenshot plan, and what the apps may say about plans.                                                                 |
+| [privacy-answers.md](privacy-answers.md) | Apple App Privacy and Google Data safety answers, each with its reason from the code; the iOS privacy manifest.                                  |
+| `scripts/release-wizard.sh`              | Walks you through the steps only you can do, one at a time, and checks what a Mac can check. Run it again any time.                              |
+| `scripts/store-screenshots.sh`           | Takes the store screenshots from the simulator and emulator, guided.                                                                             |
+| `bun run ios:archive`                    | Archives and uploads the iPhone app (`apps/ios/scripts/archive.sh`), at package.json's version and the commit's build number.                    |
+| `bun run android:bundle`                 | Builds the signed Android App Bundle (`apps/android/scripts/bundle-release.sh`), versioned the same way.                                         |
+| `bun run --cwd apps/web store:graphics`  | Remakes the Play icon and feature graphic in `assets/`.                                                                                          |
 
 ## The order
 

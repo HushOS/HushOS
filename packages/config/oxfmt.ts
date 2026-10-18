@@ -18,5 +18,7 @@ export default defineConfig({
         '**/routeTree.gen.ts',
         '**/src/rendered/**',
         'bun.lock',
+        // Written by release-please in the release pull request, in its own Markdown style.
+        'CHANGELOG.md',
     ],
 });

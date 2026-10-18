@@ -189,7 +189,8 @@ finish() {
 # are not secret (D-U-N-S, Team ID, certificate fingerprints) go to .env.release, which git
 # ignores; passwords go to the macOS keychain and are never printed. Re-run it any time: each
 # stage shows what is already done. Run from the repository root: scripts/release-wizard.sh
-# The builds it offers use RELEASE_VERSION (default 1.0.0) and RELEASE_BUILD (default 1).
+# The builds it offers take the version from package.json and the build number from
+# scripts/build-number.sh (CONTRIBUTING.md, Releasing).
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -304,8 +305,8 @@ else
     step "Apps > + > New App. Platform iOS, name HushOS, language English (U.S.),"
     step "bundle ID com.hushos.app, SKU hushos-ios, user access Full."
     note "If the bundle ID isn't in the list yet, the next step's archive registers it; come back."
-    if confirm "Archive and upload version ${RELEASE_VERSION:-1.0.0}, build ${RELEASE_BUILD:-1} now?"; then
-        DEVELOPMENT_TEAM="$TEAM" apps/ios/scripts/archive.sh "${RELEASE_VERSION:-1.0.0}" "${RELEASE_BUILD:-1}" || bad "The archive failed; see the output above and docs/release/apple.md."
+    if confirm "Archive and upload this commit (package.json's version, build $(scripts/build-number.sh)) now?"; then
+        DEVELOPMENT_TEAM="$TEAM" apps/ios/scripts/archive.sh || bad "The archive failed; see the output above and docs/release/apple.md."
     fi
     pause "Press Enter to continue"
 fi
@@ -380,8 +381,8 @@ stage "The first Android App Bundle"
 if [[ ! -f apps/android/keystore.properties ]]; then
     warn "Needs the upload key (stage 7)."
     SKIPPED+=("First Android bundle")
-elif confirm "Build version ${RELEASE_VERSION:-1.0.0}, version code ${RELEASE_BUILD:-1} now?"; then
-    apps/android/scripts/bundle-release.sh "${RELEASE_VERSION:-1.0.0}" "${RELEASE_BUILD:-1}" || bad "The build failed; see the output above."
+elif confirm "Build this commit (package.json's version, version code $(scripts/build-number.sh)) now?"; then
+    apps/android/scripts/bundle-release.sh || bad "The build failed; see the output above."
     say "Upload apps/android/app/build/outputs/bundle/release/app-release.aab to Internal testing"
     say "(docs/release/google.md, section 5). The first upload sets up Play App Signing."
 fi

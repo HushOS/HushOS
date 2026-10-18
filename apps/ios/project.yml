@@ -17,6 +17,12 @@ settings:
         CODE_SIGN_STYLE: Automatic
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        # One version and one build number for the app and its four extensions (App Store Connect
+        # refuses an upload whose extensions disagree with the app); every Info.plist reads these.
+        # The version is the product's (the root package.json): the release pull request sets it.
+        MARKETING_VERSION: '0.1.0' # x-release-please-version
+        # Xcode's own builds say 1; archive.sh passes the build number from scripts/build-number.sh.
+        CURRENT_PROJECT_VERSION: '1'
 packages:
     HushOSCore:
         path: Packages/HushOSCore
@@ -54,8 +60,8 @@ targets:
             properties:
                 CFBundleDisplayName: HushOS
                 CFBundleName: HushOS
-                CFBundleShortVersionString: '0.1.0'
-                CFBundleVersion: '1'
+                CFBundleShortVersionString: '$(MARKETING_VERSION)'
+                CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
                 UILaunchScreen:
                     UIColorName: LaunchBackground
                     UIImageName: SplashMark
@@ -129,8 +135,8 @@ targets:
             path: Files/Info.plist
             properties:
                 CFBundleDisplayName: HushOS Files
-                CFBundleShortVersionString: '0.1.0'
-                CFBundleVersion: '1'
+                CFBundleShortVersionString: '$(MARKETING_VERSION)'
+                CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.fileprovider-nonui
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
@@ -164,8 +170,8 @@ targets:
             path: FilesUI/Info.plist
             properties:
                 CFBundleDisplayName: HushOS
-                CFBundleShortVersionString: '0.1.0'
-                CFBundleVersion: '1'
+                CFBundleShortVersionString: '$(MARKETING_VERSION)'
+                CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.fileprovider-actionsui
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderUIController
@@ -193,8 +199,8 @@ targets:
             path: Widgets/Info.plist
             properties:
                 CFBundleDisplayName: HushOS
-                CFBundleShortVersionString: '0.1.0'
-                CFBundleVersion: '1'
+                CFBundleShortVersionString: '$(MARKETING_VERSION)'
+                CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.widgetkit-extension
         settings:
@@ -227,8 +233,8 @@ targets:
             path: Share/Info.plist
             properties:
                 CFBundleDisplayName: Save to HushOS
-                CFBundleShortVersionString: '0.1.0'
-                CFBundleVersion: '1'
+                CFBundleShortVersionString: '$(MARKETING_VERSION)'
+                CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.share-services
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController

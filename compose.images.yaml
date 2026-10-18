@@ -1,6 +1,7 @@
 # Run the published images instead of building from source:
 #   docker compose -f compose.yaml -f compose.images.yaml up -d
-# Pin a release by setting HUSHOS_IMAGE_TAG to a sha-<commit> tag.
+# latest follows main. Pin a release with HUSHOS_IMAGE_TAG=1.4.2 (or 1.4, or 1), or one build
+# with a sha-<commit> tag (docs/self-hosting.md, Running the published images).
 
 services:
     migrate:

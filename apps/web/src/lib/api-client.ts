@@ -1,12 +1,13 @@
 import { treaty } from '@elysia/eden';
-import { CLIENT_HEADER, DRIVE_PROTOCOL_VERSION } from '@hushos/drive/protocol';
+import { CLIENT_HEADER } from '@hushos/drive/protocol';
 import type { Api } from '@/lib/api.server';
+import { HUSHOS_VERSION } from '@/lib/version';
 
 function createClient(credentials: RequestCredentials) {
     return treaty<Api>(window.location.origin, {
-        // The client the Drive API is asked to serve; a stale tab after a deploy
-        // that raised the minimum is told to reload rather than fail oddly.
-        headers: { [CLIENT_HEADER]: `web/${DRIVE_PROTOCOL_VERSION}` },
+        // The client the Drive API is asked to serve, by product version; a stale tab
+        // after a deploy that raised the minimum is told to reload rather than fail oddly.
+        headers: { [CLIENT_HEADER]: `web/${HUSHOS_VERSION}` },
         fetch: { credentials, cache: 'no-store' },
         onRequest: () => ({ signal: AbortSignal.timeout(30_000) }),
     });

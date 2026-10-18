@@ -8,7 +8,7 @@ One list for both stores. Tick everything before pressing Submit (Apple) or Send
 - [ ] **iPhone only, or iPhone and iPad.** The project is universal (`TARGETED_DEVICE_FAMILY: '1,2'`). Universal means 13-inch iPad screenshots are mandatory and iPad can never be dropped after release. Nothing is designed for iPad. Recommended: `'1'` in `apps/ios/project.yml` before the first App Store release.
 - [ ] **Export compliance.** Keep `ITSAppUsesNonExemptEncryption = false`, or answer App Store Connect's questionnaire; and whether to sell in France now (needs a French encryption declaration) or later. apple.md, section 8. **Confirm with counsel.**
 - [ ] **Privacy answers.** Whether encrypted photos count as "collected" for Apple (privacy-answers.md). **Confirm with counsel.**
-- [ ] **Version.** `1.0.0` (recommended, matching "HushOS 1.0" on the blog) or keep `0.1.0`; builds from `1`.
+- [ ] **Version.** `1.0.0`, decided: the first release pull request proposes it (CONTRIBUTING.md, Releasing). Build numbers are the commit count on main.
 - [ ] **App Store name.** `HushOS: Encrypted Drive`, or `HushOS Drive`, if available.
 
 ## App changes before the first submission
@@ -36,10 +36,10 @@ The blockers were fixed on 2026-10-05; the boxes stay for a last look on the rel
 
 ## Builds
 
-- [ ] **Versions match on both platforms.** iOS: all five `CFBundleShortVersionString` and `CFBundleVersion` values in `apps/ios/project.yml` (archive.sh sets them). Android: `versionName` and `versionCode` in `apps/android/app/build.gradle.kts` (bundle-release.sh sets them). Each upload has a build number above the last.
-- [ ] **iOS release build** made by `bun run ios:archive <version> <build>`, uploaded, processed, no "Missing Compliance".
+- [ ] **Versions match on both platforms.** Both builds come from the release tag: the version is package.json's (`bun run check:versions` holds `MARKETING_VERSION` in `apps/ios/project.yml` and `versionName` in `apps/android/app/build.gradle.kts` to it) and the build number is `scripts/build-number.sh`'s, so the two stores see the same pair. Each upload has a build number above the last.
+- [ ] **iOS release build** made by `bun run ios:archive`, uploaded, processed, no "Missing Compliance".
 - [ ] **The iOS archive has no `fileprovider.testing-mode` entitlement** (archive.sh checks) and keeps `applinks:hushos.com` / `webcredentials:hushos.com` (`HUSHOS_LINK_HOST`).
-- [ ] **Android bundle** made by `bun run android:bundle <version> <code>`, signed with the upload key (the script refuses the debug key), `targetSdk 36`.
+- [ ] **Android bundle** made by `bun run android:bundle`, signed with the upload key (the script refuses the debug key), `targetSdk 36`.
 - [ ] **Android release talks to `https://hushos.com`.** Built without `-PdefaultOrigin`.
 
 ## On real phones (the TestFlight build and the internal-test build)
