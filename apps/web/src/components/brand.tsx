@@ -47,7 +47,10 @@ export function Wordmark({
         <span className={cn('flex items-center gap-2', className)}>
             <LogoBadge />
             {/* Compact, the name stays the link's for a screen reader. */}
-            <span className={compact ? 'sr-only' : 'text-base font-bold tracking-tight'}>
+            <span
+                data-wordmark-name
+                className={compact ? 'sr-only' : 'text-base font-bold tracking-tight'}
+            >
                 HushOS
             </span>
         </span>

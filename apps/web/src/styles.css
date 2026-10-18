@@ -68,6 +68,23 @@
     }
 }
 
+/*
+ * The sidebar folded to its icon rail (shadcn's collapsible="icon"). Before anyone has opened or
+ * closed it (no sidebar cookie), the server cannot know the width, so it marks the sidebar
+ * `data-sidebar-default="auto"` and the rail is drawn by width from the first paint: 768 to
+ * 1023px. The app's own state agrees once it runs (app/route.tsx), so nothing moves.
+ */
+@custom-variant rail {
+    &:is([data-collapsible='icon'] *) {
+        @slot;
+    }
+    @media (width >= 48rem) and (width < 64rem) {
+        &:is([data-sidebar-default='auto'] *) {
+            @slot;
+        }
+    }
+}
+
 @theme inline {
     --font-sans: 'Geist Variable', 'Geist Fallback', sans-serif;
     --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;

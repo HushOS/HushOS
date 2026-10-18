@@ -137,7 +137,7 @@ function CatalogueStatus() {
             ? 'Search couldn’t get ready. It tries again next time you open HushOS.'
             : 'Getting search ready';
     return (
-        <output className="flex items-center gap-2 px-2 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+        <output className="flex items-center gap-2 px-2 text-xs text-muted-foreground rail:hidden">
             {state.phase !== 'failed' && <Spinner className="size-3 shrink-0" />}
             <span className="truncate">{line}</span>
         </output>
@@ -193,7 +193,7 @@ function PoolMeter({
                 nearlyFull={nearlyFull}
                 line={`${family}: ${usedLine}${empty ? '' : `, ${formatSpace(free.toString())} free`}`}
             />
-            <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
+            <div className="flex flex-col gap-2 px-2 rail:hidden">
                 <span className="eyebrow truncate text-muted-foreground">{family}</span>
                 <Progress
                     value={Math.round(used * 100)}
@@ -254,7 +254,7 @@ function OwnMeter({ label }: { label: string | null }) {
                 nearlyFull={nearlyFull && !ending}
                 line={`${label ? `${label}: ` : ''}${usedLine}${line ? `, ${line}` : ''}`}
             />
-            <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
+            <div className="flex flex-col gap-2 px-2 rail:hidden">
                 {label && <span className="eyebrow text-muted-foreground">{label}</span>}
                 <Progress
                     value={Math.round(used * 100)}
@@ -295,7 +295,9 @@ function OwnMeter({ label }: { label: string | null }) {
 
 /*
  * The meter in the icon rail: a ring in the places' 40px square, its words in the tooltip and
- * the button's name. Pressing it opens the sidebar, where the whole meter is.
+ * the button's name (aria-label, never a second text node: the page holds one storage reading,
+ * and only one of the two meters is shown at a time). Pressing it opens the sidebar, where the
+ * whole meter is.
  */
 const RING = 2 * Math.PI * 7;
 function CollapsedMeter({
@@ -309,10 +311,11 @@ function CollapsedMeter({
 }) {
     const { setOpen } = useSidebar();
     return (
-        <SidebarMenu className="hidden group-data-[collapsible=icon]:flex">
+        <SidebarMenu className="hidden rail:flex">
             <SidebarMenuItem>
                 <SidebarMenuButton
                     tooltip={line}
+                    aria-label={line}
                     data-storage-rail
                     onClick={() => setOpen(true)}
                     className={cn(item, collapsed)}
@@ -338,7 +341,6 @@ function CollapsedMeter({
                             className={nearlyFull ? 'stroke-destructive' : 'stroke-primary'}
                         />
                     </svg>
-                    <span>{line}</span>
                 </SidebarMenuButton>
             </SidebarMenuItem>
         </SidebarMenu>
@@ -350,8 +352,7 @@ function CollapsedMeter({
  * middle, and the label leaves the layout instead of being clipped beside it. It stays the
  * link's name for a screen reader (sr-only, not hidden); the tooltip shows it on hover or focus.
  */
-const collapsed =
-    'group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&>span:last-child]:sr-only';
+const collapsed = 'rail:size-10! rail:justify-center rail:p-0! rail:[&>span:last-child]:sr-only';
 /* The active place is tinted, semibold and its icon heavier: never tint alone. */
 /* The quieter rows draw 16px icons in the 18px column (1px each side), so every label starts in one line. */
 const item =
@@ -461,15 +462,15 @@ export function AppSidebar({
     );
     return (
         <Sidebar collapsible="icon" className="group-data-[side=left]:border-r-0">
-            <SidebarHeader className="px-4 pt-4 pb-0 group-data-[collapsible=icon]:px-2">
+            <SidebarHeader className="px-4 pt-4 pb-0 rail:px-2">
                 {/* The logo's square shares the nav icons' centre line (37px in); the name then starts near their labels. */}
                 <Brand
                     to="/app"
                     compact={state === 'collapsed'}
-                    className="h-9 self-start rounded-md border-r-0 pr-1 pl-[9px] group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+                    className="h-9 self-start rounded-md border-r-0 pr-1 pl-[9px] rail:size-10 rail:justify-center rail:px-0 rail:[&_[data-wordmark-name]]:sr-only"
                 />
             </SidebarHeader>
-            <SidebarContent className="gap-5 px-4 pt-5 group-data-[collapsible=icon]:px-2">
+            <SidebarContent className="gap-5 px-4 pt-5 rail:px-2">
                 <SidebarGroup className={group}>
                     <NavGroup items={workspace.slice(0, 2)} pathname={pathname} />
                     <FamilyRows userId={user.id} pathname={pathname} />
@@ -495,7 +496,7 @@ export function AppSidebar({
                     </SidebarGroup>
                 )}
             </SidebarContent>
-            <SidebarFooter className="gap-4 px-4 pt-2 pb-4 group-data-[collapsible=icon]:px-2">
+            <SidebarFooter className="gap-4 px-4 pt-2 pb-4 rail:px-2">
                 <CatalogueStatus />
                 <StorageMeter userId={user.id} />
             </SidebarFooter>

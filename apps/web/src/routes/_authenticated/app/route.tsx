@@ -156,6 +156,7 @@ function AppLayout() {
         <SidebarProvider
             open={sidebarOpen}
             onOpenChange={setSidebarChoice}
+            auto={sidebarChoice === null}
             style={{ '--sidebar-width': '15rem' } as CSSProperties}
         >
             <NavigationBar />
@@ -167,9 +168,11 @@ function AppLayout() {
              */}
             <SidebarInset className="min-w-0 bg-card md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
                 <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 bg-card px-3 sm:px-5 md:px-8">
+                    {/* The sheet on a phone; on a tablet it opens or folds the rail. A desk has the rail's edge and Mod+B. */}
                     <SidebarTrigger
                         aria-label="Menu"
-                        className="text-muted-foreground hover:text-foreground md:hidden"
+                        size="icon"
+                        className="text-muted-foreground hover:text-foreground lg:hidden"
                     />
                     {/* Search opens the command palette; it reads as a box so people know where to look. */}
                     <button
