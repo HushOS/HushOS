@@ -1,0 +1,31 @@
+apps/web/src/content/roadmap.test.ts
+  s_c56e31c87cddde::t_cd0689a51182ab 4,10-12,35-39,41,54,56-57,68-70,72,76,94,99,102,106-109,116-122,128-132,135,138,140,143-156,167-169,176-180,183,200-211
+.github/pull_request_template.md
+  s_c56e31c87cddde::t_c0de98101d900b 6
+AGENTS.md
+  s_c56e31c87cddde::t_14666453ea2c84 29
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_c56e31c87cddde::t_c3c82290cc4140 83,86,158,198-199
+apps/web/src/content/roadmap.ts
+  s_c56e31c87cddde::t_d229c698ddf910 4-6,13-14,24-25,65,72-73,97,138,166,194,209,212-219
+apps/web/src/identities.css
+  s_c56e31c87cddde::t_91a1f607f8791f 389
+apps/web/src/routes/roadmap/route.tsx
+  s_c56e31c87cddde::t_224ecea1d8e3e6 56,58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f83cafef5c86a838c338dd53d3710bdc8c8a49b1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
