@@ -179,6 +179,26 @@ public struct SpaceList: Codable, Sendable {
         public let root: NodeView?
         public let rotation: Rotation?
         public let grant: AreaGrant?
+        /*
+         * This account's own wrap of the folder's key (route 23's), in the personal grant's shape.
+         * One that doesn't decode is none: the ledger ignores a bad self-grant anyway, and a
+         * malformed one must not keep the whole list from loading.
+         */
+        public let selfGrant: GrantView?
+
+        private enum CodingKeys: String, CodingKey { case workspaceId, idSeed, workspaceKeyVersion, changeSeq, root, rotation, grant, selfGrant }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            workspaceId = try c.decode(String.self, forKey: .workspaceId)
+            idSeed = try c.decodeIfPresent(String.self, forKey: .idSeed)
+            workspaceKeyVersion = try c.decode(UInt64.self, forKey: .workspaceKeyVersion)
+            changeSeq = try c.decodeIfPresent(Int.self, forKey: .changeSeq)
+            root = try c.decodeIfPresent(NodeView.self, forKey: .root)
+            rotation = try c.decodeIfPresent(Rotation.self, forKey: .rotation)
+            grant = try c.decodeIfPresent(AreaGrant.self, forKey: .grant)
+            selfGrant = (try? c.decodeIfPresent(GrantView.self, forKey: .selfGrant)) ?? nil
+        }
     }
     public struct Entry: Codable, Sendable {
         public let space: Space
@@ -238,5 +258,30 @@ public final class GroupsAPI: Sendable {
     /* 25 */
     public func spaces() async throws -> [SpaceList.Entry] {
         try await get("/drive/spaces", as: SpaceList.self).spaces
+    }
+
+    /*
+     * 23: this account's self-grant of a family folder's current key, as the ledger wrapped it
+     * (`FamilyAreaOpened.selfGrantToStore`). 409 `area-moved` means the folder's key changed
+     * meanwhile: the next sync wraps the new one.
+     */
+    func putSelfGrant(_ groupId: String, workspaceId: String, grant: WorkspaceGrant) async throws {
+        guard FamilyRecords.valid(workspaceId) else { throw GroupsAPIError(status: 400, code: "invalid", message: "Please try again.") }
+        let status: Int
+        let data: Data
+        do {
+            var request = try drive.apiRequest("/groups/\(try id(groupId))/areas/\(workspaceId)/self-grant")
+            request.httpMethod = "PUT"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["grant": Auth.json(grant)])
+            (status, data) = try await drive.send(request)
+        } catch DriveAPIError.transport {
+            throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
+        }
+        if status == 401 { throw DriveAPIError.notAuthenticated }
+        guard (200 ..< 300).contains(status) else {
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            throw GroupsAPIError(status: status, code: body?["code"] as? String, message: body?["message"] as? String ?? "Please try again.")
+        }
     }
 }

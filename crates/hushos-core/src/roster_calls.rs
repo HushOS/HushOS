@@ -46,6 +46,7 @@ use crate::groups::{
 };
 use crate::identity::{identity_open, IdentityEnvelope, IdentityKeys, PublicIdentity, ServedKeys};
 use crate::join::{admitted_at, code_at};
+use crate::ledger_settings::ContactPin;
 use crate::signatures::digest as sha256_base64url;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -65,6 +66,7 @@ pub const UNCHANGED: &str = "That doesn’t change their roles.";
 /// Taking `members` from oneself: the succession must be signed by someone who keeps it.
 pub const SELF_TAKE: &str = "Ask another manager to take this role from you.";
 const ALREADY_IN: &str = "This person is in the family already.";
+const NOT_THE_PINNED_KEYS: &str = "These are not the keys whose words were checked.";
 const NOT_IN: &str = "This person is not in the family now.";
 const KEYS_MISSING: &str = "HushOS couldn’t load everyone’s keys. Try again.";
 const ONE_AT_A_TIME: &str = "Give one person the role at a time.";
@@ -555,15 +557,12 @@ fn entry_names(entry: Option<&RosterMember>, keys: &ServedKeys) -> bool {
 }
 
 /* Whether an entry names exactly the keys a contact pin holds, the lattice keys by digest (the worker's entryIsPin). */
-fn entry_is_pin(entry: Option<&RosterMember>, pin: &VerifiedPin) -> bool {
+fn entry_is_pin(entry: Option<&RosterMember>, pin: &ContactPin) -> bool {
     entry.is_some_and(|entry| {
-        entry.encryption_public_key == pin.encryption_public_key
-            && entry.signing_public_key == pin.signing_public_key
-            && same_key_digest(
-                Some(pin.ml_dsa_public_key_hash.clone()),
-                entry.ml_dsa_public_key_digest.clone(),
-            )
-            && same_key_digest(Some(pin.kem_public_key_hash.clone()), entry.kem_public_key_digest.clone())
+        pin.encryption_public_key.as_ref() == Some(&entry.encryption_public_key)
+            && pin.signing_public_key.as_ref() == Some(&entry.signing_public_key)
+            && same_key_digest(pin.ml_dsa_public_key_hash.clone(), entry.ml_dsa_public_key_digest.clone())
+            && same_key_digest(pin.kem_public_key_hash.clone(), entry.kem_public_key_digest.clone())
     })
 }
 
@@ -662,11 +661,18 @@ impl AreaLedger {
                 if chain.roster.entry(&user_id).is_some_and(|e| e.active_with(None)) {
                     return Err(input(ALREADY_IN));
                 }
-                // Only the account's own contact pin of them: the keys their words check confirmed.
-                let pin = self.contact_pin(&user_id).ok_or_else(|| input(NOT_CHECKED))?;
+                // Only the account's own contact pin of them, from settings the ledger opened: the
+                // keys their words check confirmed (a group's word, or a pin short of a key part,
+                // admits no one, as the worker's newRosterEntry refuses it).
+                let found = self.contact_pin(&user_id).ok_or_else(|| input(NOT_CHECKED))?;
+                let pin = found.checked().ok_or_else(|| input(NOT_THE_PINNED_KEYS))?;
                 // The newcomer's ML-KEM key is the one their entry is made from.
                 kems.insert(user_id.clone(), newcomer.kem_public_key.clone());
                 let entry = roster_entry_new(pin.clone(), newcomer, roles, next)?;
+                // A pin whose userId is the person's in another case names someone else (the worker's check).
+                if entry.user_id != user_id {
+                    return Err(input(NOT_THE_PINNED_KEYS));
+                }
                 let user_id = entry.user_id.clone();
                 put(&mut members, entry);
                 (ChainRoute::Admit { user_id }, Some(pin))
@@ -1034,7 +1040,7 @@ impl AreaLedger {
     /// "Let them in" (route 17), the worker's `groupStage` admission:
     /// `user_id`'s entry made only from the keys their words check confirmed
     /// (the contact pin of them in the settings this account last opened,
-    /// [`AreaLedger::use_settings`], and `served`, their served identity:
+    /// [`AreaLedger::use_settings_envelope`], and `served`, their served identity:
     /// [`crate::roster_entry_new`]) with `roles` (their invitation's), the
     /// roster signed over the committed chain, the newcomer granted every live
     /// family folder's current key, and with `members` the current group key
@@ -1380,7 +1386,10 @@ impl AreaLedger {
         let value: Value =
             serde_json::from_slice(&plaintext).map_err(|_| CoreError::Sealed(RECORD_UNREADABLE.into()))?;
         let head = self.call_state(&group_id).chain.map(|chain| chain.roster_digests.clone());
-        let lookup = |user: &str| self.contact_pin(user).map(|pin| (pin.user_id, pin.fingerprint));
+        let lookup = |user: &str| {
+            let pin = self.contact_pin(user)?;
+            Some((pin.user_id.to_lowercase(), pin.fingerprint?))
+        };
         let reading = Reading { id: Some(&outbox_id), pin: &lookup, head: head.as_deref() };
         entry_read(&value, &group_id, &reading).ok_or_else(|| CoreError::Sealed(NOT_AN_ENTRY.into()))
     }

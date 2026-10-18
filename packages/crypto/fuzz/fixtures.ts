@@ -115,3 +115,5 @@ export const shareGrantee = once(async (): Promise<GranteeSecrets> => {
     const kem = await openIdentityKemKey(root, fixture.account.userId, identity);
     return { privateKey, kemSecretKey: kem!.secretKey };
 });
+/* crates/hushos-core/fixtures/settings-area-cases.json: Core 6's settings and family folder cases. */
+export const settingsAreaCases = () => read('crates/hushos-core/fixtures/settings-area-cases.json');

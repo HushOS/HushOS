@@ -385,13 +385,14 @@ public actor FamilySync {
     }
 
     /*
-     * Every family folder route 25 lists for the family, opened from its grant (the granter's
-     * keys from route 6, through the accepted member list), then its top folder listed through
-     * the ledger: the ledger counts a folder as rooted only once it has opened that itself. A
-     * folder whose grant does not open says "Couldn't check this folder's keys", as the web's row.
-     *
-     * Residual (docs/groups-mobile-plan.md, iOS 1): no self-grant is opened (the core has no
-     * opener for one), so a folder whose granter's identity is gone doesn't open on this phone.
+     * Every family folder route 25 lists for the family, opened in the ledger as the web's worker
+     * opens it (`open_family_area`, Core 6): this account's self-grant when it is at the folder's
+     * current version, else the area grant through its granter's keys from route 6 (the identity
+     * it was sealed to is opened by the ledger, under the account root). A self-grant the ledger
+     * wraps from a current grant is stored (route 23), so the folder keeps opening after its
+     * granter's identity is gone. The key never leaves the ledger. Then the top folder is listed
+     * through the ledger, which counts a folder as rooted only once it opened that itself. A
+     * folder that doesn't open says "Couldn't check this folder's keys", as the web's row.
      */
     func openAreas(_ groupId: String, chain: AcceptedRosters) async throws -> [OpenedFolder] {
         let spaces = try await api.spaces()
@@ -405,34 +406,51 @@ public actor FamilySync {
         await note(family.map(\.workspaceId), of: groupId)
         let served = try await fetchIdentities(groupId)
         identities[groupId] = served
+        let keyVersion = try await vault.accountKeyVersion()
         var out: [OpenedFolder] = []
         for area in family {
             var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: area.root, rotating: area.rotation != nil))
             do {
-                guard let grant = area.grant, let seed = area.idSeed, let granter = served[grant.granterUserId.lowercased()]?.identity else {
+                guard let seed = area.idSeed else {
                     out.append(folder)
                     continue
                 }
-                let mine = try await vault.identity(atKeyVersion: grant.granteeKeyVersion)
-                let key = try areaGrantOpen(
-                    envelope: try base64urlDecode(value: grant.envelope),
-                    ctx: AreaGrantContext(groupId: groupId, workspaceId: area.workspaceId, workspaceKeyVersion: grant.workspaceKeyVersion,
-                                          granteeUserId: userId, granteeKeyVersion: grant.granteeKeyVersion, granterUserId: grant.granterUserId,
-                                          rosterVersion: grant.rosterVersion, rosterDigest: grant.rosterDigest),
-                    chain: chain, areaIdSeed: seed, granterMlDsaPublicKey: try base64urlDecode(value: granter.mlDsaPublicKey),
-                    granterHistory: SignerHistory(served: granter.served, links: served[grant.granterUserId.lowercased()]?.links.map(\.link) ?? []),
-                    reader: userId, readerKeyVersion: grant.granteeKeyVersion, grantee: mine
+                var grant: ServedAreaGrant?
+                // Without this account's identity at the grant's key version, the grant cannot open: the self-grant may.
+                if let row = area.grant, let holder = try? await vault.identityEnvelope(atKeyVersion: row.granteeKeyVersion) {
+                    // The granter's keys only when route 6 serves their identity: an account gone serves none.
+                    let granter = memberIdentity(row.granterUserId, in: groupId)
+                    grant = ServedAreaGrant(
+                        envelope: try base64urlDecode(value: row.envelope), workspaceKeyVersion: row.workspaceKeyVersion,
+                        granteeKeyVersion: row.granteeKeyVersion, granterUserId: row.granterUserId, rosterVersion: row.rosterVersion,
+                        rosterDigest: row.rosterDigest, granterMlDsaPublicKey: try granter.map { try base64urlDecode(value: $0.identity.mlDsaPublicKey) },
+                        granterHistory: granter.map { SignerHistory(served: $0.identity.served, links: $0.links) },
+                        holder: holder
+                    )
+                }
+                let opened = try ledger.openFamilyArea(
+                    groupId: groupId,
+                    area: ServedArea(workspaceId: area.workspaceId, idSeed: seed, servedVersion: area.workspaceKeyVersion,
+                                     grant: grant, selfGrant: area.selfGrant?.grant),
+                    accountKeyVersion: keyVersion
                 )
-                let opened = try ledger.openArea(groupId: groupId, workspaceId: area.workspaceId, idSeed: seed, version: grant.workspaceKeyVersion,
-                                                 areaKey: key, servedVersion: area.workspaceKeyVersion)
+                if let own = opened.selfGrantToStore {
+                    do {
+                        try await api.putSelfGrant(groupId, workspaceId: area.workspaceId, grant: own)
+                    } catch let error as GroupsAPIError where error.isNotMember {
+                        throw error
+                    } catch {
+                        // `area-moved` or no answer: the folder is open now; the next sync wraps the current key again.
+                    }
+                }
                 folder.area.opened = true
-                folder.pinArea = opened.pinArea
+                folder.pinArea = opened.opened.pinArea
                 if let root = area.root {
                     let item = try await vault.openListed(root)
                     folder.area.name = item.name
                     folder.area.rootListed = root.parentKeyEpoch == areaWriteVersion(chain: chain, workspaceId: area.workspaceId)
                 }
-                folder.area.write = Self.write(reason: opened.reason, rootListed: folder.area.rootListed, root: area.root != nil)
+                folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: area.root != nil)
             } catch let error as GroupsAPIError where error.isNotMember {
                 throw error
             } catch {
@@ -443,6 +461,12 @@ public actor FamilySync {
             out.append(folder)
         }
         return out
+    }
+
+    /* A member's identity and links as route 6 served them, by user id in any case; none when it served none. */
+    private func memberIdentity(_ userId: String, in groupId: String) -> (identity: MemberIdentity.Identity, links: [SuccessionLink])? {
+        guard let member = identities[groupId]?[userId.lowercased()], let identity = member.identity else { return nil }
+        return (identity, member.links.map(\.link))
     }
 
     /* As the web's areaWrite: what the ledger found, and whether the top folder opened at the latest version. */

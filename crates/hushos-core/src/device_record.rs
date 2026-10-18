@@ -21,7 +21,7 @@
 //! - [`AreaLedger::accept_served`] accepts a served chain continuing the
 //!   record's cache; refused, from version 1 with the cache, then from version
 //!   1 with the cache left out and the record's own pin kept as a mark beside
-//!   the settings pin ([`AreaLedger::use_settings`]), never against the settings
+//!   the settings pin ([`AreaLedger::use_settings_envelope`]), never against the settings
 //!   pin alone (a server can serve older settings); the highest chain this
 //!   session committed for the family (its floor, which a refusal never
 //!   drops) is a mark too, and a run another acceptance overtook is
@@ -645,7 +645,7 @@ impl AreaLedger {
         reader: &Reader<'_>,
         served: &ServedChain,
         cache: &RecordCache,
-        settings_pin: Option<&GroupPin>,
+        settings_pin: &CoreResult<Option<GroupPin>>,
         record_pin: &CoreResult<Option<GroupPin>>,
         join_mark: Option<&JoinMark>,
         retried: bool,
@@ -672,16 +672,16 @@ impl AreaLedger {
             Err(error)
         };
         // The person's pins in the worker's order (settings, then the record's), then the cache.
-        if let Some(pin) = settings_pin {
-            if let Err(error) = group_pin_check(group_id.into(), pin.clone()) {
-                return refuse(error);
-            }
-        }
+        // The settings pin as checked when read (pin_of, or group_pin_check for a typed one).
+        let settings_pin = match settings_pin {
+            Ok(pin) => pin.clone(),
+            Err(error) => return refuse(error.clone()),
+        };
         let record_pin = match record_pin {
             Ok(pin) => pin.clone(),
             Err(error) => return refuse(error.clone()),
         };
-        let pins: Vec<GroupPin> = settings_pin.cloned().into_iter().chain(record_pin).collect();
+        let pins: Vec<GroupPin> = settings_pin.into_iter().chain(record_pin).collect();
         let pins = pins.as_slice();
         let cache = match cache {
             RecordCache::None => None,
@@ -733,7 +733,7 @@ impl AreaLedger {
         reader: &Reader<'_>,
         served: &ServedChain,
         cache: &RecordCache,
-        settings_pin: Option<&GroupPin>,
+        settings_pin: &CoreResult<Option<GroupPin>>,
         record_pin: &CoreResult<Option<GroupPin>>,
         has_record: bool,
     ) -> CoreResult<ServedAcceptance> {
@@ -800,14 +800,15 @@ impl AreaLedger {
 pub(crate) struct Marks {
     pub(crate) account: ServedAccount,
     pub(crate) record: Option<ChainRecord>,
-    pub(crate) settings_pin: Option<GroupPin>,
+    /* The family's settings pin, refused (with the worker's words) when it does not read. */
+    pub(crate) settings_pin: CoreResult<Option<GroupPin>>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 impl AreaLedger {
     /// Accepts what route 5 served for `group_id` against the person's marks:
     /// the settings pin of the settings the app last opened
-    /// ([`AreaLedger::use_settings`]), this device's chain record (`record`,
+    /// ([`AreaLedger::use_settings_envelope`]), this device's chain record (`record`,
     /// its cache and its own pin), and the family's floor: the highest chain
     /// this session committed for it, which a refusal never drops. The twin of
     /// the web's sync (`acceptFromRecord` driving the worker's `groupAccept`):
@@ -846,7 +847,7 @@ impl AreaLedger {
     /// let signing_seed = vec![5u8; 32];
     /// let ledger = AreaLedger::new();
     /// ledger.open_account(user.clone(), signing_public_key(signing_seed)?, vec![9u8; 32])?;
-    /// ledger.use_settings(user.clone(), Some(Default::default()), Default::default())?;
+    /// ledger.use_settings_envelope(user.clone(), None, None)?;
     /// let me = OwnIdentities { user_id: user, identities: vec![] };
     /// let served = ServedChain {
     ///     after: 0,
@@ -885,7 +886,7 @@ impl AreaLedger {
             None => (RecordCache::None, Ok(None)),
             Some(ChainRecord { cache, pin }) => (cache.clone(), pin.clone()),
         };
-        self.accept_in_order(&reader, &served, &cache, settings_pin.as_ref(), &record_pin, record.is_some())
+        self.accept_in_order(&reader, &served, &cache, &settings_pin, &record_pin, record.is_some())
     }
 }
 
@@ -1679,12 +1680,12 @@ mod tests {
         // stays committed.
         let mut junk = f.served(2, 3);
         junk.rosters[0].signature.ed25519 = vec![0; 64];
-        let refused = ledger.accept_in_order(&reader, &junk, &opened.cache, None, &opened.pin, true);
+        let refused = ledger.accept_in_order(&reader, &junk, &opened.cache, &Ok(None), &opened.pin, true);
         assert_eq!(refused.unwrap_err(), input(NOT_THIS_ACCOUNT));
         assert!(ledger.held_chain(GROUP).is_some());
         // An acceptance from version 1: the commit refuses, and no attempt without the cache follows.
         let from_one =
-            ledger.accept_in_order(&reader, &f.served(0, 3), &opened.cache, None, &opened.pin, true);
+            ledger.accept_in_order(&reader, &f.served(0, 3), &opened.cache, &Ok(None), &opened.pin, true);
         assert_eq!(from_one.unwrap_err(), input(NOT_THIS_ACCOUNT));
     }
 
@@ -1723,7 +1724,7 @@ mod tests {
         // The same account unlocked again (a new device key, a master-key rotation): its families stay.
         ledger.open_account(f.p1.user_id.clone(), signing_of(&f.p1), vec![8; 32]).unwrap();
         assert!(ledger.floor(GROUP).is_some() && ledger.held_chain(GROUP).is_some());
-        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP).unwrap(), Some(f.pin_at(1)));
+        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP).unwrap(), Ok(Some(f.pin_at(1))));
         // Another account: no chain, floor or settings of the last one.
         ledger.open_account(f.p2.user_id.clone(), signing_of(&f.p2), ROOT.to_vec()).unwrap();
         assert!(ledger.floor(GROUP).is_none() && ledger.held_chain(GROUP).is_none());
@@ -1747,11 +1748,11 @@ mod tests {
         // After "none", still none (acceptance runs, with no settings pin).
         ledger.use_settings(f.p1.user_id.clone(), None, Default::default()).unwrap();
         ledger.legacy_settings(f.p1.user_id.clone()).unwrap();
-        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP), Ok(None));
+        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP), Ok(Ok(None)));
         // After settings that opened: refused, and the pin held stays a mark.
         settings(&ledger, &f.p1.user_id, Some(f.pin_at(3)));
         assert!(ledger.legacy_settings(f.p1.user_id.clone()).is_err());
-        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP), Ok(Some(f.pin_at(3))));
+        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP), Ok(Ok(Some(f.pin_at(3)))));
     }
 
     #[test]
@@ -1807,7 +1808,7 @@ mod tests {
         ledger.use_settings(f.p1.user_id.clone(), None, Default::default()).unwrap();
         settings(&ledger, &f.p1.user_id, Some(f.pin_at(3)));
         assert!(ledger.use_settings(f.p1.user_id.clone(), None, Default::default()).is_err());
-        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP).unwrap(), Some(f.pin_at(3)));
+        assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP).unwrap(), Ok(Some(f.pin_at(3))));
         // The pin is a mark: rosters 1 and 2 alone are a rollback.
         assert!(f.accept(&ledger, None, f.served(0, 2)).is_err());
         assert_eq!(version_of(&f.accept(&ledger, None, f.served(0, 3)).unwrap()), Some(3));

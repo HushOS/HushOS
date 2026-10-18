@@ -7,3 +7,4 @@ pub mod join;
 pub mod rekeyed;
 pub mod roster_calls;
 pub mod rotations;
+pub mod settings_areas;

@@ -13,6 +13,7 @@
 
 mod account;
 mod area_ledger;
+mod area_open;
 mod bytes;
 mod canonical;
 mod consent;
@@ -28,6 +29,7 @@ mod groups;
 mod identity;
 mod ids;
 mod join;
+mod ledger_settings;
 mod links;
 mod opaque;
 mod pq;
@@ -41,6 +43,7 @@ mod succession_path;
 
 pub use account::*;
 pub use area_ledger::*;
+pub use area_open::*;
 pub use bytes::*;
 pub use consent::*;
 pub use contacts::*;
@@ -54,6 +57,7 @@ pub use groups::*;
 pub use identity::*;
 pub use ids::*;
 pub use join::*;
+pub use ledger_settings::*;
 pub use links::*;
 pub use opaque::*;
 pub use recovery::*;

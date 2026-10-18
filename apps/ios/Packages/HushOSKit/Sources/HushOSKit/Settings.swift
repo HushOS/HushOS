@@ -61,6 +61,11 @@ struct Settings {
     var envelopeVersion: UInt32 = 2
     /* The settings key as the server keeps it, when the account has one. */
     var keyEnvelope: SettingsKeyEnvelope?
+    /*
+     * The document's envelope as the server served it (or as this device last stored it): what
+     * the area ledger opens itself (`useSettingsEnvelope`), so no pin it reads comes from this app.
+     */
+    var served: SettingsEnvelope?
 
     init(json: String, version: UInt64) throws {
         guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
@@ -101,31 +106,6 @@ struct Settings {
             guard let raw = value as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: raw),
                   let pin = try? JSONDecoder().decode(ContactPin.self, from: data) else { continue }
             out[id] = pin
-        }
-        return out
-    }
-
-    /*
-     * The contact pins the ledger admits over and reads join codes against (`AreaLedger.useSettings`
-     * with `contacts`, as the web worker takes the settings document's): the version 3 pins (both
-     * lattice digests) filed under their own user id, by that id. Any other pin trusts nothing a
-     * roster call needs, and one filed under another person would make the ledger refuse them all.
-     */
-    var verifiedContacts: [String: VerifiedPin] {
-        var out: [String: VerifiedPin] = [:]
-        for (id, pin) in contacts {
-            guard id.lowercased() == pin.userId.lowercased(),
-                  let mlDsa = pin.mlDsaPublicKeyHash, let kem = pin.kemPublicKeyHash else { continue }
-            out[pin.userId.lowercased()] = VerifiedPin(
-                userId: pin.userId.lowercased(),
-                keyVersion: pin.keyVersion ?? 1,
-                encryptionPublicKey: pin.encryptionPublicKey,
-                signingPublicKey: pin.signingPublicKey,
-                mlDsaPublicKeyHash: mlDsa,
-                kemPublicKeyHash: kem,
-                fingerprint: pin.fingerprint,
-                trustedVia: pin.trustedVia
-            )
         }
         return out
     }
@@ -325,6 +305,7 @@ extension Vault {
             settings.envelopeVersion = reply.version == 0 ? 2 : 1
         }
         settings.keyEnvelope = reply.key
+        settings.served = reply.envelope
         marks.record(userId: session.userId, version: reply.version)
         lastPins = settings.contacts
         // The area ledger takes the families' marks from every settings read, as the web's worker does.
@@ -352,6 +333,7 @@ extension Vault {
                 SettingsMarks.shared.record(userId: session.userId, version: stored)
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
+                settings.served = sealed
                 forgetSigners()
                 return settings
             } catch AuthError.conflict where attempt < 2 {

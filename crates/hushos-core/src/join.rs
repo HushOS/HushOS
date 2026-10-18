@@ -47,8 +47,8 @@ use crate::device_record::{
 };
 use crate::error::{input, CoreError, CoreResult};
 use crate::group_trust::{
-    accept_rosters, group_pin_check, join_code, AcceptedRosters, ForkOf, GroupPin, JoinMark, MarkSide,
-    OwnIdentities, RosterChain,
+    accept_rosters, join_code, AcceptedRosters, ForkOf, GroupPin, JoinMark, MarkSide, OwnIdentities,
+    RosterChain,
 };
 use crate::groups::{parse_roster, roster_digest, Roster, SignedGroupStatement};
 use crate::signatures::digest as sha256_base64url;
@@ -542,16 +542,14 @@ impl AreaLedger {
             Some(ChainRecord { cache, pin }) => (cache.clone(), pin.clone()),
         };
         // The person's pins in the worker's order (settings, then the record's), then the cache.
-        if let Some(pin) = &marks.settings_pin {
-            group_pin_check(group_id.into(), pin.clone())?;
-        }
+        let settings_pin = marks.settings_pin.clone()?;
         let record_pin = record_pin?;
         let cache = match cache {
             RecordCache::None => None,
             RecordCache::Held(cache) => Some(*cache),
             RecordCache::Refused { .. } => return Err(input(BAD_CACHE)),
         };
-        let pins: Vec<GroupPin> = marks.settings_pin.clone().into_iter().chain(record_pin).collect();
+        let pins: Vec<GroupPin> = settings_pin.into_iter().chain(record_pin).collect();
         let marked = !pins.is_empty() || cache.is_some() || self.holds_family(group_id);
         // With no mark, over the served first keys, for the code only: the person compares it with
         // the admin's next, and only the acceptance that carries it vouches for anything.
@@ -676,7 +674,7 @@ impl AreaLedger {
             &reader,
             served,
             &cache,
-            marks.settings_pin.as_ref(),
+            &marks.settings_pin,
             &record_pin,
             Some(&matched.mark),
             false,
@@ -760,7 +758,7 @@ impl AreaLedger {
     /// ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
     /// // Settings first, as for any acceptance.
     /// assert!(ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None).is_err());
-    /// ledger.use_settings(user, Some(Default::default()), Default::default())?;
+    /// ledger.use_settings_envelope(user, None, None)?;
     /// let JoinPreview::Code { roster_version, code, session } =
     ///     ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None)?
     /// else {
@@ -859,7 +857,7 @@ impl AreaLedger {
     /// # let me = OwnIdentities { user_id: user.clone(), identities };
     /// # let ledger = AreaLedger::new();
     /// # ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root.clone())?;
-    /// # ledger.use_settings(user.clone(), Some(Default::default()), Default::default())?;
+    /// # ledger.use_settings_envelope(user.clone(), None, None)?;
     /// // A family whose one member previews their own admission, at roster 1.
     /// let preview = |holds| ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), holds);
     /// let JoinPreview::Code { session, .. } = preview(None)? else { panic!("a code") };
@@ -878,7 +876,7 @@ impl AreaLedger {
     /// // kept escalation brings it back on the next preview.
     /// ledger.clear();
     /// ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
-    /// ledger.use_settings(user, Some(Default::default()), Default::default())?;
+    /// ledger.use_settings_envelope(user, None, None)?;
     /// assert!(check(session.clone(), read_out.clone()).is_err(), "a showing from before the lock");
     /// let JoinPreview::Code { session, .. } = preview(Some(kept))? else { panic!("a code") };
     /// assert_eq!(session.hidden().iter().map(|at| session.code()[*at as usize].clone()).collect::<Vec<_>>(), read_out);
@@ -971,7 +969,12 @@ impl AreaLedger {
             None => {}
         }
         // A rejoin keeps the date the family was first checked on this account.
-        let checked_at = marks.settings_pin.as_ref().map_or(now, |pin| pin.checked_at.clone());
+        let checked_at = marks
+            .settings_pin
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map_or(now, |pin| pin.checked_at.clone());
         let plaintext =
             Zeroizing::new(joins_value(&group_id, &current, &checked_at).to_string().into_bytes());
         let record = seal_bytes(&account.store_key, &account.user_id, &group_id, JOINS, &plaintext)?;
@@ -1018,7 +1021,7 @@ impl AreaLedger {
     /// # let me = OwnIdentities { user_id: user.clone(), identities };
     /// # let ledger = AreaLedger::new();
     /// # ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
-    /// # ledger.use_settings(user, Some(Default::default()), Default::default())?;
+    /// # ledger.use_settings_envelope(user, None, None)?;
     /// // A family whose one member previews their own admission, at roster 1.
     /// let JoinPreview::Code { session, .. } = ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None)? else {
     ///     panic!("a code")
@@ -1112,7 +1115,7 @@ impl AreaLedger {
     /// # let me = OwnIdentities { user_id: user.clone(), identities };
     /// # let ledger = AreaLedger::new();
     /// # ledger.open_account(user.clone(), base64url_decode(public.signing_public_key.clone())?, root)?;
-    /// # ledger.use_settings(user, Some(Default::default()), Default::default())?;
+    /// # ledger.use_settings_envelope(user, None, None)?;
     /// // A family whose one member previews their own admission, at roster 1.
     /// let JoinPreview::Code { session, .. } = ledger.group_join_preview(me.clone(), group.clone(), None, served.clone(), None)? else {
     ///     panic!("a code")

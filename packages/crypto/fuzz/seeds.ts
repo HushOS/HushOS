@@ -9,6 +9,7 @@ import {
     coreLedger,
     coreRosterCalls,
     rosterCallSessions,
+    settingsAreaCases,
     groups,
     joinCheckCases,
     joinSessionScenarios,
@@ -324,6 +325,96 @@ export function documents(target: Target): Uint8Array[] {
                     ],
                 }),
                 json({ kind: 'groupFingerprint', groupId: GROUP, key: g.groupKeys[0] }),
+                // Settings documents read as the ledger reads them (Core 6): a verified pin filed
+                // and probed in every case, misfiled, short of a key, a group's word, junk members,
+                // the family pins at roster 2 and junk, and documents of other shapes.
+                ...(() => {
+                    const user = c.keys.userId as string;
+                    const verifiedPin = {
+                        userId: user,
+                        encryptionPublicKey: keys.encryptionPublicKey,
+                        signingPublicKey: keys.signingPublicKey,
+                        mlDsaPublicKeyHash: mlDsaHash.toString('hex'),
+                        kemPublicKeyHash: kemHash.toString('hex'),
+                        fingerprint: c.fingerprints.identity,
+                        keyVersion: 1,
+                    };
+                    const other = '00000002-abcd-4abc-8abc-abcdefabcdef';
+                    const familyPin = g.cases.flatMap((k: Json) => k.input.pins)[0];
+                    const probe = {
+                        users: [user, user.toUpperCase(), other],
+                        groups: [GROUP, other],
+                    };
+                    const text = (doc: Json) => JSON.stringify(doc);
+                    return [
+                        {
+                            version: 2,
+                            contacts: { [user]: verifiedPin },
+                            groups: { [GROUP]: familyPin },
+                        },
+                        { version: 1, contacts: { [user.toUpperCase()]: verifiedPin } },
+                        {
+                            version: 2,
+                            contacts: {
+                                [other]: verifiedPin,
+                                [user]: { ...verifiedPin, trustedVia: GROUP },
+                            },
+                        },
+                        {
+                            version: 2,
+                            contacts: { [user]: { ...verifiedPin, mlDsaPublicKeyHash: null } },
+                        },
+                        {
+                            version: 2,
+                            contacts: { [user]: 'junk', [other]: { userId: 7 } },
+                            groups: { [GROUP]: { junk: 1 } },
+                        },
+                        { version: 2, contacts: null, groups: [familyPin] },
+                        { version: 2.0, contacts: [] },
+                        { version: 3, contacts: {} },
+                        { version: 2 },
+                    ]
+                        .map((doc) => json({ kind: 'settings', text: text(doc), ...probe }))
+                        .concat([
+                            json({
+                                kind: 'settings',
+                                text: `{"version":2,"contacts":{"${user}":1,"${user}":${text(verifiedPin)}}}`,
+                                ...probe,
+                            }),
+                            json({
+                                kind: 'settings',
+                                text: '\ufeff{"version":2,"contacts":{}}',
+                                ...probe,
+                            }),
+                            json({ kind: 'settings', text: 'not json', ...probe }),
+                        ]);
+                })(),
+                // Family folders opened from route 25 (Core 6): every area case of the core's fixture, its own self-grant.
+                ...(coreRosterCalls().areaOpens as Json[]).map((open: Json) => {
+                    const spec = settingsAreaCases().areas.find((k: Json) => k.name === open.name);
+                    return json({
+                        kind: 'area_open',
+                        area: spec.area,
+                        served: spec.served,
+                        grant: spec.grant,
+                        selfGrant: open.selfGrant,
+                    });
+                }),
+                // A grant offered for a folder nobody may grant (cargo-fuzz's first find): refused alike.
+                json({
+                    kind: 'area_open',
+                    area: 'A2',
+                    served: 1,
+                    grant: { key: [0, 1] },
+                    selfGrant: null,
+                }),
+                json({
+                    kind: 'area_open',
+                    area: 'foreign',
+                    served: 1,
+                    grant: { key: [0, 1] },
+                    selfGrant: null,
+                }),
                 // Each twin's chain records as the device record cases hold them, and no record.
                 ...[coreLedger(), webLedger()].flatMap((f: Json) =>
                     f.deviceRecords.cases

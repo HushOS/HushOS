@@ -34,13 +34,13 @@ import {
 import type { ServedIdentity } from './group-trust';
 import {
     createSettingsKey,
-    openSettings,
     openSettingsKey,
     sealSettings,
     type Settings,
     type SettingsEnvelope,
     type SettingsKeyEnvelope,
 } from './contacts';
+import { settingsOpenFor } from './settings-marks';
 import { openShareKey, sealShareKey, type GranteeSecrets, type ShareContext } from './shares';
 import {
     copyForm,
@@ -1776,18 +1776,14 @@ export function createCryptoSession() {
                 const { userId, envelope } = message.input;
                 // None stored: this account's settings are empty, so it holds no group pins. Only
                 // the unlocked account's own reading says so; acceptance takes them as its marks.
-                if (envelope === null) {
-                    if (!accountKey || unlockedUserId !== userId)
-                        throw new CryptoError('Unlock your account first.');
-                    groups.useSettings(userId, null);
-                    return { settings: null };
-                }
-                const ownSettingsKey = settingsKey?.userId === userId ? settingsKey.key : null;
-                const settings = await openSettings(ownSettingsKey, userId, envelope);
                 // The group pins acceptance takes as marks: only from settings this worker opened.
                 // A version 1 document (null here) is not a reading of "no settings".
-                if (envelope.version !== 2) groups.legacySettings(userId);
-                else groups.useSettings(userId, settings);
+                const settings = await settingsOpenFor(groups, {
+                    userId,
+                    envelope,
+                    settingsKey: settingsKey?.userId === userId ? settingsKey.key : null,
+                    unlocked: Boolean(accountKey) && unlockedUserId === userId,
+                });
                 return { settings };
             }
             case 'settingsSeal': {

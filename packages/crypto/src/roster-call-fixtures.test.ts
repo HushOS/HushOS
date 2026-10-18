@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { check, fixture, sessionRun, sessionStep } from './roster-calls-testkit';
+import { check as checkSettingsAreas, fixture as settingsAreas } from './settings-areas-testkit';
 
 /*
  * Roster calls (groups 1d, Core 5a) against the Rust core: the core's bodies,
@@ -40,4 +41,14 @@ describe('a manager’s device over time (the shared session scenarios)', () => 
         },
         120_000,
     );
+});
+
+describe('settings the session opens itself, and family folders opened from route 25 (Core 6)', () => {
+    test('the core’s settings envelopes and self-grants read here to the same outcomes', async () => {
+        await expect(checkSettingsAreas(core)).resolves.toBeUndefined();
+    }, 300_000);
+
+    test('this twin’s own cases say what they declare, and read back alike', async () => {
+        await expect(checkSettingsAreas(await settingsAreas())).resolves.toBeUndefined();
+    }, 300_000);
 });

@@ -253,8 +253,28 @@ export async function openSettings(
         decode(envelope.nonce, 24),
         settingsContext(userId, 2, envelope.settingsVersion),
     );
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext));
-    plaintext.fill(0);
+    try {
+        return readSettingsDocument(plaintext);
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+/*
+ * An opened document's plaintext, read: UTF-8 as TextDecoder reads it
+ * (malformed bytes replaced, a leading BOM dropped), JSON (anything else is
+ * unsupported, not a SyntaxError), then an object with `version` the number 1
+ * or 2 and `contacts` an object (an array or null passes `typeof`, and holds
+ * no pin keyed by a user id). The core reads it the same way
+ * (ledger_settings.rs, read_document).
+ */
+export function readSettingsDocument(plaintext: Uint8Array): Settings {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(new TextDecoder().decode(plaintext));
+    } catch {
+        throw new CryptoError('Unsupported settings document.');
+    }
     if (
         !parsed ||
         typeof parsed !== 'object' ||

@@ -1,0 +1,500 @@
+{
+    "about": "Groups 1d, Core 6: the settings document opened by the ledger itself and a family folder opened from route 25 (self-grant first, else the area grant). Both twins build each case over the roster-call family (tests/common/roster_calls.rs, roster-calls-testkit.ts) through their own code (the core's AreaLedger::use_settings_envelope and open_family_area; the worker's settingsKeyOpen/settingsOpen and groupOpenArea), check `expected`, write what they sealed into their roster-call document, and read the other twin's to the same outcomes (tests/common/settings_areas.rs, settings-areas-testkit.ts). Settings cases are person 1's device: `steps` are settings reads in order (`document` as below, `envelope` v2 unless legacy, none or version-3, `key` own unless other-root or missing, `tamper` flips a ciphertext byte), then acceptance of the family's history, and when accepted, person 4's admission and person 2's join code. A document is version 2 with every other person's version 3 pin and the family's pin at the head unless it says otherwise: `contacts` a list of [key, value] (key p2..p5, P4 for p4 in capitals; value {pin: whose keys, userId, without: [fields], with: {field: value}} or {raw: any}) or {raw: any}; `groups` {raw: the family's value} or {rawGroups: the whole member}. Area cases are person 2's device opening A1, A2 (deleted), A3 (key 2 since roster 7) or a foreign id: `grant` person 1's grant of [area index, key version] at `version` (`granterKey` false when route 6 serves no identity for them), `selfGrant` person 2's own of `key` at `version` for `area` under `group` (family or other) and `root` (own or other), `envelopeVersion` to damage it.",
+    "settings": [
+        {
+            "name": "everyone-pinned",
+            "steps": [{}],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "no-contacts",
+            "steps": [{ "document": { "contacts": [] } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "Check their words first." },
+                "join": { "status": "not-pinned" }
+            }
+        },
+        {
+            "name": "filed-under-another-person",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            ["p4", { "pin": 5, "userId": "p5" }],
+                            ["p2", { "pin": 3, "userId": "p3" }]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "Check their words first." },
+                "join": { "status": "not-pinned" }
+            }
+        },
+        {
+            "name": "filed-under-the-id-in-capitals",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            ["P4", { "pin": 4 }],
+                            ["P2", { "pin": 2 }]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "user-id-in-capitals",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            ["p4", { "pin": 4, "userId": "P4" }],
+                            ["p2", { "pin": 2, "userId": "P2" }]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "These are not the keys whose words were checked." },
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "pins-from-before-version-3",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            [
+                                "p4",
+                                { "pin": 4, "without": ["mlDsaPublicKeyHash", "kemPublicKeyHash"] }
+                            ],
+                            [
+                                "p2",
+                                { "pin": 2, "without": ["mlDsaPublicKeyHash", "kemPublicKeyHash"] }
+                            ]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "These are not the keys whose words were checked." },
+                "join": { "status": "other-keys", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "trusted-through-a-group",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            [
+                                "p4",
+                                {
+                                    "pin": 4,
+                                    "with": { "trustedVia": "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b" }
+                                }
+                            ],
+                            [
+                                "p2",
+                                {
+                                    "pin": 2,
+                                    "with": { "trustedVia": "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b" }
+                                }
+                            ]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "These are not the keys whose words were checked." },
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "a-key-part-of-another-kind",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            ["p4", { "pin": 4, "with": { "fingerprint": 7 } }],
+                            ["p2", { "pin": 2, "with": { "signingPublicKey": null } }]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "These are not the keys whose words were checked." },
+                "join": { "status": "other-keys", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "members-that-are-no-pins",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            ["p4", { "raw": "junk" }],
+                            ["p2", { "raw": { "userId": 7 } }]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "Check their words first." },
+                "join": { "status": "not-pinned" }
+            }
+        },
+        {
+            "name": "the-first-filing-in-the-document-wins",
+            "steps": [
+                {
+                    "document": {
+                        "contacts": [
+                            ["p4", { "pin": 5, "userId": "p4" }],
+                            ["P4", { "pin": 4 }]
+                        ]
+                    }
+                }
+            ],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "These are not the keys whose words were checked." },
+                "join": { "status": "not-pinned" }
+            }
+        },
+        {
+            "name": "contacts-null",
+            "steps": [{ "document": { "contacts": { "raw": null } } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": { "refused": "Check their words first." },
+                "join": { "status": "not-pinned" }
+            }
+        },
+        {
+            "name": "a-version-1-document-in-a-version-2-envelope",
+            "steps": [{ "document": { "version": 1 } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "a-family-pin-that-does-not-read",
+            "steps": [{ "document": { "groups": { "raw": { "junk": 1 } } } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": { "refused": "Invalid group pin." }
+            }
+        },
+        {
+            "name": "a-family-pin-of-null",
+            "steps": [{ "document": { "groups": { "raw": null } } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": {
+                    "refused": "These group keys have not been checked: compare the join code first."
+                }
+            }
+        },
+        {
+            "name": "groups-that-are-no-object",
+            "steps": [{ "document": { "groups": { "rawGroups": ["junk"] } } }],
+            "expected": {
+                "steps": ["opened"],
+                "accept": {
+                    "refused": "These group keys have not been checked: compare the join code first."
+                }
+            }
+        },
+        {
+            "name": "a-version-1-envelope",
+            "steps": [{ "envelope": "legacy" }],
+            "expected": {
+                "steps": ["legacy"],
+                "accept": { "refused": "Open your settings first." }
+            }
+        },
+        {
+            "name": "no-settings-stored",
+            "steps": [{ "envelope": "none" }],
+            "expected": {
+                "steps": ["none"],
+                "accept": {
+                    "refused": "These group keys have not been checked: compare the join code first."
+                }
+            }
+        },
+        {
+            "name": "none-after-settings-that-opened",
+            "steps": [{}, { "envelope": "none" }],
+            "expected": {
+                "steps": [
+                    "opened",
+                    {
+                        "refused": "The server sent older settings than this device has opened, so nothing was changed."
+                    }
+                ],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "a-version-1-envelope-after-settings-that-opened",
+            "steps": [{}, { "envelope": "legacy" }],
+            "expected": {
+                "steps": [
+                    "opened",
+                    {
+                        "refused": "The server sent older settings than this device has opened, so nothing was changed."
+                    }
+                ],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "a-settings-key-of-another-root",
+            "steps": [{ "key": "other-root" }],
+            "expected": {
+                "steps": [
+                    {
+                        "refused": "This encrypted key could not be opened. It may belong to a different account or version, or it may be damaged."
+                    }
+                ],
+                "accept": { "refused": "Open your settings first." }
+            }
+        },
+        {
+            "name": "a-damaged-document",
+            "steps": [{ "tamper": true }],
+            "expected": {
+                "steps": [
+                    {
+                        "refused": "This encrypted key could not be opened. It may belong to a different account or version, or it may be damaged."
+                    }
+                ],
+                "accept": { "refused": "Open your settings first." }
+            }
+        },
+        {
+            "name": "a-damaged-document-keeps-the-settings-before",
+            "steps": [{}, { "tamper": true, "document": { "contacts": [] } }],
+            "expected": {
+                "steps": [
+                    "opened",
+                    {
+                        "refused": "This encrypted key could not be opened. It may belong to a different account or version, or it may be damaged."
+                    }
+                ],
+                "accept": "accepted",
+                "admit": "staged",
+                "join": { "status": "code", "rosterVersion": 2 }
+            }
+        },
+        {
+            "name": "a-document-of-another-version",
+            "steps": [{ "document": { "version": 3 } }],
+            "expected": {
+                "steps": [{ "refused": "Unsupported settings document." }],
+                "accept": { "refused": "Open your settings first." }
+            }
+        },
+        {
+            "name": "an-envelope-of-another-version",
+            "steps": [{ "envelope": "version-3" }],
+            "expected": {
+                "steps": [{ "refused": "Unsupported settings envelope." }],
+                "accept": { "refused": "Open your settings first." }
+            }
+        },
+        {
+            "name": "no-settings-key",
+            "steps": [{ "key": "missing" }],
+            "expected": {
+                "steps": [{ "refused": "Open your settings key first." }],
+                "accept": { "refused": "Open your settings first." }
+            }
+        }
+    ],
+    "areas": [
+        {
+            "name": "a-current-self-grant-alone",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": { "version": 2, "key": [2, 2] },
+            "expected": { "from": "self-grant", "version": 2, "stored": null }
+        },
+        {
+            "name": "a-current-self-grant-when-the-granter-is-gone",
+            "area": "A3",
+            "served": 2,
+            "grant": { "key": [2, 2], "granterKey": false },
+            "selfGrant": { "version": 2, "key": [2, 2] },
+            "expected": { "from": "self-grant", "version": 2, "stored": null }
+        },
+        {
+            "name": "the-granter-gone-and-no-self-grant",
+            "area": "A3",
+            "served": 2,
+            "grant": { "key": [2, 2], "granterKey": false },
+            "selfGrant": null,
+            "expected": { "refused": "This grant needs the key of the person who made it." }
+        },
+        {
+            "name": "a-self-grant-from-before-the-rotation-gives-way-to-the-grant",
+            "area": "A3",
+            "served": 2,
+            "grant": { "key": [2, 2] },
+            "selfGrant": { "version": 1, "key": [2, 1] },
+            "expected": { "from": "grant", "version": 2, "stored": 2 }
+        },
+        {
+            "name": "a-self-grant-from-before-the-rotation-alone",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": { "version": 1, "key": [2, 1] },
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        },
+        {
+            "name": "a-stale-self-grant-the-server-serves-behind",
+            "area": "A3",
+            "served": 1,
+            "grant": null,
+            "selfGrant": { "version": 1, "key": [2, 1] },
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        },
+        {
+            "name": "the-server-ahead-of-the-self-grant",
+            "area": "A3",
+            "served": 3,
+            "grant": { "key": [2, 2] },
+            "selfGrant": { "version": 2, "key": [2, 2] },
+            "expected": { "from": "grant", "version": 2, "stored": null }
+        },
+        {
+            "name": "a-self-grant-beyond-the-listed-versions",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": { "version": 3, "key": [2, 2] },
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        },
+        {
+            "name": "another-family-s-self-grant",
+            "area": "A3",
+            "served": 2,
+            "grant": { "key": [2, 2] },
+            "selfGrant": { "version": 2, "key": [2, 2], "group": "other" },
+            "expected": { "from": "grant", "version": 2, "stored": 2 }
+        },
+        {
+            "name": "another-folder-s-self-grant",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": { "version": 2, "key": [2, 2], "area": "A1" },
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        },
+        {
+            "name": "a-self-grant-under-another-root",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": { "version": 2, "key": [2, 2], "root": "other" },
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        },
+        {
+            "name": "a-self-grant-of-another-key-gives-way-to-the-grant",
+            "area": "A3",
+            "served": 2,
+            "grant": { "key": [2, 2] },
+            "selfGrant": { "version": 2, "key": [2, 1] },
+            "expected": { "from": "grant", "version": 2, "stored": 2 }
+        },
+        {
+            "name": "a-damaged-self-grant",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": { "version": 2, "key": [2, 2], "envelopeVersion": 2 },
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        },
+        {
+            "name": "a-grant-of-the-older-key",
+            "area": "A3",
+            "served": 2,
+            "grant": { "key": [2, 1] },
+            "selfGrant": null,
+            "expected": { "from": "grant", "version": 1, "stored": null }
+        },
+        {
+            "name": "the-only-key-of-a-folder-never-rotated",
+            "area": "A1",
+            "served": 1,
+            "grant": { "key": [0, 1] },
+            "selfGrant": null,
+            "expected": { "from": "grant", "version": 1, "stored": 1 }
+        },
+        {
+            "name": "a-deleted-folder",
+            "area": "A2",
+            "served": 1,
+            "grant": null,
+            "selfGrant": null,
+            "expected": { "refused": "This folder is not on the family’s member list." }
+        },
+        {
+            "name": "a-folder-not-derived-under-the-family",
+            "area": "foreign",
+            "served": 1,
+            "grant": null,
+            "selfGrant": null,
+            "expected": { "refused": "This folder does not belong to the family." }
+        },
+        {
+            "name": "nothing-to-open-it-with",
+            "area": "A3",
+            "served": 2,
+            "grant": null,
+            "selfGrant": null,
+            "expected": { "refused": "Couldn’t check this folder’s keys. Reload to continue." }
+        }
+    ]
+}

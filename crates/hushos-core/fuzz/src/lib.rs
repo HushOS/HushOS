@@ -38,6 +38,11 @@ pub mod join;
 #[path = "../../tests/common/roster_calls.rs"]
 pub mod roster_calls;
 
+/// The settings document and family folders opened from route 25, run as the fixture tests run them.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/settings_areas.rs"]
+pub mod settings_areas;
+
 /// Runs `target` on `data` with every invariant asserted: what a fuzz target calls.
 pub fn check(target: &str, data: &[u8]) {
     targets::verdict(target, data).expect("a known target");

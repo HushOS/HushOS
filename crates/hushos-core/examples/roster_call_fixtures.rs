@@ -14,6 +14,8 @@ mod device_records;
 mod groups;
 #[path = "../tests/common/roster_calls.rs"]
 mod roster_calls;
+#[path = "../tests/common/settings_areas.rs"]
+mod settings_areas;
 
 use serde_json::json;
 use std::fs;
@@ -22,6 +24,10 @@ use std::path::PathBuf;
 fn main() {
     let mut document = json!({ "generatedBy": "crates/hushos-core/examples/roster_call_fixtures.rs" });
     for (key, value) in roster_calls::fixture().as_object().unwrap() {
+        document[key] = value.clone();
+    }
+    // Core 6: the settings this core sealed and the family folders it opened (settingsReadings, areaOpens).
+    for (key, value) in settings_areas::fixture().as_object().unwrap() {
         document[key] = value.clone();
     }
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
