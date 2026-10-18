@@ -212,6 +212,7 @@ export function MemberList({
     manager,
     names,
     needsCheck = [],
+    checking = false,
 }: {
     userId: string;
     groupId: string;
@@ -222,6 +223,11 @@ export function MemberList({
     names: Record<string, string>;
     /* Members whose new keys no signed link reaches: their words need comparing again. */
     needsCheck?: readonly string[];
+    /*
+     * A newer member list is being checked and `view` is the last one: a role change builds the
+     * member's next roles from it, so it waits until the check lands.
+     */
+    checking?: boolean;
 }) {
     const queryClient = useQueryClient();
     const [confirming, setConfirming] = useState<RoleChange | null>(null);
@@ -333,6 +339,7 @@ export function MemberList({
                                             <DropdownMenuGroup>
                                                 {roles.includes('members') ? (
                                                     <DropdownMenuItem
+                                                        disabled={checking}
                                                         onClick={() =>
                                                             setConfirming({ member, kind: 'stop' })
                                                         }
@@ -341,6 +348,7 @@ export function MemberList({
                                                     </DropdownMenuItem>
                                                 ) : (
                                                     <DropdownMenuItem
+                                                        disabled={checking}
                                                         onClick={() =>
                                                             setConfirming({
                                                                 member,
@@ -353,6 +361,7 @@ export function MemberList({
                                                 )}
                                                 {iAmOrganizer && !roles.includes('billing') && (
                                                     <DropdownMenuItem
+                                                        disabled={checking}
                                                         onClick={() =>
                                                             setConfirming({
                                                                 member,
@@ -394,6 +403,7 @@ export function MemberList({
                         <RoleConfirm
                             change={confirming}
                             family={family}
+                            checking={checking}
                             onConfirm={() => {
                                 const change = confirming;
                                 setConfirming(null);
@@ -439,10 +449,13 @@ function stageFailure(staged: StageOutcome, ctx: Parameters<typeof outcomeCopy>[
 function RoleConfirm({
     change,
     family,
+    checking,
     onConfirm,
 }: {
     change: RoleChange;
     family: string;
+    /* Opened before a newer member list turned up: confirming waits until it is checked. */
+    checking: boolean;
     onConfirm: () => void;
 }) {
     const who = firstName(change.member.name);
@@ -471,7 +484,9 @@ function RoleConfirm({
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <Button onClick={onConfirm}>{copy.action}</Button>
+                <Button disabled={checking} onClick={onConfirm}>
+                    {copy.action}
+                </Button>
             </AlertDialogFooter>
         </>
     );

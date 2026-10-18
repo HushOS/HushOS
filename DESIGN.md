@@ -442,6 +442,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
     - Family folders:
         - Family folders (a family's row under My files opens them; Members leads to the family's page)
         - New family folder
+        - Checking Lindqvist family’s member list (one quiet line on the family's page and its folder pages while a newer member list is checked, which a removal's key change can hold up; the page shows the family as last checked meanwhile, and role changes wait for the check; a fork, an error or not being in the family replaces the line)
         - Delete family folder (a folder row's menu, for managers; asks once: "Delete “Photos”?", "It disappears for everyone in Lindqvist family now. Its files are deleted from the server, normally after 30 days, and their space is freed when they are. Anyone who kept copies or keys keeps them, as after someone is removed. The folder can't be restored.", Delete)
     - Integrity and trust:
         - Verified by Lindqvist family (Info, for an item the family's member list vouched for)

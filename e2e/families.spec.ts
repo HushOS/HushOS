@@ -534,6 +534,24 @@ test.describe.serial('two people', () => {
                     for (const area of space.areas) area.workspaceKeyVersion += 1;
             await route.fulfill({ response, json: body });
         });
+        // Synced in place first: the folder stays on the page (never empty rows, never a fresh
+        // mount, which would lose the mark set here), and Add goes the moment it reads so.
+        const kept = sam.page.getByRole('navigation', { name: 'Folder path' });
+        await kept.evaluate((nav) => nav.setAttribute('data-kept', 'yes'));
+        const sync = () =>
+            sam.page.evaluate(() =>
+                document.dispatchEvent(new Event('visibilitychange', { bubbles: true })),
+            );
+        const add = sam.page.getByRole('button', { name: 'Add', exact: true });
+        await expect(add).toBeVisible();
+        await sync();
+        await expect(sam.page.locator('[data-area-state="keys-changed"]')).toBeVisible({
+            timeout: 90_000,
+        });
+        await expect(add).toHaveCount(0);
+        await expect(fileRow(sam.page, 'from-sam.txt')).toBeVisible();
+        await expect(kept).toHaveAttribute('data-kept', 'yes');
+        // And on a fresh load too.
         await sam.page.reload();
         await expect(sam.page.locator('[data-area-state="keys-changed"]')).toBeVisible({
             timeout: 90_000,
@@ -550,6 +568,14 @@ test.describe.serial('two people', () => {
         );
         await sam.page.keyboard.press('Escape');
         await sam.page.unroute(ahead);
+        // Synced in place again, the folder is writable and Add is back, on the same mount.
+        await kept.evaluate((nav) => nav.setAttribute('data-kept', 'yes'));
+        await sync();
+        await expect(sam.page.locator('[data-area-state="keys-changed"]')).toHaveCount(0, {
+            timeout: 90_000,
+        });
+        await expect(add).toBeVisible();
+        await expect(kept).toHaveAttribute('data-kept', 'yes');
 
         // My files is Sam's own: none of the family's files are listed there.
         await sam.page.goto('/app/drive');
@@ -660,11 +686,17 @@ async function hideKeyChanges(page: Page) {
 async function holdSpaces(page: Page) {
     let release!: () => void;
     const released = new Promise<void>((resolve) => (release = resolve));
+    let held = 0;
     await page.context().route('**/api/drive/spaces', async (route) => {
+        held++;
         await released;
         await route.fallback();
     });
-    return { release: async () => release() };
+    return {
+        /* Requests that reached the hold so far, released or not. */
+        held: () => held,
+        release: async () => release(),
+    };
 }
 
 /* The member list version this device last committed for its families (its stored record). */
@@ -910,12 +942,21 @@ test.describe.serial('removal, leaving and key changes', () => {
         // page still shows Trips as last synced while the new sync waits: never a blank page.
         await expect.poll(() => listed, { timeout: 45_000 }).toBeGreaterThan(committedBefore);
         ana.page.off('response', onFamilies);
+        // And the sync that version starts has reached the held listing, so the page is checked
+        // while that sync waits, not before it began. It queues behind the first sync's family
+        // lock, which lets go when that sync's held listing times out (30 s).
+        const heldBefore = spaces.held();
+        await expect.poll(spaces.held, { timeout: 60_000 }).toBeGreaterThan(heldBefore);
         await expect(
             ana.page
                 .getByRole('navigation', { name: 'Folder path' })
                 .getByRole('heading', { level: 1 }),
         ).toHaveText('Trips');
         await expect(fileRow(ana.page, 'trip.txt')).toBeVisible();
+        await expect(ana.page.locator('[data-family-checking]')).toHaveText(
+            `Checking ${family}’s member list`,
+        );
+        await ana.page.screenshot({ path: test.info().outputPath('checking-member-list.png') });
 
         // Ana uploads into Trips in that gap, while the walk is held there. Her device knows the
         // keys changed and has not listed the new top folder yet: a key change on its way, so
@@ -952,6 +993,9 @@ test.describe.serial('removal, leaving and key changes', () => {
         expect(uploads).toEqual([]);
         // The listing goes through: the wait goes on, now for the walk.
         await spaces.release();
+        await expect(ana.page.locator('[data-family-checking]')).toHaveCount(0, {
+            timeout: 60_000,
+        });
         await ana.page.waitForTimeout(6_000);
         await expect(late).toContainText('Finishing a key change…');
         // While the walk is held, no upload has been accepted: any begin the server saw was refused
