@@ -603,7 +603,7 @@ fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: (
             Fact("Kind", kindOf(item))
             item.size?.let { Fact("Size", formatBytes(it)) }
             whenText(item.modifiedMillis)?.let { Fact("Changed", it) }
-            created?.let { Fact("Created", it) }
+            created?.let { Fact("Added", it) }
             folder?.let { Fact("Folder", it, primary = true) }
             SheetDivider()
             // Who can open it, in words (never "Same as folder"), once it is known; it opens the share sheet.

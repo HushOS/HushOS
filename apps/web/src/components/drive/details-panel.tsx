@@ -2,7 +2,7 @@ import { contentSize, tagsOf, type DriveNode } from '@hushos/drive/client';
 import { integrityIssues, type IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
@@ -385,8 +385,14 @@ export function ItemDetails({
                 {version && (
                     <Fact label="Size">{size === null ? 'Unknown' : formatBytes(size)}</Fact>
                 )}
+                {/*
+                 * Two events on two clocks: Changed is the file's own last change, as the
+                 * uploader's device dated it (sealed with its name); Added is when it reached
+                 * HushOS, on the server's clock. Not "Created": the content usually changed
+                 * before it was added.
+                 */}
                 <Fact label="Changed">{formatWhen(node.metadata?.modified ?? node.updatedAt)}</Fact>
-                <Fact label="Created">{formatWhen(node.createdAt)}</Fact>
+                <Fact label="Added">{formatWhen(node.createdAt)}</Fact>
                 {location && <Fact label="Folder">{location}</Fact>}
                 {/* Only when something did not verify: a verified item says nothing about it. */}
                 {unverified.length > 0 && (
@@ -541,14 +547,70 @@ export function DetailsPanel({
     node: DriveNode | null;
     onClose: () => void;
 }) {
+    const panel = useRef<HTMLElement>(null);
+    const fitRef = useRef<() => void>(() => {});
+    /*
+     * Never taller than the room between where the panel starts and the foot of the page, so
+     * opening a section scrolls the panel and the page stays where it is. Where it starts depends
+     * on what sits above the list (a folder's notice, an access banner) and on how far the page
+     * has scrolled before the panel sticks, so it is measured rather than assumed. The selection
+     * bar's wrapper is kept out too: the panel ends above the bar, which floats across the page,
+     * and on a short list the panel would otherwise make the page scroll, scrolling would let it
+     * grow, and so on.
+     */
+    useLayoutEffect(() => {
+        const element = panel.current;
+        if (!element) return;
+        const sheet = element.closest<HTMLElement>('[data-scroll-restoration-id="app-sheet"]');
+        let frame = 0;
+        const fit = () => {
+            const bottom = sheet?.getBoundingClientRect().bottom ?? window.innerHeight;
+            const top = Math.max(element.getBoundingClientRect().top, 0);
+            const bar = (sheet ?? document).querySelector<HTMLElement>('[data-selection-room]');
+            // The floating bar's top, from the foot of the sheet: the wrapper's sticky offset plus its
+            // height, less its top padding (the gap above the bar, which the panel may use).
+            let below = 0;
+            if (bar) {
+                const style = getComputedStyle(bar);
+                below =
+                    (parseFloat(style.bottom) || 0) +
+                    bar.offsetHeight -
+                    (parseFloat(style.paddingTop) || 0);
+            }
+            // 12px below it, as beside and above it.
+            const room = Math.floor(bottom - top - 12 - below);
+            element.style.maxHeight = `${Math.max(room, 160)}px`;
+        };
+        fitRef.current = fit;
+        const schedule = () => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(fit);
+        };
+        fit();
+        const scroller = sheet ?? window;
+        scroller.addEventListener('scroll', schedule, { passive: true });
+        window.addEventListener('resize', schedule);
+        // A notice appearing or going above the list moves the panel without any scroll. The
+        // view keeps at least the sheet's height, so on a short list the notice shrinks the row
+        // the panel sits in (it fills the rest) rather than the view: both are watched.
+        const observer = new ResizeObserver(schedule);
+        for (const box of [element.parentElement, element.parentElement?.parentElement])
+            if (box) observer.observe(box);
+        return () => {
+            cancelAnimationFrame(frame);
+            scroller.removeEventListener('scroll', schedule);
+            window.removeEventListener('resize', schedule);
+            observer.disconnect();
+        };
+    }, []);
+    // A selection made or cleared brings the bar's wrapper or takes it away: measured again.
+    useLayoutEffect(() => fitRef.current());
     return (
         <aside
+            ref={panel}
             aria-label="Details"
             data-details=""
-            // Never taller than the room beneath the header and the folder's two lines, so opening a
-            // section scrolls the panel and the page stays where it is; and while the selection bar
-            // floats at the foot of the page, it ends above it rather than under it.
-            className="sticky top-3 m-3 ml-0 flex max-h-[calc(100svh-12.5rem-var(--selection-room,0px))] w-[320px] shrink-0 transform-gpu flex-col self-start overflow-y-auto overscroll-contain rounded-2xl border border-rule bg-card text-card-foreground shadow-md will-change-transform"
+            className="sticky top-3 m-3 ml-0 flex max-h-[calc(100svh-12.5rem)] w-[320px] shrink-0 transform-gpu flex-col self-start overflow-y-auto overscroll-contain rounded-2xl border border-rule bg-card text-card-foreground shadow-md will-change-transform"
         >
             <div className="flex items-center justify-between gap-2 py-2 pr-2 pl-4">
                 <p className="text-sm font-semibold text-muted-foreground">Info</p>

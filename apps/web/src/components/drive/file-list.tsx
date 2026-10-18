@@ -435,7 +435,10 @@ export function CornerCheck({
  * The floating bar for whatever is selected: dark, at the foot of the view, the
  * count first and a way out last. It sticks to the bottom of the window while
  * the list scrolls under it, sits at the foot of a short list, and rises above
- * the Transfers panel while that is open.
+ * the Transfers panel while that is open. The Info panel ends above it
+ * (DetailsPanel), so the bar never covers its last rows. Its labels show where
+ * they fit: all of them, then only the main actions' (the `secondary` ones go
+ * first), then none, the icons keeping their tooltips.
  */
 export function SelectionBar({
     label,
@@ -463,16 +466,34 @@ export function SelectionBar({
                         `${element.offsetHeight + bottom}px`,
                     );
                 };
+                // Measured, not guessed from the width: a bar's actions differ by place (a trash
+                // bar, a read-only family folder), so only trying the labels says whether they fit.
+                const toolbar = element.querySelector<HTMLElement>('[data-selection-bar]');
+                const fitLabels = () => {
+                    if (!toolbar) return;
+                    for (const labels of ['all', 'main', 'none']) {
+                        element.dataset.labels = labels;
+                        if (toolbar.scrollWidth <= toolbar.clientWidth) return;
+                    }
+                };
+                fitLabels();
                 measure();
-                const observer = new ResizeObserver(measure);
+                const observer = new ResizeObserver(() => {
+                    fitLabels();
+                    measure();
+                });
                 observer.observe(element);
+                // The toolbar's own size moves with its words (a count, the font arriving).
+                if (toolbar) observer.observe(toolbar);
                 return () => {
                     observer.disconnect();
                     root.style.removeProperty('--selection-lift');
                     root.style.removeProperty('--selection-room');
                 };
             }}
-            className="pointer-events-none sticky bottom-4 z-30 mt-auto flex justify-center px-4 pt-4 sm:bottom-6"
+            // The Info panel keeps this wrapper's height out of its own (DetailsPanel).
+            data-selection-room=""
+            className="group/selection pointer-events-none sticky bottom-4 z-30 mt-auto flex justify-center px-4 pt-4 sm:bottom-6"
         >
             <div
                 role="toolbar"
@@ -502,6 +523,7 @@ export function SelectionAction({
     icon: Icon,
     label,
     iconOnly = false,
+    secondary = false,
     className,
     ...props
 }: {
@@ -509,6 +531,8 @@ export function SelectionAction({
     label: string;
     /* Never show the label, only the icon and its tooltip. */
     iconOnly?: boolean;
+    /* Its label goes before the main actions' when the bar is short of room. */
+    secondary?: boolean;
 } & Omit<ComponentProps<'button'>, 'children'>) {
     return (
         <button
@@ -516,13 +540,22 @@ export function SelectionAction({
             aria-label={label}
             title={label}
             className={cn(
-                'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground disabled:cursor-default disabled:opacity-40 aria-expanded:bg-secondary-foreground/10 xl:px-3',
+                'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground disabled:cursor-default disabled:opacity-40 aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
                 className,
             )}
             {...props}
         >
             <Icon className="size-[18px] shrink-0" strokeWidth={2} aria-hidden="true" />
-            {!iconOnly && <span className="max-xl:sr-only">{label}</span>}
+            {!iconOnly && (
+                <span
+                    className={cn(
+                        'group-data-[labels=none]/selection:sr-only',
+                        secondary && 'group-data-[labels=main]/selection:sr-only',
+                    )}
+                >
+                    {label}
+                </span>
+            )}
         </button>
     );
 }
