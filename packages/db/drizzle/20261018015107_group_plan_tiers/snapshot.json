@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "32269d70-0b4d-47c1-93ea-80321a1e4c48",
+    "id": "e68cd747-46a0-427e-8205-b425e6b28faa",
     "prevIds": ["b2b2b243-cb3c-4c68-b2af-08c7a14f3a6e"],
     "ddl": [
         {
@@ -5904,6 +5904,19 @@
             "generated": null,
             "identity": null,
             "name": "reissue_gave_up_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "reissue_stuck_reason",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

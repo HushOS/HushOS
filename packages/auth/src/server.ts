@@ -1055,6 +1055,7 @@ export async function getAdminOverview(sessionToken: string | null) {
             groupId: row.groupId,
             subscriptionId: row.subscriptionId,
             wanted: row.wanted,
+            reason: row.reason,
             since: row.since?.toISOString() ?? null,
         })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },

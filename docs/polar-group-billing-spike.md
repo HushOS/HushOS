@@ -721,6 +721,14 @@ Each has 4 members included, `minimum_units: 4`, and 1.50 USD or ₹59 per extra
     - **Tax** is 18% (GST from the payer's Indian address) on each order.
     - **Which card paid** is not visible (`payments:read` is missing). The only card on file is the payer's 4242.
 
+### Order shape for the paid tier (2026-10-18)
+
+HushOS reads a family's paid tier from its newest paid order (groups-design 3.5). A sandbox check confirmed what that relies on:
+
+- **A product-change order names the new product at the order level.** `product_id` (and the nested `product`) is the new tier, `billing_reason` is `subscription_update`, `status` is `paid`, `paid` is `true` and `refunded_amount` is 0. Its line items carry price ids only: the credit lines map to the old product's prices and the charge lines to the new one's.
+- **A 100%-off checkout order is paid.** `status` is `paid`, `paid` is `true`, `net_amount` is 0.
+- **A refunded order's shape is unverified**: the token has no refunds scopes. HushOS treats an order as refunded whole when its `status` is `refunded` or its `refunded_amount` reaches its `net_amount`, and counts a partly refunded one as still paying for its tier. Check this against a real refund before relying on it.
+
 ### Design consequences for groups-design 3.5
 
 1. **Charge for a raise before admitting the member, and treat a 402 as "nothing happened".** A failed off-session raise leaves `units`, status and orders untouched (E8 step 2). HushOS admits only after a 200, and on a 402 has nothing to roll back. This was observed for `PaymentFailed`; `PaymentActionRequired` is unreproduced.

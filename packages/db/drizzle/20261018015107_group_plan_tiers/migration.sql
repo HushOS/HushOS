@@ -1,6 +1,6 @@
 -- Family tiers (PR #65). This replaces 20261017234809, 20261018002318, 20261018004401,
--- 20261018010343 and 20261018011558 (all named group_plan_tiers), which were never merged: a local
--- database that ran any of them must be reset (drop it, or those columns of
+-- 20261018010343, 20261018011558 and 20261018013257 (all named group_plan_tiers), which were never
+-- merged: a local database that ran any of them must be reset (drop it, or those columns of
 -- group_billing_subscriptions and the drizzle.__drizzle_migrations row) before migrating.
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "pending_product_id" text;--> statement-breakpoint
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "intended_product_id" text;--> statement-breakpoint
@@ -13,6 +13,7 @@ ALTER TABLE "group_billing_subscriptions" ADD COLUMN "reissued_state" text;--> s
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "reissue_attempts" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "reissue_retry_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "reissue_gave_up_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "group_billing_subscriptions" ADD COLUMN "reissue_stuck_reason" text;--> statement-breakpoint
 -- Rows from before: what they hold is what was paid for, unless no place was (paid_units = 0).
 UPDATE "group_billing_subscriptions" SET
     "paid_product_id" = CASE WHEN "paid_units" = 0 THEN NULL ELSE "product_id" END,

@@ -501,11 +501,22 @@ export async function claimReissueRetry(subscriptionId: string, until: Date) {
     return rows.length === 1;
 }
 
-/* Marks (or, with null, clears) that HushOS gave up re-issuing a family's pending update. */
-export async function setReissueGaveUp(subscriptionId: string, at: Date | null) {
+/*
+ * Marks (or, with null, clears) a family's plan change HushOS can't make, and why
+ * (`not-kept`, `revert-unavailable`): the operators' list on the management page.
+ */
+export async function setReissueGaveUp(
+    subscriptionId: string,
+    at: Date | null,
+    reason: 'not-kept' | 'revert-unavailable' | null = null,
+) {
     await db
         .update(groupBillingSubscriptions)
-        .set({ reissueGaveUpAt: at, updatedAt: new Date() })
+        .set({
+            reissueGaveUpAt: at,
+            reissueStuckReason: at === null ? null : reason,
+            updatedAt: new Date(),
+        })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
@@ -524,6 +535,7 @@ export async function listGivenUpReissues() {
             groupId: groupBillingSubscriptions.groupId,
             subscriptionId: groupBillingSubscriptions.id,
             wanted: groupBillingSubscriptions.reissuedState,
+            reason: groupBillingSubscriptions.reissueStuckReason,
             since: groupBillingSubscriptions.reissueGaveUpAt,
         })
         .from(groupBillingSubscriptions)

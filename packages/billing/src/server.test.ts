@@ -186,6 +186,7 @@ const polar = {
         product_id?: string | null;
         billing_reason?: string;
         refunded_amount?: number;
+        net_amount?: number;
         /* Made, but not listed yet (Polar's listing lagging the change). */
         hidden?: boolean;
     }[],
@@ -201,6 +202,7 @@ const polar = {
         product_id: string;
         billing_reason: string;
         refunded_amount?: number;
+        net_amount?: number;
         hidden?: boolean;
     }[],
     calls: [] as string[],
@@ -517,11 +519,14 @@ const fakeClient = {
                             // `created_after` is taken loosely here: HushOS checks dates itself.
                             (!query.product_id || order.product_id === query.product_id),
                     )
+                    // As Polar keeps them: a refunded order stays paid, with its refunds counted;
+                    // one refunded whole is marked so. `net_amount` is what it charged.
                     .map((order) => ({
                         billing_reason: 'subscription_update',
                         refunded_amount: 0,
+                        net_amount: order.status === 'pending' ? order.due_amount : 1000,
                         ...order,
-                        paid: order.status === 'paid',
+                        paid: ['paid', 'partially_refunded', 'refunded'].includes(order.status),
                     })),
                 pagination: { total_count: 0, max_page: 1 },
             };
@@ -2913,12 +2918,22 @@ describe('family tiers', () => {
         });
     });
 
-    test('a refunded newest order falls back to the one paid before it', async () => {
+    test('a partial refund keeps the tier; a refund in full falls back to the order paid before', async () => {
         const { payer, groupId } = await familyOnPlan({ product: PLUS });
         await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
         expect(await pool(groupId)).toBe(MAX_POOL);
-        // Polar refunds the upgrade (support, a dispute): back to Family Plus's pool.
-        polar.orders.find((order) => order.product_id === MAX_FAMILY)!.refunded_amount = 1000;
+        const upgrade = polar.orders.find((order) => order.product_id === MAX_FAMILY)!;
+        // A goodwill credit of 3.00 of the 10.00: the upgrade still pays for Family Max.
+        upgrade.status = 'partially_refunded';
+        upgrade.refunded_amount = 300;
+        await billing.reconcileGroup(groupId);
+        expect(await pool(groupId)).toBe(MAX_POOL);
+        // Refunded whole (support, a dispute): back to Family Plus's pool, by either sign.
+        upgrade.refunded_amount = 1000;
+        await billing.reconcileGroup(groupId);
+        expect(await pool(groupId)).toBe(PLUS_POOL);
+        upgrade.refunded_amount = 0;
+        upgrade.status = 'refunded';
         await billing.reconcileGroup(groupId);
         expect(await pool(groupId)).toBe(PLUS_POOL);
         expect(await live(groupId)).toMatchObject({ productId: MAX_FAMILY, paidProductId: PLUS });
@@ -3299,6 +3314,7 @@ describe('family tiers', () => {
                 groupId,
                 subscriptionId,
                 wanted: JSON.stringify({ units: null, product: PLUS }),
+                reason: 'not-kept',
                 since: expect.any(Date),
             },
         ]);
@@ -3386,5 +3402,98 @@ describe('family tiers', () => {
         polar.ignoresMoves = false;
         await billing.reissueCut(groupId);
         expect((await live(groupId))?.reissueAttempts).toBe(0);
+    });
+
+    test('an old unpaid order for the same tier doesn’t start the clock on a fresh upgrade', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS });
+        // Months ago an upgrade to Family Max was never paid (and was reverted).
+        polar.orders.push({
+            id: 'order_old_max',
+            subscription_id: subscription.id,
+            status: 'pending',
+            due_amount: 1000,
+            created_at: new Date(Date.now() - 90 * DAY).toISOString(),
+            product_id: MAX_FAMILY,
+            billing_reason: 'subscription_update',
+        });
+        polar.raiseLeavesOrder = true;
+        await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        polar.raiseLeavesOrder = false;
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update ?? null).toBeNull();
+        expect(Date.now() - (await live(groupId))!.tierMismatchSince!.getTime()).toBeLessThan(DAY);
+    });
+
+    test('a refund since the last reconcile is read before a place is bought', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({
+            product: PLUS,
+            units: 4,
+            members: 3,
+        });
+        await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        expect((await live(groupId))?.paidProductId).toBe(MAX_FAMILY);
+        // Refunded at Polar; no delivery has arrived yet.
+        const upgrade = polar.orders.find((order) => order.product_id === MAX_FAMILY)!;
+        upgrade.status = 'refunded';
+        upgrade.refunded_amount = 1000;
+        await setTestMember({
+            groupId,
+            userId: (await createTestAccount()).userId,
+            state: 'accepted',
+        });
+        polar.calls = [];
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        expect(raises()).toEqual([]);
+        expect(subscription.units).toBe(4);
+        expect((await live(groupId))?.paidProductId).toBe(PLUS);
+    });
+
+    test('an unpaid upgrade whose paid plan is no longer offered stays small and goes to operators', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS });
+        polar.raiseLeavesOrder = true;
+        await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        polar.raiseLeavesOrder = false;
+        polar.orders.find((order) => order.product_id === MAX_FAMILY)!.created_at = new Date(
+            Date.now() - 8 * DAY,
+        ).toISOString();
+        const plus = polar.products.find((candidate) => candidate.id === PLUS)!;
+        const clock = vi.spyOn(Date, 'now');
+        catalogueClock += 10 * 60_000;
+        try {
+            plus.is_archived = true;
+            clock.mockReturnValue(new Date().getTime() + catalogueClock);
+            polar.calls = [];
+            for (let index = 0; index < 3; index++) await billing.reconcileGroup(groupId);
+            // No move back to a plan not on sale, and no loop asking for one.
+            expect(updates()).toEqual([]);
+            expect(subscription.pending_update ?? null).toBeNull();
+            expect((await live(groupId))?.intendedProductId).toBeNull();
+            expect(await pool(groupId)).toBe(PLUS_POOL);
+            expect(await billingRepository.listGivenUpReissues()).toEqual([
+                expect.objectContaining({ groupId, reason: 'revert-unavailable' }),
+            ]);
+            // Paid after all: no longer stuck.
+            polar.orders.find((order) => order.product_id === MAX_FAMILY)!.status = 'paid';
+            await billing.reconcileGroup(groupId);
+            expect(await billingRepository.listGivenUpReissues()).toEqual([]);
+            expect(await pool(groupId)).toBe(MAX_POOL);
+        } finally {
+            plus.is_archived = false;
+            clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+            await billing.listCatalogue();
+            clock.mockRestore();
+        }
+    });
+
+    test('a 100%-off checkout, which charged nothing, pays for its tier', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
+        familySubscription(groupId, { product_id: PRO_FAMILY, units: 4, amount: 0 });
+        // As the sandbox showed: paid, net 0, nothing refunded.
+        polar.checkoutOrders[0]!.net_amount = 0;
+        await billing.reconcileGroup(groupId);
+        expect(await pool(groupId)).toBe(FAMILY_POOL);
+        expect((await live(groupId))?.paidProductId).toBe(PRO_FAMILY);
     });
 });

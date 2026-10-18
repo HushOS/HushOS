@@ -152,6 +152,18 @@ async function orderState(subscriptionId: string) {
     }
 }
 
+/*
+ * An order refunded whole: Polar marks it `refunded`, or its refunds reach what it
+ * charged. A partial refund (a goodwill credit) leaves it paying for its tier; an
+ * order that charged nothing (a 100%-off checkout) is never "refunded" by being free.
+ */
+function fullyRefunded(order: models.Order) {
+    return (
+        order.status === 'refunded' ||
+        (order.refunded_amount > 0 && order.refunded_amount >= order.net_amount)
+    );
+}
+
 /* The orders that pay for a tier: a checkout, a renewal, a change. */
 const TIER_ORDER_REASONS = new Set([
     'subscription_create',
@@ -163,7 +175,7 @@ const TIER_ORDER_REASONS = new Set([
  * The tier a subscription has paid for, re-derived from Polar's orders: the
  * product of its newest paid, unrefunded checkout, renewal or change order
  * (newest by when it was made), and that product's pool. Pending orders don't
- * count, nor refunded ones (any refund). So a paid upgrade gives its tier, an
+ * count, nor orders refunded whole (a partial refund still pays for the tier). So a paid upgrade gives its tier, an
  * unpaid one leaves the last paid order's tier in force, and a paid renewal of
  * the bigger tier gives it whatever change order still waits. A raise is a
  * change order for the product it was made on, which places are refused off
@@ -207,7 +219,7 @@ async function tierStateOf(
         .filter(
             (order) =>
                 order.paid &&
-                order.refunded_amount === 0 &&
+                !fullyRefunded(order) &&
                 TIER_ORDER_REASONS.has(order.billing_reason) &&
                 catalogue.some((candidate) => candidate.id === order.product_id),
         )
@@ -219,12 +231,16 @@ async function tierStateOf(
     if (!paidTier || BigInt(plan.quotaBytes) <= paidTier.quotaBytes)
         return { known: true, paidTier, mismatchSince: null };
     const row = await billingRepository.getGroupSubscription(subscription.id);
+    // Only change orders made since the tier paid for: an old one left unpaid months ago (an
+    // upgrade that was reverted) doesn't start the clock on a fresh upgrade to the same tier.
+    const paidAt = newest ? Date.parse(newest.created_at) : 0;
     const unpaid = orders
         .filter(
             (order) =>
                 !order.paid &&
                 order.billing_reason === 'subscription_update' &&
-                order.product_id === subscription.product_id,
+                order.product_id === subscription.product_id &&
+                Date.parse(order.created_at) > paidAt,
         )
         .map((order) => Date.parse(order.created_at))
         .filter((at) => !Number.isNaN(at));
@@ -362,19 +378,39 @@ export async function reconcileGroup(groupId: string) {
         // a renewal never bills it. The payer's own move at or below that tier stands. Withdrawn
         // by reissueCut as soon as the tier paid for matches the product.
         const tier = { productId: live.paidProductId, quotaBytes: paidTier(live).quotaBytes };
-        log.warn({
-            message: 'Unconfirmed upgrade reverted at the period end',
-            billing: { group: groupId, product: live.productId, paid: tier.productId },
-        });
+        const catalogue = await getFamilyCatalogue();
+        const back = catalogue.find((candidate) => candidate.id === tier.productId);
         const own = live.intendedProductId
-            ? (await getFamilyCatalogue()).find(
-                  (candidate) => candidate.id === live?.intendedProductId,
-              )
+            ? catalogue.find((candidate) => candidate.id === live?.intendedProductId)
             : undefined;
-        if (!own || BigInt(own.quotaBytes) > tier.quotaBytes) {
+        if (!back || !offeredFamilies(catalogue).includes(back)) {
+            // Nothing to move back to: the family stays at the smaller storage (the pool is the
+            // lesser of the two) and an operator is told, once; nothing is scheduled or retried.
+            if (live.reissueStuckReason !== 'revert-unavailable') {
+                log.error({
+                    message: 'Unconfirmed upgrade can’t be reverted: its paid plan is not offered',
+                    billing: { group: groupId, product: live.productId, paid: tier.productId },
+                });
+                await billingRepository.setReissueGaveUp(
+                    live.id,
+                    new Date(Date.now()),
+                    'revert-unavailable',
+                );
+            }
+        } else if (!own || BigInt(own.quotaBytes) > tier.quotaBytes) {
+            log.warn({
+                message: 'Unconfirmed upgrade reverted at the period end',
+                billing: { group: groupId, product: live.productId, paid: tier.productId },
+            });
             await billingRepository.setIntendedProduct(live.id, tier.productId, true);
             live = await billingRepository.getLiveGroupSubscription(groupId);
         }
+    } else if (
+        live?.reissueStuckReason === 'revert-unavailable' &&
+        paidTier(live).quotaBytes >= live.quotaBytes
+    ) {
+        // Paid after all, or moved by hand: no longer stuck.
+        await billingRepository.setReissueGaveUp(live.id, null);
     }
     // The raise the stale rule cut back was paid after all: withdraw that cut, re-issue nothing.
     if (live?.intendedStale && live.paidUnits >= live.units) {
@@ -695,7 +731,7 @@ export async function reissueCut(groupId: string, options: { fromReconcile?: boo
     // front of an operator (the management page), rather than ask again for ever.
     if (again && live.reissueAttempts >= MAX_REISSUES) {
         if (!live.reissueGaveUpAt) {
-            await billingRepository.setReissueGaveUp(live.id, new Date(Date.now()));
+            await billingRepository.setReissueGaveUp(live.id, new Date(Date.now()), 'not-kept');
             log.error({
                 message: 'Family plan’s scheduled change given up: Polar would not keep it',
                 billing: { group: groupId, wanted: want, held, attempts: live.reissueAttempts },
@@ -1090,6 +1126,9 @@ async function changePlaces(
     // No raise on top of an upgrade the bank hasn't confirmed: the two orders never interleave.
     // Polar's product, just read, against the tier paid for: a row a failed write left behind
     // can't open a place.
+    // The tier paid for is read from Polar's orders now, not taken from the row: a refund
+    // since the last reconcile can't leave a place open.
+    if (!(await applyChanged(groupId, subscription, false))) return { status: 'no-plan' };
     const row = await billingRepository.getLiveGroupSubscription(groupId);
     if (row && subscription.product_id !== paidTier(row).productId)
         return { status: 'confirm', url: null };

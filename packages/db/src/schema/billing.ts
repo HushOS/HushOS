@@ -191,6 +191,12 @@ export const groupBillingSubscriptions = pgTable(
          * keep): shown to operators on the management page until Polar holds the change.
          */
         reissueGaveUpAt: timestamp('reissue_gave_up_at', { withTimezone: true }),
+        /*
+         * Why: `not-kept` (Polar answered 200 and kept nothing, MAX_REISSUES times) or
+         * `revert-unavailable` (an unpaid upgrade past STALE_RAISE_DAYS whose paid tier is no
+         * longer offered, so there is nothing to move it back to).
+         */
+        reissueStuckReason: text('reissue_stuck_reason'),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),

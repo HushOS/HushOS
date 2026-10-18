@@ -88,6 +88,13 @@ function StatGrid({ stats }: { stats: Stat[] }) {
 
 const count = (value: number) => value.toLocaleString();
 
+/* Why a family's plan change is stuck, by the reason billing records. */
+const stuckReasons: Record<string, string> = {
+    'not-kept': 'Polar accepted the change five times and kept none of it.',
+    'revert-unavailable':
+        'An upgrade unpaid for over a week, and the plan it was paid for is no longer offered, so it can’t be moved back. The family keeps the smaller storage meanwhile.',
+};
+
 function AdminPage() {
     const overview = useQuery(adminOverviewQueryOptions);
     const billing = useBillingEnabled();
@@ -258,6 +265,7 @@ function AdminPage() {
                                         <th className={th}>Family</th>
                                         <th className={th}>Polar subscription</th>
                                         <th className={th}>Wanted at renewal</th>
+                                        <th className={th}>Why</th>
                                         <th className={th}>Since</th>
                                     </tr>
                                 </thead>
@@ -267,6 +275,11 @@ function AdminPage() {
                                             <td className={td}>{row.groupId}</td>
                                             <td className={td}>{row.subscriptionId}</td>
                                             <td className={td}>{row.wanted ?? '–'}</td>
+                                            <td className={cn(td, 'font-sans')}>
+                                                {stuckReasons[row.reason ?? ''] ??
+                                                    row.reason ??
+                                                    '–'}
+                                            </td>
                                             <td className={cn(td, 'tabular-nums')}>
                                                 {row.since ? formatWhen(row.since) : '–'}
                                             </td>
@@ -275,9 +288,9 @@ function AdminPage() {
                                 </tbody>
                             </OperatorTable>
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
-                                Polar accepted these scheduled changes five times and kept none of
-                                them, so HushOS stopped asking. Set the change on the subscription
-                                in Polar’s dashboard; the row goes once Polar holds it.
+                                HushOS can’t make these plan changes itself. Set the change on the
+                                subscription in Polar’s dashboard; the row goes once the plan is as
+                                it should be.
                             </p>
                         </>
                     )}
