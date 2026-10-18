@@ -3,8 +3,9 @@
  * header, the footer, the logo, Geist and the one primary action) and wears its
  * own ground, ink and motif: the home page is sealed in Hush blue, the blog is
  * an engineer's notebook, About is a letter, Security is a blueprint, Pricing is
- * bright, Teams is an office, an offer (/go) is a voucher, an invite (/r) is a
- * card with a seat kept for you and a comparison (/vs) is a scoreboard. The app
+ * bright, Teams is an office, the roadmap is a trail map, an offer (/go) is a
+ * voucher, an invite (/r) is a card with a seat kept for you and a comparison
+ * (/vs) is a scoreboard. The app
  * under /app, the auth pages and the legal pages wear no identity; a shared link
  * asking for its password has the auth pages' panel. See DESIGN.md → Dither.
  *
@@ -122,6 +123,16 @@
         --id-ink-muted: light-dark(#4c5c54, var(--ink-muted));
         --id-quiet: light-dark(#e1e9e4, color-mix(in oklab, var(--ink) 7%, var(--surface)));
         --id-rule: light-dark(#cbd8d0, var(--rule));
+    }
+
+    /* Trail map: pale mint, the ground of a map with the way ahead marked on it. */
+    :is(:root:not(.hc) [data-identity='roadmap'], :root:not(.hc):has([data-identity='roadmap'])) {
+        --id-ground: light-dark(#eaf6ef, var(--ground));
+        --id-raised: light-dark(#ffffff, var(--surface));
+        --id-ink: light-dark(#11241a, var(--ink));
+        --id-ink-muted: light-dark(#475c50, var(--ink-muted));
+        --id-quiet: light-dark(#dbede2, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#c3decd, var(--rule));
     }
 
     /* Voucher: pale lime, the colour of the offer's ticket. */
@@ -367,6 +378,16 @@ h2:hover > .heading-anchor,
     .heading-anchor {
         display: none;
     }
+}
+
+/* ── Roadmap ──────────────────────────────────────────────────────────── */
+
+/* Each item's own link, beside its title on hover or focus, as a post's sections have. */
+[data-identity='roadmap'] article h3 {
+    position: relative;
+}
+h3:hover > .heading-anchor {
+    opacity: 1;
 }
 
 /* ── About ────────────────────────────────────────────────────────────── */

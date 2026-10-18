@@ -10,6 +10,7 @@ const pages = [
     '/blog',
     ...posts.map((post) => `/blog/${post.slug}`),
     '/security',
+    '/roadmap',
     '/pricing',
     '/terms',
     '/privacy',

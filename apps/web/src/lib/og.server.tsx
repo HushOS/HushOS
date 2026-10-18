@@ -63,6 +63,14 @@ const fixed: Record<string, Card> = {
         ground: '#eef3f0',
         art: { word: 'TEAMS', tone: 'sage' },
     },
+    roadmap: {
+        title: 'What’s shipped,\nand what’s next.',
+        description:
+            'What HushOS has shipped, what is being built now, and what is planned. It changes as work ships.',
+        label: 'HushOS · Roadmap',
+        ground: '#eaf6ef',
+        art: { word: 'AHEAD', tone: 'mint' },
+    },
     blog: {
         title: 'The HushOS blog.',
         description: 'Notes on how HushOS protects your data, and what is being built next.',

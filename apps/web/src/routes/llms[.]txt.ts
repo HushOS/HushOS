@@ -62,6 +62,7 @@ ${plans}
 - [About](${origin}/about): what HushOS is, why it exists, what it promises
 ${comparisons.map((entry) => `- [HushOS vs ${entry.name}](${origin}/vs/${entry.slug}): HushOS compared with ${entry.name}`).join('\n')}
 - [Security](${origin}/security): security model (sign-in, keys, Drive, sharing, reports)
+- [Roadmap](${origin}/roadmap): what has shipped, what is being built now, and what is planned
 - [Pricing](${origin}/pricing): plans and prices
 - [Design guidelines](${origin}/design.md): DESIGN.md format
 - [Terms of Service](${origin}/terms)

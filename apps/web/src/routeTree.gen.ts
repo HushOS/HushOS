@@ -22,6 +22,7 @@ import { Route as PricingRouteRouteImport } from './routes/pricing/route'
 import { Route as PrivacyRouteRouteImport } from './routes/privacy/route'
 import { Route as RecoverRouteRouteImport } from './routes/recover/route'
 import { Route as RegisterRouteRouteImport } from './routes/register/route'
+import { Route as RoadmapRouteRouteImport } from './routes/roadmap/route'
 import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
 import { Route as SecurityRouteRouteImport } from './routes/security/route'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
@@ -140,6 +141,11 @@ const RecoverRouteRoute = RecoverRouteRouteImport.update({
 const RegisterRouteRoute = RegisterRouteRouteImport.update({
   id: '/register',
   path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RoadmapRouteRoute = RoadmapRouteRouteImport.update({
+  id: '/roadmap',
+  path: '/roadmap',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
@@ -458,6 +464,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
+  '/roadmap': typeof RoadmapRouteRoute
   '/security': typeof SecurityRouteRoute
   '/support': typeof SupportRouteRoute
   '/teams': typeof TeamsRouteRoute
@@ -524,6 +531,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
+  '/roadmap': typeof RoadmapRouteRoute
   '/security': typeof SecurityRouteRoute
   '/support': typeof SupportRouteRoute
   '/teams': typeof TeamsRouteRoute
@@ -590,6 +598,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
+  '/roadmap': typeof RoadmapRouteRoute
   '/security': typeof SecurityRouteRoute
   '/support': typeof SupportRouteRoute
   '/teams': typeof TeamsRouteRoute
@@ -662,6 +671,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/recover'
     | '/register'
+    | '/roadmap'
     | '/security'
     | '/support'
     | '/teams'
@@ -728,6 +738,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/pricing'
     | '/privacy'
+    | '/roadmap'
     | '/security'
     | '/support'
     | '/teams'
@@ -793,6 +804,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/recover'
     | '/register'
+    | '/roadmap'
     | '/security'
     | '/support'
     | '/teams'
@@ -864,6 +876,7 @@ export interface RootRouteChildren {
   PrivacyRouteRoute: typeof PrivacyRouteRoute
   RecoverRouteRoute: typeof RecoverRouteRouteWithChildren
   RegisterRouteRoute: typeof RegisterRouteRouteWithChildren
+  RoadmapRouteRoute: typeof RoadmapRouteRoute
   SecurityRouteRoute: typeof SecurityRouteRoute
   SupportRouteRoute: typeof SupportRouteRoute
   TeamsRouteRoute: typeof TeamsRouteRoute
@@ -978,6 +991,13 @@ declare module '@tanstack/react-router' {
       path: '/register'
       fullPath: '/register'
       preLoaderRoute: typeof RegisterRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/roadmap': {
+      id: '/roadmap'
+      path: '/roadmap'
+      fullPath: '/roadmap'
+      preLoaderRoute: typeof RoadmapRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/robots.txt': {
@@ -1544,6 +1564,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRouteRoute: PrivacyRouteRoute,
   RecoverRouteRoute: RecoverRouteRouteWithChildren,
   RegisterRouteRoute: RegisterRouteRouteWithChildren,
+  RoadmapRouteRoute: RoadmapRouteRoute,
   SecurityRouteRoute: SecurityRouteRoute,
   SupportRouteRoute: SupportRouteRoute,
   TeamsRouteRoute: TeamsRouteRoute,
