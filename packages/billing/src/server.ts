@@ -41,6 +41,7 @@ export {
     quoteUnitsChange,
     reconcileGroup,
     reissueCut,
+    seatError,
     setCutRetryQueue,
     setGroupUnits,
     spaceOf,

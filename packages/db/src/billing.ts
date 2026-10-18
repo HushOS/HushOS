@@ -521,29 +521,37 @@ export async function setReissueGaveUp(
 }
 
 /*
- * Claims the family's one plan change (a place purchase or an upgrade) until
- * `until`: false while another holds it and hasn't run out.
+ * Claims the family's one plan change (a place purchase or an upgrade) for
+ * `holdMs`, on the database's clock: the claim's expiry, the token its holder
+ * releases with, or null while another holds one that hasn't run out.
+ * Truncated to the millisecond so the token comes back exactly as stored.
  */
-export async function claimPlanChange(subscriptionId: string, until: Date) {
-    const now = new Date(Date.now());
+export async function claimPlanChange(subscriptionId: string, holdMs: number) {
+    const until = sql`date_trunc('milliseconds', now() + make_interval(secs => ${holdMs / 1000}))`;
     const rows = await db
         .update(groupBillingSubscriptions)
-        .set({ changeClaimUntil: until, updatedAt: now })
+        .set({ changeClaimUntil: until, updatedAt: sql`now()` })
         .where(
             and(
                 eq(groupBillingSubscriptions.id, subscriptionId),
-                sql`(${groupBillingSubscriptions.changeClaimUntil} is null or ${groupBillingSubscriptions.changeClaimUntil} <= ${now.toISOString()}::timestamptz)`,
+                sql`(${groupBillingSubscriptions.changeClaimUntil} is null or ${groupBillingSubscriptions.changeClaimUntil} <= now())`,
             ),
         )
-        .returning({ id: groupBillingSubscriptions.id });
-    return rows.length === 1;
+        .returning({ until: groupBillingSubscriptions.changeClaimUntil });
+    return rows[0]?.until ?? null;
 }
 
-export async function releasePlanChange(subscriptionId: string) {
+/* Lets go of the claim taken as `claim`, and no other: one taken since stays its holder's. */
+export async function releasePlanChange(subscriptionId: string, claim: Date) {
     await db
         .update(groupBillingSubscriptions)
-        .set({ changeClaimUntil: null, updatedAt: new Date() })
-        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+        .set({ changeClaimUntil: null, updatedAt: sql`now()` })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                eq(groupBillingSubscriptions.changeClaimUntil, claim),
+            ),
+        );
 }
 
 /* Records orders that must never count as paying for a tier (added to those already kept). */

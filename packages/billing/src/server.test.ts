@@ -173,6 +173,8 @@ const polar = {
     beforeProductChange: null as (() => Promise<void>) | null,
     /* Runs once as Polar takes the next raise: an upgrade landing mid-flight. */
     beforeRaise: null as (() => Promise<void>) | null,
+    /* Runs once just after the next subscription read: a change landing behind it. */
+    afterGet: null as (() => void) | null,
     /*
      * A Polar that answers 200 to a scheduled product change and keeps none of it: a
      * pending update HushOS can never see settle, to prove re-issues don't repeat.
@@ -548,7 +550,11 @@ const fakeClient = {
             const subscription = polar.subscriptions.get(id);
             if (!subscription) throw notFound();
             // A copy, as an API answer is: later changes at Polar don't reach it.
-            return structuredClone(subscription);
+            const answer = structuredClone(subscription);
+            const hook = polar.afterGet;
+            polar.afterGet = null;
+            hook?.();
+            return answer;
         },
         /*
          * Polar's quantity rules as the sandbox showed them (spike E3, E8): a cut
@@ -574,6 +580,7 @@ const fakeClient = {
                 const hook = polar.beforeProductChange;
                 polar.beforeProductChange = null;
                 polar.beforeRaise = null;
+                polar.afterGet = null;
                 await hook?.();
                 // T1: a scheduled change overwrites only its own part of the pending update.
                 if (body.proration_behavior === 'next_period') {
@@ -3526,7 +3533,14 @@ describe('family tiers', () => {
             return answer;
         };
         try {
-            expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'busy' });
+            const result = await billing.ensureGroupSeat(groupId, payer.id);
+            expect(result).toEqual({ status: 'changed' });
+            // Polar charged: the payer is told so, never asked to try again.
+            const told = billing.seatError(result as { status: 'changed' }).message;
+            expect(told).toBe(
+                'The charge went through but the plan changed at the same time. Refresh to see your places.',
+            );
+            expect(told).not.toMatch(/try again/i);
         } finally {
             fakeClient.subscriptions.update = update;
         }
@@ -3578,5 +3592,87 @@ describe('family tiers', () => {
         expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'busy' });
         await set('-1 minute');
         expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'ok' });
+    });
+
+    test('a raise that lands between the first read and the claim is seen by the upgrade’s guard', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS, units: 4 });
+        // Right after the upgrade's first read, a place purchase finishes at Polar, its charge
+        // still waiting for the bank.
+        polar.afterGet = () => {
+            subscription.units = 5;
+            polar.orders.push({
+                id: 'order_raise_waiting',
+                subscription_id: subscription.id,
+                status: 'pending',
+                due_amount: 150,
+                created_at: new Date().toISOString(),
+                product_id: PLUS,
+                billing_reason: 'subscription_update',
+                units: 5,
+            });
+        };
+        polar.calls = [];
+        await expect(billing.changeGroupPlan(payer, groupId, MAX_FAMILY)).rejects.toMatchObject({
+            status: 409,
+            message: expect.stringMatching(/hasn’t confirmed/),
+        });
+        expect(updates()).toEqual([]);
+        expect(subscription.product_id).toBe(PLUS);
+    });
+
+    test('a change that outlived its claim releases only its own, never a newer one', async () => {
+        const { payer, groupId } = await familyOnPlan({ product: PLUS });
+        const sub = (await live(groupId))!.id;
+        let newer: Date | null = null;
+        // Polar is slow: the upgrade's claim runs out and another change takes the family's.
+        polar.beforeProductChange = async () => {
+            await rawSql(
+                `update group_billing_subscriptions set change_claim_until = now() - interval '1 second' where id = '${sub}'`,
+            );
+            newer = await billingRepository.claimPlanChange(sub, 60_000);
+            expect(newer).not.toBeNull();
+        };
+        await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        expect((await live(groupId))?.changeClaimUntil).toEqual(newer);
+        // While it is held, nothing else gets in, whatever this server's clock says.
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(new Date().getTime() + 10 * 60_000);
+        try {
+            expect(await billingRepository.claimPlanChange(sub, 60_000)).toBeNull();
+        } finally {
+            clock.mockRestore();
+        }
+        await billingRepository.releasePlanChange(sub, newer!);
+        expect((await live(groupId))?.changeClaimUntil).toBeNull();
+    });
+
+    test('an upgrade that lands between a place purchase’s first read and its claim stops the raise', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({
+            product: PLUS,
+            units: 4,
+            members: 3,
+        });
+        await setTestMember({
+            groupId,
+            userId: (await createTestAccount()).userId,
+            state: 'accepted',
+        });
+        // Right after the place purchase's first read, an upgrade to Family Max finishes at
+        // Polar, its charge still waiting for the bank.
+        polar.afterGet = () => {
+            subscription.product_id = MAX_FAMILY;
+            polar.orders.push({
+                id: 'order_upgrade_waiting',
+                subscription_id: subscription.id,
+                status: 'pending',
+                due_amount: 2000,
+                created_at: new Date().toISOString(),
+                product_id: MAX_FAMILY,
+                billing_reason: 'subscription_update',
+            });
+        };
+        polar.calls = [];
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        expect(raises()).toEqual([]);
+        expect(subscription.units).toBe(4);
     });
 });

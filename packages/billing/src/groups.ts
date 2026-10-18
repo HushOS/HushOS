@@ -1062,6 +1062,8 @@ export type SeatResult =
     | { status: 'payment' }
     /* Another place purchase or an upgrade is under way for this family. */
     | { status: 'busy' }
+    /* Polar charged for the place, but billed it on a plan changed meanwhile: nobody let in. */
+    | { status: 'changed' }
     | { status: 'unavailable' };
 
 /* A refused raise, by what Polar said. */
@@ -1101,38 +1103,71 @@ async function changePlaces(
     const plan = await planOf(subscription.product_id);
     if (!plan) return { status: 'no-plan' };
     const current = subscription.units ?? plan.includedMembers;
-    const cut = subscription.pending_update?.units ?? null;
     const cap = { status: 'cap' as const, max: plan.maxMembers, step: MAX_MEMBERS_PER_RAISE };
     if (target > plan.maxMembers) return cap;
     if (subscription.cancel_at_period_end) return { status: 'canceling' };
-    if (target <= current) {
-        // Polar holds places HushOS has not seen paid: a raise awaiting the bank. Re-read;
-        // they open only once no order waits, and asking Polar again would charge nothing.
-        if (target > live.paidUnits) {
-            await reconcileGroup(groupId);
-            const fresh = await billingRepository.getLiveGroupSubscription(groupId);
-            if (!fresh || fresh.paidUnits < target) return { status: 'confirm', url: null };
-        }
-        if (cut === null || cut >= target) return { status: 'ok' };
-        try {
-            const intended = await billingRepository.getLiveGroupSubscription(groupId);
-            await setPending(groupId, subscription, {
-                units: target < current ? target : null,
-                product: intended?.id === live.id ? intended.intendedProductId : null,
-            });
-            await billingRepository.setIntendedUnits(live.id, target < current ? target : null);
-            return { status: 'ok' };
-        } catch (error) {
-            return refusedRaise(error);
-        }
-    }
+    if (target <= current) return placesHeld(groupId, live, subscription, target);
     if (target - current > MAX_MEMBERS_PER_RAISE) return cap;
-    // One plan change at a time: a raise and an upgrade never run together for a family.
+    // One plan change at a time: a raise and an upgrade never run together for a family. The
+    // raise works from a read taken under the claim, never from the one above.
     return withPlanChange(
         live.id,
         (): SeatResult => ({ status: 'busy' }),
-        () => raisePlaces(groupId, live, subscription, target, cut),
+        async () => {
+            let held: models.Subscription;
+            try {
+                held = await polar().subscriptions.get(live.id);
+            } catch (error) {
+                log.warn({
+                    message: 'Group plan read failed',
+                    billing: { status: statusOf(error) },
+                });
+                return { status: 'unavailable' };
+            }
+            const heldPlan = await planOf(held.product_id);
+            if (!heldPlan) return { status: 'no-plan' };
+            const now = held.units ?? heldPlan.includedMembers;
+            if (held.cancel_at_period_end) return { status: 'canceling' };
+            if (target > heldPlan.maxMembers) return cap;
+            // A raise that landed meanwhile may already hold the place.
+            if (target <= now) return placesHeld(groupId, live, held, target);
+            if (target - now > MAX_MEMBERS_PER_RAISE) return cap;
+            return raisePlaces(groupId, live, held, target, held.pending_update?.units ?? null);
+        },
     );
+}
+
+/*
+ * A place the plan already has: open once paid (a raise awaiting the bank opens
+ * nothing; asking Polar again would charge nothing), and a scheduled cut that
+ * would take it is moved up, free.
+ */
+async function placesHeld(
+    groupId: string,
+    live: { id: string; paidUnits: number },
+    subscription: models.Subscription,
+    target: number,
+): Promise<SeatResult> {
+    const plan = await planOf(subscription.product_id);
+    const current = subscription.units ?? plan?.includedMembers ?? 0;
+    const cut = subscription.pending_update?.units ?? null;
+    if (target > live.paidUnits) {
+        await reconcileGroup(groupId);
+        const fresh = await billingRepository.getLiveGroupSubscription(groupId);
+        if (!fresh || fresh.paidUnits < target) return { status: 'confirm', url: null };
+    }
+    if (cut === null || cut >= target) return { status: 'ok' };
+    try {
+        const intended = await billingRepository.getLiveGroupSubscription(groupId);
+        await setPending(groupId, subscription, {
+            units: target < current ? target : null,
+            product: intended?.id === live.id ? intended.intendedProductId : null,
+        });
+        await billingRepository.setIntendedUnits(live.id, target < current ? target : null);
+        return { status: 'ok' };
+    } catch (error) {
+        return refusedRaise(error);
+    }
 }
 
 /*
@@ -1207,7 +1242,7 @@ async function raisePlaces(
         );
         await applyChanged(groupId, raised, false);
         await reconcileGroup(groupId);
-        return { status: 'busy' };
+        return { status: 'changed' };
     }
     // The raise replaced any scheduled cut at Polar (spike E3): the payer asked for more places
     // now, so the cut is not put back, or they would pay for places they could not fill.
@@ -1293,6 +1328,10 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
     }
 }
 
+/* Said when Polar has charged for a place on a plan that changed meanwhile: never "try again". */
+const CHARGED_BUT_CHANGED =
+    'The charge went through but the plan changed at the same time. Refresh to see your places.';
+
 /* Said when a place purchase and an upgrade meet: one waits for the other. */
 const BUSY = 'Another change to this plan is in progress. Try again in a moment.';
 
@@ -1304,12 +1343,13 @@ const CHANGE_CLAIM_MS = 2 * 60 * 1000;
  * upgrades), or answers `busy` when another holds it. Released however `work` ends.
  */
 async function withPlanChange<T>(subscriptionId: string, busy: () => T, work: () => Promise<T>) {
-    const until = new Date(Date.now() + CHANGE_CLAIM_MS);
-    if (!(await billingRepository.claimPlanChange(subscriptionId, until))) return busy();
+    const claim = await billingRepository.claimPlanChange(subscriptionId, CHANGE_CLAIM_MS);
+    if (!claim) return busy();
     try {
         return await work();
     } finally {
-        await billingRepository.releasePlanChange(subscriptionId);
+        // Only this claim: one that ran out and was taken by another change stays theirs.
+        await billingRepository.releasePlanChange(subscriptionId, claim);
     }
 }
 
@@ -1427,14 +1467,31 @@ export async function changeGroupPlan(
             },
             async (): Promise<PlanChange> => {
                 await familyOf(groupId, user.id, 'billing');
+                // Read again under the claim: the guard and the change work from this, never from
+                // a copy a place purchase finished after.
+                let held: models.Subscription;
+                try {
+                    held = await polar().subscriptions.get(live.id);
+                } catch (error) {
+                    throw unavailable(error);
+                }
+                if (
+                    held.product_id !== subscription.product_id ||
+                    held.cancel_at_period_end ||
+                    held.status === 'past_due'
+                )
+                    throw new BillingError(
+                        'This plan changed a moment ago. Look at it again before changing it.',
+                        409,
+                    );
                 // The tier paid for, read from Polar's orders now (a refund since the last reconcile).
-                if (!(await applyChanged(groupId, subscription, false))) throw unresolvedPlan();
+                if (!(await applyChanged(groupId, held, false))) throw unresolvedPlan();
                 const fresh = (await billingRepository.getLiveGroupSubscription(groupId)) ?? live;
                 // Nothing stacks on a charge the bank hasn't confirmed: places, or an upgrade.
                 if (
                     fresh.paidUnits < fresh.units ||
                     paidTier(fresh).quotaBytes < fresh.quotaBytes ||
-                    subscription.product_id !== paidTier(fresh).productId
+                    held.product_id !== paidTier(fresh).productId
                 )
                     throw new BillingError(
                         'Your bank hasn’t confirmed the last charge yet. Confirm it in Manage payment and invoices, then change the plan.',
@@ -1442,7 +1499,7 @@ export async function changeGroupPlan(
                     );
                 let changed: models.Subscription;
                 try {
-                    changed = await polar().subscriptions.update(subscription.id, {
+                    changed = await polar().subscriptions.update(held.id, {
                         product_id: target.id,
                         proration_behavior: 'invoice',
                     });
@@ -1450,7 +1507,7 @@ export async function changeGroupPlan(
                     const refused = refusedRaise(error);
                     if (refused.status === 'confirm') {
                         // The bank wants the payer: whatever Polar now holds is written, never left stale.
-                        await writeAsPolarHolds(groupId, subscription.id);
+                        await writeAsPolarHolds(groupId, held.id);
                         return {
                             billing: await getGroupBilling(user, groupId),
                             url: (await portalFor(groupId, user.id)).url,
@@ -1591,6 +1648,8 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
             );
         case 'busy':
             return new BillingError(BUSY, 409);
+        case 'changed':
+            return new BillingError(CHARGED_BUT_CHANGED, 409);
         case 'cap':
             return new BillingError(
                 `A family can have at most ${result.max} members, and one change can add at most ${result.step} places.`,
