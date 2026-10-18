@@ -240,6 +240,13 @@ export const sections: RoadmapSection[] = [
                 area: 'Drive',
                 title: 'Editing together',
                 body: 'Edit the same document with other people at the same time, with every change end-to-end encrypted between your devices.',
+                links: [
+                    {
+                        kind: 'docs',
+                        path: 'docs/editing-together-design.md',
+                        label: 'Read the design',
+                    },
+                ],
             },
             {
                 id: 'messages',
