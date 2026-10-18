@@ -1,0 +1,46 @@
+apps/web/src/components/drive/json-view.tsx
+  s_c56e31c87cddde::t_ce62ef87decb23 1-694,696-697,699-700
+  s_c56e31c87cddde::t_a63dc4974469e6 695,698,701-705
+apps/web/src/lib/json.test.ts
+  s_c56e31c87cddde::t_c70d5486764190 1-101
+  s_c56e31c87cddde::t_178fd2a23bf5ea 102-103
+apps/web/src/lib/json.ts
+  s_c56e31c87cddde::t_b5b3ee19c1f85c 1-219,223-265,267,269-292
+  s_c56e31c87cddde::t_ea7321ed637562 220-222
+  s_c56e31c87cddde::t_3aec55cb6baf7b 266,268
+apps/web/src/lib/json-inspect.ts
+  s_c56e31c87cddde::t_f86cb8471f3048 47
+  s_c56e31c87cddde::t_9e8e8b7cc0547b 1-46,48-58
+apps/web/src/components/drive/preview.tsx
+  s_c56e31c87cddde::t_6b51e3d292d757 31,64-70,105-110,127-131,626-631
+apps/web/src/components/drive/rich-text.css
+  s_c56e31c87cddde::t_b606487c149405 23-34,49-59,242-278
+apps/web/src/components/drive/rich-text.tsx
+  s_c56e31c87cddde::t_8138c62c124d3a 6-7,9,13,17-26,176-310,312-319,321-361,363,365,369-412
+apps/web/src/lib/highlight.ts
+  s_c56e31c87cddde::t_78c10df2574346 2,153-157,159-164,204-259,271
+apps/web/src/lib/json.worker.ts
+  s_c56e31c87cddde::t_e80706ba302dd5 1-13
+apps/web/src/lib/preload.ts
+  s_c56e31c87cddde::t_102d47e6fa0aca 26
+apps/web/src/lib/previews.ts
+  s_c56e31c87cddde::t_6120ccc5ee252a 126-131
+e2e/drive.spec.ts
+  s_c56e31c87cddde::t_f53976e197e5d7 116-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7abfa67863fd2ed02417d6fe1fc3281fd948c02",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
