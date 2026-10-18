@@ -14,16 +14,15 @@ import {
     useState,
 } from 'react';
 import { Fragment as JsxFragment, jsx, jsxs } from 'react/jsx-runtime';
-import { Spinner } from '@/components/motion';
-import { Button } from '@/components/ui/button';
+import { LargeFileBar } from '@/components/drive/viewer-parts';
 import {
     canHighlight,
-    COLOUR_CEILING,
     type ColouredLine,
     colourLines,
     HIGHLIGHT_LIMIT,
     highlight,
 } from '@/lib/highlight';
+import { largeFileStage } from '@/lib/previews';
 import { markdownToHast } from '@/lib/markdown';
 import '@/components/drive/rich-text.css';
 
@@ -299,6 +298,7 @@ export function CodeView({
     language,
     size = text.length,
     markLine = null,
+    quiet = false,
 }: {
     text: string;
     language: string | null;
@@ -306,12 +306,13 @@ export function CodeView({
     size?: number;
     /* A 1-based line to mark in the gutter and scroll to, such as where a JSON file stops being valid. */
     markLine?: number | null;
+    /* No colouring bar: another bar above already speaks for the file (text shown in part). */
+    quiet?: boolean;
 }) {
     const [asked, setAsked] = useState(false);
     const colourable = canHighlight(language);
-    const large = colourable && size > HIGHLIGHT_LIMIT;
-    const tooLarge = large && size > COLOUR_CEILING;
-    const colour = colourable && (!large || (asked && !tooLarge));
+    const stage = colourable ? largeFileStage('colour', size) : 'fine';
+    const colour = colourable && (stage === 'fine' || (stage === 'offer' && asked));
     const lines = useMemo(() => text.split('\n'), [text]);
     const plain = useMemo(() => {
         const out: (readonly string[])[] = [];
@@ -323,30 +324,22 @@ export function CodeView({
     const done = blocks ? Math.min(blocks.length * RENDER_BLOCK, lines.length) : 0;
     return (
         <>
-            {large && (!asked || tooLarge || done < lines.length) && (
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule px-4 py-2.5 text-[13px] text-muted-foreground sm:px-6">
-                    {tooLarge ? (
-                        <p>This file is too large to colour, so it’s shown as plain text.</p>
-                    ) : !asked ? (
-                        <>
-                            <p className="min-w-0 flex-1 basis-64">
-                                This file is large, so it isn’t coloured. Colouring it may slow this
-                                tab down.
-                            </p>
-                            <Button variant="outline" onClick={() => setAsked(true)}>
-                                Colour anyway
-                            </Button>
-                        </>
-                    ) : (
-                        <p className="flex items-center gap-2">
-                            <Spinner />
-                            <output>Colouring…</output>
-                            <span className="tabular-nums" aria-hidden="true">
-                                {Math.floor((done / lines.length) * 100)}%
-                            </span>
-                        </p>
-                    )}
-                </div>
+            {stage !== 'fine' && !quiet && (
+                <LargeFileBar
+                    kind="colour"
+                    size={size}
+                    stage={
+                        stage === 'ceiling'
+                            ? 'ceiling'
+                            : !asked
+                              ? 'offer'
+                              : done < lines.length
+                                ? 'working'
+                                : 'done'
+                    }
+                    progress={done / lines.length}
+                    onContinue={() => setAsked(true)}
+                />
             )}
             <div className="rt-code" data-language={language ?? undefined}>
                 <Gutter count={lines.length} markLine={markLine} />

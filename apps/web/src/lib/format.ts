@@ -19,7 +19,8 @@ export function formatBytes(value: number | string | bigint | null | undefined) 
         n /= 1024;
         unit++;
     }
-    return `${unit === 0 ? n : n.toFixed(n >= 100 ? 0 : 1)} ${UNITS[unit]}`;
+    // A whole number shows none of the decimal it doesn't have: "20 MB", "1.6 KB".
+    return `${unit === 0 ? n : Number(n.toFixed(n >= 100 ? 0 : 1))} ${UNITS[unit]}`;
 }
 
 /*

@@ -1,9 +1,9 @@
 import type { DriveNode } from '@hushos/drive/client';
-import { officeKind } from '@/lib/office';
 import type { FileReader } from '@hushos/drive/downloads';
 import { downloadWorker } from '@/lib/download-sinks';
 import { downloads } from '@/lib/downloads';
 import { languageFor } from '@/lib/highlight';
+import { officeKind } from '@/lib/office';
 
 /*
  * Previews are the client decrypting bytes it fetched by range and rendering
@@ -24,16 +24,15 @@ export type PreviewKind =
     | 'office'
     | 'none';
 
-export const PREVIEW_LIMITS = {
-    image: 100 * 1024 * 1024,
-    text: 8 * 1024 * 1024,
-    /* A PDF up to this size is read whole and remembered; larger ones stream by range. */
-    document: 16 * 1024 * 1024,
-    /* A clip up to this size plays from memory and is remembered; larger media streams by range. */
-    media: 16 * 1024 * 1024,
-    /* Media falls back to a blob where the service worker is unavailable. */
-    mediaBlob: 256 * 1024 * 1024,
-};
+export {
+    imageCeiling,
+    largeFileStage,
+    OFFICE_CEILING,
+    PREVIEW_LIMITS,
+    TEXT_CEILING,
+    type LargeFileKind,
+    type LargeFileStage,
+} from '@/lib/large-files';
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico']);
 const TEXT_EXT = new Set([
@@ -183,8 +182,13 @@ export function previewMime(node: DriveNode) {
     return table[ext] ?? 'application/octet-stream';
 }
 
-export function openReader(node: DriveNode) {
-    return downloads.openReader(node);
+/*
+ * A reader over the node's decrypted chunks. One that reads the whole file
+ * (text, an image, an Office file) keeps one chunk, not four: those chunks
+ * would only sit in memory beside the copy the viewer is making.
+ */
+export function openReader(node: DriveNode, wholeRead = false) {
+    return downloads.openReader(node, wholeRead ? 1 : undefined);
 }
 
 export type ReadProgress = { done: number; total: number };
@@ -315,16 +319,35 @@ export function recallPreview(versionId: string) {
     return entry;
 }
 
+/*
+ * Keeps a preview for the session; false when it is too big to keep, and then
+ * the caller still owns its URL (see holdUrl). An earlier entry for the same
+ * version (the first 8 MB of a text now read whole) goes either way.
+ */
 export function rememberPreview(versionId: string, entry: RememberedPreview) {
-    if (entry.bytes > PREVIEW_CACHE_BYTES / 4) return;
     const previous = remembered.get(versionId);
     if (previous) evict(versionId, previous);
+    if (entry.bytes > PREVIEW_CACHE_BYTES / 4) return false;
     remembered.set(versionId, entry);
     rememberedBytes += entry.bytes;
     for (const [id, old] of remembered) {
         if (rememberedBytes <= PREVIEW_CACHE_BYTES) break;
         if (id !== versionId) evict(id, old);
     }
+    return true;
+}
+
+/*
+ * Blob URLs of decrypted bytes that a viewer holds itself because the session
+ * cache didn't keep them. The viewer releases its URL when it closes; locking
+ * releases every one still held, so no decrypted bytes outlive the lock.
+ */
+const held = new Set<string>();
+export function holdUrl(url: string) {
+    held.add(url);
+    return () => {
+        if (held.delete(url)) URL.revokeObjectURL(url);
+    };
 }
 
 function evict(versionId: string, entry: RememberedPreview) {
@@ -335,4 +358,6 @@ function evict(versionId: string, entry: RememberedPreview) {
 
 export function forgetPreviews() {
     for (const [id, entry] of remembered) evict(id, entry);
+    for (const url of held) URL.revokeObjectURL(url);
+    held.clear();
 }
