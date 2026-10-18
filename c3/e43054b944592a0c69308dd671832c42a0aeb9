@@ -1,0 +1,31 @@
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_50e5b9517725a8 27
+e2e/admin-storage.spec.ts
+  s_c56e31c87cddde::t_09f7504bad818d 2,24
+e2e/contacts.spec.ts
+  s_c56e31c87cddde::t_99411d13b266ca 2,118
+e2e/helpers.ts
+  s_c56e31c87cddde::t_4a8d31a71e3bb6 1,27-67
+e2e/reports.spec.ts
+  s_c56e31c87cddde::t_f50f778d135ce0 9-10,87,256
+e2e/screenshots.spec.ts
+  s_c56e31c87cddde::t_fa7038046d446b 14,236,245-246,250
+packages/db/scripts/admin.ts
+  s_c56e31c87cddde::t_e7f2f2f7f6733c 1,14-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3e43054b944592a0c69308dd671832c42a0aeb9",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
