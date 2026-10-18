@@ -356,8 +356,9 @@ public actor Vault {
     func adopt(accountKey key: Data) { accountKey = key }
 
     /* Tests: an identity already opened, without the account key from this device's keychain. */
-    func adopt(identity keys: IdentityKeys, earlier: [IdentityKeys] = []) {
+    func adopt(identity keys: IdentityKeys, earlier: [IdentityKeys] = [], envelope: IdentityEnvelope? = nil) {
         identity = keys
+        identityEnvelope = envelope
         identityCheckedAt = Date()
         earlierIdentities = earlier
         forgetSigners()

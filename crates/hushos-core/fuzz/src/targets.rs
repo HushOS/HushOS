@@ -677,6 +677,8 @@ pub fn pins(value: &Value) -> Option<Value> {
         "member_join_code" => return member_join_code_kind(value),
         "roster_call" => return roster_call_kind(value),
         "roster_call_session" => return roster_call_session_kind(value),
+        "settings" => return settings_kind(value),
+        "area_open" => return area_open_kind(value),
         _ => return None,
     })
 }
@@ -1592,4 +1594,158 @@ fn roster_call_session_kind(value: &Value) -> Option<Value> {
     }
     let steps = steps.iter().map(session_step).collect::<Option<Vec<_>>>()?;
     Some(ok(Value::Array(session_run(&steps))))
+}
+
+/*
+ * A settings document's plaintext (`text`, JSON text as a JSON string so both
+ * twins read the same bytes), read as the ledger reads it, with each of
+ * `users` (at most 8) and `groups` (at most 8) probed: the contact pin found
+ * and the group pin's verdict (refusal words dropped). Skipped: text either
+ * twin's JSON parser reads its own way (numbers past an f64, more than 64
+ * brackets; escaped lone surrogates are repaired alike before parsing). Invariants: a pin found under a probe names
+ * it in any case; one an admission takes holds every key part.
+ */
+pub fn settings_fits(text: &str) -> bool {
+    // A number token both parsers read to the same f64: at most 200 digits, an exponent of at most two.
+    let number_ok = |token: &str| {
+        let (mantissa, exponent) = token.split_once(['e', 'E']).unwrap_or((token, ""));
+        mantissa.bytes().filter(u8::is_ascii_digit).count() <= 200
+            && exponent.bytes().filter(u8::is_ascii_digit).count() <= 2
+    };
+    let (mut in_string, mut escape, mut brackets, mut token) = (false, false, 0usize, String::new());
+    for c in text.chars() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if c == '\\' {
+                escape = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c.is_ascii_digit() || "+-.eE".contains(c) {
+            token.push(c);
+            continue;
+        }
+        if !number_ok(&token) {
+            return false;
+        }
+        token.clear();
+        match c {
+            '"' => in_string = true,
+            '{' | '[' => brackets += 1,
+            _ => {}
+        }
+    }
+    number_ok(&token) && brackets <= 64
+}
+
+fn settings_kind(value: &Value) -> Option<Value> {
+    let text = text(value, "text")?;
+    let users = strings_of(value, "users")?;
+    let groups = strings_of(value, "groups")?;
+    if users.len() > 8 || groups.len() > 8 || text.len() > 65_536 || !settings_fits(&text) {
+        return None;
+    }
+    let mut verdict = settings_document_verdict(text.as_bytes(), &users, &groups);
+    if verdict["status"] == "refused" {
+        return Some(refused());
+    }
+    for user in &users {
+        let found = &verdict["contacts"][user];
+        if found.is_null() {
+            continue;
+        }
+        assert_eq!(
+            found["userId"].as_str().unwrap().to_lowercase(),
+            user.to_lowercase(),
+            "a pin found under another person"
+        );
+        if found["checked"] == json!(true) {
+            assert!(
+                found["keys"].as_array().unwrap().iter().all(Value::is_string),
+                "a checked pin short of a key"
+            );
+            assert!(found["fingerprint"].is_string(), "a checked pin with no fingerprint");
+        }
+    }
+    for group in &groups {
+        let at = &mut verdict["groups"][group];
+        if at.get("refused").is_some() {
+            *at = json!({ "refused": true });
+        } else if let Some(pin) = at.get("pin") {
+            let pin = crate::groups::pin_from(pin);
+            assert!(group_pin_check(group.clone(), pin).is_ok(), "a pin read that does not check");
+        }
+    }
+    Some(ok(verdict))
+}
+
+/*
+ * A family folder of the roster-call family opened by person 2 (the core's
+ * `areaOpens` cases' vocabulary: `area` A1, A2, A3 or foreign, `served` 1 to
+ * 4, `grant` null or person 1's of `key` [0 or 2, 1 or 2] with `granterKey`,
+ * and `selfGrant` null or any envelope of the personal grant's shape). The
+ * verdict is what opened it (or a refusal). Invariants: a self-grant opens
+ * only at or above the chain's latest version and the served one; a
+ * self-grant to store comes only from a grant at the version both name.
+ */
+fn area_open_kind(value: &Value) -> Option<Value> {
+    use crate::settings_areas::run_area;
+    let area = text(value, "area")?;
+    if !["A1", "A2", "A3", "foreign"].contains(&area.as_str()) {
+        return None;
+    }
+    let served = number(value, "served").filter(|n| (1..=4).contains(n))?;
+    let grant = match value.get("grant") {
+        None | Some(Value::Null) => Value::Null,
+        Some(grant) => {
+            let key = grant.get("key")?.as_array()?;
+            let index = shape::unsigned(key.first()?).filter(|n| *n == 0 || *n == 2)?;
+            let version = shape::unsigned(key.get(1)?).filter(|n| (1..=2).contains(n))?;
+            if key.len() != 2 || (index == 0 && version != 1) {
+                return None;
+            }
+            let granter = match grant.get("granterKey") {
+                None | Some(Value::Null) => true,
+                Some(Value::Bool(b)) => *b,
+                _ => return None,
+            };
+            json!({ "key": [index, version], "granterKey": granter })
+        }
+    };
+    let self_grant = match value.get("selfGrant") {
+        None | Some(Value::Null) => Value::Null,
+        Some(own) => {
+            let version = shape::number(own, "version").filter(|n| *n <= u32::MAX as u64)?;
+            json!({
+                "version": version,
+                "workspaceId": text(own, "workspaceId")?,
+                "keyVersion": shape::number(own, "keyVersion")?,
+                "workspaceKeyVersion": shape::number(own, "workspaceKeyVersion")?,
+                "wrappingSalt": text(own, "wrappingSalt")?,
+                "wrappingNonce": text(own, "wrappingNonce")?,
+                "encryptedKey": text(own, "encryptedKey")?,
+            })
+        }
+    };
+    let spec = json!({ "area": area, "served": served, "grant": grant, "selfGrant": {} });
+    let (outcome, stored) = run_area(&spec, &self_grant);
+    if outcome.get("refused").is_some() {
+        return Some(refused());
+    }
+    let latest = if area == "A3" { 2 } else { 1 };
+    if outcome["from"] == "self-grant" {
+        let v = self_grant["workspaceKeyVersion"].as_u64().unwrap();
+        assert!(v >= latest && v >= served && v <= latest, "a self-grant taken off the latest version");
+    }
+    if let Some(stored) = stored {
+        assert_eq!(outcome["from"], "grant", "a self-grant made from a self-grant");
+        assert!(
+            stored.workspace_key_version == latest && served == latest,
+            "a self-grant of a key not current"
+        );
+    }
+    Some(ok(outcome))
 }

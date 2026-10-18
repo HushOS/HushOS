@@ -169,7 +169,7 @@ pub fn pin_verified(
     check().unwrap_or(false)
 }
 
-fn hkdf(ikm: &[u8], info: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+pub(crate) fn hkdf(ikm: &[u8], info: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&[0u8; 32]), ikm)
         .expand(info, key.as_mut())
@@ -275,7 +275,7 @@ fn padded_settings(json: &str) -> Zeroizing<Vec<u8>> {
     out
 }
 
-fn settings_context(user_id: &str, version: u32, settings_version: u64) -> Vec<u8> {
+pub(crate) fn settings_context(user_id: &str, version: u32, settings_version: u64) -> Vec<u8> {
     context(&[
         json!("hushos/settings"),
         json!(version),
@@ -354,6 +354,27 @@ fn seal_settings(
         &settings_context(user_id, version, settings_version),
     )?;
     Ok(SettingsEnvelope { version, settings_version, nonce: encode(&nonce), ciphertext: encode(&sealed) })
+}
+
+/// Any plaintext sealed as a version 2 settings envelope, padded as the real
+/// one is, for the shared fixtures only: documents [`settings_seal`] refuses
+/// to write (another version, `contacts` null) must still reach the readers.
+#[cfg(feature = "fixtures")]
+#[doc(hidden)]
+pub fn settings_seal_raw(
+    user_id: &str,
+    settings_key: &[u8],
+    settings_version: u64,
+    text: &str,
+) -> CoreResult<SettingsEnvelope> {
+    let nonce = random(NONCE_BYTES);
+    let sealed = seal_with_nonce(
+        settings_key,
+        &nonce,
+        &padded_settings(text),
+        &settings_context(user_id, 2, settings_version),
+    )?;
+    Ok(SettingsEnvelope { version: 2, settings_version, nonce: encode(&nonce), ciphertext: encode(&sealed) })
 }
 
 /// The settings JSON out of a version 2 envelope, under the settings key.

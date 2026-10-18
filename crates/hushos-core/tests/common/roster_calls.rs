@@ -133,13 +133,13 @@ pub fn chain_of(
     }
 }
 
-fn me(n: usize) -> OwnIdentities {
+pub fn me(n: usize) -> OwnIdentities {
     let p = &family().p[n - 1];
     OwnIdentities { user_id: p.user_id.clone(), identities: vec![super::groups::served_keys(p)] }
 }
 
 /* Person `n`'s identity envelope under the shared device root: what their phone opened. */
-fn envelope(n: usize) -> IdentityEnvelope {
+pub fn envelope(n: usize) -> IdentityEnvelope {
     let p = &family().p[n - 1];
     identity_wrap(p.user_id.clone(), root(), &p.keys).unwrap()
 }
@@ -179,7 +179,7 @@ fn contacts(of: usize, filed: Option<Vec<(usize, usize)>>) -> HashMap<String, Ve
 }
 
 /* The served chain of `rosters` (all from version 1). */
-fn served_of(first_keys: GroupPublicKey, rosters: Vec<SignedGroupStatement>) -> ServedChain {
+pub fn served_of(first_keys: GroupPublicKey, rosters: Vec<SignedGroupStatement>) -> ServedChain {
     ServedChain { after: 0, first_keys, rosters, successions: vec![], signer_keys: ml_dsa_keys() }
 }
 

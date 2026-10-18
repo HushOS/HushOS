@@ -5,6 +5,13 @@ import { areaKeyCommitment } from './area-keys';
 import { encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
 import {
+    contactPinOf,
+    refuseDowngrade,
+    settingsMarks,
+    settingsPinOf,
+    type SettingsMarks,
+} from './settings-marks';
+import {
     generateKey,
     openDocument,
     openNodeKey,
@@ -730,6 +737,8 @@ export type GroupResults = {
             | 'root-unknown'
             | null;
         selfGrantToStore: WorkspaceKeyEnvelope | null;
+        /* Which envelope opened the key: the self-grant, or the area grant (the core's AreaKeyFrom). */
+        from: 'self-grant' | 'grant';
         /* The only way an area enters a pin (pins.ts, mergePin). */
         pinArea: OpenedArea;
     };
@@ -1466,15 +1475,8 @@ export function createGroupSession(host: GroupHost) {
      * (area-ledger.ts), from what this session tells it.
      */
     const ledger = host.ledger;
-    /* The group pins in the settings this worker last opened or sealed: the only settings marks taken. */
-    let settingsPins: {
-        userId: string;
-        pins: Record<string, GroupPin>;
-        /* The same document's contact pins: the only pins an admission or a join code reads. */
-        contacts: Record<string, ContactPin>;
-        /* Whether they came from a settings document that opened, not from "none". */
-        opened: boolean;
-    } | null = null;
+    /* The settings this worker last opened (settings-marks.ts): the only settings marks taken, and the only contact pins read. */
+    let settingsPins: SettingsMarks | null = null;
     /* The session's succession verification cache (groupWriterTrust's `verified`). */
     const verified = new Map<string, boolean>();
 
@@ -1489,27 +1491,13 @@ export function createGroupSession(host: GroupHost) {
         return opened.get(groupId) ?? new Map<string, { idSeed: string; version: number }>();
     }
     const { isArea, readVersion, writeVersion, requireWritable } = ledger;
-    /*
-     * Within one unlock, settings that opened never give way to none (or to a
-     * version 1 document, which opens as none): a server answering so would
-     * drop the family pins, and with them the marks that keep a family from
-     * being joined again onto another history (decision D7). The client keeps
-     * the same rule across unlocks (its settings document mark).
-     */
+    /* The settings document this worker opened (session.ts's settingsOpen), or none: settings-marks.ts. */
     function useSettings(
         userId: string,
-        settings: {
-            groups?: Record<string, GroupPin>;
-            contacts?: Record<string, ContactPin>;
-        } | null,
+        settings: { groups?: unknown; contacts?: unknown } | null,
+        settingsVersion = 0,
     ) {
-        if (settings === null) refuseDowngrade(userId);
-        settingsPins = {
-            userId,
-            pins: { ...settings?.groups },
-            contacts: { ...settings?.contacts },
-            opened: settings !== null,
-        };
+        settingsPins = settingsMarks(settingsPins, userId, settings, settingsVersion);
     }
     /* This account's contact pin of `userId`, from the settings it last opened; null without one. */
     function contactPin(userId: string): ContactPin | null {
@@ -1520,17 +1508,7 @@ export function createGroupSession(host: GroupHost) {
         } catch {
             return null;
         }
-        if (!settingsPins || settingsPins.userId !== account) return null;
-        const wanted = userId.toLowerCase();
-        for (const [key, pin] of Object.entries(settingsPins.contacts))
-            if (key.toLowerCase() === wanted && pin.userId.toLowerCase() === wanted) return pin;
-        return null;
-    }
-    function refuseDowngrade(userId: string) {
-        if (settingsPins?.userId === userId && settingsPins.opened)
-            throw new CryptoError(
-                'The server sent older settings than this device has opened, so nothing was changed.',
-            );
+        return contactPinOf(settingsPins, account, userId);
     }
     /*
      * A version 1 document: it opens nowhere, and is not "no settings" either
@@ -1538,7 +1516,7 @@ export function createGroupSession(host: GroupHost) {
      * all, and after settings that opened it is a rollback.
      */
     function legacySettings(userId: string) {
-        refuseDowngrade(userId);
+        refuseDowngrade(settingsPins, userId);
     }
     /* Refused (NOT_THIS_ACCOUNT) once the session an acceptance began in was forgotten, or another account is open. */
     function stillTheSession(began: number, userId: string) {
@@ -2154,9 +2132,7 @@ export function createGroupSession(host: GroupHost) {
             }
             if (!settingsPins || settingsPins.userId !== userId)
                 throw new CryptoError(OPEN_SETTINGS);
-            const settingsPin = Object.hasOwn(settingsPins.pins, groupId)
-                ? settingsPins.pins[groupId]!
-                : null;
+            const settingsPin = settingsPinOf(settingsPins, groupId);
             const pins = [settingsPin, record?.pin ?? null].filter(
                 (pin): pin is GroupPin => pin !== null && pin !== undefined,
             );
@@ -2684,6 +2660,7 @@ export function createGroupSession(host: GroupHost) {
                 writable: held === null,
                 reason: held,
                 selfGrantToStore,
+                from: fromGrant ? ('grant' as const) : ('self-grant' as const),
                 pinArea: { groupId, workspaceId, version },
             };
         } finally {

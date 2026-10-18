@@ -1904,8 +1904,9 @@ pub struct VerifiedPin {
 /// A new member's entry, only from the keys their words check confirmed: a
 /// version 3 pin of them that verifies, and a served identity whose four keys
 /// are the pinned ones (the lattice keys by digest) and whose keys statement
-/// holds. Anything else and nobody is added.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+/// holds. Anything else and nobody is added. Not exported to the apps (Core
+/// 6): an admission takes the pin from settings the ledger opened itself
+/// ([`crate::AreaLedger::admit_body`]), never one an app built.
 pub fn roster_entry_new(
     pin: VerifiedPin,
     served: PublicIdentity,

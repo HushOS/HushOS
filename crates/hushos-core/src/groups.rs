@@ -1294,8 +1294,9 @@ pub fn area_grant_seal(
 /// granter who is active on the roster and whose signature holds
 /// under their keys through it; and the key it opens to must be the one the
 /// roster's commitment names, so an honest member kept behind cannot hand on a
-/// key the real chain never listed.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+/// key the real chain never listed. Not exported to the apps (Core 6): they
+/// open a family folder through [`crate::AreaLedger::open_family_area`], and
+/// its key never leaves the ledger.
 #[allow(clippy::too_many_arguments)]
 pub fn area_grant_open(
     envelope: Vec<u8>,

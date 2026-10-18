@@ -48,3 +48,14 @@ fn a_manager_s_device_over_time_never_resends_other_bytes_or_builds_while_locked
         assert_eq!(Value::Array(session_run(&steps)), scenario["expected"], "{}", scenario["name"]);
     }
 }
+
+#[test]
+fn the_web_s_settings_and_family_folders_open_here_as_there() {
+    common::settings_areas::check(&read("web-roster-calls.json"));
+}
+
+#[test]
+fn this_core_s_settings_and_family_folders_say_what_they_declare() {
+    let doc = common::settings_areas::fixture();
+    common::settings_areas::check(&doc);
+}

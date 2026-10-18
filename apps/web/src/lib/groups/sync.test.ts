@@ -358,6 +358,7 @@ describe('areaWrite', () => {
         writable: reason === null,
         reason,
         selfGrantToStore: null,
+        from: 'grant' as const,
         pinArea: { groupId: GROUP, workspaceId: AREA, version: 1 },
     });
     const view = (withRoot: boolean) => ({

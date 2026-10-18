@@ -86,8 +86,8 @@ const OPEN_PARENT: &str = "Open the containing folder first.";
 const OLDER_FOLDER_KEY: &str = "This item was wrapped under an older folder key.";
 const OWN_WORKSPACE: &str = "This was refused: it claims to be a folder of your own.";
 pub(crate) const NO_CHAIN: &str = "Check the family’s member list first.";
-const NOT_THE_FAMILYS: &str = "This folder does not belong to the family.";
-const NOT_LISTED: &str = "This folder is not on the family’s member list.";
+pub(crate) const NOT_THE_FAMILYS: &str = "This folder does not belong to the family.";
+pub(crate) const NOT_LISTED: &str = "This folder is not on the family’s member list.";
 const ITEM_CHANGED: &str = "This item changed since it was opened. Refresh and retry.";
 const FAMILY_FOLDER: &str = "This was refused: it is a family folder.";
 /// A walk handed a node outside the family folders: personal rotations re-seal as the apps always have.
@@ -113,7 +113,7 @@ pub const OLDER_CHAIN: &str = "This device already holds a later member list for
 pub const SPLIT_CHAIN: &str = "This family’s member list was shown differently to this device.";
 
 /// Settings served as none after settings that opened, within one unlock.
-const OLDER_SETTINGS: &str =
+pub(crate) const OLDER_SETTINGS: &str =
     "The server sent older settings than this device has opened, so nothing was changed.";
 /// An acceptance before the app opened the account's settings.
 pub(crate) const OPEN_SETTINGS: &str = "Open your settings first.";
@@ -328,13 +328,31 @@ struct State {
     seeds: HashMap<(String, u64), Zeroizing<Vec<u8>>>,
 }
 
-/* The settings the app last opened for the account: their group pins, or none when no document opened. */
-struct Settings {
-    user_id: String,
-    pins: HashMap<String, GroupPin>,
-    /* The document's contact pins by user id: the only pins a roster call or join code reads (roster_calls.rs). */
-    contacts: HashMap<String, crate::group_trust::VerifiedPin>,
-    opened: bool,
+/*
+ * The settings last used for the account (use_settings_envelope): the document's group pins and
+ * contact pins as the worker keeps them (`{ ...settings.groups }`, `{ ...settings.contacts }`), or
+ * none when no document opened.
+ */
+pub(crate) struct Settings {
+    pub(crate) user_id: String,
+    /* By family id, exactly as filed: checked only when acceptance reads the family's (HeldPin). */
+    pub(crate) pins: HashMap<String, HeldPin>,
+    /* The contacts object's members in document order: the only pins a roster call or join code reads. */
+    pub(crate) contacts: Vec<(String, serde_json::Value)>,
+    pub(crate) opened: bool,
+    /*
+     * The highest settings version opened in this unlock (0: none opened): a document below it is
+     * an older copy the server served again, and would drop pins (refused, OLDER_SETTINGS).
+     */
+    pub(crate) settings_version: u64,
+}
+
+/* A family's settings pin as held: the raw JSON a document carried, or one the fixtures handed in typed. */
+#[derive(Clone)]
+pub(crate) enum HeldPin {
+    Raw(serde_json::Value),
+    #[cfg(feature = "fixtures")]
+    Typed(GroupPin),
 }
 
 fn slot(workspace_id: &str, node_id: &str) -> Slot {
@@ -1321,45 +1339,6 @@ impl AreaLedger {
         Ok(())
     }
 
-    /// The settings document the app just opened for `user_id`: its group pins and its contact pins
-    /// (`contacts`, by user id: the people this account checked words with, version 3), or `None`
-    /// pins and no contacts when the server served none; a version 1 document is
-    /// [`AreaLedger::legacy_settings`]. Within one unlock, settings that opened never give way to
-    /// none: refused, and the pins held stay (decision D7; the worker's `useSettings`).
-    /// [`AreaLedger::accept_served`] takes its settings pin from here; an admission, the admin's join
-    /// code and an admission's resend take the person's contact pin from here, never from the app.
-    pub fn use_settings(
-        &self,
-        user_id: String,
-        pins: Option<HashMap<String, GroupPin>>,
-        contacts: HashMap<String, crate::group_trust::VerifiedPin>,
-    ) -> CoreResult<()> {
-        uuid(&user_id, "user id")?;
-        if pins.is_none() && !contacts.is_empty() {
-            return Err(refused("Contacts come only with a settings document."));
-        }
-        let mut filed = HashMap::new();
-        for (key, pin) in contacts {
-            let key = key.to_lowercase();
-            if uuid(&key, "user id").is_err() || !pin.user_id.eq_ignore_ascii_case(&key) {
-                return Err(refused("A contact pin is filed under another person."));
-            }
-            filed.insert(key, pin);
-        }
-        let mut state = self.lock();
-        let held = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(&user_id));
-        if pins.is_none() && held.is_some_and(|held| held.opened) {
-            return Err(refused(OLDER_SETTINGS));
-        }
-        state.settings = Some(Settings {
-            user_id: user_id.to_lowercase(),
-            opened: pins.is_some(),
-            pins: pins.unwrap_or_default(),
-            contacts: filed,
-        });
-        Ok(())
-    }
-
     /// A family the person no longer reads: the keys of the areas it opened, and all it knew of them.
     /// Another family's chain listing those areas touches nothing.
     pub fn forget_group(&self, group_id: String) {
@@ -1372,59 +1351,6 @@ impl AreaLedger {
         let generation = state.generation + 1;
         *state = State::default();
         state.generation = generation;
-    }
-
-    /// A family folder's key at `version`, as a grant (`area_grant_open`) or
-    /// self-grant opened it, with the version the server reports
-    /// (`served_version`). Refused unless the group's chain is committed here,
-    /// the folder's id is derived under the group from `id_seed`, and the
-    /// chain lists the folder with this key's commitment at that version.
-    /// Writable only once a root at the chain's latest version is listed too.
-    pub fn open_area(
-        &self,
-        group_id: String,
-        workspace_id: String,
-        id_seed: String,
-        version: u64,
-        area_key: Vec<u8>,
-        served_version: u64,
-    ) -> CoreResult<AreaOpened> {
-        let area_key = Zeroizing::new(area_key);
-        let mut state = self.lock();
-        uuid(&group_id, "group id")?;
-        let chain = state.chains.get(&group_id).cloned().ok_or_else(|| refused(NO_CHAIN))?;
-        uuid(&workspace_id, "workspace id")?;
-        if state.personal.contains(&workspace_id) {
-            return Err(refused(NOT_THE_FAMILYS));
-        }
-        check_id(IdKind::Workspace, group_id.clone(), id_seed.clone(), workspace_id.clone())
-            .map_err(|_| refused(NOT_THE_FAMILYS))?;
-        let latest = area_write_version(Arc::clone(&chain), workspace_id.clone())
-            .ok_or_else(|| refused(NOT_LISTED))?;
-        let listed = chain.area_keys.get(&workspace_id).cloned().unwrap_or_default();
-        let index = usize::try_from(version.wrapping_sub(1)).unwrap_or(usize::MAX);
-        let commitment = area_key_commitment(&area_key).map_err(|_| refused(NOT_CHECKED_KEYS))?;
-        if version == 0 || listed.get(index) != Some(&commitment) {
-            return Err(refused(NOT_CHECKED_KEYS));
-        }
-        let group_id_of_area = group_id.clone();
-        let areas = state.opened.entry(group_id).or_default();
-        let before = areas.get(&workspace_id).map(|area| area.version).unwrap_or(0);
-        areas.insert(workspace_id.clone(), OpenedArea { id_seed, version: before.max(version) });
-        let reason = state.admit_area_key(
-            &group_id_of_area,
-            &workspace_id,
-            version,
-            area_key.to_vec(),
-            served_version,
-            latest,
-        );
-        Ok(AreaOpened {
-            version,
-            writable: reason.is_none(),
-            reason,
-            pin_area: crate::device_record::OpenedArea::new(group_id_of_area.clone(), workspace_id, version),
-        })
     }
 
     /// The account's own workspace, its key at `version` opened from its grant
@@ -1853,6 +1779,168 @@ impl AreaLedger {
 }
 
 impl AreaLedger {
+    /// A family folder's key at `version`, as a grant (`area_grant_open`) or
+    /// self-grant opened it, with the version the server reports
+    /// (`served_version`). Refused unless the group's chain is committed here,
+    /// the folder's id is derived under the group from `id_seed`, and the
+    /// chain lists the folder with this key's commitment at that version.
+    /// Writable only once a root at the chain's latest version is listed too.
+    /// Not exported (Core 6): apps open a family folder from what route 25
+    /// serves through [`AreaLedger::open_family_area`], which opens the grant
+    /// or self-grant here; the shared scenarios and tests hand keys in directly.
+    pub fn open_area(
+        &self,
+        group_id: String,
+        workspace_id: String,
+        id_seed: String,
+        version: u64,
+        area_key: Vec<u8>,
+        served_version: u64,
+    ) -> CoreResult<AreaOpened> {
+        self.open_area_in(
+            group_id,
+            workspace_id,
+            id_seed,
+            version,
+            Zeroizing::new(area_key),
+            served_version,
+            None,
+        )
+    }
+
+    /*
+     * open_area, and with `session` (the generation and account root a key was opened under, outside
+     * the lock) only while that is still the account open: NOT_THIS_ACCOUNT after a lock, another
+     * account or another root (a master-key rotation), checked under the lock before anything is held.
+     */
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_area_in(
+        &self,
+        group_id: String,
+        workspace_id: String,
+        id_seed: String,
+        version: u64,
+        area_key: Zeroizing<Vec<u8>>,
+        served_version: u64,
+        session: Option<(u64, &[u8])>,
+    ) -> CoreResult<AreaOpened> {
+        let mut state = self.lock();
+        if let Some((generation, root)) = session {
+            let same_root = state.account_root.as_ref().is_some_and(|held| held.as_slice() == root);
+            if state.generation != generation || !same_root {
+                return Err(refused(NOT_THIS_ACCOUNT));
+            }
+        }
+        uuid(&group_id, "group id")?;
+        let chain = state.chains.get(&group_id).cloned().ok_or_else(|| refused(NO_CHAIN))?;
+        uuid(&workspace_id, "workspace id")?;
+        if state.personal.contains(&workspace_id) {
+            return Err(refused(NOT_THE_FAMILYS));
+        }
+        check_id(IdKind::Workspace, group_id.clone(), id_seed.clone(), workspace_id.clone())
+            .map_err(|_| refused(NOT_THE_FAMILYS))?;
+        let latest = area_write_version(Arc::clone(&chain), workspace_id.clone())
+            .ok_or_else(|| refused(NOT_LISTED))?;
+        let listed = chain.area_keys.get(&workspace_id).cloned().unwrap_or_default();
+        let index = usize::try_from(version.wrapping_sub(1)).unwrap_or(usize::MAX);
+        let commitment = area_key_commitment(&area_key).map_err(|_| refused(NOT_CHECKED_KEYS))?;
+        if version == 0 || listed.get(index) != Some(&commitment) {
+            return Err(refused(NOT_CHECKED_KEYS));
+        }
+        let group_id_of_area = group_id.clone();
+        let areas = state.opened.entry(group_id).or_default();
+        let before = areas.get(&workspace_id).map(|area| area.version).unwrap_or(0);
+        areas.insert(workspace_id.clone(), OpenedArea { id_seed, version: before.max(version) });
+        let reason = state.admit_area_key(
+            &group_id_of_area,
+            &workspace_id,
+            version,
+            area_key.to_vec(),
+            served_version,
+            latest,
+        );
+        Ok(AreaOpened {
+            version,
+            writable: reason.is_none(),
+            reason,
+            pin_area: crate::device_record::OpenedArea::new(group_id_of_area.clone(), workspace_id, version),
+        })
+    }
+
+    /// The settings as typed values, for the shared fixtures and tests only
+    /// (apps hand the ledger the served envelopes,
+    /// [`AreaLedger::use_settings_envelope`], and the ledger opens them): the
+    /// group pins, or `None` pins and no contacts for "no settings", and the
+    /// contact pins by user id (each filed under its own id, or all are
+    /// refused). Within one unlock, settings that opened never give way to
+    /// none (decision D7).
+    #[cfg(feature = "fixtures")]
+    #[doc(hidden)]
+    pub fn use_settings(
+        &self,
+        user_id: String,
+        pins: Option<HashMap<String, GroupPin>>,
+        contacts: HashMap<String, crate::group_trust::VerifiedPin>,
+    ) -> CoreResult<()> {
+        uuid(&user_id, "user id")?;
+        if pins.is_none() && !contacts.is_empty() {
+            return Err(refused("Contacts come only with a settings document."));
+        }
+        let mut filed = vec![];
+        for (key, pin) in contacts {
+            let key = key.to_lowercase();
+            if uuid(&key, "user id").is_err() || !pin.user_id.eq_ignore_ascii_case(&key) {
+                return Err(refused("A contact pin is filed under another person."));
+            }
+            filed.push((key, crate::ledger_settings::contact_json(&pin)));
+        }
+        filed.sort_by(|a, b| a.0.cmp(&b.0));
+        let opened = pins.is_some();
+        let pins = pins.unwrap_or_default().into_iter().map(|(id, pin)| (id, HeldPin::Typed(pin))).collect();
+        self.set_settings(&user_id, opened, 0, pins, filed, None)
+    }
+
+    /*
+     * The settings to hold for `user_id`, refused when they are none after settings that opened in
+     * this unlock (OLDER_SETTINGS), and, when `session` says which (generation, account root) the
+     * document was opened under, unless that is still the one open (NOT_THIS_ACCOUNT).
+     */
+    pub(crate) fn set_settings(
+        &self,
+        user_id: &str,
+        opened: bool,
+        settings_version: u64,
+        pins: HashMap<String, HeldPin>,
+        contacts: Vec<(String, serde_json::Value)>,
+        session: Option<(u64, &[u8])>,
+    ) -> CoreResult<()> {
+        let mut state = self.lock();
+        if let Some((generation, root)) = session {
+            let same_root = state.account_root.as_ref().is_some_and(|held| held.as_slice() == root);
+            let same_user =
+                state.account.as_ref().is_some_and(|(held, _)| held.eq_ignore_ascii_case(user_id));
+            if state.generation != generation || !same_root || !same_user {
+                return Err(refused(NOT_THIS_ACCOUNT));
+            }
+        }
+        let held = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(user_id));
+        // Settings that opened never give way to none, nor to a document older than one opened,
+        // whichever of two overlapping reads lands last (decided here, under the lock).
+        if held.is_some_and(|held| held.opened && (!opened || settings_version < held.settings_version)) {
+            return Err(refused(OLDER_SETTINGS));
+        }
+        state.settings =
+            Some(Settings { user_id: user_id.to_lowercase(), opened, pins, contacts, settings_version });
+        Ok(())
+    }
+
+    /* The unlocked account's user id, generation and root, for work done outside the lock. */
+    pub(crate) fn unlocked(&self) -> Option<(String, u64, Zeroizing<Vec<u8>>)> {
+        let state = self.lock();
+        let (user_id, _) = state.account.clone()?;
+        Some((user_id, state.generation, state.account_root.clone()?))
+    }
+
     /// A walk's key half alone, for the shared scenarios and the fuzz target
     /// (Rust callers only, never exported to the apps): [`AreaLedger::rotate_node`]
     /// with no records, the fresh key pending once it is wrapped.
@@ -1905,6 +1993,11 @@ impl AreaLedger {
         self.lock().forked.contains(group_id)
     }
 
+    /* The family's committed chain, if any: none after a refusal or a fork (held_back). */
+    pub(crate) fn committed_chain(&self, group_id: &str) -> Option<Arc<AcceptedRosters>> {
+        self.lock().chains.get(group_id).cloned()
+    }
+
     /* The unlocked account's root, as open_account held it; none while locked. */
     pub(crate) fn account_root(&self) -> Option<Zeroizing<Vec<u8>>> {
         self.lock().account_root.clone()
@@ -1954,23 +2047,42 @@ impl AreaLedger {
         Some(ServedAccount { user_id, signing_public_key, store_key, generation: state.generation })
     }
 
-    /* The settings pin for the family, from the settings the account last opened; refused before any. */
-    pub(crate) fn settings_pin(&self, user_id: &str, group_id: &str) -> CoreResult<Option<GroupPin>> {
+    /*
+     * The settings pin for the family, from the settings the account last used; refused
+     * (OPEN_SETTINGS) before any. Inside, the pin's own verdict, as acceptance takes it: none for
+     * no member or a JSON null (the worker filters both out), else checked as checkGroupPin
+     * checks the raw value (`pin_of`), its words kept for the refusal.
+     */
+    pub(crate) fn settings_pin(
+        &self,
+        user_id: &str,
+        group_id: &str,
+    ) -> CoreResult<CoreResult<Option<GroupPin>>> {
         let state = self.lock();
         let settings = state
             .settings
             .as_ref()
             .filter(|held| held.user_id.eq_ignore_ascii_case(user_id))
             .ok_or_else(|| refused(OPEN_SETTINGS))?;
-        Ok(settings.pins.get(group_id).cloned())
+        Ok(match settings.pins.get(group_id) {
+            None | Some(HeldPin::Raw(serde_json::Value::Null)) => Ok(None),
+            Some(HeldPin::Raw(value)) => crate::device_record::pin_of(group_id, value).map(Some),
+            #[cfg(feature = "fixtures")]
+            Some(HeldPin::Typed(pin)) => {
+                crate::group_trust::group_pin_check(group_id.into(), pin.clone()).map(Some)
+            }
+        })
     }
 
-    /* The account's contact pin of `user_id`, from the settings it last opened; none without one. */
-    pub(crate) fn contact_pin(&self, user_id: &str) -> Option<crate::group_trust::VerifiedPin> {
+    /*
+     * The account's contact pin of `user_id`, from the settings it last used: the worker's
+     * contactPin (the first member whose key and `userId` both lowercase to the id); none without.
+     */
+    pub(crate) fn contact_pin(&self, user_id: &str) -> Option<crate::ledger_settings::ContactPin> {
         let state = self.lock();
         let (account, _) = state.account.as_ref()?;
         let settings = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(account))?;
-        settings.contacts.get(&user_id.to_lowercase()).cloned()
+        crate::ledger_settings::contact_pin_of(&settings.contacts, user_id)
     }
 
     /* The highest chain committed for the family in this session (accept_served's floor and mark). */

@@ -41,20 +41,20 @@ extension Vault {
     }
 
     /*
-     * The settings document's family pins, as the ledger takes its marks from them, and its contact
-     * pins, the only ones a roster call or join code reads (as the web worker takes the document it
-     * opened): none when the server holds no settings, the version 1 form (which opens nowhere) as
-     * legacy settings, and otherwise every pin that reads. The ledger refuses none after settings
-     * that opened. Until the ledger opens the settings itself (Core 5a's residual), this app is
-     * trusted to pass the document it opened.
+     * The settings document handed to the ledger as the server served it: the ledger opens the
+     * settings key under the account root it holds and the document under that key, and takes the
+     * family pins (its marks) and contact pins (the only ones a roster call or join code reads)
+     * from what it opened itself, as the web worker does (Core 6). None stored is "no settings";
+     * a version 1 row (served as none at a later sequence) is legacy settings, which open nowhere.
+     * The ledger refuses none or legacy after settings that opened.
      */
     func useForFamilies(_ settings: Settings) throws {
         if settings.version == 0 {
-            try areaLedger.useSettings(userId: session.userId, pins: nil, contacts: [:])
-        } else if settings.envelopeVersion == 1 {
-            try areaLedger.legacySettings(userId: session.userId)
+            try areaLedger.useSettingsEnvelope(userId: session.userId, keyEnvelope: nil, settingsEnvelope: nil)
+        } else if let served = settings.served {
+            try areaLedger.useSettingsEnvelope(userId: session.userId, keyEnvelope: settings.keyEnvelope, settingsEnvelope: served)
         } else {
-            try areaLedger.useSettings(userId: session.userId, pins: settings.groupPins, contacts: settings.verifiedContacts)
+            try areaLedger.legacySettings(userId: session.userId)
         }
     }
 
@@ -97,12 +97,22 @@ extension Vault {
         })
     }
 
-    /* The identity a grant was sealed to, by its key version. */
-    func identity(atKeyVersion version: UInt64) async throws -> IdentityKeys {
-        guard let keys = try await allIdentities().first(where: { $0.keyVersion == version }) else {
-            throw DriveAPIError.server(400, "This family folder was shared with keys this account no longer has.")
-        }
-        return keys
+    /*
+     * This account's identity envelope at `version`, for the ledger to open under the account
+     * root (a grant is opened there, never here): the one in use, or an earlier one as the server
+     * serves the history (the ledger's open proves it is this account's own).
+     */
+    func identityEnvelope(atKeyVersion version: UInt64) async throws -> IdentityEnvelope {
+        _ = try await identityKeys()
+        if let current = identityEnvelope, current.keyVersion == version { return current }
+        if let earlier = try await Auth.identityHistory().first(where: { $0.keyVersion == version }) { return earlier }
+        throw DriveAPIError.server(400, "This family folder was shared with keys this account no longer has.")
+    }
+
+    /* The account key's version, as the personal workspace's grant names it: what a self-grant names. */
+    func accountKeyVersion() async throws -> UInt64 {
+        guard let version = try await loadWorkspace().grant?.keyVersion else { throw DriveAPIError.server(404, "No workspace grant") }
+        return version
     }
 
     /* Route 25 named these as family folders: never opened under a key from the personal path. */

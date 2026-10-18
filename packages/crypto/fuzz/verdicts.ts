@@ -95,6 +95,9 @@ import {
 import { drawPositions } from '../src/join-session';
 import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
 import { readOutboxEntry } from '../src/outbox';
+import { readSettingsDocument } from '../src/contacts';
+import { contactPinOf, settingsMarks, settingsPinOf } from '../src/settings-marks';
+import { runArea } from '../src/settings-areas-testkit';
 import {
     JUNK,
     committedSession,
@@ -1104,6 +1107,10 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
             return rosterCallKind(value);
         case 'roster_call_session':
             return rosterCallSessionKind(value);
+        case 'settings':
+            return settingsKind(value);
+        case 'area_open':
+            return areaOpenKind(value);
         default:
             return undefined;
     }
@@ -2018,4 +2025,156 @@ async function rosterCallSessionKind(value: Doc): Promise<Verdict | undefined> {
     const clean = steps.map((step) => rosterSessionStep(step as Json));
     if (clean.some((step) => step === null)) return undefined;
     return ok(await sessionRun(clean as Json[]));
+}
+
+/*
+ * Text both JSON parsers read alike (the core's settings_fits): numbers of at
+ * most 200 digits with an exponent of at most two, at most 64 brackets
+ * (escaped lone surrogates are repaired alike before parsing).
+ */
+export function settingsFits(text: string) {
+    const numberOk = (token: string) => {
+        const at = token.search(/[eE]/);
+        const mantissa = at < 0 ? token : token.slice(0, at);
+        const exponent = at < 0 ? '' : token.slice(at + 1);
+        return (
+            (mantissa.match(/[0-9]/g) ?? []).length <= 200 &&
+            (exponent.match(/[0-9]/g) ?? []).length <= 2
+        );
+    };
+    let [inString, escape, brackets, token] = [false, false, 0, ''];
+    for (const c of text) {
+        if (inString) {
+            if (escape) escape = false;
+            else if (c === '\\') escape = true;
+            else if (c === '"') inString = false;
+            continue;
+        }
+        if (/[0-9]/.test(c) || '+-.eE'.includes(c)) {
+            token += c;
+            continue;
+        }
+        if (!numberOk(token)) return false;
+        token = '';
+        if (c === '"') inString = true;
+        else if (c === '{' || c === '[') brackets++;
+    }
+    return numberOk(token) && brackets <= 64;
+}
+
+/* A settings document's plaintext read as the worker reads it, probed (the core's settings kind). */
+async function settingsKind(value: Doc): Promise<Verdict | undefined> {
+    const text = value.text;
+    const users = stringsOf(value, 'users');
+    const groups = stringsOf(value, 'groups');
+    if (typeof text !== 'string' || !users || !groups) return undefined;
+    if (users.length > 8 || groups.length > 8 || new TextEncoder().encode(text).length > 65_536)
+        return undefined;
+    if (!settingsFits(text)) return undefined;
+    let settings;
+    try {
+        settings = readSettingsDocument(new TextEncoder().encode(text));
+    } catch (error) {
+        if (error instanceof CryptoError) return refused;
+        throw error;
+    }
+    const account = '00000000-0000-4000-8000-000000000000';
+    const marks = settingsMarks(null, account, settings);
+    const contacts: Json = {};
+    for (const user of users) {
+        const pin: Json = contactPinOf(marks, account, user);
+        if (!pin) {
+            contacts[user] = null;
+            continue;
+        }
+        const str = (v: unknown) => (typeof v === 'string' ? v : null);
+        const keys = [
+            str(pin.encryptionPublicKey),
+            str(pin.signingPublicKey),
+            str(pin.mlDsaPublicKeyHash),
+            str(pin.kemPublicKeyHash),
+        ];
+        const wordsChecked = pin.trustedVia === undefined || pin.trustedVia === null;
+        const checked =
+            wordsChecked &&
+            keys.every((key) => key !== null) &&
+            typeof pin.fingerprint === 'string' &&
+            (await pinVerified(pin));
+        invariant(
+            pin.userId.toLowerCase() === user.toLowerCase(),
+            'a pin found under another person',
+        );
+        contacts[user] = { userId: pin.userId, keys, fingerprint: str(pin.fingerprint), checked };
+    }
+    const groupVerdicts: Json = {};
+    for (const group of groups) {
+        const raw = settingsPinOf(marks, group);
+        if (raw === null) {
+            groupVerdicts[group] = null;
+            continue;
+        }
+        try {
+            groupVerdicts[group] = { pin: checkGroupPin(group, raw) };
+        } catch (error) {
+            if (!(error instanceof CryptoError)) throw error;
+            groupVerdicts[group] = { refused: true };
+        }
+    }
+    return ok({ status: 'read', contacts, groups: groupVerdicts });
+}
+
+/* A family folder of the roster-call family opened by person 2 (the core's area_open kind). */
+async function areaOpenKind(value: Doc): Promise<Verdict | undefined> {
+    const area = text(value, 'area');
+    if (area === undefined || !['A1', 'A2', 'A3', 'foreign'].includes(area)) return undefined;
+    const served = number(value, 'served');
+    if (served === undefined || served < 1 || served > 4) return undefined;
+    let grant: Json = null;
+    if (value.grant !== undefined && value.grant !== null) {
+        if (!isObject(value.grant) || !Array.isArray(value.grant.key)) return undefined;
+        const key = value.grant.key as unknown[];
+        const index = unsigned(key[0]);
+        const version = unsigned(key[1]);
+        if (key.length !== 2 || (index !== 0 && index !== 2) || version === undefined)
+            return undefined;
+        if (version < 1 || version > 2 || (index === 0 && version !== 1)) return undefined;
+        const granterKey = value.grant.granterKey;
+        if (granterKey !== undefined && granterKey !== null && typeof granterKey !== 'boolean')
+            return undefined;
+        grant = { key: [index, version], granterKey: granterKey ?? true };
+    }
+    let selfGrant: Json = null;
+    if (value.selfGrant !== undefined && value.selfGrant !== null) {
+        const own = value.selfGrant;
+        if (!isObject(own)) return undefined;
+        const fields = {
+            version: small(own, 'version'),
+            workspaceId: text(own, 'workspaceId'),
+            keyVersion: number(own, 'keyVersion'),
+            workspaceKeyVersion: number(own, 'workspaceKeyVersion'),
+            wrappingSalt: text(own, 'wrappingSalt'),
+            wrappingNonce: text(own, 'wrappingNonce'),
+            encryptedKey: text(own, 'encryptedKey'),
+        };
+        if (Object.values(fields).some((field) => field === undefined)) return undefined;
+        selfGrant = fields;
+    }
+    const { outcome, stored } = await runArea({ area, served, grant }, selfGrant);
+    if ('refused' in outcome) return refused;
+    const latest = area === 'A3' ? 2 : 1;
+    if (outcome.from === 'self-grant') {
+        const v = selfGrant.workspaceKeyVersion as number;
+        invariant(
+            v >= latest && v >= served && v <= latest,
+            'a self-grant taken off the latest version',
+        );
+    }
+    if (stored) {
+        invariant(outcome.from === 'grant', 'a self-grant made from a self-grant');
+        invariant(
+            stored.workspaceKeyVersion === latest && served === latest,
+            'a self-grant of a key not current',
+        );
+    }
+    return ok(outcome);
 }

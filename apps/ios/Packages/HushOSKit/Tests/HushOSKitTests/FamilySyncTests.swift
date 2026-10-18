@@ -92,6 +92,68 @@ extension OnFakeDrive {
             #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 3)
         }
 
+        /*
+         * The grant opened the folder's current key, so the ledger wrapped it as this account's
+         * self-grant and the phone stored it (route 23). Later the creator's account is gone (route 6
+         * serves no identity for the granter): a fresh start opens the folder from the self-grant,
+         * and stores nothing again. Fails without the self-grant opener or without storing it.
+         */
+        @Test func aFolderWhoseGranterIsGoneOpensFromTheSelfGrantThisPhoneStored() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let route23 = "/api/groups/\(family.groupId)/areas/\(family.workspaceId)/self-grant"
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(server.count(route23, method: "PUT") == 1)
+            let stored = try #require(server.selfGrant)
+            #expect((stored["workspaceId"] as? String) == family.workspaceId && (stored["keyVersion"] as? NSNumber)?.intValue == 1)
+            first.done()
+
+            server.granterGone = true
+            server.clearRequests()
+            let later = try await family.phone(server, records: first.records)
+            defer { later.done() }
+            guard case .accepted(let view) = await later.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let area = try #require(view.areas.first)
+            #expect(area.name == "Photos" && area.openable)
+            #expect(try await later.vault.children(of: family.rootId).map(\.name) == ["Recipes.txt"])
+            #expect(!server.requested(route23, method: "PUT"))
+        }
+
+        /*
+         * A grant envelope and a granter key that don't decode (a server's junk) are no reason to stop:
+         * the stored self-grant still opens the folder, as on the web. Fails if a decode error aborts
+         * the folder before the ledger is asked.
+         */
+        @Test func aGrantThatDoesNotDecodeStillLetsTheSelfGrantOpenTheFolder() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(server.selfGrant != nil)
+            first.done()
+
+            server.malformedGrant = true
+            let later = try await family.phone(server, records: first.records)
+            defer { later.done() }
+            guard case .accepted(let view) = await later.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let area = try #require(view.areas.first)
+            #expect(area.name == "Photos" && area.openable)
+        }
+
+        /* The break-check's other half: with the granter gone and no self-grant stored, nothing of the folder opens. */
+        @Test func aFolderWhoseGranterIsGoneAndNoSelfGrantDoesNotOpen() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.granterGone = true
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let area = try #require(view.areas.first)
+            #expect(area.name == nil && !area.openable && area.write == .readOnly)
+            #expect(server.selfGrant == nil)
+        }
+
         /* Only 404 `not-member` wipes: the record, the ledger's keys and the opened folders go; the settings pin stays. */
         @Test func aNotMemberAnswerWipesWhatThePhoneKeptButKeepsTheSettingsPin() async throws {
             let family = try FamilyFixture()
@@ -281,11 +343,13 @@ struct FamilyPerson {
     let userId: String
     let root: Data
     let keys: IdentityKeys
+    let envelope: IdentityEnvelope
 
     init(keyVersion: UInt64 = 1) throws {
         userId = UUID().uuidString.lowercased()
         root = try randomBytes(length: 32)
-        keys = try identityOpen(userId: userId, accountKey: root, envelope: try identityCreate(userId: userId, accountKey: root, keyVersion: keyVersion))
+        envelope = try identityCreate(userId: userId, accountKey: root, keyVersion: keyVersion)
+        keys = try identityOpen(userId: userId, accountKey: root, envelope: envelope)
     }
 
     var served: ServedKeys {
@@ -421,8 +485,10 @@ struct FamilyFixture {
         let api = DriveAPI(session: session, configuration: configuration)
         let vault = Vault(api: api, session: session)
         await vault.adopt(accountKey: member.root)
-        await vault.adopt(identity: member.keys)
-        await vault.adopt(workspace: WorkspaceView(workspaceId: personal, changeSeq: nil, grant: nil, root: nil), key: try randomBytes(length: 32))
+        await vault.adopt(identity: member.keys, envelope: member.envelope)
+        // The personal workspace's grant names the account key's version, which a self-grant names too.
+        let grant = GrantView(version: 1, workspaceId: personal, keyVersion: 1, workspaceKeyVersion: 1, wrappingSalt: "", wrappingNonce: "", encryptedKey: "")
+        await vault.adopt(workspace: WorkspaceView(workspaceId: personal, changeSeq: nil, grant: grant, root: nil), key: try randomBytes(length: 32))
         let store = records ?? FamilyRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-records-\(UUID().uuidString)"), activity: .expired)
         return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store), records: store)
     }
@@ -451,6 +517,12 @@ final class FamilyServer: @unchecked Sendable {
     var beforePut: (@Sendable () -> Void)?
     /* Route 3's members, as a manager's view names them. */
     var members: [[String: Any]] = []
+    /* Route 6 without the creator's identity: their account is gone (the folder's granter). */
+    var granterGone = false
+    /* The member's self-grant as route 23 stored it, served back on route 25. */
+    var selfGrant: [String: Any]?
+    /* Route 25's grant envelope and route 6's granter key as something that doesn't decode. */
+    var malformedGrant = false
     private var requests: [(method: String, path: String)] = []
     private let settingsKey: Data
     private let settingsKeyEnvelope: SettingsKeyEnvelope
@@ -478,7 +550,7 @@ final class FamilyServer: @unchecked Sendable {
     }
 
     /* Anything but a read: a write the phone must never send. */
-    var writes: [String] { lock.withLock { requests.filter { $0.method != "GET" && !$0.path.hasPrefix("/api/auth/settings") }.map(\.path) } }
+    var writes: [String] { lock.withLock { requests.filter { $0.method != "GET" && !$0.path.hasPrefix("/api/auth/settings") && !$0.path.hasSuffix("/self-grant") }.map(\.path) } }
 
     /* The member's settings document, sealed one version above what is stored, holding `pin` for the family. */
     func storeSettings(pin: GroupPin, contacts: [ContactPin] = []) throws {
@@ -555,15 +627,29 @@ final class FamilyServer: @unchecked Sendable {
         case ("GET", "/api/groups/\(f.groupId)"):
             return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6]])
         case ("GET", "/api/groups/\(f.groupId)/identities"):
-            return (200, ["identities": [identity(f.creator), identity(f.member)].sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
+            var creator = identity(f.creator)
+            if lock.withLock({ granterGone }) { creator["identity"] = NSNull() }
+            if lock.withLock({ malformedGrant }), var keys = creator["identity"] as? [String: Any] {
+                keys["mlDsaPublicKey"] = "not base64url!"
+                creator["identity"] = keys
+            }
+            return (200, ["identities": [creator, identity(f.member)].sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
+        case ("PUT", "/api/groups/\(f.groupId)/areas/\(f.workspaceId)/self-grant"):
+            let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            guard let grant = sent["grant"] as? [String: Any], (grant["workspaceKeyVersion"] as? NSNumber)?.intValue == 1 else {
+                return (409, ["code": "area-moved", "message": "This folder's key changed."])
+            }
+            lock.withLock { selfGrant = grant }
+            return (200, ["ok": true])
         case ("GET", "/api/drive/spaces"):
             return (200, ["spaces": [
                 ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
                 ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
                     "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": 1, "changeSeq": 2, "root": json(f.root), "rotation": NSNull(),
                     "grant": ["workspaceKeyVersion": 1, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId, "rosterVersion": 2,
-                              "rosterDigest": rosterDigest(statement: f.r2.statement), "envelope": base64urlEncode(bytes: f.grant)],
-                    "selfGrant": NSNull(),
+                              "rosterDigest": rosterDigest(statement: f.r2.statement),
+                              "envelope": lock.withLock { malformedGrant } ? "not base64url!" : base64urlEncode(bytes: f.grant)],
+                    "selfGrant": (lock.withLock { selfGrant } as Any?) ?? NSNull(),
                 ]]],
             ]])
         case ("GET", "/api/drive/nodes/\(f.rootId)/children"):

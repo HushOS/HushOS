@@ -253,8 +253,78 @@ export async function openSettings(
         decode(envelope.nonce, 24),
         settingsContext(userId, 2, envelope.settingsVersion),
     );
-    const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext));
-    plaintext.fill(0);
+    try {
+        return readSettingsDocument(plaintext);
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+/*
+ * The text with every unpaired \uD800..\uDFFF escape inside a string written
+ * as \uFFFD (the core's without_lone_surrogates): serde_json refuses them, a
+ * contact name the server served can hold one, and no field trust reads is
+ * outside ASCII. Text outside strings is untouched.
+ */
+export function withoutLoneSurrogates(text: string) {
+    if (!text.includes('\\u')) return text;
+    const surrogateAt = (at: number) => {
+        if (text[at] !== '\\' || text[at + 1] !== 'u') return null;
+        const hex = text.slice(at + 2, at + 6);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) return null;
+        const n = parseInt(hex, 16);
+        return n >= 0xd800 && n <= 0xdfff ? n : null;
+    };
+    let out = '';
+    let inString = false;
+    let at = 0;
+    while (at < text.length) {
+        const c = text[at]!;
+        if (!inString) inString = c === '"';
+        else if (c === '"') inString = false;
+        else if (c === '\\') {
+            const unit = surrogateAt(at);
+            if (unit !== null && unit <= 0xdbff) {
+                const low = surrogateAt(at + 6);
+                if (low !== null && low >= 0xdc00) {
+                    out += text.slice(at, at + 12);
+                    at += 12;
+                    continue;
+                }
+            }
+            if (unit !== null) {
+                out += '\\ufffd';
+                at += 6;
+                continue;
+            }
+            // Any other escape: the backslash and the character it escapes, kept as they are.
+            const next = text.codePointAt(at + 1);
+            const width = next === undefined ? 0 : next > 0xffff ? 2 : 1;
+            out += text.slice(at, at + 1 + width);
+            at += 1 + width;
+            continue;
+        }
+        out += c;
+        at++;
+    }
+    return out;
+}
+
+/*
+ * An opened document's plaintext, read: UTF-8 as TextDecoder reads it
+ * (malformed bytes replaced, a leading BOM dropped), JSON (anything else is
+ * unsupported, not a SyntaxError), then an object with `version` the number 1
+ * or 2 and `contacts` an object (an array or null passes `typeof`, and holds
+ * no pin keyed by a user id). The core reads it the same way
+ * (ledger_settings.rs, read_document).
+ */
+export function readSettingsDocument(plaintext: Uint8Array): Settings {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(withoutLoneSurrogates(new TextDecoder().decode(plaintext)));
+    } catch {
+        throw new CryptoError('Unsupported settings document.');
+    }
     if (
         !parsed ||
         typeof parsed !== 'object' ||
