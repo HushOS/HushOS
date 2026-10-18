@@ -2,8 +2,8 @@ import type { DriveNode } from '@hushos/drive/client';
 import type { FileReader } from '@hushos/drive/downloads';
 import { downloadWorker } from '@/lib/download-sinks';
 import { downloads } from '@/lib/downloads';
-import { COLOUR_CEILING, HIGHLIGHT_LIMIT, languageFor } from '@/lib/highlight';
-import { OFFICE_LIMIT, officeKind } from '@/lib/office';
+import { languageFor } from '@/lib/highlight';
+import { officeKind } from '@/lib/office';
 
 /*
  * Previews are the client decrypting bytes it fetched by range and rendering
@@ -24,80 +24,15 @@ export type PreviewKind =
     | 'office'
     | 'none';
 
-export const PREVIEW_LIMITS = {
-    image: 100 * 1024 * 1024,
-    text: 8 * 1024 * 1024,
-    /* A PDF up to this size is read whole and remembered; larger ones stream by range. */
-    document: 16 * 1024 * 1024,
-    /* A clip up to this size plays from memory and is remembered; larger media streams by range. */
-    media: 16 * 1024 * 1024,
-    /* Media falls back to a blob where the service worker is unavailable. */
-    mediaBlob: 256 * 1024 * 1024,
-};
-
-/* ------------------------------------------------------------------------- */
-/* Large files                                                                */
-/* ------------------------------------------------------------------------- */
-
-/*
- * Past a kind's threshold a file is shown only in part, or not coloured, or
- * not opened, until the person asks (the large-file card, LargeFile in
- * viewer-parts); past its ceiling it isn't offered at all. PDF and media have
- * neither: they stream by range. Everything still decrypts into memory only.
- */
-export type LargeFileKind = 'colour' | 'text' | 'image' | 'office';
-export type LargeFileStage = 'fine' | 'offer' | 'ceiling';
-
-const MiB = 1024 * 1024;
-
-/*
- * Text loads whole up to 32 MB. The bytes and the decoded string are held
- * together (two to four times the file), the viewer draws it in blocks so the
- * page stays usable, and past this the gain over the first 8 MB rarely
- * outweighs a tab that a phone may kill.
- */
-export const TEXT_CEILING = 32 * MiB;
-/*
- * Office files and CSV open up to 64 MB. Mammoth and SheetJS parse on the
- * page and keep several copies of what they read (a spreadsheet's XML
- * inflates many times over); at 64 MB a CSV already takes about a gigabyte.
- */
-export const OFFICE_CEILING = 64 * MiB;
-
-/*
- * Images open up to 300 MB, less where the browser says the device has little
- * memory (Chromium's navigator.deviceMemory, in GB, capped at 8; Safari and
- * Firefox don't say). The file is held while the browser decodes it, and the
- * decoded picture takes four bytes a pixel, often more than the file.
- */
-export function imageCeiling(
-    deviceMemory = typeof navigator === 'undefined'
-        ? undefined
-        : (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
-) {
-    if (deviceMemory !== undefined && deviceMemory <= 2) return PREVIEW_LIMITS.image;
-    if (deviceMemory !== undefined && deviceMemory <= 4) return 200 * MiB;
-    return 300 * MiB;
-}
-
-export function largeFileLimits(kind: LargeFileKind) {
-    switch (kind) {
-        case 'colour':
-            return { threshold: HIGHLIGHT_LIMIT, ceiling: COLOUR_CEILING };
-        case 'text':
-            return { threshold: PREVIEW_LIMITS.text, ceiling: TEXT_CEILING };
-        case 'image':
-            return { threshold: PREVIEW_LIMITS.image, ceiling: imageCeiling() };
-        case 'office':
-            return { threshold: OFFICE_LIMIT, ceiling: OFFICE_CEILING };
-    }
-}
-
-export function largeFileStage(kind: LargeFileKind, size: number): LargeFileStage {
-    const { threshold, ceiling } = largeFileLimits(kind);
-    if (size <= threshold) return 'fine';
-    return size <= ceiling ? 'offer' : 'ceiling';
-}
+export {
+    imageCeiling,
+    largeFileStage,
+    OFFICE_CEILING,
+    PREVIEW_LIMITS,
+    TEXT_CEILING,
+    type LargeFileKind,
+    type LargeFileStage,
+} from '@/lib/large-files';
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico']);
 const TEXT_EXT = new Set([
@@ -247,8 +182,13 @@ export function previewMime(node: DriveNode) {
     return table[ext] ?? 'application/octet-stream';
 }
 
-export function openReader(node: DriveNode) {
-    return downloads.openReader(node);
+/*
+ * A reader over the node's decrypted chunks. One that reads the whole file
+ * (text, an image, an Office file) keeps one chunk, not four: those chunks
+ * would only sit in memory beside the copy the viewer is making.
+ */
+export function openReader(node: DriveNode, wholeRead = false) {
+    return downloads.openReader(node, wholeRead ? 1 : undefined);
 }
 
 export type ReadProgress = { done: number; total: number };
@@ -379,16 +319,35 @@ export function recallPreview(versionId: string) {
     return entry;
 }
 
+/*
+ * Keeps a preview for the session; false when it is too big to keep, and then
+ * the caller still owns its URL (see holdUrl). An earlier entry for the same
+ * version (the first 8 MB of a text now read whole) goes either way.
+ */
 export function rememberPreview(versionId: string, entry: RememberedPreview) {
-    if (entry.bytes > PREVIEW_CACHE_BYTES / 4) return;
     const previous = remembered.get(versionId);
     if (previous) evict(versionId, previous);
+    if (entry.bytes > PREVIEW_CACHE_BYTES / 4) return false;
     remembered.set(versionId, entry);
     rememberedBytes += entry.bytes;
     for (const [id, old] of remembered) {
         if (rememberedBytes <= PREVIEW_CACHE_BYTES) break;
         if (id !== versionId) evict(id, old);
     }
+    return true;
+}
+
+/*
+ * Blob URLs of decrypted bytes that a viewer holds itself because the session
+ * cache didn't keep them. The viewer releases its URL when it closes; locking
+ * releases every one still held, so no decrypted bytes outlive the lock.
+ */
+const held = new Set<string>();
+export function holdUrl(url: string) {
+    held.add(url);
+    return () => {
+        if (held.delete(url)) URL.revokeObjectURL(url);
+    };
 }
 
 function evict(versionId: string, entry: RememberedPreview) {
@@ -399,4 +358,6 @@ function evict(versionId: string, entry: RememberedPreview) {
 
 export function forgetPreviews() {
     for (const [id, entry] of remembered) evict(id, entry);
+    for (const url of held) URL.revokeObjectURL(url);
+    held.clear();
 }

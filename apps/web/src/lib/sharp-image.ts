@@ -62,7 +62,11 @@ export function useSharpImage(node: DriveNode, limit: number, enabled = true) {
                 const url = URL.createObjectURL(
                     new Blob([bytes as BlobPart], { type: previewMime(node) }),
                 );
-                rememberPreview(versionId, { kind: 'image', url, bytes: bytes.byteLength });
+                // Only what the cache keeps is shown: the cache revokes it, here nothing would.
+                if (!rememberPreview(versionId, { kind: 'image', url, bytes: bytes.byteLength })) {
+                    URL.revokeObjectURL(url);
+                    return;
+                }
                 if (active) setLoaded({ versionId, url });
             } catch {
                 // The thumbnail stays.

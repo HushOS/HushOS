@@ -14,7 +14,7 @@ import {
     useState,
 } from 'react';
 import { Fragment as JsxFragment, jsx, jsxs } from 'react/jsx-runtime';
-import { LargeFile } from '@/components/drive/viewer-parts';
+import { LargeFileBar } from '@/components/drive/viewer-parts';
 import {
     canHighlight,
     type ColouredLine,
@@ -298,6 +298,7 @@ export function CodeView({
     language,
     size = text.length,
     markLine = null,
+    quiet = false,
 }: {
     text: string;
     language: string | null;
@@ -305,6 +306,8 @@ export function CodeView({
     size?: number;
     /* A 1-based line to mark in the gutter and scroll to, such as where a JSON file stops being valid. */
     markLine?: number | null;
+    /* No colouring bar: another bar above already speaks for the file (text shown in part). */
+    quiet?: boolean;
 }) {
     const [asked, setAsked] = useState(false);
     const colourable = canHighlight(language);
@@ -321,11 +324,19 @@ export function CodeView({
     const done = blocks ? Math.min(blocks.length * RENDER_BLOCK, lines.length) : 0;
     return (
         <>
-            {stage !== 'fine' && (!asked || done < lines.length) && (
-                <LargeFile
+            {stage !== 'fine' && !quiet && (
+                <LargeFileBar
                     kind="colour"
                     size={size}
-                    stage={stage === 'ceiling' ? 'ceiling' : asked ? 'working' : 'offer'}
+                    stage={
+                        stage === 'ceiling'
+                            ? 'ceiling'
+                            : !asked
+                              ? 'offer'
+                              : done < lines.length
+                                ? 'working'
+                                : 'done'
+                    }
                     progress={done / lines.length}
                     onContinue={() => setAsked(true)}
                 />

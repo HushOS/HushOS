@@ -4,23 +4,11 @@ import { fromHtml } from 'hast-util-from-html';
 import { sanitize, defaultSchema, type Schema } from 'hast-util-sanitize';
 import { cn } from 'cn';
 import { FileQuestionIcon } from 'lucide-react';
-import { type ReactNode, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CodeView, HastView } from '@/components/drive/rich-text';
-import {
-    LargeFile,
-    Notice,
-    Opening,
-    useSourceSwitch,
-    viewerWords,
-} from '@/components/drive/viewer-parts';
+import { Notice, Opening, useSourceSwitch, viewerWords } from '@/components/drive/viewer-parts';
 import { languageFor } from '@/lib/highlight';
-import {
-    largeFileStage,
-    OFFICE_CEILING,
-    readAll,
-    type ReadProgress,
-    rememberPreview,
-} from '@/lib/previews';
+import { readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
 import {
     clipSheet,
     OFFICE_LIMIT,
@@ -112,39 +100,31 @@ export function OfficeViewer({
     versionId,
     kind,
     name,
-    mark,
+    limit = OFFICE_LIMIT,
     onDownload,
 }: {
-    /* The file's mark, for the large-file card. */
-    mark?: ReactNode;
     /* The file to read, or its bytes when a previous open remembered them. */
     source: FileReader | Uint8Array;
     versionId: string | null;
     kind: OfficeKind;
     name: string;
+    /*
+     * How much may be read. The viewer checks the size against the large-file
+     * card before this chunk loads, so a file here is already within it.
+     */
+    limit?: number;
     onDownload: () => void;
 }) {
     const [state, setState] = useState<Loaded | null>(null);
-    const [failure, setFailure] = useState<'large' | 'broken' | null>(null);
+    const [failure, setFailure] = useState(false);
     const [progress, setProgress] = useState<ReadProgress | null>(null);
-    // Past the limit nothing is read until the person chooses Open anyway, for this viewing.
-    const [opened, setOpened] = useState(false);
-    const size = source instanceof Uint8Array ? source.byteLength : source.size;
-    const stage = source instanceof Uint8Array ? 'fine' : largeFileStage('office', size);
-    const held = stage === 'ceiling' || (stage === 'offer' && !opened);
     useEffect(() => {
-        if (held) return;
         let active = true;
         const read =
             source instanceof Uint8Array
-                ? Promise.resolve({ bytes: source, truncated: false })
-                : readAll(
-                      source,
-                      opened ? OFFICE_CEILING : OFFICE_LIMIT,
-                      (value) => active && setProgress(value),
-                  );
-        read.then(({ bytes, truncated }) => {
-            if (truncated) throw new TooLarge();
+                ? Promise.resolve({ bytes: source })
+                : readAll(source, limit, (value) => active && setProgress(value));
+        read.then(({ bytes }) => {
             if (versionId && !(source instanceof Uint8Array))
                 rememberPreview(versionId, {
                     kind: 'document',
@@ -156,33 +136,14 @@ export function OfficeViewer({
             .then((loaded) => {
                 if (active) setState(loaded);
             })
-            .catch((cause: unknown) => {
-                if (active) setFailure(cause instanceof TooLarge ? 'large' : 'broken');
+            .catch(() => {
+                if (active) setFailure(true);
             });
         return () => {
             active = false;
         };
-    }, [source, versionId, kind, held, opened]);
-    if (held)
-        return (
-            <LargeFile
-                kind="office"
-                size={size}
-                stage={stage === 'ceiling' ? 'ceiling' : 'offer'}
-                icon={mark}
-                onContinue={() => setOpened(true)}
-                onDownload={onDownload}
-            />
-        );
-    if (failure === 'large')
-        return (
-            <Notice
-                title={viewerWords.tooLarge((source as FileReader).size)}
-                text={viewerWords.elsewhere}
-                onDownload={onDownload}
-            />
-        );
-    if (failure === 'broken')
+    }, [source, versionId, kind, limit]);
+    if (failure)
         return (
             <Notice
                 icon={
@@ -206,7 +167,12 @@ export function OfficeViewer({
     switch (state.kind) {
         case 'docx':
             return (
-                <div className="flex-1 overflow-auto px-3 py-4 sm:px-6 sm:py-8" data-office="docx">
+                <div
+                    data-viewer-body
+                    tabIndex={-1}
+                    className="flex-1 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8"
+                    data-office="docx"
+                >
                     <div className="sheet mx-auto max-w-4xl">
                         <article className="rt-markdown">
                             <HastView tree={state.tree} />
@@ -220,8 +186,6 @@ export function OfficeViewer({
             return <SlidesView slides={state.slides} />;
     }
 }
-
-class TooLarge extends Error {}
 
 /*
  * Tables per sheet, with the sheets as tabs along the bottom, where people look
@@ -242,7 +206,9 @@ function SheetView({
     if (raw && source !== null)
         return (
             <div
-                className="min-h-0 flex-1 overflow-auto px-3 py-4 sm:px-6 sm:py-8"
+                data-viewer-body
+                tabIndex={-1}
+                className="min-h-0 flex-1 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8"
                 data-office="sheet"
             >
                 <div className="sheet mx-auto flex w-full max-w-5xl min-w-0 flex-col">
@@ -252,7 +218,12 @@ function SheetView({
         );
     const { cells, width, moreRows, moreCols } = sheet.clipped;
     return (
-        <div className="flex min-h-0 flex-1 flex-col p-3 sm:p-6" data-office="sheet">
+        <div
+            data-viewer-body
+            tabIndex={-1}
+            className="flex min-h-0 flex-1 flex-col p-3 outline-none sm:p-6"
+            data-office="sheet"
+        >
             <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-card shadow-sm">
                 <div className="min-h-0 flex-1 overflow-auto">
                     <table className="border-collapse text-[13px] tabular-nums">
@@ -325,7 +296,9 @@ function SlidesView({ slides }: { slides: Slide[] }) {
     const titleOf = (entry: Slide) => entry.title ?? entry.paragraphs[0] ?? `Slide ${entry.number}`;
     return (
         <div
-            className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-3 py-4 sm:px-6 sm:py-8 md:flex-row"
+            data-viewer-body
+            tabIndex={-1}
+            className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8 md:flex-row"
             data-office="slides"
         >
             <ol
