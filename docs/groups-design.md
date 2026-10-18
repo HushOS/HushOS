@@ -567,10 +567,13 @@ Each fails on a defect a person would notice (see AGENTS.md):
 
 ## 9. Still open after the families release
 
-Families (milestone 1c) are released on the web: create, invite, join with the join code, family folders, removal and leaving with every folder's keys replaced, and re-keyed records that keep each writer's signature. What is not done, and what it costs; server-side detail is in `docs/groups-server.md`, "Still open", and the core's open flags in `docs/groups-invariants.md`, "Flags".
+Families (milestone 1c) are released on the web: create, invite, join with the join code, family folders, removal and leaving with every folder's keys replaced, and re-keyed records that keep each writer's signature. Family billing (1e, 3.5) is built: the payer is charged for each place and the family folders draw on the plan's pool (PR #50); the family's page chooses, changes, renews and cancels a plan and adds or removes places (PR #53); families choose Family Plus, Pro or Max (PR #65); and the pricing page offers the Family plan (PR #57). What is not done, and what it costs; server-side detail is in `docs/groups-server.md`, "Still open", and the core's open flags in `docs/groups-invariants.md`, "Flags".
 
-- **Mobile families (1d) are not built:** iOS and Android show no families, so family folders open only in a browser.
-- **Billing (1e) is not built:** family folders are free storage bounded by `GROUP_AREA_LIMIT` and `GROUP_OWNED_LIMIT`, with no pool, payer or seat purchase (3.5), so hushos.com keeps families off.
+- **Mobile families (1d) are in progress:** the native core has the family write rules (Core 1) and walks, re-keyed records and verdicts (Core 2), but iOS and Android show no families yet, so family folders open only in a browser (`docs/groups-mobile-plan.md`).
+- **iOS and Android billing is read only:** the phones are to show the plan, the pool and who pays, with no purchase and no link out (`docs/groups-mobile-plan.md`, iOS 7), so a family chooses, changes and pays for its plan only on the web.
+- **Polar's `PaymentActionRequired` path is unreproduced:** a bank that asks the payer to confirm an off-session charge sends them to the portal, but no sandbox card has produced that answer (`docs/polar-group-billing-spike.md`, E3), so that path is built against Polar's documentation, not an observed response.
+- **Billing handover of a live plan is not built:** while a plan is live its payer can't leave, be removed or delete their account, even when another member holds `billing`; they must cancel it first (`docs/self-hosting.md`, Family plans).
+- **The pool covers family folders only:** members' own files stay on their own plans; "one storage source per person" (3.5) is not built.
 - **Native clients don't read re-keyed records yet:** re-keyed records stay in family folders only, since a shipped app would stall on one in a personal folder.
 - **Personal folders still re-attribute on rotation:** after a personal rotation, an editor's verified record reads as the owner's.
 - **Copies outside family folders judge the legacy columns:** a copy in a personal folder vouches for the rotation's re-signature rather than the writer, and copies or moves between spaces re-sign as the copier.
