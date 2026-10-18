@@ -429,6 +429,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Not now (asks once: "Turn Sam down?", Turn down)
         - They match
         - They don't match
+        - Compare again (after They don't match, on both sides: the newcomer's join screen and each step of Let them in; nothing was kept, so the words or the code come back)
         - Join code (the newcomer compares ten words and types the two their screen hides: "Compare the join code"; the family's first wrong pair in a tab is taken as a typo, said calmly below the fields and never which word (both fields are marked): "One of the words doesn't match. Ask Maya to read them again. If they still don't match, choose They don't match."; the same two words are then asked again, after a reload too, and any later wrong pair for that family, whatever code is showing, is the warning that HushOS may be showing a different member list, as They don't match is)
         - Organizer
         - Manages the family

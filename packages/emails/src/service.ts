@@ -195,7 +195,7 @@ export async function sendSecurityNotice(
 }
 
 /*
- * An invitation into a family group: who sent it, the group's name, and the
+ * An invitation into a family: who sent it, the family's name, and the
  * one-time link (its token in the fragment). The name is the organiser's own
  * text: escaped like every value, and never in the subject, which leads with
  * the inviter.
@@ -214,7 +214,7 @@ export async function sendGroupInvitation(
     };
     await adapter.send({
         to,
-        subject: `${input.inviterName} invited you to a family group · HushOS`,
+        subject: `${input.inviterName} invited you to join a family · HushOS`,
         html: fillTemplate(groupInvitation.html, values, true),
         text: fillTemplate(groupInvitation.text, values, false),
     });

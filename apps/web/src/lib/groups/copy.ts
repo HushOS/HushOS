@@ -1,5 +1,5 @@
 import { keyChangeWords } from '@/lib/key-change-words';
-import { GroupApiError } from './api';
+import { GroupApiError, NO_ANSWER } from './api';
 import type { GroupNotice } from './context';
 import type { SendOutcome } from './outbox';
 
@@ -177,16 +177,18 @@ export function refusalCopy(
 /* Any error from the families layer, worded: a coded refusal, no answer at all, or the worker's own sentence. */
 export function errorCopy(error: unknown, ctx: CopyContext = {}) {
     if (error instanceof GroupApiError) {
-        if (error.status === 0) return 'Couldn’t reach HushOS. Check your connection, then retry.';
+        if (error.status === 0) return NO_ANSWER;
         if (error.status === 401 || error.code === 'signed-out')
             return 'You were signed out. Sign in again, then retry.';
         if (error.code) return refusalCopy(error.code, error.data, ctx);
         if (error.status === 501) return 'Families aren’t available on this server.';
         return 'HushOS couldn’t do that just now. Try again in a moment.';
     }
-    return error instanceof Error && error.message
-        ? keyChangeWords(error.message)
-        : 'Something went wrong. Try again.';
+    if (!(error instanceof Error) || !error.message) return 'Something went wrong. Try again.';
+    // A request outside the groups client (the worker's, a sync's) that never reached the server
+    // fails with the browser's own words, as isNetworkFailure in lib/drive.ts reads them.
+    if (/^(failed to fetch|load failed|networkerror\b)/i.test(error.message)) return NO_ANSWER;
+    return keyChangeWords(error.message);
 }
 
 /*

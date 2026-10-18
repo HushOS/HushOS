@@ -15,8 +15,8 @@ import {
 } from 'react-email';
 
 /*
- * Someone invited you into a family group. Same sheet as the share notice.
- * The group's name is whatever its organiser typed, so the mail leads with
+ * Someone invited you into a family. Same sheet as the share notice.
+ * The family's name is whatever its organiser typed, so the mail leads with
  * who sent it (name and address), says plainly that HushOS never asks for a
  * password by email, and carries the one-time link in the fragment.
  *
@@ -52,7 +52,7 @@ export default function GroupInvitation({
         ['From', inviterName],
         ['Email', inviterEmail],
         // The organiser's own words, quoted as theirs: never HushOS speaking.
-        ['Group, as they named it', `“${groupName}”`],
+        ['Family, as they named it', `“${groupName}”`],
         ['Expires', 'In 7 days'],
     ];
     return (
@@ -91,7 +91,7 @@ export default function GroupInvitation({
                     }
                 `}</style>
             </Head>
-            <Preview>{inviterName} invited you to a family group on HushOS.</Preview>
+            <Preview>{inviterName} invited you to join a family on HushOS.</Preview>
             <Body
                 className="email-body"
                 style={{
@@ -182,7 +182,7 @@ export default function GroupInvitation({
                                 color: '#17203a',
                             }}
                         >
-                            {inviterName} invited you to a family group.
+                            {inviterName} invited you to join a family.
                         </Heading>
                         <Text
                             className="email-muted"
@@ -193,9 +193,13 @@ export default function GroupInvitation({
                                 color: '#5a6380',
                             }}
                         >
-                            Open the link to accept, signed in with this address. Before anything is
-                            shared with you, you and {inviterName} compare a few words to make sure
-                            you see the same group.
+                            {/*
+                             * Who checks is any manager, not always the inviter, and the name may be
+                             * the server's fallback ("A HushOS member"), so the check names nobody.
+                             */}
+                            Open the link to accept, signed in with this address. Then, on a call or
+                            in person, you and a manager of the family check it’s really each other,
+                            and you’re let in. Nothing in the family is shared with you before that.
                         </Text>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 20px' }}>
@@ -237,6 +241,9 @@ export default function GroupInvitation({
                                                     lineHeight: '20px',
                                                     fontWeight: 400,
                                                     color: '#17203a',
+                                                    // A long address or name wraps rather than pushing the card off a phone.
+                                                    overflowWrap: 'anywhere',
+                                                    wordBreak: 'break-word',
                                                 }}
                                             >
                                                 {value}
@@ -285,7 +292,8 @@ export default function GroupInvitation({
                             <Link
                                 className="email-link"
                                 href={joinUrl}
-                                style={{ color: '#2c428e' }}
+                                // The printed link is one long word: unbroken, it widened the card past a phone's edge.
+                                style={{ color: '#2c428e', wordBreak: 'break-all' }}
                             >
                                 {joinUrl}
                             </Link>
