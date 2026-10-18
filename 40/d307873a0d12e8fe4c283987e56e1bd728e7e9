@@ -1,0 +1,47 @@
+docs/groups-design.md
+  s_c56e31c87cddde::t_72b458b5f43c8e 343
+docs/groups-server.md
+  s_c56e31c87cddde::t_e6a67dd1781bd2 277
+docs/self-hosting.md
+  s_c56e31c87cddde::t_8bb46df2762f3f 375-390
+packages/crypto/src/protocol.ts
+  s_c56e31c87cddde::t_0e008576351731 84-91
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_6cc116b3c09767 24,2335-2397
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_5742771c0b3b58 127,1810-1811,1878,1998
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_b9a3145985048a 3167-3184,3205,3397,3504,3583
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_f388e01d5d36ac 10-11,1004-1005,1014,1017,1030,1957,1960-1976,1979,1992-2042,2044-2102,3676,3685
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_565c968a0a83f9 12,15-16,250-264
+packages/drive/src/client.test.ts
+  s_c56e31c87cddde::t_acb3b19f067cd5 730-784,786-788,791-800,803-838,847,850-892
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_e26e89052bd3a3 1224-1229,1512,1532-1539,1547,1607-1609,1612-1654,1678
+packages/drive/src/protocol.ts
+  s_c56e31c87cddde::t_0d1c7bdeb89c74 116-118
+packages/drive/src/server.shares.test.ts
+  s_c56e31c87cddde::t_2cca6094593c85 1,4,8,10-11,14-25,104-245
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_512342334a9553 466-468,974-975,1010,1756-1757,1813-1814
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_47acd77f5e20fb 38-43,2325-2328,2335,2344,2347,2360,2565,2568,2570-2598,2600,2602-2615,2617
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "40d307873a0d12e8fe4c283987e56e1bd728e7e9",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
