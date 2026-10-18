@@ -1,0 +1,39 @@
+DESIGN.md
+  s_c56e31c87cddde::t_eeeb3639fd2b0d 432
+apps/web/src/components/families/invite-dialog.tsx
+  s_c56e31c87cddde::t_16c87812a5a08a 15,42-44,52,64-70,101-106,108
+apps/web/src/components/families/let-in-dialog.tsx
+  s_c56e31c87cddde::t_77e300eaaf1536 5,334-339,399-415,472-496
+apps/web/src/lib/groups/api.ts
+  s_c56e31c87cddde::t_3195dbc8a4193f 51-56,61,63-66
+apps/web/src/lib/groups/copy.ts
+  s_c56e31c87cddde::t_cc05ed577e49e4 2,180,187-191
+apps/web/src/lib/groups/removal.ts
+  s_c56e31c87cddde::t_98a7993c9dce22 72-73
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_48235e93ccc9c0 1806-1811,1814,1857
+packages/emails/scripts/render.tsx
+  s_c56e31c87cddde::t_526d6f0b08d183 115
+packages/emails/src/rendered/group-invitation.ts
+  s_c56e31c87cddde::t_c24e9304e7f3b4 3-4
+packages/emails/src/service.ts
+  s_c56e31c87cddde::t_9c7d6aa7ce39f3 198,217
+packages/emails/src/templates/group-invitation.tsx
+  s_c56e31c87cddde::t_eed09a2c5282a1 18-19,55,94,185,196-202,244-246,295-296
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a0922fc9a7244308dc372ab55a19dfc80f03e7b9",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
