@@ -1,0 +1,124 @@
+scripts/check-versions.ts
+  s_c56e31c87cddde::t_7c17aba03dd552 1-71
+  s_c56e31c87cddde::t_6972f731cd1686 72-88
+.github/workflows/release.yml
+  s_c56e31c87cddde::t_a473b53ef57ec9 1-49
+packages/drive/src/protocol.test.ts
+  s_c56e31c87cddde::t_b8808d743d5a5a 2-9,13,15-16,27-55,57,59-61,64,66-69,72
+.env.example
+  s_c56e31c87cddde::t_2a209d44b42318 79-80
+.github/workflows/ci.yml
+  s_c56e31c87cddde::t_0d9259d7c3c62f 457-459,465-490,514,518,522
+.release-please-manifest.json
+  s_c56e31c87cddde::t_149d1377b07150 1-3
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_2a629dafc743a7 129-141
+apps/android/app/build.gradle.kts
+  s_c56e31c87cddde::t_d06230135e325d 48-58,67-69
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c56e31c87cddde::t_ec08735109a7c3 15-20
+apps/android/scripts/bundle-release.sh
+  s_c56e31c87cddde::t_a8fba5164a2105 4,6-9,18-23,38
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_d818d2dbaae9e2 81
+apps/ios/App/Info.plist
+  s_c56e31c87cddde::t_952b47411787e2 24,37
+apps/ios/Files/Info.plist
+  s_c56e31c87cddde::t_3a1aa4b42a5cdc 20,22
+apps/ios/FilesUI/Info.plist
+  s_c56e31c87cddde::t_7d7b939a1e70d9 20,22
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_c56e31c87cddde::t_87842669b6a8dd 35-39,41-45
+apps/ios/Share/Info.plist
+  s_c56e31c87cddde::t_e96e72d5c3dacb 20,22
+apps/ios/Widgets/Info.plist
+  s_c56e31c87cddde::t_c2c1e510b8ed62 20,22
+apps/ios/project.yml
+  s_c56e31c87cddde::t_7f9b39bf221b3a 20-25,63-64,138-139,173-174,202-203,236-237
+apps/ios/scripts/archive.sh
+  s_c56e31c87cddde::t_dfb2353ac38fec 4,6-12,19,21-25,36
+apps/web/package.json
+  s_c56e31c87cddde::t_42343a4d485c49 3
+apps/web/server/plugins/request-context.ts
+  s_c56e31c87cddde::t_1a04dca2bd55e4 3,31-32
+apps/web/src/lib/api-client.ts
+  s_c56e31c87cddde::t_030aa3cb1d21ae 2,4,8-10
+apps/web/src/lib/version.ts
+  s_c56e31c87cddde::t_24f0f9d88ec834 1-9
+bun.lock
+  s_c56e31c87cddde::t_c055d4df6ccc11 23,115,132,148,156,176,196,215,237,251,273,291,304,313,323
+compose.images.yaml
+  s_c56e31c87cddde::t_1e5643ab31c6fb 3-4
+docs/release/README.md
+  s_c56e31c87cddde::t_61db7fe5acc0e6 5-17
+docs/release/apple.md
+  s_c56e31c87cddde::t_ab8d08476857dc 103,108,113,119,248
+docs/release/checklist.md
+  s_c56e31c87cddde::t_bf7c05545a83bb 11,39-40,42
+docs/release/google.md
+  s_c56e31c87cddde::t_ce94745a8d583c 141-142,145,181
+docs/release/signing.md
+  s_c56e31c87cddde::t_35c4a3e0b01e42 24,55,70,133
+docs/self-hosting.md
+  s_c56e31c87cddde::t_5c886112796003 137-138,156,255-256,508,611-623
+package.json
+  s_c56e31c87cddde::t_d8db888a14bcd2 3,20-21
+packages/auth/package.json
+  s_c56e31c87cddde::t_a34756770e6997 3
+packages/billing/package.json
+  s_c56e31c87cddde::t_5d17782b5c7192 3
+packages/config/oxfmt.ts
+  s_c56e31c87cddde::t_6f6c69e6193275 21-22
+packages/config/package.json
+  s_c56e31c87cddde::t_0e66e3ad22368b 3
+packages/crypto/package.json
+  s_c56e31c87cddde::t_f208588cd78d1d 3
+packages/db/package.json
+  s_c56e31c87cddde::t_56471504327cb0 3
+packages/drive/package.json
+  s_c56e31c87cddde::t_cdd564707851ab 3
+packages/drive/src/protocol.ts
+  s_c56e31c87cddde::t_6ba24684da118c 131-135,172-196,227
+packages/emails/package.json
+  s_c56e31c87cddde::t_c4cb71447ddc2b 3
+packages/env/package.json
+  s_c56e31c87cddde::t_e5e99ed3678acf 3
+packages/env/src/storage.ts
+  s_c56e31c87cddde::t_3874ca7b268040 43-46,50-51
+packages/groups/package.json
+  s_c56e31c87cddde::t_a3ef82de52a659 3
+packages/jobs/package.json
+  s_c56e31c87cddde::t_6aadb8be4cc346 3
+packages/logging/package.json
+  s_c56e31c87cddde::t_dec81d9fdd41a0 3
+packages/shared/package.json
+  s_c56e31c87cddde::t_11a9ad05c495c0 3
+packages/tokens/package.json
+  s_c56e31c87cddde::t_05908aeb8c227b 3
+packages/utils/package.json
+  s_c56e31c87cddde::t_7c0e726525afab 3
+release-please-config.json
+  s_c56e31c87cddde::t_0a53910c860b57 1-46
+scripts/build-number.sh
+  s_c56e31c87cddde::t_3f6799166844d0 1-25
+scripts/release-wizard.sh
+  s_c56e31c87cddde::t_623dba57f35f88 192-193,308-309,384-385
+turbo.json
+  s_c56e31c87cddde::t_c30375c5593a63 135-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb224576c61a8c298f3f2969c3ca543eb1cd1ec0",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
