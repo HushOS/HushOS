@@ -82,7 +82,8 @@ function personLine(members: readonly FamilyMember[] | undefined, userId: string
 function organizersLine(members: readonly FamilyMember[] | undefined) {
     const names = (members ?? [])
         .filter((member) => member.state === 'active' && member.roles.includes('billing'))
-        .map((member) => member.name);
+        // A name from the server always has its address beside it.
+        .map((member) => (member.email ? `${member.name} (${member.email})` : member.name));
     return names.length ? names.join(' or ') : null;
 }
 

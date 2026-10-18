@@ -1,7 +1,7 @@
 import type { ContactPin } from '@hushos/crypto/contacts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon } from 'lucide-react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FingerprintWords } from '@/components/fingerprint-words';
 import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
@@ -99,7 +99,7 @@ function sameKeys(lookup: Lookup, person: PendingPerson) {
 export function LetInDialog(props: Props) {
     return (
         <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-            <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-[600px]">
+            <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto overscroll-contain sm:max-w-[600px]">
                 {props.open && <LetIn {...props} />}
             </DialogContent>
         </Dialog>
@@ -331,6 +331,11 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
             steps.current?.querySelector<HTMLElement>(`[data-step="${n}"] h3`)?.focus(),
         );
     const [confirmingDecline, setConfirmingDecline] = useState(false);
+    // A refusal lands just above the pinned footer: brought into view, wherever the card is scrolled.
+    const refusal = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (error || seat) refusal.current?.scrollIntoView({ block: 'nearest' });
+    }, [error, seat]);
 
     return (
         <>
@@ -455,8 +460,9 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                                         {first} is in {family}’s member list, but their device won’t
                                         use the family until the codes match, so their folders stay
                                         closed to them. Don’t share anything with {first} through
-                                        the family until you’ve sorted it out together. Removing
-                                        someone from a family isn’t available in this version yet.
+                                        the family until you’ve sorted it out together. If you
+                                        can’t, close this and choose Remove from family in {first}’s
+                                        row under Members.
                                     </p>
                                 </div>
                             ) : (
@@ -495,32 +501,53 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                     </Button>
                 </div>
             )}
-            {error && (
-                <p role="alert" className="text-sm text-destructive">
-                    {error}
-                </p>
-            )}
-            {seat && !admitted && (
-                <SeatHelp
-                    userId={userId}
-                    groupId={groupId}
-                    roles={roles}
-                    reason={seat.reason}
-                    url={seat.url}
-                    onChoosePlan={() => {
-                        onOpenChange(false);
-                        requestAnimationFrame(() =>
-                            document
-                                .getElementById('choose-plan')
-                                ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-                        );
-                    }}
-                />
-            )}
+            <div ref={refusal} className="flex flex-col gap-3 empty:hidden">
+                {error && (
+                    <p role="alert" className="text-sm text-destructive">
+                        {error}
+                    </p>
+                )}
+                {seat && !admitted && (
+                    <SeatHelp
+                        userId={userId}
+                        groupId={groupId}
+                        roles={roles}
+                        reason={seat.reason}
+                        url={seat.url}
+                        onChoosePlan={() => {
+                            onOpenChange(false);
+                            requestAnimationFrame(() =>
+                                document
+                                    .getElementById('choose-plan')
+                                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+                            );
+                        }}
+                    />
+                )}
+            </div>
             {!admitted && !seat && personDone && (
                 <SeatNote userId={userId} groupId={groupId} first={first} />
             )}
-            <div className="flex flex-wrap justify-end gap-2 border-t border-rule pt-4">
+            {/*
+             * Pinned to the foot of the scrolling card, so its actions stay in reach on a phone.
+             * The card's scroll padding is its height, so what is scrolled into view (a refusal)
+             * lands above it rather than under it.
+             */}
+            <div
+                ref={(footer) => {
+                    const card = footer?.parentElement;
+                    if (!footer || !card) return;
+                    const pad = () => (card.style.scrollPaddingBottom = `${footer.offsetHeight}px`);
+                    pad();
+                    const observer = new ResizeObserver(pad);
+                    observer.observe(footer);
+                    return () => {
+                        observer.disconnect();
+                        card.style.scrollPaddingBottom = '';
+                    };
+                }}
+                className="sticky -bottom-6 z-10 -mx-6 -mb-6 flex flex-wrap justify-end gap-2 border-t border-rule bg-popover px-6 pt-4 pb-6 sm:-bottom-7 sm:-mx-7 sm:-mb-7 sm:px-7 sm:pb-7"
+            >
                 {admitted ? (
                     <Button onClick={() => onOpenChange(false)}>Done</Button>
                 ) : (

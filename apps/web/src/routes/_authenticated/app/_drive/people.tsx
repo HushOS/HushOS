@@ -251,7 +251,7 @@ function People() {
                         <li
                             key={contact.userId}
                             data-contact={contact.email}
-                            className="flex h-16 items-center gap-3 border-b border-rule pr-3 pl-5 hover:bg-muted sm:pr-5 sm:pl-8"
+                            className="flex min-h-16 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 hover:bg-muted sm:pr-5 sm:pl-8"
                         >
                             <PersonAvatar name={contact.name} seed={contact.userId} />
                             <span className="flex min-w-0 flex-1 flex-col">

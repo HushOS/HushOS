@@ -138,7 +138,7 @@ function FamilySpaceLayout() {
                     <AlertTitle>Couldn’t check {family}</AlertTitle>
                     <AlertDescription>{errorCopy(sync.error, { family })}</AlertDescription>
                     <AlertAction>
-                        <Button size="sm" variant="outline" onClick={() => void sync.refetch()}>
+                        <Button variant="outline" onClick={() => void sync.refetch()}>
                             Try again
                         </Button>
                     </AlertAction>

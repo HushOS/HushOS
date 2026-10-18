@@ -215,9 +215,7 @@ function AppLayout() {
                                         Enter your password to open your files here again.
                                     </AlertDescription>
                                     <AlertAction>
-                                        <Button size="sm" onClick={openDeviceDialog}>
-                                            Unlock
-                                        </Button>
+                                        <Button onClick={openDeviceDialog}>Unlock</Button>
                                     </AlertAction>
                                 </Alert>
                             )}

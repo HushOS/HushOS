@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
 import {
+    changedByLabel,
     changedByWords,
     droppedLines,
     rekeyedLines,
@@ -389,7 +390,7 @@ export function ItemDetails({
                 {location && <Fact label="Folder">{location}</Fact>}
                 {/* Only when something did not verify: a verified item says nothing about it. */}
                 {unverified.length > 0 && (
-                    <Fact label="Changed by">
+                    <Fact label={changedByLabel(unverified[0]!)}>
                         <span className="inline-flex flex-wrap items-center gap-2">
                             <ChangedBy issue={unverified[0]!} />
                             <UnverifiedMark node={node} />
@@ -545,8 +546,9 @@ export function DetailsPanel({
             aria-label="Details"
             data-details=""
             // Never taller than the room beneath the header and the folder's two lines, so opening a
-            // section scrolls the panel and the page stays where it is.
-            className="sticky top-3 m-3 ml-0 flex max-h-[calc(100svh-12.5rem)] w-[320px] shrink-0 transform-gpu flex-col self-start overflow-y-auto overscroll-contain rounded-2xl border border-rule bg-card text-card-foreground shadow-md will-change-transform"
+            // section scrolls the panel and the page stays where it is; and while the selection bar
+            // floats at the foot of the page, it ends above it rather than under it.
+            className="sticky top-3 m-3 ml-0 flex max-h-[calc(100svh-12.5rem-var(--selection-room,0px))] w-[320px] shrink-0 transform-gpu flex-col self-start overflow-y-auto overscroll-contain rounded-2xl border border-rule bg-card text-card-foreground shadow-md will-change-transform"
         >
             <div className="flex items-center justify-between gap-2 py-2 pr-2 pl-4">
                 <p className="text-sm font-semibold text-muted-foreground">Info</p>

@@ -14,6 +14,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -68,10 +69,17 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     );
 }
 
+/*
+ * At least 56px, growing with what wraps: a long address truncates on its own
+ * line, so it never hides the roles, which sit as small badges beside the
+ * name (wrapping under it on a phone), or a note on a line of its own.
+ */
 function Row({
     name,
     seed,
     line,
+    badges,
+    note,
     data,
     mark,
     children,
@@ -79,6 +87,9 @@ function Row({
     name: string;
     seed: string;
     line: string;
+    badges?: ReactNode;
+    /* Said whole on a line of its own, below the address, so truncating that never hides it. */
+    note?: ReactNode;
     data?: Record<string, string>;
     /* In place of the person's initials: an invitation is an address, not yet anyone. */
     mark?: ReactNode;
@@ -87,15 +98,36 @@ function Row({
     return (
         <li
             {...data}
-            className="flex h-14 items-center gap-3 border-b border-rule pr-3 pl-5 sm:pr-5 sm:pl-8"
+            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 sm:pr-5 sm:pl-8"
         >
             {mark ?? <PersonAvatar name={name} seed={seed} />}
-            <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-[15px] font-medium">{name}</span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="min-w-0 truncate text-[15px] font-medium">{name}</span>
+                    {badges}
+                </span>
                 <span className="truncate text-[13px] text-muted-foreground">{line}</span>
+                {note && (
+                    <span className="text-[13px] text-pretty text-muted-foreground">{note}</span>
+                )}
             </span>
             {children}
         </li>
+    );
+}
+
+/* A member's roles in words, as small badges: "Organizer", "Manages the family", or "Member". */
+function RoleBadges({ roles }: { roles: readonly string[] }) {
+    return (
+        <span className="flex flex-wrap gap-1" data-roles>
+            {rolesLine(roles)
+                .split(' · ')
+                .map((role) => (
+                    <Badge key={role} variant="secondary">
+                        {role}
+                    </Badge>
+                ))}
+        </span>
     );
 }
 
@@ -129,7 +161,8 @@ export function PendingList({
                             name={person.name}
                             seed={person.userId}
                             data={{ 'data-pending': person.email }}
-                            line={`${person.email} · accepted ${formatWhen(person.acceptedAt, { lower: true })}`}
+                            line={person.email}
+                            note={`Accepted ${formatWhen(person.acceptedAt, { lower: true })}`}
                         >
                             {waitingForPlan ? (
                                 <span
@@ -272,10 +305,12 @@ export function MemberList({
                         name={self ? `${member.name} (you)` : member.name}
                         seed={member.userId}
                         data={{ 'data-member': member.email ?? member.userId }}
-                        line={
+                        line={member.email ?? ''}
+                        badges={<RoleBadges roles={roles} />}
+                        note={
                             needsCheck.includes(member.userId)
-                                ? `${member.email} · Check ${who}’s words again`
-                                : `${member.email} · ${rolesLine(roles)}`
+                                ? `Check ${who}’s words again`
+                                : undefined
                         }
                     >
                         {manager && !self && (
@@ -460,8 +495,7 @@ function JoinCodeDialog({
                 <DialogHeader>
                     <DialogTitle>{who}’s join code</DialogTitle>
                     <DialogDescription>
-                        Read all twelve words to {who}. Two are hidden on {who}’s screen; {who}
-                        types those.
+                        {`Read all twelve words to ${who}. Two are hidden on ${who}’s screen; ${who} types those.`}
                     </DialogDescription>
                 </DialogHeader>
                 {code.isPending ? (
@@ -538,7 +572,8 @@ export function InvitationList({
                             <MailIcon className="size-4" aria-hidden="true" />
                         </span>
                     }
-                    line={`Invited by ${inviter(invitation.invitedBy)} · open until ${formatDay(invitation.expiresAt)}`}
+                    line={`Open until ${formatDay(invitation.expiresAt)}`}
+                    note={`Invited by ${inviter(invitation.invitedBy)}`}
                 >
                     <Button
                         variant="ghost"

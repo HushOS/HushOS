@@ -9,6 +9,7 @@ import {
     COULDNT_CHECK,
     REKEY_UNATTESTED,
     REKEY_UNCONFIRMED,
+    changedByLabel,
     changedByWords,
     droppedLines,
     issueLines,
@@ -221,9 +222,52 @@ describe('in a family folder', () => {
         expect(issueLines([issue('former-member', gone)], family)[0]!.text).toBe(
             'Written by someone you haven’t checked, who has left Lindqvist family.',
         );
+        expect(changedByLabel(issue('former-member', gone))).toBe('Written by');
         expect(changedByWords(issue('former-member', gone), family)).toBe(
-            'Someone you haven’t checked',
+            'Someone you haven’t checked, who has left Lindqvist family.',
         );
+    });
+
+    test('Info never says the family vouches for a former member, and reads as the row’s mark', () => {
+        // Sam was pinned on Berg family's word, and has since left this family: the pin's name
+        // still carries the vouch, which nobody gives for him here any more.
+        const vouched: SignerNames = {
+            ...family,
+            checked: {
+                ...family.checked,
+                [SAM]: 'Sam Lindqvist (sam@example.com), whom Lindqvist family vouches for',
+            },
+            vouched: {
+                [SAM]: {
+                    name: 'Sam Lindqvist',
+                    email: 'sam@example.com',
+                    family: 'Lindqvist family',
+                },
+            },
+        };
+        for (const record of ['metadata', 'version'] as const) {
+            const gone = issue('former-member', SAM, record);
+            const info = `${changedByLabel(gone)} ${changedByWords(gone, vouched)}`;
+            expect(info).not.toMatch(/vouche/);
+            expect(info).toBe(issueLines([gone], vouched)[0]!.text);
+        }
+        expect(
+            `${changedByLabel(issue('former-member', SAM))} ${changedByWords(issue('former-member', SAM), vouched)}`,
+        ).toBe('Written by Sam, who has left Lindqvist family.');
+        // Beside Unverified for any other verdict: the plain label, and the name with the address,
+        // never the vouch, which this record does not have.
+        expect(changedByLabel(issue('unknown-signer', SAM))).toBe('Changed by');
+        for (const verdict of ['bad-signature', 'key-conflict', 'retired-key'] as const)
+            expect(changedByWords(issue(verdict, SAM), vouched)).toBe(
+                'Sam Lindqvist (sam@example.com)',
+            );
+        for (const verdict of ['retired-key', 'resealed'] as const)
+            expect(issueLines([issue(verdict, SAM)], vouched)[0]!.text).not.toMatch(/vouches/);
+        expect(issueLines([issue('bad-signature', SAM)], vouched)[0]!.action).toEqual({
+            kind: 'again',
+            signer: { id: SAM },
+            name: 'Sam Lindqvist (sam@example.com)',
+        });
     });
 
     test('Info says "Verified by" only when every record verified and the family vouched for one', () => {

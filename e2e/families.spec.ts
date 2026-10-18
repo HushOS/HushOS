@@ -313,7 +313,10 @@ test.describe('two people', () => {
         test.setTimeout(180_000);
         await createFamily(maya, family);
         const members = maya.page.locator(`[data-member="${maya.email}"]`);
-        await expect(members).toContainText('Organizer · Manages the family');
+        await expect(members.locator('[data-roles] [data-slot=badge]')).toHaveText([
+            'Organizer',
+            'Manages the family',
+        ]);
         await invite(maya, 'nobody-yet@hushos.local');
         await maya.page
             .locator('[data-invitation="nobody-yet@hushos.local"]')
@@ -383,15 +386,44 @@ test.describe('two people', () => {
         );
         await maya.page.keyboard.press('Escape');
 
-        await typeHidden(sam, hidden, code);
+        // A typo in one hidden word: said calmly, naming neither word, and nothing kept; the
+        // alarm is only for "They don't match".
+        const [, last] = hidden as [number, number];
+        const typo = code.map((word, at) =>
+            at === last - 1 ? (word === 'abandon' ? 'ability' : 'abandon') : word,
+        );
+        await typeHidden(sam, hidden, typo);
+        await expect(sam.page.locator('[data-wrong-words]')).toHaveText(
+            'One of the words doesn’t match. Ask Maya to read them again. If they still don’t match, choose They don’t match.',
+            { timeout: 60_000 },
+        );
+        await expect(sam.page.locator('[data-mismatch]')).toHaveCount(0);
+        // Both fields marked alike, so the page never says which word was wrong.
+        for (const at of hidden)
+            await expect(sam.page.getByLabel(`Word ${at}`, { exact: true })).toHaveAttribute(
+                'aria-invalid',
+                'true',
+            );
+        await sam.page.getByLabel(`Word ${last}`, { exact: true }).fill(code[last - 1]!);
+        await expect(sam.page.locator('[data-wrong-words]')).toHaveCount(0);
+        await sam.page.getByRole('button', { name: 'They match' }).click();
         await expect(sam.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
             timeout: 90_000,
         });
-        await expect(sam.page.locator(`[data-member="${maya.email}"]`)).toContainText(
-            'Organizer · Manages the family',
-        );
-        await sam.page.getByText('Technical details').click();
+        await expect(
+            sam.page.locator(`[data-member="${maya.email}"] [data-roles] [data-slot=badge]`),
+        ).toHaveText(['Organizer', 'Manages the family']);
+        await sam.page.getByText('Technical details and leaving').click();
         await expect(sam.page.getByText('Member list version')).toBeVisible();
+        // A plain member may leave: offered, under Technical details and leaving.
+        await expect(sam.page.getByRole('button', { name: 'Leave family' })).toBeEnabled();
+        // The organizer is never offered Leave family only to be refused: it says why up front.
+        await maya.page.getByText('Technical details and leaving').click();
+        await expect(maya.page.getByRole('button', { name: 'Leave family' })).toBeDisabled();
+        await expect(maya.page.locator('#leave-blocked')).toHaveText(
+            'Make someone else the organizer first.',
+        );
+        await maya.page.getByText('Technical details and leaving').click();
         await expect(
             sam.page.getByRole('link', { name: family, exact: true }).first(),
         ).toBeVisible();
@@ -693,7 +725,7 @@ test.describe('removal, leaving and key changes', () => {
         const walk = await holdWalk(maya.page);
         const others = [await holdWalk(ana.page), await holdWalk(sam.page)];
         const before = await rotationsDone(maya.page);
-        await maya.page.getByText('Technical details').click();
+        await maya.page.getByText('Technical details and leaving').click();
         const keys = maya.page.locator('[data-folder-keys="Family"]');
         await expect(keys).toContainText('Key version 1', { timeout: 60_000 });
         await keys.getByRole('button', { name: 'Replace keys' }).click();
@@ -731,10 +763,17 @@ test.describe('removal, leaving and key changes', () => {
             .filter({ hasText: 'trip.txt' })
             .last();
         await expect(row).toContainText('Finishing a key change…', { timeout: 60_000 });
+        // The panel says what it waits for, and shows nothing moving: no bar, no Pause.
+        const panel = ana.page.locator('section[aria-label=Transfers]');
+        await expect(panel.locator('header')).toContainText('1 file waiting for a key change');
+        await expect(panel.getByRole('button', { name: 'Pause all' })).toHaveCount(0);
+        await expect(row.locator('progress')).toHaveCount(0);
         await ana.page.screenshot({ path: test.info().outputPath('upload-waiting.png') });
-        // Past a recheck it still waits: the walk has not reached Trips.
+        // Past a recheck it still waits: the walk has not reached Trips, and nothing it does
+        // between checks reads as uploading.
         await ana.page.waitForTimeout(6_000);
         await expect(row).toContainText('Finishing a key change…');
+        await expect(panel.locator('header')).toContainText('1 file waiting for a key change');
         await expect(fileRow(ana.page, 'trip.txt')).toHaveCount(0);
 
         // The walk goes on: it ends, and the waiting upload lands by itself.
@@ -932,6 +971,8 @@ test.describe('removal, leaving and key changes', () => {
     test('leaving: the member goes, and the manager’s device marks them left with every folder’s keys replaced', async () => {
         test.setTimeout(360_000);
         await openFamilyPage(ana, groupPath, family);
+        // Under Technical details and leaving, the quietest place on the page.
+        await ana.page.getByText('Technical details and leaving').click();
         await ana.page.getByRole('button', { name: 'Leave family' }).click();
         const dialog = ana.page.getByRole('alertdialog', { name: `Leave ${family}?` });
         await expect(
@@ -952,7 +993,7 @@ test.describe('removal, leaving and key changes', () => {
         });
         await expect(maya.page.locator('[data-left-due]')).toHaveCount(0, { timeout: 90_000 });
         await waitForRotation(maya.page, before);
-        await maya.page.getByText('Technical details').click();
+        await maya.page.getByText('Technical details and leaving').click();
         await expect(maya.page.locator('[data-folder-keys="Family"]')).toContainText(
             'Key version 4',
             { timeout: 60_000 },
@@ -1043,8 +1084,23 @@ test.describe('three people', () => {
 
         // Ana's screen works out the same code from the stored member list.
         const anaHidden = await newcomerCode(ana, anaCode);
-        // Ben's code read to her by mistake, its two words typed: refused, and nothing is kept.
+        // Ben's code read to her by mistake, its two words typed: refused calmly the first time,
+        // and nothing is kept.
         await typeHidden(ana, anaHidden, benCode);
+        await expect(ana.page.locator('[data-wrong-words]')).toBeVisible({ timeout: 60_000 });
+        await expect(ana.page.locator('[data-mismatch]')).toHaveCount(0);
+        // Read out again, still wrong for the same code: the warning, not another calm retry.
+        await ana.page.getByRole('button', { name: 'They match' }).click();
+        await expect(
+            ana.page.getByRole('heading', { name: `Don’t use ${family} yet` }),
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(ana.page.locator('[data-mismatch]')).toBeVisible();
+        // A reload asks the same two words (held in this tab), and a second miss is still the
+        // warning; Ana's own code, read out at last, joins.
+        await ana.page.reload();
+        const asked = await newcomerCode(ana, anaCode);
+        expect(asked).toEqual(anaHidden);
+        await typeHidden(ana, asked, benCode);
         await expect(ana.page.locator('[data-mismatch]')).toBeVisible({ timeout: 60_000 });
         await ana.page.reload();
         await typeHidden(ana, await newcomerCode(ana, anaCode), anaCode);

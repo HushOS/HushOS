@@ -152,7 +152,7 @@ function FamilyTrash() {
                         <li
                             key={row.node.id}
                             data-node-id={row.node.id}
-                            className="flex h-14 items-center gap-3 border-b border-rule pr-3 pl-5 sm:pr-6 sm:pl-8"
+                            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 sm:pr-6 sm:pl-8"
                         >
                             <FileMark node={row.node} size="list" />
                             <span className="flex min-w-0 flex-1 flex-col">

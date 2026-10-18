@@ -25,9 +25,17 @@ import { afterAccept, fetchServed, syncGroup, syncLocked, type SyncResult } from
  *    now; another code (the member list changed meanwhile) keeps nothing and
  *    is the new one to compare. Then the typed words must be the code's at
  *    the positions this module issued for it (never ones the caller names),
- *    or nothing is kept ('mismatch'), and the same positions stay for that
- *    code for the rest of the session, so a retry cannot fish for easier
- *    ones. Only then is the code
+ *    or nothing is kept. The first wrong pair for the family in this tab is
+ *    said calmly ('wrong-words': most likely misheard), and its positions are
+ *    held for that code, in this tab's sessionStorage under a digest of the
+ *    code, so neither a retry nor a reload can fish for easier ones. Any later
+ *    wrong pair for the family in this tab is the alarm ('mismatch'), whatever
+ *    code is showing: a server grinding a made-up family whose code matches
+ *    the admin's in most words passes a showing only when both hidden words
+ *    fall among those, and a person who retries after every calm line (or a
+ *    server that switches to another code for a fresh one) would hand it
+ *    fresh positions each time. A successful join clears both.
+ *    Only then is the code
  *    recorded in the sealed joins record, the chain accepted with it as the
  *    mark, and the device record, the folders and the settings pin written;
  *    the joins record goes.
@@ -37,7 +45,9 @@ import { afterAccept, fetchServed, syncGroup, syncLocked, type SyncResult } from
  * family it made up the moment it does; comparing alone could then be done
  * by a person who never waited for the admin. Typing two words only the
  * admin's screen shows cannot: guessing them is 22 bits, at positions the
- * server does not know. That holds against finishing alone. It is no bound
+ * server does not know. A wrong pair is said as one of the two being wrong,
+ * never which, so the words never fall one at a time (2 x 2048 tries in
+ * place of 4 million). That holds against finishing alone. It is no bound
  * on a server grinding a made-up family whose code matches the admin's in
  * the words a person who compares nothing would skip: the ten compared words
  * are the defence there, and only as good as the comparing.
@@ -143,12 +153,81 @@ export type HiddenWords = readonly string[];
 /*
  * The positions issued for each code shown in this session, by account,
  * family and code: confirmJoin checks the typed words against these, never
- * against positions a caller names. `held`: a wrong word was typed for that
- * code, so its positions stay until the page is left.
+ * against positions a caller names. `held`: a wrong pair was typed for that
+ * code, so its positions stay, across reloads too (heldStore), and the next
+ * wrong pair is the alarm.
  */
 const issued = new Map<string, { positions: [number, number]; held: boolean }>();
 const issuedKey = (ctx: GroupContext, groupId: string, mark: JoinMark) =>
     `${ctx.userId}:${groupId}:${mark.rosterVersion}:${mark.code.join(' ')}`;
+
+/*
+ * Held positions in this tab's sessionStorage, so a reload asks the same two
+ * words. Stored under a digest of the code, never the code itself. Storage
+ * that is missing or refuses (a private window, a worker) is no error: the
+ * hold then lasts only as long as the page.
+ */
+const HELD_PREFIX = 'hushos.join-held.';
+async function heldStorageKey(key: string) {
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+    return (
+        HELD_PREFIX + [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('')
+    );
+}
+function readHeld(storageKey: string): [number, number] | null {
+    try {
+        const value: unknown = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null');
+        if (
+            Array.isArray(value) &&
+            value.length === 2 &&
+            value.every((at) => Number.isInteger(at) && at >= 0 && at <= 11) &&
+            value[0] < value[1]
+        )
+            return [value[0], value[1]];
+    } catch {
+        /* No storage, or something unreadable in it: nothing held. */
+    }
+    return null;
+}
+/*
+ * The family's one calm try in this tab: once a wrong pair was typed for any
+ * of its codes, the next is the alarm. Kept under a digest of the group id,
+ * in memory and in sessionStorage (which may refuse: memory then holds it for
+ * the page).
+ */
+const tried = new Set<string>();
+async function triedStorageKey(groupId: string) {
+    return heldStorageKey(`tried:${groupId}`);
+}
+async function hasTried(groupId: string) {
+    const key = await triedStorageKey(groupId);
+    if (tried.has(key)) return true;
+    try {
+        return sessionStorage.getItem(key) === '1';
+    } catch {
+        return false;
+    }
+}
+async function setTried(groupId: string, on: boolean) {
+    const key = await triedStorageKey(groupId);
+    if (on) tried.add(key);
+    else tried.delete(key);
+    try {
+        if (on) sessionStorage.setItem(key, '1');
+        else sessionStorage.removeItem(key);
+    } catch {
+        /* No storage: held for this page only. */
+    }
+}
+
+function writeHeld(storageKey: string, positions: [number, number] | null) {
+    try {
+        if (positions) sessionStorage.setItem(storageKey, JSON.stringify(positions));
+        else sessionStorage.removeItem(storageKey);
+    } catch {
+        /* No storage: held for this page only. */
+    }
+}
 
 /* One of 0 to 11 from the crypto RNG, without modulo bias. */
 function position() {
@@ -167,10 +246,20 @@ function hiddenPositions(): [number, number] {
     return first < second ? [first, second] : [second, first];
 }
 
-/* One showing of a code: new positions, unless a wrong word held the last ones. */
-function compare(ctx: GroupContext, groupId: string, mark: JoinMark, changed = false): JoinOutcome {
+/* One showing of a code: new positions, unless a wrong pair held the last ones. */
+async function compare(
+    ctx: GroupContext,
+    groupId: string,
+    mark: JoinMark,
+    changed = false,
+): Promise<JoinOutcome> {
     const key = issuedKey(ctx, groupId, mark);
-    const before = issued.get(key);
+    let before = issued.get(key);
+    // Held before a reload: the same positions, and still held.
+    if (!before?.held) {
+        const stored = readHeld(await heldStorageKey(key));
+        if (stored) before = { positions: stored, held: true };
+    }
     const positions = before?.held ? before.positions : hiddenPositions();
     issued.set(key, { positions, held: before?.held ?? false });
     return {
@@ -188,7 +277,11 @@ function issuedFor(ctx: GroupContext, groupId: string, mark: JoinMark) {
     return at;
 }
 
-/* Whether the typed words are the code's at the positions issued for it. */
+/*
+ * Whether the typed words are the code's at the positions issued for it. One
+ * answer for the pair: which word is wrong is never said, or a guesser could
+ * find the two one at a time.
+ */
 function typedMatch(positions: readonly number[], mark: JoinMark, typed: HiddenWords) {
     if (typed.length !== 2 || typed.some((word) => typeof word !== 'string' || !word.trim()))
         throw new Error('Type the two hidden words of the join code.');
@@ -211,7 +304,17 @@ export type JoinOutcome =
      * changed, or the server is showing something else), and nothing was kept.
      */
     | { status: 'compare'; mark: JoinMark; hidden: [number, number]; changed?: boolean }
-    /* The typed words are not the code's: nothing was kept. */
+    /*
+     * The typed words are not the code's, the first time for this family in
+     * this tab: most likely one misheard or mistyped, said calmly and never
+     * which. Nothing was kept, and the positions are held for this code.
+     */
+    | { status: 'wrong-words' }
+    /*
+     * A wrong pair again for this family in this tab, for this code or any
+     * other: no longer said as a typo. HushOS may be showing a different
+     * member list; nothing was kept.
+     */
     | { status: 'mismatch' }
     /* This person's own marks disagree with what is served (a rejoin onto another history): the hard warning. */
     | { status: 'fork'; fork: RosterFork };
@@ -236,7 +339,7 @@ export async function joinStatus(
     if (shown.status === 'fork') return shown;
     // Active on route 2 but not on the member list it serves yet: still waiting.
     if (shown.status === 'not-admitted') return { status: 'waiting' };
-    return compare(ctx, groupId, { rosterVersion: shown.rosterVersion, code: shown.code });
+    return await compare(ctx, groupId, { rosterVersion: shown.rosterVersion, code: shown.code });
 }
 
 /*
@@ -287,16 +390,23 @@ async function completeJoin(
         if (!sameMark(current, mark)) {
             // Not the code that was compared: it vouches for nothing here, and never waits on.
             await ctx.store.deleteJoin(ctx.userId, groupId);
-            return compare(ctx, groupId, current, true);
+            return await compare(ctx, groupId, current, true);
         }
         // The two words only the admin's screen shows: without them, nothing is kept, and the
         // positions stay as they were for this code.
         if (typed) {
             const at = issuedFor(ctx, groupId, current);
             if (!typedMatch(at.positions, current, typed)) {
+                // Held positions stay with the code either way; but only the family's first wrong
+                // pair in this tab is taken as a typo, whatever code is showing.
+                const again = at.held || (await hasTried(groupId));
                 at.held = true;
-                return { status: 'mismatch' };
+                writeHeld(await heldStorageKey(issuedKey(ctx, groupId, current)), at.positions);
+                await setTried(groupId, true);
+                return again ? { status: 'mismatch' } : { status: 'wrong-words' };
             }
+            writeHeld(await heldStorageKey(issuedKey(ctx, groupId, current)), null);
+            await setTried(groupId, false);
         }
         // Kept before acceptance: a reload between the two finishes from here.
         await writeJoin(ctx, { v: 2, groupId, joinMark: mark, checkedAt });

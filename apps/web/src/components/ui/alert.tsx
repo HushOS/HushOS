@@ -4,7 +4,7 @@ import { cn } from 'cn';
 import { AlertCircleIcon, CheckCircle2Icon, InfoIcon, TriangleAlertIcon } from 'lucide-react';
 
 const alertVariants = cva(
-    "group/alert relative grid w-full gap-1 rounded-xl border border-transparent px-4 py-3 text-left text-sm animate-in fade-in slide-in-from-top-1 duration-200 ease-out-expo has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-3 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
+    "group/alert relative grid w-full gap-1 rounded-xl border border-transparent px-4 py-3 text-left text-sm animate-in fade-in slide-in-from-top-1 duration-200 ease-out-expo has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-3 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
     {
         variants: {
             variant: {
@@ -78,11 +78,15 @@ function AlertDescription({ className, ...props }: React.ComponentProps<'div'>) 
     );
 }
 
+/* The notice's one action, below its words: pinned beside the title, it collided with it on a phone. */
 function AlertAction({ className, ...props }: React.ComponentProps<'div'>) {
     return (
         <div
             data-slot="alert-action"
-            className={cn('absolute top-2.5 right-2.5', className)}
+            className={cn(
+                'mt-2 flex flex-wrap gap-2 group-has-[>svg]/alert:col-start-2',
+                className,
+            )}
             {...props}
         />
     );

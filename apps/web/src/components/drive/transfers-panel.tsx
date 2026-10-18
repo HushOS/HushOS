@@ -33,6 +33,11 @@ import { FINISHING_KEY_CHANGE, formatBytes, isNetworkFailure, OFFLINE_WORDS } fr
 import { transfers, useTransfers } from '@/lib/transfers';
 import { useBatchProgress } from '@/lib/batch-progress';
 import { formatTimeLeft } from '@/lib/progress';
+import {
+    transferHeadline,
+    waitsForKeyChange,
+    WAITING_FOR_CONNECTION as WAITING,
+} from '@/lib/transfer-headline';
 
 /*
  * The one panel that follows the person around the app while transfers run: a
@@ -63,7 +68,6 @@ function useOffline() {
         () => false,
     );
 }
-const WAITING = 'Waiting for a connection';
 
 /* What went wrong, said as what to do about it. */
 function failure(item: { error: string | null; errorCode?: string | null }) {
@@ -141,12 +145,15 @@ function Row({
     tone,
     progress,
     actions,
+    wrap = false,
 }: {
     name: string;
     line: string;
     tone: Tone;
     progress: { value: number | undefined; max: number | undefined } | null;
     actions: ReactNode;
+    /* A line that must be read whole (what an upload waits for) wraps rather than truncating. */
+    wrap?: boolean;
 }) {
     return (
         <li className="flex items-center gap-3 border-t border-rule py-2.5 pr-2 pl-4">
@@ -170,7 +177,8 @@ function Row({
                 )}
                 <p
                     className={cn(
-                        'truncate text-xs leading-snug tabular-nums',
+                        'text-xs leading-snug tabular-nums',
+                        wrap ? 'text-pretty' : 'truncate',
                         tone === 'failed'
                             ? 'text-destructive'
                             : tone === 'done'
@@ -296,10 +304,13 @@ function AttachFile({ item }: { item: UploadItem }) {
 
 function UploadRow({ item, offline }: { item: UploadItem; offline: boolean }) {
     const overQuota = item.status === 'failed' && item.errorCode === OVER_QUOTA;
+    // Waiting out a key change: nothing moves, so no bar, and the reason is read whole.
+    const waiting = waitsForKeyChange(item);
     return (
         <Row
             name={item.name}
             line={statusLine(item, offline)}
+            wrap={waiting}
             tone={
                 item.status === 'failed'
                     ? 'failed'
@@ -310,7 +321,10 @@ function UploadRow({ item, offline }: { item: UploadItem; offline: boolean }) {
                         : 'active'
             }
             progress={
-                item.status === 'done' || item.status === 'cancelled' || item.status === 'failed'
+                waiting ||
+                item.status === 'done' ||
+                item.status === 'cancelled' ||
+                item.status === 'failed'
                     ? null
                     : { value: item.loaded, max: item.total || 1 }
             }
@@ -369,8 +383,6 @@ function UploadRow({ item, offline }: { item: UploadItem; offline: boolean }) {
     );
 }
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-
 export function TransfersPanel() {
     const state = useTransfers();
     const down = useDownloads();
@@ -385,36 +397,18 @@ export function TransfersPanel() {
     const finished =
         state.uploads.filter((item) => settled(item.status)).length +
         down.downloads.filter((item) => settled(item.status)).length;
-    const paused =
-        state.uploads.filter((item) => item.status === 'paused').length +
-        down.downloads.filter((item) => item.status === 'paused').length;
-    const failed =
-        state.uploads.filter((item) => item.status === 'failed').length +
-        down.downloads.filter((item) => item.status === 'failed').length;
-    const active = state.active + down.active;
-    // Uploads waiting for a family folder's key change: not active, not finished either.
-    const waiting = state.uploads.filter(
-        (item) => !settled(item.status) && item.status !== 'failed' && item.waitingFor,
-    ).length;
-    // The one headline every client uses.
-    const title =
-        active > 0 && offline
-            ? WAITING
-            : state.active && down.active
-              ? `Transferring ${plural(active, 'file')}`
-              : state.active
-                ? `Uploading ${plural(state.active, 'file')}`
-                : down.active
-                  ? `Downloading ${plural(down.active, 'file')}`
-                  : waiting
-                    ? `${plural(waiting, 'file')} waiting for a key change`
-                    : paused
-                      ? `${paused} paused`
-                      : failed
-                        ? `${plural(failed, 'transfer')} didn’t finish`
-                        : doneDownloads === 0 && doneUploads > 0
-                          ? `${plural(doneUploads, 'file')} uploaded`
-                          : `${plural(doneUploads + doneDownloads, 'transfer')} finished`;
+    // The one headline every client uses. An upload waiting for a key change moves nothing,
+    // so it never counts as active here: no ring, bytes or Pause for it.
+    const {
+        title,
+        mode,
+        moving: active,
+    } = transferHeadline({
+        uploads: state.uploads,
+        downloads: down.downloads,
+        downloadsActive: down.active,
+        offline,
+    });
     const rate = state.bytesPerSecond + down.bytesPerSecond;
     const counted = state.uploads.length + down.downloads.length;
     // Under the headline: files done of all, and the time left once the rate has settled.
@@ -435,7 +429,10 @@ export function TransfersPanel() {
               ]
                   .filter(Boolean)
                   .join(' · ')
-            : `${doneUploads + doneDownloads} of ${counted} files`;
+            : // Waiting for a key change: nothing to count yet; each row says what it waits for.
+              mode === 'waiting'
+              ? null
+              : `${doneUploads + doneDownloads} of ${counted} files`;
     // Failed items first: the reason the panel is still open is what to look at.
     const uploadRows = [
         ...state.uploads.filter((item) => item.status === 'failed'),
@@ -495,24 +492,26 @@ export function TransfersPanel() {
                             value={batch.bytes.total ? batch.bytes.loaded / batch.bytes.total : 0}
                             size={22}
                         />
-                    ) : waiting > 0 ? (
+                    ) : mode === 'waiting' ? (
                         <ClockIcon className="size-5 text-muted-foreground" aria-hidden="true" />
-                    ) : paused > 0 ? (
+                    ) : mode === 'paused' ? (
                         <PauseIcon className="size-5 text-muted-foreground" aria-hidden="true" />
-                    ) : failed > 0 ? (
+                    ) : mode === 'failed' ? (
                         <TriangleAlertIcon className="size-5 text-destructive" aria-hidden="true" />
                     ) : (
                         <CircleCheckIcon className="size-5 text-success" aria-hidden="true" />
                     )}
                 </span>
                 <div className="min-w-0 flex-1">
-                    <p className="truncate text-[15px] font-bold">{title}</p>
-                    <p
-                        className="truncate text-xs text-muted-foreground tabular-nums"
-                        data-batch-progress
-                    >
-                        {summary}
-                    </p>
+                    <p className="text-[15px] leading-snug font-bold text-pretty">{title}</p>
+                    {summary && (
+                        <p
+                            className="truncate text-xs text-muted-foreground tabular-nums"
+                            data-batch-progress
+                        >
+                            {summary}
+                        </p>
+                    )}
                 </div>
                 {active > 0 ? (
                     <IconAction
@@ -523,7 +522,7 @@ export function TransfersPanel() {
                             downloads.pauseAll();
                         }}
                     />
-                ) : paused > 0 ? (
+                ) : mode === 'paused' ? (
                     <IconAction
                         label="Resume all"
                         icon={PlayIcon}

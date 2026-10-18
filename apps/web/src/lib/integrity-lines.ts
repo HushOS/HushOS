@@ -59,6 +59,16 @@ export function nameSigner(signer: Signer | null, names: SignerNames): Named {
     return member ? { kind: 'member', ...member } : { kind: 'unknown' };
 }
 
+/*
+ * A checked contact as a line about a record that did not verify names them:
+ * the pin's name, and for a pin taken on a family's word the server's name
+ * and address, never the pin's label with "whom … vouches for", which beside
+ * Unverified would claim a word nobody gave for that record.
+ */
+function plainContact(named: Extract<Named, { kind: 'contact' }>) {
+    return named.vouched ? `${named.vouched.name} (${named.vouched.email})` : named.name;
+}
+
 /* A member as a sentence names them: a checked contact by their pin, anyone else as the server does. */
 function memberWords(named: Named, fallback: string) {
     if (named.kind === 'contact') return firstName(named.name);
@@ -72,18 +82,35 @@ function firstName(name: string) {
 }
 
 /*
+ * The label Info gives the worst issue's writer: "Changed by", except for a
+ * former member's record, which Info says as the row's mark does ("Written
+ * by Sam, who has left Lindqvist family."), the label and changedByWords
+ * read together.
+ */
+export function changedByLabel(issue: IntegrityIssue) {
+    if (issue.integrity !== 'former-member' || issue.rekey) return 'Changed by';
+    return issue.record === 'version' ? 'Added by' : 'Written by';
+}
+
+/*
  * Who Info's "Changed by" names for the worst issue: from this person's own
  * pins and the family's list, as everywhere. A re-key cause names someone
  * only for a mismatch under the re-keyer's verified signature; any other is
- * "Not confirmed", whatever the server says.
+ * "Not confirmed", whatever the server says. A former member is named as the
+ * row's mark names them, after changedByLabel: never with the family's word
+ * for their keys, which it no longer gives.
  */
 export function changedByWords(issue: IntegrityIssue, names: SignerNames) {
     if (issue.rekey && !(issue.rekey.cause === 'mismatch' && issue.rekey.rekeyer === 'verified'))
         return 'Not confirmed';
     if (issue.integrity === 'unchecked') return 'Not checked';
     const named = nameSigner(issue.signer, names);
+    if (issue.integrity === 'former-member') {
+        const who = memberWords(named, 'someone you haven’t checked');
+        return `${who.charAt(0).toUpperCase()}${who.slice(1)}, who has left ${names.family?.name ?? 'the family'}.`;
+    }
     if (named.kind === 'you') return 'You';
-    if (named.kind === 'contact') return named.name;
+    if (named.kind === 'contact') return plainContact(named);
     if (named.kind === 'member') return named.email ? `${named.name} (${named.email})` : named.name;
     return issue.signer ? 'Someone you haven’t checked' : 'Unknown';
 }
@@ -209,7 +236,7 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
                         : 'HushOS couldn’t verify this signature.',
                     action:
                         signer && named.kind === 'contact'
-                            ? { kind: 'again', signer, name: named.name }
+                            ? { kind: 'again', signer, name: plainContact(named) }
                             : null,
                 };
             const whose =
@@ -222,7 +249,7 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
                 text: `${version ? 'This version’s signature' : 'The signature'} doesn’t match ${whose} keys. Don’t trust this item.`,
                 action:
                     signer && named.kind === 'contact'
-                        ? { kind: 'again', signer, name: named.name }
+                        ? { kind: 'again', signer, name: plainContact(named) }
                         : null,
             };
         }
@@ -231,7 +258,7 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
                 named.kind === 'you'
                     ? 'you have'
                     : named.kind === 'contact'
-                      ? `${named.name} has`
+                      ? `${plainContact(named)} has`
                       : 'its writer has';
             return {
                 text: `${version ? 'This version was signed' : 'Signed'} with keys ${who} since replaced.`,
@@ -243,7 +270,7 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
                 named.kind === 'you'
                     ? 'you'
                     : named.kind === 'contact'
-                      ? named.name
+                      ? plainContact(named)
                       : 'someone you haven’t checked';
             return {
                 text: `${version ? 'This version was re-locked' : 'Re-locked'} by ${by}; HushOS couldn’t confirm who wrote it before.`,
