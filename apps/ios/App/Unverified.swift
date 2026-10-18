@@ -10,11 +10,25 @@ import SwiftUI
 extension Provenance {
     var colour: Color {
         if case .badSignature = self { return Alpine.danger }
+        if case .family(let mark) = self, mark.danger { return Alpine.danger }
         return Alpine.warning
     }
 
+    /* A check that could not run offers Try again. */
+    var retryable: Bool {
+        if self == .unchecked { return true }
+        if case .family(let mark) = self { return mark.retry }
+        return false
+    }
+
     /* The mark's word: drawn alike, but a check that couldn't run says so rather than passing for a verdict. */
-    var title: String { self == .unchecked ? "Couldn’t check" : "Unverified" }
+    var title: String {
+        if self == .unchecked { return "Couldn’t check" }
+        if case .family(let mark) = self { return mark.label }
+        // A key conflict is worse than Unverified and says so, as the web's mark does.
+        if case .keyConflict = self { return "Keys don’t match" }
+        return "Unverified"
+    }
 }
 
 /*
@@ -29,7 +43,13 @@ struct CheckTarget: Identifiable, Hashable {
 
 extension DriveStore {
     func checkTarget(for provenance: Provenance) -> CheckTarget? {
-        guard case .unknownSigner(let signerId?) = provenance else { return nil }
+        let signer: String?
+        switch provenance {
+        case .unknownSigner(let id): signer = id
+        case .family(let mark): signer = mark.check
+        default: signer = nil
+        }
+        guard let signerId = signer else { return nil }
         let id = signerId.lowercased()
         if let mount = mounts.first(where: { $0.share.granter.id.lowercased() == id }), !mount.share.granter.email.isEmpty {
             return CheckTarget(id: id, email: mount.share.granter.email)
@@ -121,7 +141,7 @@ struct UnverifiedExplanation: View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             Label(provenance.title, systemImage: "exclamationmark.shield").font(Theme.Text.headline).foregroundStyle(provenance.colour)
             Text(provenance.explanation).font(Theme.Text.callout).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)
-            if provenance == .unchecked {
+            if provenance.retryable {
                 Button { retry() } label: { Text("Try again").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
             } else if let target {

@@ -124,6 +124,15 @@ public actor Vault {
     /* The top folder being made, so callers that arrive meanwhile wait for it instead of making a second. */
     var makingRoot: Task<WorkspaceView, Error>?
 
+    /*
+     * The family write rules and keys (the core's `AreaLedger`, one per unlocked session in this
+     * process): every family folder node opens through it, so a family folder is read only under
+     * a member list the core accepted (FamilySync). This app version writes nothing there.
+     */
+    public nonisolated let areaLedger = AreaLedger()
+    /* Every family folder route 25 named this session, lowercased: refused by the personal key path whatever the ledger holds. */
+    var familyWorkspaces: Set<String> = []
+
     public init(api: DriveAPI, session: SharedKeychain.Session) {
         self.api = api
         self.session = session
@@ -162,6 +171,14 @@ public actor Vault {
             }
         }
         if changed { saveIndex() }
+    }
+
+    /* Family folder ids leave the index on disk when their family is forgotten here. */
+    func forgetParents(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        let before = parents.count
+        parents = parents.filter { !ids.contains($0.key.lowercased()) && !ids.contains($0.value.lowercased()) }
+        if parents.count != before { saveIndex() }
     }
 
     func rememberParent(_ id: String, parent: String) {
@@ -360,6 +377,10 @@ public actor Vault {
     }
 
     func parentKey(for node: NodeView) throws -> Data {
+        // A family folder's keys come from the area ledger alone (see `open`): never under a key cached here.
+        if areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased()) {
+            throw DriveAPIError.server(500, FamilyWords.openAgain)
+        }
         let parentId = node.parentId ?? node.workspaceId
         if parentId == node.workspaceId {
             // The workspace key is this account's own: it opens only its own top folder.
@@ -375,16 +396,26 @@ public actor Vault {
         return key
     }
 
-    /* Opens one node under its parent's key (the workspace key at the root); parents first. */
+    /*
+     * Opens one node under its parent's key (the workspace key at the root); parents first. A
+     * node in a family folder opens only through the area ledger, which holds what its path is
+     * rooted at and refuses a top level whose key is not the one the member list committed to.
+     */
     @discardableResult
     public func open(_ node: NodeView) throws -> Opened {
         if let done = opened[node.ref] { return done }
         try node.checkEnvelopeSuite()
-        let ctx = NodeKeyContext(
-            workspaceId: node.workspaceId, nodeId: node.id, parentId: node.parentId ?? node.workspaceId,
-            parentKeyEpoch: node.parentKeyEpoch, keyEpoch: node.keyEpoch
-        )
-        let key = try nodeOpen(ctx: ctx, parentKey: try parentKey(for: node), keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
+        let key: Data
+        if areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased()) {
+            // A family shown differently or refused since: the ledger holds its keys back until it is accepted again.
+            key = try areaLedger.openListedNode(workspaceId: node.workspaceId, node: node.servedKey())
+        } else {
+            let ctx = NodeKeyContext(
+                workspaceId: node.workspaceId, nodeId: node.id, parentId: node.parentId ?? node.workspaceId,
+                parentKeyEpoch: node.parentKeyEpoch, keyEpoch: node.keyEpoch
+            )
+            key = try nodeOpen(ctx: ctx, parentKey: try parentKey(for: node), keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
+        }
         nodeKeys[node.ref] = key
         let metadata = try metadataOpen(
             ctx: MetadataContext(workspaceId: node.workspaceId, nodeId: node.id, metadataVersion: node.metadataVersion),

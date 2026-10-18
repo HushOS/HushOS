@@ -1,0 +1,603 @@
+import CryptoKit
+import Foundation
+import HushOSCore
+import Testing
+@testable import HushOSKit
+
+/*
+ * A family synced on the phone against a stub of the group routes, with real member lists the
+ * core signs and accepts (docs/groups-mobile-plan.md, iOS 1): a served chain short of the device
+ * record is refused, a fork shows the warning and leaves nothing open, a not-member answer wipes
+ * what the phone kept but keeps the settings pin, and a late acceptance never writes an older
+ * record over a newer one. Each fails if its guard in FamilySync or FamilyRecords is removed.
+ */
+extension OnFakeDrive {
+    @Suite struct FamilySyncTests {
+        @Test func aMembersFolderOpensAndItsCreatorsFileIsVerifiedByTheFamily() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(view.rosterVersion == 2)
+            #expect(view.members.map(\.userId).sorted() == [family.creator.userId, family.member.userId].sorted())
+            let area = try #require(view.areas.first)
+            #expect(area.name == "Photos" && area.openable && area.write == .writable)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 2)
+
+            let children = try await phone.vault.children(of: family.rootId)
+            #expect(children.map(\.name) == ["Recipes.txt"])
+            let verdict = await phone.sync.verdict(of: try #require(children.first).node, groupId: family.groupId)
+            // The member never compared the creator's words: the family's member list vouches for them.
+            #expect(verdict.mark == nil)
+            #expect(verdict.verifiedBy == "Verified by Lindqvist family")
+            // Nothing is written into a family folder by this version, whatever the screens offer.
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await phone.vault.createFolder(in: family.rootId, name: "New") }
+        }
+
+        /*
+         * The record is at roster 3 and the settings pin only at 2 (an older save from another
+         * device). The server serves roster 2 as the head again: from version 1 the record's own
+         * pin must still be a mark, so it is a rollback, and nothing opens.
+         */
+        @Test func aChainShortOfTheDeviceRecordIsRefusedAndTheFamilyCouldntBeChecked() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(first.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 3)
+            first.done()
+
+            // Later, a fresh start of the app: the settings pin is back at roster 2, and the server serves only that far.
+            try server.storeSettings(pin: try family.pin(through: [family.r1, family.r2]))
+            server.serve(chain: [family.r1, family.r2], ignoringAfter: true)
+            server.clearRequests()
+            let later = try await family.phone(server, records: first.records)
+            defer { later.done() }
+            guard case .failed = await later.sync.sync(family.summary) else { Issue.record("a rollback below the record was accepted"); return }
+            #expect(!server.requested("/api/drive/spaces"))
+            #expect(!later.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+            #expect(later.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 3)
+        }
+
+        /*
+         * A family opened on this phone, then the server shows another history from version 3:
+         * the hard warning, and what was opened of its folders is gone, so nothing in them opens.
+         */
+        @Test func aForkShowsTheWarningAndOpensNothing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+
+            // The continuation names a head this device never saw; from version 1 it branches at 3.
+            server.serve(chain: [family.r1, family.r2, family.r3Fork, family.r4Fork])
+            server.clearRequests()
+            guard case .fork(let fork) = await phone.sync.sync(family.summary) else { Issue.record("no warning"); return }
+            #expect(fork.memberList && fork.version == 3)
+            #expect(Set(fork.sides.flatMap(\.from)).contains("what the server shows now"))
+            #expect(!server.requested("/api/drive/spaces"))
+            #expect(await phone.vault.item(family.rootId) == nil)
+            #expect(await phone.vault.item(family.fileId) == nil)
+            // The core holds the family's keys back after the fork: the listing is refused there, not by the app.
+            do {
+                _ = try await phone.vault.children(of: family.rootId)
+                Issue.record("a forked family's folder listed")
+            } catch {
+                #expect(FamilyWords.error(error) == FamilyWords.openAgain)
+            }
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 3)
+        }
+
+        /* Only 404 `not-member` wipes: the record, the ledger's keys and the opened folders go; the settings pin stays. */
+        @Test func aNotMemberAnswerWipesWhatThePhoneKeptButKeepsTheSettingsPin() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+            let pinBefore = try #require(try server.storedPin(family))
+
+            server.notMember = true
+            server.clearRequests()
+            #expect(await phone.sync.sync(family.summary) == .wiped)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+            #expect(!phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+            #expect(await phone.vault.item(family.rootId) == nil)
+            #expect(try server.storedPin(family) == pinBefore)
+            #expect(!server.requested("/api/auth/settings", method: "PUT"))
+        }
+
+        /*
+         * Another device saves a later pin (roster 3, an earlier words check) the moment this one
+         * saves: this one's pin, merged against what it read before, must not land over it. The
+         * family is accepted again against the stored pin, and only what that adds is saved.
+         */
+        @Test func aPinAnotherDeviceSavedFirstIsNeverWrittenOver() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let theirs = try family.pin(through: [family.r1, family.r2, family.r3], checkedAt: "2026-10-18T08:00:00.000Z")
+            server.beforePut = { try? server.storeSettings(pin: theirs) }
+
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(view.rosterVersion == 3)
+            let stored = try #require(try server.storedPin(family))
+            // Their earlier check stands; this device only adds the folder it opened.
+            #expect(stored.checkedAt == theirs.checkedAt && stored.rosterVersion == 3)
+            #expect(stored.areas == [family.workspaceId: 1])
+        }
+
+        /*
+         * This device accepted roster 2; before it saves, another device saved a pin at roster 3.
+         * The stored pin is ahead: never lowered, and the family is accepted again with it as a
+         * mark, reaching roster 3.
+         */
+        @Test func aStoredPinAheadIsNeverLoweredAndTheFamilyIsAcceptedAgainUpToIt() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let ahead = try family.pin(through: [family.r1, family.r2, family.r3], checkedAt: "2026-10-18T08:00:00.000Z")
+            server.afterRosters = {
+                server.serve(chain: [family.r1, family.r2, family.r3])
+                try? server.storeSettings(pin: ahead)
+            }
+
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(view.rosterVersion == 3)
+            #expect(try server.storedPin(family)?.rosterVersion == 3)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 3)
+        }
+
+        /*
+         * This session committed roster 3; the server then keeps serving roster 2 as the head. Each
+         * run is overtaken (short of the chain held), read again quietly, and after the third the
+         * family says the server keeps serving an older member list.
+         */
+        @Test func threeOvertakenRunsSayTheServerKeepsServingAnOlderList() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+
+            server.serve(chain: [family.r1, family.r2], ignoringAfter: true)
+            server.clearRequests()
+            #expect(await phone.sync.sync(family.summary) == .failed(servedRaceMessage(split: false)))
+            // Three runs, each the continuation and then version 1.
+            #expect(server.count("/api/groups/\(family.groupId)/rosters") == 6)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 3)
+        }
+
+        /* A record that no longer opens (a master-key rotation) is deleted, and the family accepted again against the settings pin. */
+        @Test func anUnreadableRecordIsResetAndTheFamilyAcceptedAgainstTheSettingsPin() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let row = try #require(phone.records.read(userId: family.member.userId, groupId: family.groupId))
+            // One character of the sealed body changed: still base64url, no longer opens.
+            var chars = Array(row.envelope)
+            let at = chars.count / 2
+            chars[at] = chars[at] == "A" ? "B" : "A"
+            let damaged = FamilyRecords.Row(envelope: String(chars), rosterVersion: row.rosterVersion, areas: row.areas)
+            try phone.records.put(userId: family.member.userId, groupId: family.groupId, damaged)
+
+            let later = try await family.phone(server, records: phone.records)
+            guard case .accepted(let view) = await later.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            #expect(view.recordReset)
+            let fresh = try #require(later.records.read(userId: family.member.userId, groupId: family.groupId))
+            #expect(fresh.envelope != damaged.envelope && fresh.rosterVersion == 2)
+        }
+
+        /*
+         * The member pinned the creator after a words check over other keys than the ones the
+         * member list names: the creator's file reads "Keys don't match", in the danger colour,
+         * and the family vouches for nothing.
+         */
+        @Test func aKeyConflictMarksTheFileAndTheFamilyVouchesForNothing() async throws {
+            let family = try FamilyFixture()
+            let other = try FamilyPerson()
+            let conflicting = try pinned(family.creator.userId, other.keys, name: "Maya Lindqvist")
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            try server.storeSettings(pin: try family.pin(through: [family.r1, family.r2]), contacts: [conflicting])
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let file = try #require(try await phone.vault.children(of: family.rootId).first)
+            let verdict = await phone.sync.verdict(of: file.node, groupId: family.groupId)
+            let mark = try #require(verdict.mark)
+            #expect(mark.label == "Keys don’t match" && mark.danger)
+            #expect(mark.lines == ["Maya’s keys don’t match the ones you checked. Check it’s them again."])
+            #expect(verdict.verifiedBy == nil)
+        }
+
+        /* Every write the vault offers is refused in a family folder before anything reaches the server. */
+        @Test func everyWriteIntoAFamilyFolderIsRefusedBeforeItIsSent() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            let file = try #require(try await vault.children(of: family.rootId).first)
+            let source = FileManager.default.temporaryDirectory.appendingPathComponent("family-write-\(UUID().uuidString).txt")
+            try Data("x".utf8).write(to: source)
+            let anyone = try pinned(family.creator.userId, family.creator.keys)
+            server.clearRequests()
+
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.move(file.id, to: family.rootId) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.copy(file.id, to: family.rootId) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.upload(fileURL: source, name: "x.txt", mime: "text/plain", in: family.rootId, replacing: nil) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.share(file, with: anyone, role: "viewer") }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.createLink(for: file, password: nil, expiresAt: nil) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.rotate(file) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.report(file, category: "spam", reason: "x", email: nil) }
+            await #expect(throws: FamilyWriteError.readOnly) { try await vault.keepDownloaded(file) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.rename(file.id, to: "renamed.txt") }
+            await #expect(throws: FamilyWriteError.readOnly) { try await vault.trash(file.id) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.restore(file, parentTrashed: false) }
+            let version = VersionListView(id: UUID().uuidString.lowercased(), objectId: UUID().uuidString.lowercased(), contentKeyEnvelope: "AA", status: "ready",
+                                          contentSuite: 3, contentNonce: "AA", plaintextSize: nil, ciphertextSize: nil, current: false, supersededAt: nil,
+                                          createdAt: "2026-10-18T10:00:00.000Z")
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.restoreVersion(version, of: file.id) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.copyAcross(file.id, to: family.personal) }
+            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.planKeep(file) }
+            #expect(server.writes.isEmpty)
+        }
+
+        /*
+         * Another process finished a later acceptance (roster 3) while this one was fetching
+         * roster 2: this one's record lands second and must not replace the later one.
+         */
+        @Test func aLateAcceptanceNeverWritesAnOlderRecordOverANewerOne() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let newer = FamilyRecords.Row(envelope: "sealed-at-roster-3", rosterVersion: 3, areas: [family.workspaceId])
+            server.onRosters = { try? phone.records.put(userId: family.member.userId, groupId: family.groupId, newer) }
+
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(view.rosterVersion == 2)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == newer)
+        }
+    }
+}
+
+/* Base64url of SHA-256, as rosters name ML-DSA and ML-KEM keys. */
+private func digest(_ value: String) throws -> String {
+    base64urlEncode(bytes: Data(SHA256.hash(data: try base64urlDecode(value: value))))
+}
+
+struct FamilyPerson {
+    let userId: String
+    let root: Data
+    let keys: IdentityKeys
+
+    init(keyVersion: UInt64 = 1) throws {
+        userId = UUID().uuidString.lowercased()
+        root = try randomBytes(length: 32)
+        keys = try identityOpen(userId: userId, accountKey: root, envelope: try identityCreate(userId: userId, accountKey: root, keyVersion: keyVersion))
+    }
+
+    var served: ServedKeys {
+        ServedKeys(keyVersion: keys.keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+                   mlDsaPublicKey: keys.mlDsaPublicKey!, kemPublicKey: keys.kemPublicKey!)
+    }
+
+    var own: OwnIdentities { OwnIdentities(userId: userId, identities: [served]) }
+
+    func entry(_ roles: [GroupRole], since: UInt64) throws -> RosterMember {
+        RosterMember(userId: userId, keyVersion: keys.keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+                     mlDsaPublicKeyDigest: try digest(keys.mlDsaPublicKey!), kemPublicKeyDigest: try digest(keys.kemPublicKey!),
+                     status: .active, roles: roles, sinceVersion: since)
+    }
+}
+
+/*
+ * A family as the web makes one: the creator signs roster 1 (one family folder, its key and its
+ * top folder's key committed), lets the member in at roster 2 with a grant of the folder's key,
+ * and makes them the organizer at roster 3 (or, on a server's other branch, a guardian, then
+ * roster 4 on top). The creator wrote a file into the folder.
+ */
+struct FamilyFixture {
+    let creator: FamilyPerson
+    let member: FamilyPerson
+    let groupId: String
+    let groupSeed: Data
+    let workspaceId: String
+    let workspaceSeed: String
+    let areaKey: Data
+    let rootKey: Data
+    let rootId: String
+    let fileId: String
+    let r1: SignedGroupStatement
+    let r2: SignedGroupStatement
+    let r3: SignedGroupStatement
+    let r3Fork: SignedGroupStatement
+    let r4Fork: SignedGroupStatement
+    let grant: Data
+    let root: NodeView
+    let file: NodeView
+    let personal = UUID().uuidString.lowercased()
+
+    var summary: GroupSummary { GroupSummary(id: groupId, kind: "family", name: "Lindqvist family", roles: [], state: "active", rosterVersion: 2, groupKeyVersion: 1) }
+    var firstKeys: GroupPublicKey { get throws { try groupPublicKey(seed: groupSeed) } }
+    var signerKeys: [String: String] { get throws { [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!] } }
+
+    init() throws {
+        creator = try FamilyPerson()
+        member = try FamilyPerson()
+        groupId = try newId(kind: .group, scopeId: creator.userId).id
+        groupSeed = groupSeedCreate()
+        let area = try newId(kind: .workspace, scopeId: groupId)
+        workspaceId = area.id
+        workspaceSeed = area.seed
+        areaKey = try randomBytes(length: 32)
+        rootKey = try randomBytes(length: 32)
+        let owner = try creator.entry([.billing, .members], since: 1)
+        let first = try rosterFirst(groupId: groupId, kind: .family, creator: owner,
+                                    areaKeys: [AreaKey(workspaceId: workspaceId, workspaceKey: areaKey, rootKey: rootKey)], format: 2)
+        r1 = try rosterSign(roster: first, groupSeed: groupSeed, signer: creator.keys)
+        let (group, seed, signer) = (groupId, groupSeed, creator)
+        func next(_ previous: SignedGroupStatement, version: UInt64, _ memberEntry: RosterMember) throws -> SignedGroupStatement {
+            let members = [owner, memberEntry].sorted { $0.userId < $1.userId }
+            let roster = Roster(groupId: group, kind: .family, rosterVersion: version, previousRosterDigest: rosterDigest(statement: previous.statement),
+                                groupKeyVersion: 1, signerUserId: signer.userId, members: members, areas: [], format: 2)
+            return try rosterSign(roster: roster, groupSeed: seed, signer: signer.keys)
+        }
+        r2 = try next(r1, version: 2, try member.entry([], since: 2))
+        r3 = try next(r2, version: 3, try member.entry([.billing], since: 3))
+        r3Fork = try next(r2, version: 3, try member.entry([.guardian], since: 3))
+        r4Fork = try next(r3Fork, version: 4, try member.entry([], since: 4))
+
+        // The creator's device grants the folder's key to the member at roster 2.
+        guard case .accepted(let chain) = try acceptRosters(
+            groupId: groupId, firstKeys: try groupPublicKey(seed: groupSeed), firstKeysChecked: true, pins: [], rosters: [r1, r2],
+            successions: [], mlDsaKeys: [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!], me: creator.own, cache: nil
+        ) else { throw FamilyFailure(message: "the creator's chain didn't accept") }
+        grant = try areaGrantSeal(
+            workspaceKey: areaKey,
+            ctx: AreaGrantContext(groupId: groupId, workspaceId: workspaceId, workspaceKeyVersion: 1, granteeUserId: member.userId,
+                                  granteeKeyVersion: member.keys.keyVersion, granterUserId: creator.userId, rosterVersion: 2,
+                                  rosterDigest: rosterDigest(statement: r2.statement)),
+            chain: chain, areaIdSeed: workspaceSeed, granteeKemPublicKey: try base64urlDecode(value: member.keys.kemPublicKey!), granter: creator.keys
+        )
+
+        rootId = try newId(kind: .node, scopeId: workspaceId).id
+        fileId = try newId(kind: .node, scopeId: workspaceId).id
+        root = try Self.node(id: rootId, in: workspaceId, parent: nil, parentKey: areaKey, key: rootKey, kind: .folder, name: "Photos", writer: creator)
+        file = try Self.node(id: fileId, in: workspaceId, parent: rootId, parentKey: rootKey, key: try randomBytes(length: 32), kind: .file,
+                             name: "Recipes.txt", writer: creator)
+    }
+
+    /* A node wrapped under its parent (the area key at version 1 for the top folder) and signed by its writer. */
+    static func node(id: String, in workspaceId: String, parent: String?, parentKey: Data, key: Data, kind: NodeKind, name: String, writer: FamilyPerson) throws -> NodeView {
+        let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspaceId, nodeId: id, parentId: parent ?? workspaceId, parentKeyEpoch: 1, keyEpoch: 1),
+                                   parentKey: parentKey, nodeKey: key)
+        let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
+                                      metadata: NodeMetadata(name: name, mime: kind == .file ? "text/plain" : nil, size: nil, modified: nil))
+        let signature = try metadataSign(signingSeed: writer.keys.signingSeed,
+                                         statement: MetadataStatement(workspaceId: workspaceId, nodeId: id, kind: kind, metadataVersion: 1), metadataEnvelope: sealed)
+        var node = NodeView(id: id, workspaceId: workspaceId, parentId: parent, kind: kind == .folder ? "folder" : "file", keyEpoch: 1, parentKeyEpoch: 1,
+                            keyEnvelope: base64urlEncode(bytes: wrapped), metadataVersion: 1, metadataEnvelope: base64urlEncode(bytes: sealed),
+                            currentVersion: nil, trashedAt: nil, changeSeq: 1, createdAt: "2026-10-18T10:00:00.000Z", updatedAt: "2026-10-18T10:00:00.000Z")
+        node.metadataSigner = Signer(id: writer.userId)
+        node.metadataSignature = base64urlEncode(bytes: signature)
+        return node
+    }
+
+    /* The member's settings pin over `rosters`, as joining on the web left it. */
+    func pin(through rosters: [SignedGroupStatement], checkedAt: String = "2026-10-18T09:00:00.000Z") throws -> GroupPin {
+        guard case .accepted(let chain) = try acceptRosters(groupId: groupId, firstKeys: try firstKeys, firstKeysChecked: true, pins: [], rosters: rosters,
+                                                           successions: [], mlDsaKeys: try signerKeys, me: member.own, cache: nil)
+        else { throw FamilyFailure(message: "the member's chain didn't accept") }
+        return try pinAfter(pins: [], chain: chain, checkedAt: checkedAt)
+    }
+
+    func server(chain: [SignedGroupStatement], pin: GroupPin) -> FamilyServer {
+        let server = FamilyServer(family: self)
+        server.serve(chain: chain)
+        try? server.storeSettings(pin: pin)
+        return server
+    }
+
+    /* The member's phone: a vault with their keys and drive, its own ledger, and FamilySync over the stub. */
+    func phone(_ server: FamilyServer, records: FamilyRecords? = nil) async throws -> Phone {
+        let session = SharedKeychain.Session(origin: "https://family.test", token: "t", userId: member.userId)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FamilyServerProtocol.self]
+        FamilyServer.current = server
+        Auth.testSession = session
+        Auth.testTransport = configuration
+        let api = DriveAPI(session: session, configuration: configuration)
+        let vault = Vault(api: api, session: session)
+        await vault.adopt(accountKey: member.root)
+        await vault.adopt(identity: member.keys)
+        await vault.adopt(workspace: WorkspaceView(workspaceId: personal, changeSeq: nil, grant: nil, root: nil), key: try randomBytes(length: 32))
+        let store = records ?? FamilyRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-records-\(UUID().uuidString)"), activity: .expired)
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store), records: store)
+    }
+
+    struct Phone {
+        let vault: Vault
+        let sync: FamilySync
+        let records: FamilyRecords
+        func done() { Auth.testSession = nil; Auth.testTransport = nil; FamilyServer.current = nil }
+    }
+}
+
+/* The group routes, the settings routes and one family folder's listing, as the server has them. */
+final class FamilyServer: @unchecked Sendable {
+    nonisolated(unsafe) static var current: FamilyServer?
+    let family: FamilyFixture
+    private let lock = NSLock()
+    private var chain: [SignedGroupStatement] = []
+    private var ignoringAfter = false
+    var notMember = false
+    /* Runs as route 5 is answered: another process at work meanwhile. */
+    var onRosters: (@Sendable () -> Void)?
+    /* Runs once, after the first route 5 answer is built: the server or another device moves on meanwhile. */
+    var afterRosters: (@Sendable () -> Void)?
+    /* Runs once, as the first settings save arrives: another device saved first. */
+    var beforePut: (@Sendable () -> Void)?
+    /* Route 3's members, as a manager's view names them. */
+    var members: [[String: Any]] = []
+    private var requests: [(method: String, path: String)] = []
+    private let settingsKey: Data
+    private let settingsKeyEnvelope: SettingsKeyEnvelope
+    private var settings: SettingsEnvelope?
+
+    init(family: FamilyFixture) {
+        self.family = family
+        let made = try! settingsKeyCreate(userId: family.member.userId, accountKey: family.member.root)
+        settingsKey = made.key
+        settingsKeyEnvelope = made.envelope
+    }
+
+    func serve(chain: [SignedGroupStatement], ignoringAfter: Bool = false) {
+        lock.withLock { self.chain = chain; self.ignoringAfter = ignoringAfter }
+    }
+
+    func clearRequests() { lock.withLock { requests = [] } }
+
+    func requested(_ path: String, method: String = "GET") -> Bool {
+        lock.withLock { requests.contains { $0.path == path && $0.method == method } }
+    }
+
+    func count(_ path: String, method: String = "GET") -> Int {
+        lock.withLock { requests.filter { $0.path == path && $0.method == method }.count }
+    }
+
+    /* Anything but a read: a write the phone must never send. */
+    var writes: [String] { lock.withLock { requests.filter { $0.method != "GET" && !$0.path.hasPrefix("/api/auth/settings") }.map(\.path) } }
+
+    /* The member's settings document, sealed one version above what is stored, holding `pin` for the family. */
+    func storeSettings(pin: GroupPin, contacts: [ContactPin] = []) throws {
+        var document = Settings()
+        document.setGroupPin(family.groupId, pin)
+        for contact in contacts { document.setPin(contact) }
+        let next = (lock.withLock { settings?.settingsVersion } ?? 0) + 1
+        let sealed = try settingsSeal(userId: family.member.userId, settingsKey: settingsKey, settingsVersion: next, json: try document.json())
+        lock.withLock { settings = sealed }
+    }
+
+    /* The family's pin as the stored settings hold it. */
+    func storedPin(_ family: FamilyFixture) throws -> GroupPin? {
+        guard let envelope = lock.withLock({ settings }),
+              let json = try settingsOpen(userId: family.member.userId, settingsKey: settingsKey, envelope: envelope) else { return nil }
+        return try Settings(json: json, version: envelope.settingsVersion).groupPin(family.groupId)
+    }
+
+    private func wire(_ signed: SignedGroupStatement, version: Int) -> [String: Any] {
+        ["version": version, "statement": base64urlEncode(bytes: signed.statement),
+         "signature": ["ed25519": base64urlEncode(bytes: signed.signature.ed25519), "mlDsa": base64urlEncode(bytes: signed.signature.mlDsa)],
+         "signerSignature": base64urlEncode(bytes: signed.signerSignature)]
+    }
+
+    private func json(_ node: NodeView) -> Any {
+        (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(node))) ?? [:]
+    }
+
+    private func identity(_ person: FamilyPerson) -> [String: Any] {
+        let keys = person.keys
+        return ["userId": person.userId, "links": [Any](),
+                "identity": ["keyVersion": keys.keyVersion, "encryptionPublicKey": keys.encryptionPublicKey, "signingPublicKey": keys.signingPublicKey,
+                             "mlDsaPublicKey": keys.mlDsaPublicKey!, "kemPublicKey": keys.kemPublicKey!, "keysSignature": ""]]
+    }
+
+    func answer(_ request: URLRequest, body: Data?) -> (Int, Any) {
+        let path = request.url?.path ?? ""
+        let method = request.httpMethod ?? "GET"
+        lock.withLock { requests.append((method, path)) }
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let f = family
+        switch (method, path) {
+        case ("GET", "/api/auth/settings"):
+            return lock.withLock {
+                guard let settings else { return (200, ["settingsVersion": 0]) }
+                return (200, ["settingsVersion": settings.settingsVersion,
+                              "settings": ["version": settings.version, "settingsVersion": settings.settingsVersion, "nonce": settings.nonce, "ciphertext": settings.ciphertext],
+                              "settingsKey": Auth.json(settingsKeyEnvelope)])
+            }
+        case ("PUT", "/api/auth/settings"):
+            let hook = lock.withLock { () -> (@Sendable () -> Void)? in defer { beforePut = nil }; return beforePut }
+            hook?()
+            let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            return lock.withLock {
+                let expected = (sent["expectedVersion"] as? NSNumber)?.uint64Value ?? 0
+                guard expected == (settings?.settingsVersion ?? 0) else { return (409, ["message": "Your settings changed on another device."]) }
+                settings = SettingsEnvelope(version: UInt32((sent["version"] as? NSNumber)?.intValue ?? 2), settingsVersion: expected + 1,
+                                            nonce: sent["nonce"] as? String ?? "", ciphertext: sent["ciphertext"] as? String ?? "")
+                return (200, ["settingsVersion": expected + 1])
+            }
+        case ("GET", "/api/groups/\(f.groupId)/rosters"):
+            if notMember { return (404, ["code": "not-member", "message": "You are not in this group."]) }
+            onRosters?()
+            let after = Int(query.first { $0.name == "after" }?.value ?? "0") ?? 0
+            let answer: (Int, Any) = lock.withLock {
+                let rosters = chain.enumerated().filter { ignoringAfter || $0.offset + 1 > after }.map { wire($0.element, version: $0.offset + 1) }
+                return (200, ["rosters": rosters, "successions": [Any](),
+                              "firstKeys": ["ed25519PublicKey": (try? f.firstKeys.ed25519PublicKey) ?? "", "mlDsaPublicKey": (try? f.firstKeys.mlDsaPublicKey) ?? ""],
+                              "signerKeys": (try? f.signerKeys) ?? [:], "head": ["version": chain.count, "digest": ""], "next": NSNull()])
+            }
+            let next = lock.withLock { () -> (@Sendable () -> Void)? in defer { afterRosters = nil }; return afterRosters }
+            next?()
+            return answer
+        case ("GET", "/api/groups/\(f.groupId)"):
+            return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6]])
+        case ("GET", "/api/groups/\(f.groupId)/identities"):
+            return (200, ["identities": [identity(f.creator), identity(f.member)].sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
+        case ("GET", "/api/drive/spaces"):
+            return (200, ["spaces": [
+                ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
+                ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
+                    "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": 1, "changeSeq": 2, "root": json(f.root), "rotation": NSNull(),
+                    "grant": ["workspaceKeyVersion": 1, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId, "rosterVersion": 2,
+                              "rosterDigest": rosterDigest(statement: f.r2.statement), "envelope": base64urlEncode(bytes: f.grant)],
+                    "selfGrant": NSNull(),
+                ]]],
+            ]])
+        case ("GET", "/api/drive/nodes/\(f.rootId)/children"):
+            return (200, ["folder": json(f.root), "ancestors": [Any](), "children": [json(f.file)], "nextCursor": NSNull()])
+        default:
+            return (404, ["message": "Not here."])
+        }
+    }
+}
+
+final class FamilyServerProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open()
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read <= 0 { break }
+                data.append(buffer, count: read)
+            }
+            stream.close()
+            body = data
+        }
+        let (status, json) = FamilyServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: json)) ?? Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

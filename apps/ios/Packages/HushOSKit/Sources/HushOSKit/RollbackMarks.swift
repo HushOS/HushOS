@@ -49,7 +49,7 @@ struct HighWaterMarks: Sendable {
         var intended = base
         change(&intended)
         floor.raise(file, from: base, to: intended, retiring: retiring)
-        whileRunning { granted in locked(retiring: retiring, wait: granted, change) }
+        FileLock.whileRunning(activity) { granted in locked(retiring: retiring, wait: granted, change) }
     }
 
     private func locked(retiring: Set<String>, wait: Bool, _ change: (inout [String: UInt64]) -> Void) {
@@ -57,7 +57,7 @@ struct HighWaterMarks: Sendable {
         let lock = open(file.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard lock >= 0 else { return }
         defer { close(lock) }
-        guard Self.take(lock, wait: wait) else { return }
+        guard FileLock.take(lock, wait: wait) else { return }
         defer { flock(lock, LOCK_UN) }
         let before = load()
         let pending = floor.pending(file)
@@ -71,12 +71,19 @@ struct HighWaterMarks: Sendable {
         }
         floor.written(file, marks)
     }
+}
 
+/*
+ * An exclusive `flock` on a lock file in the app group, shared by every file the app and its
+ * extensions read-modify-write there (the rollback marks, the family device records). Held only
+ * while the system has promised not to suspend the process, and never waited on without end.
+ */
+enum FileLock {
     /*
      * The lock, never waited on without end: a process parked behind another's lock is one
      * the system may suspend there. Tried for about a second when there is time, once when not.
      */
-    private static func take(_ lock: Int32, wait: Bool) -> Bool {
+    static func take(_ lock: Int32, wait: Bool) -> Bool {
         var tries = wait ? 100 : 1
         while true {
             if flock(lock, LOCK_EX | LOCK_NB) == 0 { return true }
@@ -99,13 +106,13 @@ struct HighWaterMarks: Sendable {
      * waiting; a raise not written then stays pending. Callers are on the vault's actor, never
      * the main thread.
      */
-    private func whileRunning(_ work: (_ granted: Bool) -> Void) {
+    static func whileRunning(_ activity: HighWaterMarks.Activity, _ work: (_ granted: Bool) -> Void) {
         if activity == .expired { return work(false) }
         #if os(iOS)
         let granted = DispatchSemaphore(value: 0)
         let finished = DispatchSemaphore(value: 0)
         let answer = ActivityAnswer()
-        ProcessInfo.processInfo.performExpiringActivity(withReason: "Saving a rollback mark") { expired in
+        ProcessInfo.processInfo.performExpiringActivity(withReason: "Saving a record on this device") { expired in
             // The second call (expiring while the write runs) changes nothing: the write takes milliseconds.
             guard answer.first(expired: expired) else { return }
             granted.signal()
@@ -116,6 +123,25 @@ struct HighWaterMarks: Sendable {
         #else
         work(true)
         #endif
+    }
+
+    /*
+     * Runs `body` holding the lock at `path` (made if missing), within the activity above; false
+     * when the lock could not be had, and `body` did not run.
+     */
+    @discardableResult
+    static func withLock(_ path: String, activity: HighWaterMarks.Activity = .system, _ body: () -> Void) -> Bool {
+        var ran = false
+        whileRunning(activity) { granted in
+            let lock = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+            guard lock >= 0 else { return }
+            defer { close(lock) }
+            guard take(lock, wait: granted) else { return }
+            defer { flock(lock, LOCK_UN) }
+            body()
+            ran = true
+        }
+        return ran
     }
 }
 

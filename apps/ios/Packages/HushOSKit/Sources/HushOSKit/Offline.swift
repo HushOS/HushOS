@@ -222,6 +222,8 @@ public enum Offline {
 extension Vault {
     /* Keeps a file: downloads its current version into the offline store and records it. */
     public func keepDownloaded(_ item: Opened, folder: String? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws {
+        // Family folders are read only in this version, and nothing of them is kept on the phone.
+        try refuseFamilyWrite(item.node.workspaceId)
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
         Unbacked.folder(Offline.root())
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -334,6 +336,8 @@ public struct KeepPlan: Codable, Sendable, Equatable {
 
 extension Vault {
     public func planKeep(_ item: Opened) async throws -> KeepPlan {
+        // Family folders are read only in this version, and nothing of them is kept on the phone.
+        try refuseFamilyWrite(item.node.workspaceId)
         guard !item.isFolder, let current = item.node.currentVersion else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
         let opened = try openVersion(item)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)

@@ -89,6 +89,8 @@ extension PublicAPI {
 extension Vault {
     /* Files a report on an item shared with this account; the session names the reporter. */
     public func report(_ item: Opened, category: String, reason: String, email: String?) async throws -> Bool {
+        // Never for a family folder's items: there is nobody's share to report through, and the item is the family's.
+        try refuseFamilyWrite(item.node.workspaceId)
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let body = try await Reports.body(api: PublicAPI(origin: session.origin), item: item, nodeKey: nodeKey, category: category, reason: reason, email: email, via: ["share": true])
         return try await api.performPublic(try api.mutationPublic("/reports", body: body), as: ReportFiled.self).duplicate

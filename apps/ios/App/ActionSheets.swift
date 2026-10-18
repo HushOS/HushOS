@@ -469,6 +469,15 @@ struct InfoSheet: View {
                     // Said as the rows and the web's details say it: "Today, 11:17 AM", "Yesterday", "6 Oct".
                     if let changed = changedLabel(item.modified) { fact("Changed", changed) }
                     if let created = changedLabel(parseDate(item.node.createdAt)) { fact("Added", created) }
+                    // A family folder's item: who wrote it and who vouched, as the web's Info says (details-panel.tsx).
+                    if let verdict = store.familyVerdict(of: item) {
+                        if verdict.mark != nil, let changed = verdict.changedBy { sentence(changed.label, value: changed.words, chevron: false).alpineRow() }
+                        if let written = verdict.writtenBy { sentence("Written by", value: written, chevron: false).alpineRow() }
+                        ForEach(verdict.replacedBy, id: \.self) { line in
+                            Text(line).foregroundStyle(Alpine.inkMuted).alpineRow()
+                        }
+                        if let verified = verdict.verifiedBy { sentence("Checked", value: verified, chevron: false).alpineRow() }
+                    }
                     if let folder = folderName, let parent = item.node.parentId {
                         // Where it is, one tap away: Files opens at that folder.
                         Button {
@@ -518,6 +527,7 @@ struct InfoSheet: View {
     }
 
     private var whoCanOpen: String {
+        if let family = store.family(of: item) { return "Everyone in \(family.name) can open it." }
         guard store.isOwn(item) else {
             let mount = store.mounts.first { $0.share.workspaceId == item.node.workspaceId }
             return mount.map { "Shared by \($0.share.granter.name.isEmpty ? $0.share.granter.email : $0.share.granter.name)" } ?? "Shared with you"
