@@ -1,3 +1,4 @@
+import { keyChangeWords } from '@/lib/key-change-words';
 import { GroupApiError } from './api';
 import type { GroupNotice } from './context';
 import type { SendOutcome } from './outbox';
@@ -184,7 +185,7 @@ export function errorCopy(error: unknown, ctx: CopyContext = {}) {
         return 'HushOS couldn’t do that just now. Try again in a moment.';
     }
     return error instanceof Error && error.message
-        ? error.message
+        ? keyChangeWords(error.message)
         : 'Something went wrong. Try again.';
 }
 

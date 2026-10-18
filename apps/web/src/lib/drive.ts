@@ -21,6 +21,7 @@ import {
     trustGranter,
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
+import { keyChangeWords } from '@/lib/key-change-words';
 import { createSpaceRegistry } from '@/lib/space-registry';
 
 /*
@@ -326,7 +327,7 @@ export function isNetworkFailure(message: string | null | undefined) {
 
 export function driveError(error: unknown) {
     if (!(error instanceof Error)) return 'Please try again.';
-    return isNetworkFailure(error.message) ? OFFLINE_WORDS : error.message;
+    return isNetworkFailure(error.message) ? OFFLINE_WORDS : keyChangeWords(error.message);
 }
 
 /* Where the catalogue build is, for search results and the sidebar to follow. */

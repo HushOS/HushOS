@@ -453,6 +453,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Trust as Lindqvist family does (the Unverified popover outside family folders, with "In Lindqvist family")
     - Key changes:
         - Finishing a key change… (an upload into a family folder waits for it, and goes by itself once it is done; the transfers headline says "1 file waiting for a key change", with no progress or Pause; after half an hour it stops: "The family folder's key change hasn't finished, so this file wasn't uploaded. Retry later.")
+        - "HushOS is finishing a key change for this folder. Try again in a moment." (a new folder, rename, move, copy or trash in a family folder while its key change is still arriving)
         - This folder's keys changed
         - "One item in this folder can't take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes." (a key change stopped by an item it can't carry)
     - Family plans (web, on servers that sell plans):
