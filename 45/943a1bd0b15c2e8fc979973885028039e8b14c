@@ -1,0 +1,31 @@
+DESIGN.md
+  s_c56e31c87cddde::t_b6fcd207040b49 422-425
+apps/web/src/components/drive/office-viewer.tsx
+  s_c56e31c87cddde::t_93077255cadcd4 7,9-15,17-23,115,118-119,130-134,136,141-145,165-176
+apps/web/src/components/drive/preview.tsx
+  s_c56e31c87cddde::t_279147979180ce 19,32,34,45,361-365,368-371,374,377-378,380-390,392-393,401,430-437,440-451,453-462,482,548,553-554,566,580,583,586-605,611,627-628,634-636,650,673,683,694,700-701,703-709,723-725,733-734
+apps/web/src/components/drive/rich-text.tsx
+  s_c56e31c87cddde::t_f478af840b12e9 17,25,311-312,324-331
+apps/web/src/components/drive/viewer-parts.tsx
+  s_c56e31c87cddde::t_15d54ddca1e278 6,25-168
+apps/web/src/lib/previews.ts
+  s_c56e31c87cddde::t_8ed7654f04d141 5-6,38-101
+docs/drive-design.md
+  s_c56e31c87cddde::t_1e823cb6afaf30 600,604
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "45943a1bd0b15c2e8fc979973885028039e8b14c",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
