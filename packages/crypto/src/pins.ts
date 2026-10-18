@@ -107,9 +107,12 @@ export function checkGroupPin(groupId: string, value: unknown): GroupPin {
     checkTime(pin.checkedAt);
     if (typeof pin.areas !== 'object' || pin.areas === null || Array.isArray(pin.areas))
         throw new CryptoError('Invalid group pin.');
+    // Every id, then every version: the refusal names the same field whatever order the keys are
+    // in (the Rust core's `group_pin_check` holds the same order).
+    for (const workspaceId of Object.keys(pin.areas)) uuid(workspaceId, 'workspace id');
     const areas: Record<string, number> = {};
     for (const [workspaceId, version] of Object.entries(pin.areas))
-        areas[uuid(workspaceId, 'workspace id')] = integer(version, 'workspace key version');
+        areas[workspaceId] = integer(version, 'workspace key version');
     return {
         firstEd25519PublicKey: bytesOf(pin.firstEd25519PublicKey, 32, 'group key'),
         firstMlDsaPublicKeyDigest: digestOf(pin.firstMlDsaPublicKeyDigest, 'key digest'),
@@ -120,4 +123,74 @@ export function checkGroupPin(groupId: string, value: unknown): GroupPin {
         rosterDigest: digestOf(pin.rosterDigest, 'roster digest'),
         areas,
     };
+}
+
+/*
+ * An area this device opened (groupOpenArea's `pinArea`), with the family it
+ * was opened under: what mergePin folds in from `opened`. The chain's or the
+ * server's list of areas never adds one. `current` and `next` are plain pins,
+ * though: areas written into them by hand would only raise an area's mark (and
+ * the next acceptance then needs that key version), which is the limit of
+ * this rule; the only `next` is an acceptance's `pin`.
+ */
+export type OpenedArea = { groupId: string; workspaceId: string; version: number };
+
+/*
+ * `next`, with the opened areas folded in, as it may be saved over `current`
+ * (docs/groups-design.md 2.7; apps/web/src/lib/groups/pins.ts settles it):
+ * - null when `current` is ahead of it (a later roster or group key), so it
+ *   must not be written;
+ * - 'conflict' when the two name other first keys, or other rosters or group
+ *   keys at one version: never saved over, and acceptance (run again with the
+ *   settings pin as a mark) says what it is.
+ * An opened area of another family than `groupId` is refused. Pure: the Rust
+ * core's `merge_pin` is its twin.
+ */
+export function mergePin(
+    groupId: string,
+    current: GroupPin | null,
+    next: GroupPin,
+    opened: readonly OpenedArea[] = [],
+): GroupPin | null | 'conflict' {
+    if (opened.some((area) => area.groupId !== groupId))
+        throw new CryptoError('This folder is not one of this family’s.');
+    if (current) {
+        if (
+            current.firstEd25519PublicKey !== next.firstEd25519PublicKey ||
+            current.firstMlDsaPublicKeyDigest !== next.firstMlDsaPublicKeyDigest
+        )
+            return 'conflict';
+        if (
+            (current.rosterVersion === next.rosterVersion &&
+                current.rosterDigest !== next.rosterDigest) ||
+            (current.keyVersion === next.keyVersion &&
+                current.groupKeyDigest !== next.groupKeyDigest)
+        )
+            return 'conflict';
+        if (current.rosterVersion > next.rosterVersion || current.keyVersion > next.keyVersion)
+            return null;
+    }
+    const areas: Record<string, number> = { ...current?.areas };
+    for (const [workspaceId, version] of Object.entries(next.areas))
+        areas[workspaceId] = Math.max(areas[workspaceId] ?? 0, version);
+    for (const { workspaceId, version } of opened)
+        areas[workspaceId] = Math.max(areas[workspaceId] ?? 0, version);
+    return {
+        ...next,
+        // The earliest words check stands, whichever side made it.
+        checkedAt:
+            current && current.checkedAt < next.checkedAt ? current.checkedAt : next.checkedAt,
+        areas,
+    };
+}
+
+/* Whether saving `next` over `current` records anything new (the core's `pin_ahead`). */
+export function pinAhead(current: GroupPin | null, next: GroupPin) {
+    if (!current) return true;
+    if (next.rosterVersion > current.rosterVersion || next.keyVersion > current.keyVersion)
+        return true;
+    if (next.checkedAt < current.checkedAt) return true;
+    return Object.entries(next.areas).some(
+        ([workspaceId, version]) => version > (current.areas[workspaceId] ?? 0),
+    );
 }

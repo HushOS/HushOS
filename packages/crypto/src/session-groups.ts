@@ -1,5 +1,6 @@
 import { encryptKey, decryptKey } from './aead';
 import { OLDER_CHAIN, SPLIT_CHAIN, type AreaLedger } from './area-ledger';
+import { NOT_THIS_ACCOUNT, OPEN_SETTINGS } from './protocol';
 import { areaKeyCommitment } from './area-keys';
 import { encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
@@ -74,7 +75,7 @@ import {
 } from './identity';
 import { checkId, newId } from './ids';
 import { decode, encode } from './keys';
-import type { GroupPin } from './pins';
+import type { GroupPin, OpenedArea } from './pins';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import { GROUP_OPERATIONS } from './protocol';
 import type { GranteeSecrets } from './sealing';
@@ -589,7 +590,8 @@ export type GroupResults = {
             | 'root-unknown'
             | null;
         selfGrantToStore: WorkspaceKeyEnvelope | null;
-        pinArea: { workspaceId: string; version: number };
+        /* The only way an area enters a pin (pins.ts, mergePin). */
+        pinArea: OpenedArea;
     };
     groupStage: GroupStaged | { outboxId: null; needsCheck: string[] };
     groupRestage: {
@@ -1223,7 +1225,9 @@ function entryIsPin(entry: RosterMember | undefined, pin: ContactPin) {
  * is taken from it; acceptance verifies the rest.
  */
 function servedHead(served: ServedChain, cache: GroupChainCache | null) {
-    let head = cache?.rosterDigests.length ?? 0;
+    // The cache as the record holds it, before acceptance checks it: a damaged one names no head.
+    const digests: unknown = cache?.rosterDigests;
+    let head = Array.isArray(digests) ? digests.length : 0;
     for (const roster of served.rosters)
         try {
             head = Math.max(head, parseRoster(decode(roster.statement)).rosterVersion);
@@ -1249,6 +1253,8 @@ export async function codeAt(chain: AcceptedRosters, version: number) {
 export function createGroupSession(host: GroupHost) {
     /* Committed chains, from what the server served only. */
     const chains = new Map<string, AcceptedRosters>();
+    /* Bumped by forget(): an acceptance commits only into the session it began in. */
+    let generation = 0;
     /* Groups whose last acceptance was a fork: roster verdicts are personal until it is sorted. */
     const forked = new Set<string>();
     /* Group seeds by `${groupId}:${groupKeyVersion}`. */
@@ -1312,6 +1318,13 @@ export function createGroupSession(host: GroupHost) {
     function legacySettings(userId: string) {
         refuseDowngrade(userId);
     }
+    /* Refused (NOT_THIS_ACCOUNT) once the session an acceptance began in was forgotten, or another account is open. */
+    function stillTheSession(began: number, userId: string) {
+        if (generation !== began) throw new CryptoError(NOT_THIS_ACCOUNT);
+        const { userId: now, root } = host.unlocked();
+        root.fill(0);
+        if (now !== userId) throw new CryptoError(NOT_THIS_ACCOUNT);
+    }
     function commit(chain: AcceptedRosters) {
         // The ledger first: a chain it refuses (older, or another at the version held) leaves the
         // session's chains as they were, so the two never disagree about the family.
@@ -1374,6 +1387,7 @@ export function createGroupSession(host: GroupHost) {
         for (const outboxId of staged.keys()) dropStaged(outboxId);
         ledger.forgetAllGroups();
         chains.clear();
+        generation++;
         forked.clear();
         opened.clear();
         verified.clear();
@@ -1913,7 +1927,7 @@ export function createGroupSession(host: GroupHost) {
                 };
             }
             if (!settingsPins || settingsPins.userId !== userId)
-                throw new CryptoError('Open your settings first.');
+                throw new CryptoError(OPEN_SETTINGS);
             const settingsPin = Object.hasOwn(settingsPins.pins, groupId)
                 ? settingsPins.pins[groupId]!
                 : null;
@@ -1941,6 +1955,8 @@ export function createGroupSession(host: GroupHost) {
         // it, so nothing accepts, views or keeps a chain over first keys nobody checked.
         if (input.joining && !input.joining.joinMark)
             throw new CryptoError('Compare the join code first.');
+        // The session this run begins in: a lock or another account before it ends keeps nothing.
+        const began = generation;
         const marked = await marksOf(input);
         if (!marked) return { status: 'record-unreadable' };
         const { groupId, userId, pins, cache, marks } = marked;
@@ -1980,11 +1996,12 @@ export function createGroupSession(host: GroupHost) {
         }
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
-        // The chain this session already committed for the family is one of the person's marks:
-        // served short of it, the run lost a race with a later one (or the server rolled back),
-        // and nothing of it is kept; served through another roster at a version it fixes, the
-        // acceptance below reports the fork, the hard warning, and never commits it.
-        const held = chains.get(groupId);
+        // The floor, the highest chain this session committed for the family (the ledger keeps it,
+        // and a refusal never drops it), is one of the person's marks: served short of it, the run
+        // lost a race with a later one (or the server rolled back), and nothing of it is kept;
+        // served through another roster at a version it fixes, the acceptance below reports the
+        // fork, the hard warning, and never commits it.
+        const held = ledger.floor(groupId);
         if (held && servedHead(input.served, cache) < held.roster.rosterVersion)
             throw new CryptoError(OLDER_CHAIN);
         const sessionPin = held ? await pinAfter([], held, input.checkedAt) : null;
@@ -2015,18 +2032,24 @@ export function createGroupSession(host: GroupHost) {
                 joinMark: input.joining?.joinMark ?? null,
             });
         } catch (error) {
-            // A refusal on a forked group keeps the fork: it is still the person's own marks' conflict.
+            // Only under the session the run began in; a refusal on a forked group keeps the fork:
+            // it is still the person's own marks' conflict.
+            stillTheSession(began, userId);
             uncommit(groupId, forked.has(groupId));
             throw error;
         }
         if (chain.status === 'fork') {
+            stillTheSession(began, userId);
             uncommit(groupId, true);
             return { status: 'fork', fork: chain };
         }
         // An acceptance that lost a race with one committed while it ran changes nothing: no
         // staged call dropped, no record or pin written; nor does one through another roster at
         // the version committed meanwhile (the ledger refuses both again).
-        const now = chains.get(groupId);
+        // A lock or another account meanwhile: nothing is committed into a session this run did not
+        // begin in.
+        stillTheSession(began, userId);
+        const now = ledger.floor(groupId);
         if (now && now.roster.rosterVersion > chain.roster.rosterVersion)
             throw new CryptoError(OLDER_CHAIN);
         if (
@@ -2248,7 +2271,7 @@ export function createGroupSession(host: GroupHost) {
                 writable: held === null,
                 reason: held,
                 selfGrantToStore,
-                pinArea: { workspaceId, version },
+                pinArea: { groupId, workspaceId, version },
             };
         } finally {
             root.fill(0);

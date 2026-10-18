@@ -23,6 +23,11 @@ pub mod groups;
 #[path = "../../tests/common/area_ledger.rs"]
 pub mod area_ledger;
 
+/// Device records and the settings pin, run as the fixture tests run them.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/device_records.rs"]
+pub mod device_records;
+
 /// Runs `target` on `data` with every invariant asserted: what a fuzz target calls.
 pub fn check(target: &str, data: &[u8]) {
     targets::verdict(target, data).expect("a known target");

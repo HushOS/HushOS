@@ -38,6 +38,12 @@ pub fn groups() -> &'static Value {
     GROUPS.get_or_init(|| read("packages/crypto/src/__fixtures__/core-groups.json"))
 }
 
+/// `packages/crypto/src/__fixtures__/core-area-ledger.json`: the core's ledger runs, walks and device records.
+pub fn core_ledger() -> &'static Value {
+    static LEDGER: OnceLock<Value> = OnceLock::new();
+    LEDGER.get_or_init(|| read("packages/crypto/src/__fixtures__/core-area-ledger.json"))
+}
+
 /// The four people of the group fixtures, derived from the shared seeds.
 pub fn people() -> &'static [Person] {
     static PEOPLE: OnceLock<Vec<Person>> = OnceLock::new();

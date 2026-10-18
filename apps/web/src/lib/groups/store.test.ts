@@ -1,5 +1,18 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
-import { deleteGroupDevice } from './store';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import {
+    IDBCursor,
+    IDBCursorWithValue,
+    IDBDatabase,
+    IDBFactory,
+    IDBIndex,
+    IDBKeyRange,
+    IDBObjectStore,
+    IDBOpenDBRequest,
+    IDBRequest,
+    IDBTransaction,
+    IDBVersionChangeEvent,
+} from 'fake-indexeddb';
+import { createIndexedDbGroupStore, createMemoryGroupStore, deleteGroupDevice } from './store';
 
 /*
  * Sign-out (the 1c plan, 1.3): membership is the social graph, so every
@@ -76,4 +89,48 @@ describe('signing out', () => {
             'hushos-groups',
         ]);
     });
+});
+
+describe('the device record', () => {
+    // A real IndexedDB, in memory (fake-indexeddb), for the store's own transaction.
+    beforeEach(() => {
+        const globals = {
+            IDBCursor,
+            IDBCursorWithValue,
+            IDBDatabase,
+            IDBIndex,
+            IDBKeyRange,
+            IDBObjectStore,
+            IDBOpenDBRequest,
+            IDBRequest,
+            IDBTransaction,
+            IDBVersionChangeEvent,
+        };
+        for (const [name, value] of Object.entries(globals)) vi.stubGlobal(name, value);
+        vi.stubGlobal('indexedDB', new IDBFactory());
+    });
+
+    test.each([
+        ['in IndexedDB', () => createIndexedDbGroupStore(`hushos-groups-test-${Math.random()}`)],
+        ['in memory', () => createMemoryGroupStore()],
+    ])(
+        'never goes back to an earlier roster version, whichever acceptance writes last (%s)',
+        async (_, make) => {
+            const store = make();
+            const row = (rosterVersion: number, envelope: string) => ({
+                userId: 'u',
+                groupId: 'g',
+                envelope,
+                rosterVersion,
+                areas: [],
+            });
+            await store.putChain(row(3, 'background'));
+            // The foreground's acceptance, overtaken, finishing last: its older record is not written.
+            await store.putChain(row(2, 'foreground'));
+            expect((await store.chain('u', 'g'))?.envelope).toBe('background');
+            await store.putChain(row(3, 'again'));
+            await store.putChain(row(4, 'later'));
+            expect((await store.chain('u', 'g'))?.envelope).toBe('later');
+        },
+    );
 });

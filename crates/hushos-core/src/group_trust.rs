@@ -104,18 +104,22 @@ pub(crate) fn check_time(value: &str) -> CoreResult<()> {
 /// pass is not a pin.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn group_pin_check(group_id: String, pin: GroupPin) -> CoreResult<GroupPin> {
+    // In the web's order, so a pin wrong in two places is refused for the same one in both twins:
+    // every area id, then every area version, then the keys and versions.
     uuid(&group_id, "group id")?;
     check_time(&pin.checked_at)?;
+    for workspace_id in pin.areas.keys() {
+        uuid(workspace_id, "workspace id")?;
+    }
+    for version in pin.areas.values() {
+        integer(*version, "workspace key version")?;
+    }
     bytes_of(&pin.first_ed25519_public_key, 32, "group key")?;
     digest_of(&pin.first_ml_dsa_public_key_digest, "key digest")?;
     integer(pin.key_version, "group key version")?;
     digest_of(&pin.group_key_digest, "key digest")?;
     integer(pin.roster_version, "roster version")?;
     digest_of(&pin.roster_digest, "roster digest")?;
-    for (workspace_id, version) in &pin.areas {
-        uuid(workspace_id, "workspace id")?;
-        integer(*version, "workspace key version")?;
-    }
     Ok(pin)
 }
 

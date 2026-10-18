@@ -1,5 +1,11 @@
 import type { CryptoResults, GroupView, RosterFork, ServedChain } from '@hushos/crypto';
-import { OLDER_CHAIN, SPLIT_CHAIN } from '@hushos/crypto/protocol';
+import { SPLIT_CHAIN } from '@hushos/crypto/protocol';
+import {
+    acceptFromRecord,
+    accountError,
+    lostRace,
+    servedRaceMessage,
+} from '@hushos/crypto/record-acceptance';
 import {
     GroupApiError,
     isNotMember,
@@ -234,29 +240,8 @@ export async function acceptServed(
             // more, quietly; the next run either lands or, for a split view, answers the fork.
             if (!lostRace(error)) throw error;
             if (attempt >= 2)
-                throw new Error(
-                    (error as Error).message === SPLIT_CHAIN ? SERVED_SPLIT : SERVED_OLDER,
-                );
+                throw new Error(servedRaceMessage((error as Error).message === SPLIT_CHAIN));
         }
-}
-
-/*
- * After three runs that all came back refused against this worker's
- * committed chain, it is no race: the server keeps serving an older member
- * list than this device already checked, or another one at its version.
- * Each is said as what it is. Writes go on under the chain held.
- */
-const SERVED_OLDER =
-    'HushOS sent an older member list than this device already checked. Try again later.';
-/* The same for another member list at the version this device already checked: a split view. */
-const SERVED_SPLIT =
-    'HushOS sent a different member list at the version this device already checked. Try again later.';
-
-/* The worker's answer to a run that a later acceptance in the same session overtook. */
-export function lostRace(error: unknown) {
-    return (
-        error instanceof Error && (error.message === OLDER_CHAIN || error.message === SPLIT_CHAIN)
-    );
 }
 
 async function acceptOnce(
@@ -266,7 +251,7 @@ async function acceptOnce(
 ): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
     await ctx.settings.read();
     const row = await ctx.store.chain(ctx.userId, groupId);
-    const accept = async (after: number, withoutCache = false) => {
+    const accept = async (after: number, withoutCache: boolean) => {
         const { served } = await fetchServed(ctx, groupId, after);
         return ctx.rpc('groupAccept', {
             userId: ctx.userId,
@@ -278,31 +263,25 @@ async function acceptOnce(
             ...(withoutCache ? { withoutCache } : {}),
         });
     };
-    let result: CryptoResults['groupAccept'];
-    try {
-        result = await accept(row?.rosterVersion ?? 0);
-    } catch (error) {
-        // The route's answer is the route's, and a lost race is the caller's to read again: only
-        // the worker's other refusals are retried from version 1.
-        if (error instanceof GroupApiError || !row || lostRace(error)) throw error;
-        try {
-            if (row.rosterVersion === 0) throw error;
-            result = await accept(0);
-        } catch (again) {
-            if (again instanceof GroupApiError || lostRace(again)) throw again;
-            // Refused with the record as a mark too: its cache may be what the worker refuses (one
-            // a newer release wrote, or a damaged one), and retrying with it would refuse the
-            // family on this device for good. Accepted from version 1 without the cache, but with
-            // the record's pin as a mark: never below the record's version and digest, so a
-            // server that gets the cache refused and serves older settings rolls nothing back.
-            result = await accept(0, true);
-        }
-    }
+    // The order is the shared one (@hushos/crypto/record-acceptance, the core's accept_served):
+    // continuing the record's cache, then from version 1 with it, then from version 1 without the
+    // cache but with the record's pin as a mark, never below the record's version and digest, so
+    // a server that gets the cache refused and serves older settings rolls nothing back. The
+    // route's answer is the route's, and a lost race is the caller's to read again.
+    const result = await acceptFromRecord(
+        row ? (row.rosterVersion ?? 0) : null,
+        accept,
+        // The route's own answers, and a session or account that changed meanwhile.
+        (error) => error instanceof GroupApiError || accountError(error),
+    );
     if (result.status === 'record-unreadable') {
         await ctx.store.deleteChain(ctx.userId, groupId);
         return result;
     }
     if (result.status === 'accepted' && result.record) {
+        // Records reach disk in commit order: putChain never writes over a record at a later
+        // roster version (a background acceptance finishing after the foreground's), and the
+        // record is written before the settings pin is (afterAccept).
         await ctx.store.putChain({
             userId: ctx.userId,
             groupId,

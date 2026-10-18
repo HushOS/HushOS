@@ -50,7 +50,7 @@ describe('syncing a family', () => {
         expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
     });
 
-    test('a run a later acceptance overtook is read again quietly, never retried from version 1 or without the cache', async () => {
+    test('a continuation a later acceptance overtook goes once from version 1 with the record, never without the cache', async () => {
         for (const refused of [OLDER_CHAIN, SPLIT_CHAIN]) {
             const h = harness({ head: 6 });
             await knownFamily(h);
@@ -58,8 +58,8 @@ describe('syncing a family', () => {
             h.failNext.set('groupAccept', new Error(refused));
             const result = await syncGroup(h.ctx, GROUP);
             expect(result.status).toBe('accepted');
-            // Read again from the record, as the first run was: not from version 1, no withoutCache.
-            expect(asked).toEqual([5, 5]);
+            // A damaged cache that names no head looks just like this: version 1 settles it.
+            expect(asked).toEqual([5, 0]);
             expect(h.calls('groupAccept')).toMatchObject([
                 { record: 'record-5' },
                 { record: 'record-5' },
@@ -69,6 +69,24 @@ describe('syncing a family', () => {
             );
             expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
         }
+    });
+
+    test('a run overtaken from version 1 too is read again quietly, from the record', async () => {
+        const h = harness({ head: 6 });
+        await knownFamily(h);
+        const asked = routeRosters(h);
+        const answer = h.results.groupAccept;
+        let calls = 0;
+        h.results.groupAccept = (input: unknown) => {
+            if (++calls <= 2) throw new Error(OLDER_CHAIN);
+            return (answer as (input: unknown) => unknown)(input);
+        };
+        expect((await syncGroup(h.ctx, GROUP)).status).toBe('accepted');
+        // The record and settings read again, and the run starts over from the record.
+        expect(asked).toEqual([5, 0, 5]);
+        expect(h.calls('groupAccept').some((call) => 'withoutCache' in (call as object))).toBe(
+            false,
+        );
     });
 
     test('a server that keeps serving older, or another list at the version checked, is said so, not as a lost race', async () => {
@@ -82,7 +100,8 @@ describe('syncing a family', () => {
                 throw new Error(refused);
             };
             await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow(said);
-            expect(h.calls('groupAccept')).toHaveLength(3);
+            // Three runs, each the continuation and once from version 1.
+            expect(h.calls('groupAccept')).toHaveLength(6);
             expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-5');
             expect(h.settingsLog.writes).toEqual([]);
         }
@@ -167,7 +186,7 @@ describe('syncing a family', () => {
             writable: false,
             reason: 'root-unknown',
             selfGrantToStore: selfGrant as never,
-            pinArea: { workspaceId: AREA, version: 1 },
+            pinArea: { groupId: GROUP, workspaceId: AREA, version: 1 },
         });
         h.results.driveOpenNodes = () => ({
             nodes: [
@@ -339,7 +358,7 @@ describe('areaWrite', () => {
         writable: reason === null,
         reason,
         selfGrantToStore: null,
-        pinArea: { workspaceId: AREA, version: 1 },
+        pinArea: { groupId: GROUP, workspaceId: AREA, version: 1 },
     });
     const view = (withRoot: boolean) => ({
         workspaceKeyVersion: 1,

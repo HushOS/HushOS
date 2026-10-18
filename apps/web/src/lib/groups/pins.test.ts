@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { mergePin, settlePin } from './pins';
+import { mergePin } from '@hushos/crypto/pins';
+import { settlePin } from './pins';
 import { afterAccept } from './sync';
 import { AREA, AREA_2, GROUP, harness, pinAt } from './test-harness';
 
@@ -130,9 +131,10 @@ describe('the settings pin', () => {
 
     test('keeps the earliest words check and never lowers an area', () => {
         const merged = mergePin(
+            GROUP,
             pinAt(5, { checkedAt: '2026-09-01T08:00:00.000Z', areas: { [AREA]: 3 } }),
             pinAt(6, { checkedAt: '2026-10-01T08:00:00.000Z', areas: { [AREA]: 2 } }),
-            [{ workspaceId: AREA_2, version: 1 }],
+            [{ groupId: GROUP, workspaceId: AREA_2, version: 1 }],
         );
         expect(merged).toMatchObject({
             rosterVersion: 6,
@@ -178,7 +180,7 @@ describe('areas in the pin', () => {
                 writable: false,
                 reason: 'root-unknown',
                 selfGrantToStore: null,
-                pinArea: { workspaceId: AREA, version: 1 },
+                pinArea: { groupId: GROUP, workspaceId: AREA, version: 1 },
             };
         };
         const result = await afterAccept(h.ctx, GROUP, {
