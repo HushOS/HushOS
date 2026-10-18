@@ -171,6 +171,12 @@ function AdminPage() {
                                 to: { to: '/app/admin/reports' },
                             },
                             {
+                                label: 'Plan changes stuck',
+                                value: count(data.stuckPlanChanges.length),
+                                tone: data.stuckPlanChanges.length > 0 ? 'danger' : undefined,
+                                anchor: '#stuck-plan-changes',
+                            },
+                            {
                                 label: 'On hold',
                                 value: count(data.reports.held),
                                 to: { to: '/app/admin/reports', search: { status: 'held' } },
@@ -238,6 +244,43 @@ function AdminPage() {
                         back. Otherwise the file shows as unavailable to its owner until it is
                         recovered by hand.
                     </p>
+                    {data.stuckPlanChanges.length > 0 && (
+                        <>
+                            <h2
+                                id="stuck-plan-changes"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Plan changes stuck
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Wanted at renewal</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.stuckPlanChanges.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={td}>{row.subscriptionId}</td>
+                                            <td className={td}>{row.wanted ?? '–'}</td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                Polar accepted these scheduled changes five times and kept none of
+                                them, so HushOS stopped asking. Set the change on the subscription
+                                in Polar’s dashboard; the row goes once Polar holds it.
+                            </p>
+                        </>
+                    )}
                 </>
             )}
         </OperatorPage>

@@ -158,13 +158,20 @@ export const groupBillingSubscriptions = pgTable(
         /* The move above is the stale rule's (an upgrade unpaid past STALE_RAISE_DAYS), not the payer's. */
         intendedProductStale: boolean('intended_product_stale').notNull().default(false),
         /*
-         * The tier and pool paid for, as `paid_units` is for places: the product's once no
-         * order of the subscription waits for payment, else the last paid (never above the
-         * product's pool). An upgrade awaiting the bank gives nothing until its order is
-         * paid; the pool Drive reads is this. Null on rows from before it: the product's.
+         * The tier paid for: the product of the subscription's newest paid, unrefunded order
+         * (a checkout, a renewal or a change), re-derived from Polar on every reconcile, and
+         * that product's pool. Null and 0 while nothing is paid. Drive's pool is the lesser of
+         * this and the product's, so an unpaid upgrade gives nothing and a smaller tier at a
+         * renewal counts at once.
          */
         paidProductId: text('paid_product_id'),
         paidQuotaBytes: bigint('paid_quota_bytes', { mode: 'bigint' }),
+        /*
+         * Since when the product has been bigger than the tier paid for (an upgrade unpaid):
+         * the oldest unpaid change order for it, or when HushOS first saw the difference.
+         * Past STALE_RAISE_DAYS the plan is moved back at the period's end; null once they match.
+         */
+        tierMismatchSince: timestamp('tier_mismatch_since', { withTimezone: true }),
         /*
          * When HushOS last asked Polar again for a cut or a tier move. A reconcile skips the
          * re-issue for a while after, so the webhook a re-issue causes never causes another.
@@ -172,20 +179,18 @@ export const groupBillingSubscriptions = pgTable(
         reissuedAt: timestamp('reissued_at', { withTimezone: true }),
         /* What that re-issue asked for: only the same request is held back, never a new one. */
         reissuedState: text('reissued_state'),
-        /* How many times in a row that same request was sent; HushOS stops at a few. */
+        /*
+         * How many times in a row Polar answered that same request with 200 and didn't keep it;
+         * failures (5xx, timeouts) don't count. HushOS stops at a few.
+         */
         reissueAttempts: integer('reissue_attempts').notNull().default(0),
         /* Until when a queued retry is pending, so a family has one at a time. */
         reissueRetryAt: timestamp('reissue_retry_at', { withTimezone: true }),
         /*
-         * The upgrade being paid for: its product and when HushOS asked for it. Its order is
-         * the `subscription_update` for that product made since, never an older one; cleared
-         * once that order is paid, or the plan has moved off the product.
+         * When HushOS gave up asking Polar again (MAX_REISSUES answers of 200 that Polar didn't
+         * keep): shown to operators on the management page until Polar holds the change.
          */
-        upgradeProductId: text('upgrade_product_id'),
-        upgradeStartedAt: timestamp('upgrade_started_at', { withTimezone: true }),
-        /* The tier paid for when it began: the most the family has until its order is paid. */
-        upgradeFromProductId: text('upgrade_from_product_id'),
-        upgradeFromQuotaBytes: bigint('upgrade_from_quota_bytes', { mode: 'bigint' }),
+        reissueGaveUpAt: timestamp('reissue_gave_up_at', { withTimezone: true }),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),

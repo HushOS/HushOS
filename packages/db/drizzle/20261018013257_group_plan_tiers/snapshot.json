@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "dc45b4e7-efd3-4765-af63-1d1b534e2b9a",
+    "id": "32269d70-0b4d-47c1-93ea-80321a1e4c48",
     "prevIds": ["b2b2b243-cb3c-4c68-b2af-08c7a14f3a6e"],
     "ddl": [
         {
@@ -5838,6 +5838,19 @@
             "default": null,
             "generated": null,
             "identity": null,
+            "name": "tier_mismatch_since",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
             "name": "reissued_at",
             "entityType": "columns",
             "schema": "public",
@@ -5883,19 +5896,6 @@
             "table": "group_billing_subscriptions"
         },
         {
-            "type": "text",
-            "typeSchema": null,
-            "notNull": false,
-            "dimensions": 0,
-            "default": null,
-            "generated": null,
-            "identity": null,
-            "name": "upgrade_product_id",
-            "entityType": "columns",
-            "schema": "public",
-            "table": "group_billing_subscriptions"
-        },
-        {
             "type": "timestamp with time zone",
             "typeSchema": null,
             "notNull": false,
@@ -5903,33 +5903,7 @@
             "default": null,
             "generated": null,
             "identity": null,
-            "name": "upgrade_started_at",
-            "entityType": "columns",
-            "schema": "public",
-            "table": "group_billing_subscriptions"
-        },
-        {
-            "type": "text",
-            "typeSchema": null,
-            "notNull": false,
-            "dimensions": 0,
-            "default": null,
-            "generated": null,
-            "identity": null,
-            "name": "upgrade_from_product_id",
-            "entityType": "columns",
-            "schema": "public",
-            "table": "group_billing_subscriptions"
-        },
-        {
-            "type": "bigint",
-            "typeSchema": null,
-            "notNull": false,
-            "dimensions": 0,
-            "default": null,
-            "generated": null,
-            "identity": null,
-            "name": "upgrade_from_quota_bytes",
+            "name": "reissue_gave_up_at",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

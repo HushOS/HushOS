@@ -116,10 +116,29 @@ const fakeClient = {
             return structuredClone(subscription);
         },
     },
-    // No order waits for payment here: every raise this fake accepts is paid.
+    // No order waits for payment here: every raise this fake accepts is paid, and each plan's
+    // checkout order was paid, which is what gives the family its tier and pool.
     orders: {
-        async list() {
-            return { items: [] };
+        async list(query: { subscription_id?: string; status?: string }) {
+            const subscription = query.subscription_id
+                ? polar.subscriptions.get(query.subscription_id)
+                : undefined;
+            if (query.status === 'pending' || !subscription) return { items: [] };
+            return {
+                items: [
+                    {
+                        id: `order_create_${subscription.id}`,
+                        subscription_id: subscription.id,
+                        status: 'paid',
+                        paid: true,
+                        due_amount: 0,
+                        refunded_amount: 0,
+                        billing_reason: 'subscription_create',
+                        product_id: subscription.product_id,
+                        created_at: new Date(Date.now() - 60 * DAY).toISOString(),
+                    },
+                ],
+            };
         },
     },
     customerSessions: {

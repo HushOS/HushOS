@@ -280,16 +280,13 @@ export type GroupSubscriptionSnapshot = {
     /* The product a pending update moves the plan to at the period's end (a smaller tier). */
     pendingProductId: string | null;
     /*
-     * Whether the product's tier is paid for: judged by the newest order for that product
-     * (an upgrade's own order), not by the subscription's others. When false the tier and
-     * pool paid before stay, or a smaller tier counts at once. Absent: by `paidUnits`.
+     * The tier paid for (the newest paid, unrefunded order's product and its pool), null
+     * while nothing is paid; absent when Polar's orders couldn't be read, which leaves the
+     * row's as it was (a new row then starts with nothing paid).
      */
-    tierPaid?: boolean;
-    /*
-     * While an upgrade's own order isn't paid: the tier paid for when it began, which the
-     * paid tier is set to (never above the product), whatever the row said before.
-     */
-    paidTierWhileWaiting?: { productId: string; quotaBytes: bigint };
+    paidTier?: { productId: string; quotaBytes: bigint } | null;
+    /* Since when the product has been bigger than the tier paid for; null once it isn't. */
+    tierMismatchSince?: Date | null;
     includedMembers: number;
     /* The pool the plan gives the group; a family's is fixed. */
     quotaBytes: bigint;
@@ -504,23 +501,39 @@ export async function claimReissueRetry(subscriptionId: string, until: Date) {
     return rows.length === 1;
 }
 
-/* Anchors (or, with nulls, forgets) the upgrade whose order decides the tier. */
-export async function setUpgradeAnchor(
-    subscriptionId: string,
-    productId: string | null,
-    startedAt: Date | null,
-    from: { productId: string; quotaBytes: bigint } | null = null,
-) {
+/* Marks (or, with null, clears) that HushOS gave up re-issuing a family's pending update. */
+export async function setReissueGaveUp(subscriptionId: string, at: Date | null) {
     await db
         .update(groupBillingSubscriptions)
-        .set({
-            upgradeProductId: productId,
-            upgradeStartedAt: startedAt,
-            upgradeFromProductId: productId === null ? null : (from?.productId ?? null),
-            upgradeFromQuotaBytes: productId === null ? null : (from?.quotaBytes ?? null),
-            updatedAt: new Date(),
-        })
+        .set({ reissueGaveUpAt: at, updatedAt: new Date() })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Lets a claimed retry go (its job could not be queued), so the next attempt may queue one. */
+export async function releaseReissueRetry(subscriptionId: string) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ reissueRetryAt: null, updatedAt: new Date() })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Live family plans whose scheduled change HushOS gave up on: the operators' list. */
+export async function listGivenUpReissues() {
+    return db
+        .select({
+            groupId: groupBillingSubscriptions.groupId,
+            subscriptionId: groupBillingSubscriptions.id,
+            wanted: groupBillingSubscriptions.reissuedState,
+            since: groupBillingSubscriptions.reissueGaveUpAt,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                isNull(groupBillingSubscriptions.endedAt),
+                isNotNull(groupBillingSubscriptions.reissueGaveUpAt),
+            ),
+        )
+        .orderBy(desc(groupBillingSubscriptions.reissueGaveUpAt));
 }
 
 /* One group subscription's row, live or not: what it had paid for before a change. */
@@ -621,9 +634,9 @@ export async function applyGroupState(input: {
                     ...values,
                     // A subscription first seen with an order unpaid has paid for nothing yet.
                     paidUnits: paid === null ? 0 : Math.min(paid, subscription.units),
-                    // Its pool is the checkout's once paid; first seen unpaid, none yet.
-                    paidProductId: subscription.productId,
-                    paidQuotaBytes: paid !== null ? subscription.quotaBytes : 0n,
+                    paidProductId: subscription.paidTier?.productId ?? null,
+                    paidQuotaBytes: subscription.paidTier?.quotaBytes ?? 0n,
+                    tierMismatchSince: subscription.tierMismatchSince ?? null,
                 })
                 .onConflictDoUpdate({
                     target: groupBillingSubscriptions.id,
@@ -633,32 +646,16 @@ export async function applyGroupState(input: {
                             paid === null
                                 ? sql`least(${groupBillingSubscriptions.paidUnits}, ${subscription.units})`
                                 : Math.min(paid, subscription.units),
-                        /*
-                         * The tier paid for moves with the places: to the product once nothing
-                         * waits, else only down (a smaller tier at a renewal still unpaid). An
-                         * upgrade awaiting the bank keeps the tier and pool paid before it.
-                         */
-                        ...(subscription.paidTierWhileWaiting
+                        // The tier paid for, as Polar's orders say it now; unreadable, as it was.
+                        ...(subscription.paidTier !== undefined
                             ? {
-                                  paidProductId:
-                                      subscription.paidTierWhileWaiting.quotaBytes <
-                                      subscription.quotaBytes
-                                          ? subscription.paidTierWhileWaiting.productId
-                                          : subscription.productId,
-                                  paidQuotaBytes:
-                                      subscription.paidTierWhileWaiting.quotaBytes <
-                                      subscription.quotaBytes
-                                          ? subscription.paidTierWhileWaiting.quotaBytes
-                                          : subscription.quotaBytes,
+                                  paidProductId: subscription.paidTier?.productId ?? null,
+                                  paidQuotaBytes: subscription.paidTier?.quotaBytes ?? 0n,
                               }
-                            : {
-                                  paidProductId: !(subscription.tierPaid ?? paid !== null)
-                                      ? sql`case when ${subscription.quotaBytes.toString()}::bigint <= coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}) then ${subscription.productId}::text else coalesce(${groupBillingSubscriptions.paidProductId}, ${groupBillingSubscriptions.productId}) end`
-                                      : subscription.productId,
-                                  paidQuotaBytes: !(subscription.tierPaid ?? paid !== null)
-                                      ? sql`least(coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}), ${subscription.quotaBytes.toString()}::bigint)`
-                                      : subscription.quotaBytes,
-                              }),
+                            : {}),
+                        ...(subscription.tierMismatchSince !== undefined
+                            ? { tierMismatchSince: subscription.tierMismatchSince }
+                            : {}),
                         updatedAt: now,
                     },
                 });
@@ -698,8 +695,13 @@ export async function applyGroupState(input: {
             .set({ seatLimit: plan ? seatLimitOf(plan) : null, updatedAt: now })
             .where(eq(groups.id, input.groupId));
         const pool = {
-            // The pool paid for: an upgrade waiting for the bank gives nothing yet.
-            quotaBytes: plan ? (plan.paidQuotaBytes ?? plan.quotaBytes) : 0n,
+            // The lesser of the tier paid for and the product's: an unpaid upgrade gives nothing,
+            // a smaller tier at a renewal counts at once.
+            quotaBytes: plan
+                ? (plan.paidQuotaBytes ?? 0n) < plan.quotaBytes
+                    ? (plan.paidQuotaBytes ?? 0n)
+                    : plan.quotaBytes
+                : 0n,
             expiresAt: plan ? new Date(plan.currentPeriodEnd.getTime() + input.graceMs) : null,
         };
         await tx

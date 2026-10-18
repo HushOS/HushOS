@@ -98,11 +98,14 @@ export async function ensureQueues(boss: PgBoss) {
      * queued and one active job per family, however many reconciles ask (a queue's policy
      * can't change once made, so billing.reissue-cut stays only to drain what it holds).
      */
+    // A failure (Polar down, a 5xx, a timeout) is retried for as long as it takes, backing off to
+    // six hours; HushOS gives up only on answers of 200 that Polar didn't keep (MAX_REISSUES).
     await boss.createQueue(queues.billingReissuePending, {
         policy: 'stately',
-        retryLimit: 8,
+        retryLimit: 100_000,
         retryDelay: 60,
         retryBackoff: true,
+        retryDelayMax: 6 * 60 * 60,
         expireInSeconds: 5 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
     });
