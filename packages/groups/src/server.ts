@@ -1850,6 +1850,22 @@ export async function openInvitation(userId: string, token: string, address: str
     };
 }
 
+/*
+ * Route 14b: the open invitations to this account's own address, for Account
+ * → Family. Each is accepted from its emailed link, never from here.
+ */
+export async function listMyInvitations(userId: string) {
+    return {
+        invitations: (await groupsRepository.openInvitationsFor(userId)).map((row) => ({
+            id: row.id,
+            groupId: row.groupId,
+            name: row.name,
+            inviterName: row.inviterName,
+            expiresAt: row.expiresAt.toISOString(),
+        })),
+    };
+}
+
 /* Route 15: binds the invitation to the signed-in account, which must hold the invited address. */
 export async function acceptInvitation(userId: string, token: string, address: string) {
     await limit(`invitations:accept:address:${address}`, 30, 15 * 60 * 1000);

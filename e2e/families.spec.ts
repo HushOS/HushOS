@@ -54,7 +54,8 @@ import {
  * 4. Deleting a family folder: a manager deletes a second folder from its
  *    row's menu, it is gone for the other member too, and the removal that
  *    follows rotates only the folder that is left.
- * 5. Families off: hidden from the sidebar, and the page says so.
+ * 5. Families off: no family row in the sidebar, no Family section in
+ *    Account, and the old families address says so.
  *
  * Whether families are on is this run's GROUPS_ENABLED (from the environment
  * or .env, as the dev server reads it). The server must agree: one that says
@@ -129,8 +130,12 @@ async function info(who: Person, name: string) {
 }
 
 async function createFamily(owner: Person, name: string) {
-    await owner.page.goto('/app/families');
-    await owner.page.getByRole('button', { name: 'Create a family' }).click();
+    // Account → Family, where someone in no family makes one (one family per account).
+    await owner.page.goto('/app/account#family');
+    await owner.page
+        .locator('[data-account-family]')
+        .getByRole('button', { name: 'Create a family' })
+        .click();
     const dialog = owner.page.getByRole('dialog', { name: 'Create a family' });
     await dialog.getByLabel('Name').fill(name);
     await dialog.getByRole('button', { name: 'Create family' }).click();
@@ -332,6 +337,16 @@ test.describe.serial('two people', () => {
         await expect(maya.page.locator('[data-invitation="nobody-yet@hushos.local"]')).toHaveCount(
             0,
         );
+        // In a family: Account → Family shows it and offers no second one, and the old families
+        // address opens it.
+        await maya.page.goto('/app/account#family');
+        const section = maya.page.locator('[data-account-family]');
+        await expect(section.locator('[data-your-family]')).toContainText(family);
+        await expect(section.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await maya.page.goto('/app/families');
+        await expect(maya.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
         await invite(maya, sam.email);
     });
 
@@ -1550,7 +1565,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 
 /*
  * The pricing page's Create a family, pressed signed out: it signs up first and lands on
- * Families, through the return it keeps in this browser (rememberReturn, for an hour). The
+ * Account → Family, through the return it keeps in this browser (rememberReturn, for an hour). The
  * section shows only where the server sells plans and lists a family plan, so this skips
  * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
  * (verify-hushos `launch --billing polar`).
@@ -1558,7 +1573,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 test.describe('creating a family from the pricing page', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 
-    test('someone without an account signs up from Create a family and lands on Families', async ({
+    test('someone without an account signs up from Create a family and lands on Account → Family', async ({
         browser,
         request,
     }) => {
@@ -1582,11 +1597,11 @@ test.describe('creating a family from the pricing page', () => {
         await expect(page).toHaveURL(/\/register$/);
         await registerAccount(page, 'Rosa Ekström', undefined, {
             viaCurrentPage: true,
-            landsOn: /\/app\/families$/,
+            landsOn: /\/app\/account#family$/,
         });
-        await expect(page.getByRole('heading', { level: 1, name: 'Families' })).toBeVisible({
-            timeout: 60_000,
-        });
+        await expect(
+            page.locator('[data-account-family]').getByRole('button', { name: 'Create a family' }),
+        ).toBeVisible({ timeout: 60_000 });
     });
 });
 
@@ -1746,7 +1761,11 @@ test.describe('families off', () => {
         const page = await (await newContext(browser)).newPage();
         await registerAccount(page, 'Rae Off');
         await expect(page.getByRole('link', { name: 'My files' }).first()).toBeVisible();
-        await expect(page.getByRole('link', { name: 'Families' })).toHaveCount(0);
+        await page.goto('/app/account');
+        await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.locator('[data-account-family]')).toHaveCount(0);
         await page.goto('/app/families');
         await expect(page.getByText('Families aren’t available here')).toBeVisible({
             timeout: 60_000,

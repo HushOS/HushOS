@@ -251,8 +251,12 @@ function JoinFamily() {
                         : 'You haven’t accepted an invitation to it, or it has ended.'
                 }
             >
-                <Link to="/app/families" className="text-sm font-semibold text-primary underline">
-                    Families
+                <Link
+                    to="/app/account"
+                    hash="family"
+                    className="text-sm font-semibold text-primary underline"
+                >
+                    Account
                 </Link>
             </EmptyState>
         );
@@ -260,7 +264,11 @@ function JoinFamily() {
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader
-                back={<Link to="/app/families">Families</Link>}
+                back={
+                    <Link to="/app/account" hash="family">
+                        Account
+                    </Link>
+                }
                 title={`Join ${family}`}
                 description={`Do this with ${themFull} on a call or in person. It takes a minute.`}
             />
