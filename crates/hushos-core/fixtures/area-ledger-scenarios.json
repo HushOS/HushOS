@@ -1293,7 +1293,7 @@
                     "expect": {
                         "isArea": true,
                         "read": 2,
-                        "write": "keys-changed"
+                        "write": "key-change-pending"
                     }
                 },
                 {
@@ -1313,7 +1313,7 @@
                     "expect": {
                         "isArea": true,
                         "read": 2,
-                        "write": "keys-changed"
+                        "write": "key-change-pending"
                     }
                 },
                 {
@@ -1373,6 +1373,194 @@
                     "expect": {
                         "key": "root:1"
                     }
+                }
+            ]
+        },
+        {
+            "name": "a member list committed before its top level is listed waits for the listing, and a server behind it still stops writes",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": "key-change-pending"
+                    }
+                },
+                {
+                    "op": "requireWritable",
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "writable",
+                    "node": "A",
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "create",
+                    "node": "C",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "rewrap",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-behind"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": "key-change-pending"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 1,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "server-behind"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": "keys-changed"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "C",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "keys-changed"
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-behind"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "prev": {
+                        "key": "root:1",
+                        "under": "area:2",
+                        "parentKeyEpoch": 2,
+                        "keyEpoch": 1,
+                        "label": "previous-root"
+                    },
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "requireWritable",
+                    "expect": "ok"
+                },
+                {
+                    "op": "create",
+                    "node": "D",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:D@1"
+                    }
+                },
+                {
+                    "op": "writable",
+                    "node": "A",
+                    "expect": "key-change-pending"
                 }
             ]
         },

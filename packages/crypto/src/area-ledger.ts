@@ -264,8 +264,13 @@ export function createAreaLedger() {
         if (at === null) return null;
         const key = areaSlot(at.groupId, workspaceId);
         if (blocked.has(key)) throw new CryptoError(KEYS_CHANGED);
-        // Only once a root wrapped under this very version was opened here.
-        if (rootSeenAt.get(key) !== at.version) throw new CryptoError(KEYS_CHANGED);
+        // Only once a root wrapped under this very version was opened here. A root seen under
+        // an earlier version is a key change this device committed but has not listed yet (a
+        // sync between its acceptance and its root listing): a wait, which the next listing
+        // ends. No root seen at all, or one past the chain, is not.
+        const seen = rootSeenAt.get(key);
+        if (seen !== undefined && seen < at.version) throw new CryptoError(KEY_CHANGE_PENDING);
+        if (seen !== at.version) throw new CryptoError(KEYS_CHANGED);
         return at.version;
     }
     /* Why an area may not be written, or null. */
@@ -313,7 +318,11 @@ export function createAreaLedger() {
             await checkAreaRoot(chain, workspaceId, parentKeyEpoch, rootKey);
         } catch (error) {
             if (!(error instanceof CryptoError)) throw error;
-            if (rootSeenAt.get(key) === parentKeyEpoch) rootSeenAt.delete(key);
+            // A root refused at the version seen, or at the write version itself, leaves no root
+            // seen: the area reads as a key change that went wrong (KEYS_CHANGED), not one still
+            // on its way, until a committed root at the write version opens.
+            if (rootSeenAt.get(key) === parentKeyEpoch || areaWrite.get(key) === parentKeyEpoch)
+                rootSeenAt.delete(key);
             return false;
         }
         const seen = rootSeenAt.get(key);

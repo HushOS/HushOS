@@ -646,6 +646,42 @@ async function hideKeyChanges(page: Page) {
     return { restore: () => page.context().unroute(pattern, handler) };
 }
 
+/*
+ * Route 25 held for a device: a sync there commits the member list it fetched
+ * and then waits before it can list any family folder's top folder under the
+ * new key. The gap between the two, held open for as long as the test needs.
+ */
+async function holdSpaces(page: Page) {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    await page.context().route('**/api/drive/spaces', async (route) => {
+        await released;
+        await route.fallback();
+    });
+    return { release: async () => release() };
+}
+
+/* The member list version this device last committed for its families (its stored record). */
+function committedVersion(page: Page) {
+    return page.evaluate(
+        () =>
+            new Promise<number>((resolve, reject) => {
+                const open = indexedDB.open('hushos-groups');
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                    const db = open.result;
+                    const all = db.transaction('chains').objectStore('chains').getAll();
+                    all.onerror = () => reject(all.error);
+                    all.onsuccess = () => {
+                        db.close();
+                        const rows = all.result as { rosterVersion: number }[];
+                        resolve(Math.max(0, ...rows.map((row) => row.rosterVersion)));
+                    };
+                };
+            }),
+    );
+}
+
 test.describe('removal, leaving and key changes', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
@@ -805,6 +841,10 @@ test.describe('removal, leaving and key changes', () => {
         await openFamilyFolder(ana, family, 'Family');
         await openSubfolder(ana, 'Trips');
         const unheard = await hideKeyChanges(ana.page);
+        // And any sync of hers from here on commits the removal's member list but cannot list the
+        // top folder under its new key until released.
+        const committedBefore = await committedVersion(ana.page);
+        const spaces = await holdSpaces(ana.page);
         await openFamilyPage(maya, groupPath, family);
         const walk = await holdWalk(maya.page);
         const others = [await holdWalk(ana.page)];
@@ -835,10 +875,19 @@ test.describe('removal, leaving and key changes', () => {
             timeout: 60_000,
         });
 
-        // Ana uploads into Trips while the walk is held there. Either her device has already seen
-        // the key change and waits on its own (KEY_CHANGE_PENDING), or the server says to wait
-        // (409 rotating); which one depends on whether her sync ran first. Either way the upload
-        // waits and says so, and nothing is published until the walk has re-keyed the folder.
+        // Ana's device syncs: it commits the removal's member list, and its listing of the top
+        // folder under the new key is held. Her page still shows the folder as before.
+        await ana.page.evaluate(() =>
+            document.dispatchEvent(new Event('visibilitychange', { bubbles: true })),
+        );
+        await expect
+            .poll(() => committedVersion(ana.page), { timeout: 60_000 })
+            .toBeGreaterThan(committedBefore);
+
+        // Ana uploads into Trips in that gap, while the walk is held there. Her device knows the
+        // keys changed and has not listed the new top folder yet: a key change on its way, so
+        // the upload waits (KEY_CHANGE_PENDING), never "keys changed, reload", and nothing is
+        // published until the walk has re-keyed the folder.
         const uploads: { status: number; code?: string }[] = [];
         const onUpload = async (response: Response) => {
             if (
@@ -866,6 +915,12 @@ test.describe('removal, leaving and key changes', () => {
             .filter({ hasText: 'late.txt' })
             .last();
         await expect(late).toContainText('Finishing a key change…', { timeout: 60_000 });
+        // Her own device refused to seal it: nothing reached the server.
+        expect(uploads).toEqual([]);
+        // The listing goes through: the wait goes on, now for the walk.
+        await spaces.release();
+        await ana.page.waitForTimeout(6_000);
+        await expect(late).toContainText('Finishing a key change…');
         // While the walk is held, no upload has been accepted: any begin the server saw was refused
         // as rotating, never published under the folder's old keys.
         expect(uploads.filter((u) => u.status < 400)).toEqual([]);
