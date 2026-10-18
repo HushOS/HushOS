@@ -4,7 +4,7 @@ import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
-import { ForkAlert, NoticeList } from '@/components/families/family-alerts';
+import { CheckingLine, ForkAlert, NoticeList } from '@/components/families/family-alerts';
 import { FamilyPlan, useFamilyPlanGate } from '@/components/families/family-billing';
 import { InviteDialog } from '@/components/families/invite-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
@@ -184,6 +184,9 @@ function FamilyPage() {
             </PageHeader>
 
             <div className="flex flex-col gap-2 px-5 empty:hidden sm:px-8">
+                {sync.isPlaceholderData && result?.status === 'accepted' && (
+                    <CheckingLine family={family} />
+                )}
                 {result?.status === 'fork' && <ForkAlert family={family} fork={result.fork} />}
                 {sync.isError && (
                     <Alert variant="warning">
@@ -304,6 +307,7 @@ function FamilyPage() {
                     manager={manager}
                     names={names}
                     needsCheck={work.needsCheck}
+                    checking={sync.isPlaceholderData}
                 />
             )}
             {manager && invitations.data && (

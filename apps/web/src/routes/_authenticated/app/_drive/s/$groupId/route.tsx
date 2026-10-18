@@ -4,7 +4,7 @@ import { RotateCcwIcon, TriangleAlertIcon, UsersIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
-import { ForkAlert } from '@/components/families/family-alerts';
+import { CheckingLine, ForkAlert } from '@/components/families/family-alerts';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -158,6 +158,11 @@ function FamilySpaceLayout() {
     };
     return (
         <FamilySpaceProvider value={space}>
+            {sync.isPlaceholderData && result.status === 'accepted' && (
+                <div className="px-5 pb-2 sm:px-8">
+                    <CheckingLine family={family} />
+                </div>
+            )}
             <Outlet />
         </FamilySpaceProvider>
     );

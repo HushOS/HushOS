@@ -11,6 +11,19 @@ const FROM: Record<string, string> = {
 };
 
 /*
+ * A newer member list is being checked, and the page shows the family as last checked meanwhile
+ * (a removal's check can wait on a key change): one quiet line, no alert. A fork, an error or
+ * not being in the family replaces it.
+ */
+export function CheckingLine({ family }: { family: string }) {
+    return (
+        <output className="block text-[13px] text-muted-foreground" data-family-checking>
+            Checking {family}’s member list
+        </output>
+    );
+}
+
+/*
  * The hard warning (the 1c plan, section 3): an inline danger alert, never a
  * toast. Both sides' digests and where each came from go under Technical
  * details. Nothing resolves it automatically (decision D5); changes from

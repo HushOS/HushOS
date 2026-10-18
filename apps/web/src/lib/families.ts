@@ -236,8 +236,12 @@ export function useFamilySync(
         // A new member list version is a new key: until its sync answers, the page goes on
         // showing the family as last synced, never a blank one that drops the folder open in
         // it (a removal's sync can wait on a key change). Never another family's or account's.
+        // `isPlaceholderData` says so meanwhile: the pages say the family is being checked, and
+        // nothing built from the last member list (a role change) is offered.
         placeholderData: (previous, previousQuery) =>
-            previousQuery?.queryKey[1] === userId && previousQuery.queryKey[3] === groupId
+            familyKeys
+                .family(userId, groupId)
+                .every((part, index) => previousQuery?.queryKey[index] === part)
                 ? previous
                 : undefined,
         staleTime: 0,

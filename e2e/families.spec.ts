@@ -686,11 +686,17 @@ async function hideKeyChanges(page: Page) {
 async function holdSpaces(page: Page) {
     let release!: () => void;
     const released = new Promise<void>((resolve) => (release = resolve));
+    let held = 0;
     await page.context().route('**/api/drive/spaces', async (route) => {
+        held++;
         await released;
         await route.fallback();
     });
-    return { release: async () => release() };
+    return {
+        /* Requests that reached the hold so far, released or not. */
+        held: () => held,
+        release: async () => release(),
+    };
 }
 
 /* The member list version this device last committed for its families (its stored record). */
@@ -936,12 +942,21 @@ test.describe.serial('removal, leaving and key changes', () => {
         // page still shows Trips as last synced while the new sync waits: never a blank page.
         await expect.poll(() => listed, { timeout: 45_000 }).toBeGreaterThan(committedBefore);
         ana.page.off('response', onFamilies);
+        // And the sync that version starts has reached the held listing, so the page is checked
+        // while that sync waits, not before it began. It queues behind the first sync's family
+        // lock, which lets go when that sync's held listing times out (30 s).
+        const heldBefore = spaces.held();
+        await expect.poll(spaces.held, { timeout: 60_000 }).toBeGreaterThan(heldBefore);
         await expect(
             ana.page
                 .getByRole('navigation', { name: 'Folder path' })
                 .getByRole('heading', { level: 1 }),
         ).toHaveText('Trips');
         await expect(fileRow(ana.page, 'trip.txt')).toBeVisible();
+        await expect(ana.page.locator('[data-family-checking]')).toHaveText(
+            `Checking ${family}’s member list`,
+        );
+        await ana.page.screenshot({ path: test.info().outputPath('checking-member-list.png') });
 
         // Ana uploads into Trips in that gap, while the walk is held there. Her device knows the
         // keys changed and has not listed the new top folder yet: a key change on its way, so
@@ -978,6 +993,9 @@ test.describe.serial('removal, leaving and key changes', () => {
         expect(uploads).toEqual([]);
         // The listing goes through: the wait goes on, now for the walk.
         await spaces.release();
+        await expect(ana.page.locator('[data-family-checking]')).toHaveCount(0, {
+            timeout: 60_000,
+        });
         await ana.page.waitForTimeout(6_000);
         await expect(late).toContainText('Finishing a key change…');
         // While the walk is held, no upload has been accepted: any begin the server saw was refused
