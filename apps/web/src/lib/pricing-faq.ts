@@ -24,7 +24,7 @@ const middle: Question[] = [
     },
     {
         q: 'Can I switch between monthly and yearly?',
-        a: 'Yes. Choose the one you want and the difference is charged, or credited, to your saved card straight away. Paying yearly gets you two months free.',
+        a: 'Yes. Choose the one you want and the difference is charged, or credited, to your saved card straight away. Paying yearly gets you more than two months free.',
     },
 ];
 

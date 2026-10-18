@@ -474,7 +474,7 @@ function BillingPage() {
                                             key={tier.key}
                                             name={tier.name}
                                             size={formatQuota(tier.quotaBytes)}
-                                            price={`${priceLine(plan, currency)}${plan.interval === 'year' ? ' · 2 months free' : ''}`}
+                                            price={`${priceLine(plan, currency)}${plan.interval === 'year' ? ' · More than 2 months free' : ''}`}
                                             recommended={tier.recommended && !current}
                                             current={current}
                                             footer={

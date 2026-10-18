@@ -446,7 +446,7 @@ function PricingPage() {
                                                 <>
                                                     Yearly
                                                     <span className="font-semibold text-primary">
-                                                        2 months free
+                                                        More than 2 months free
                                                     </span>
                                                 </>
                                             ),

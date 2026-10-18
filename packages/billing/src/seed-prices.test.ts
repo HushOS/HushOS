@@ -58,11 +58,12 @@ describe('priceProblem', () => {
         );
     });
 
-    test('refuses a year that costs as much as twelve months, and takes one unit less', () => {
-        expect(priceProblem('Plus', { usd: 400 }, { usd: 4800 })).toBe(
-            'Plus yearly in usd costs as much as twelve months.',
-        );
-        expect(priceProblem('Plus', { usd: 401 }, { usd: 4800 })).toBeNull();
+    test('refuses a year at ten months or more, which isn’t more than two months free', () => {
+        for (const usd of [400, 480])
+            expect(priceProblem('Plus', { usd }, { usd: 4800 })).toBe(
+                'Plus yearly in usd isn’t more than two months free.',
+            );
+        expect(priceProblem('Plus', { usd: 481 }, { usd: 4800 })).toBeNull();
     });
 
     test('refuses a year missing the default currency or priced in other currencies', () => {

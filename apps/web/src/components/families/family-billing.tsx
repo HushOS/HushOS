@@ -475,7 +475,7 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
                     label="Billed"
                     options={[
                         { value: 'month', label: 'Monthly' },
-                        { value: 'year', label: 'Yearly · 2 months free' },
+                        { value: 'year', label: 'Yearly · More than 2 months free' },
                     ]}
                     value={period}
                     onChange={setPeriod}

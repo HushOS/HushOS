@@ -6,10 +6,10 @@ import { DEFAULT_CURRENCY } from './protocol';
  * again by the script before it calls Polar.
  *
  * Personal plans: 5, 10 and 15 USD or EUR a month, 4, 8 and 12 GBP, 199, 399 and 699 INR.
- * A year (owner, 2026-10-19) is a round total that splits evenly into twelve, at roughly
- * two months free, so the pricing page can show it by the month without cents: 48, 96 and
- * 144 USD or EUR (4, 8 and 12 a month), 36, 72 and 108 GBP (3, 6, 9), and 1,980, 3,900 and
- * 6,900 INR (165, 325, 575). It replaced "a year is ten months". Changing a live price
+ * A year (owner, 2026-10-19) is a round total that splits evenly into twelve, at more than
+ * two months free (2.1 to 3, so the pages say "More than 2 months free"), so the pricing
+ * page can show it by the month without cents: 48, 96 and 144 USD or EUR (4, 8 and 12 a
+ * month), 36, 72 and 108 GBP (3, 6, 9), and 1,980, 3,900 and 6,900 INR (165, 325, 575). It replaced "a year is ten months". Changing a live price
  * takes the seed's `--update`, which gives new checkouts and plan switches the new price
  * while existing subscribers keep the one they signed up at.
  */
@@ -104,7 +104,8 @@ export const familyTiers: {
  * Why a table can't be seeded, or null: a typo caught before anything reaches Polar. Every
  * price has a default-currency amount (Polar treats a missing one as free); a year is priced
  * in the same currencies as the month, splits into twelve whole units of its currency (the
- * pricing page shows it by the month only then), and costs less than twelve months.
+ * pricing page shows it by the month only then), and costs less than ten months, since the
+ * pages say "More than 2 months free".
  */
 export function priceProblem(name: string, month: PriceTable, year: PriceTable) {
     if (!(DEFAULT_CURRENCY in month) || !(DEFAULT_CURRENCY in year))
@@ -114,8 +115,8 @@ export function priceProblem(name: string, month: PriceTable, year: PriceTable) 
     for (const [currency, amount] of Object.entries(year)) {
         if (!Number.isInteger(amount) || amount <= 0 || amount % 1200 !== 0)
             return `${name} yearly in ${currency} doesn’t split into twelve whole units.`;
-        if (amount >= month[currency]! * 12)
-            return `${name} yearly in ${currency} costs as much as twelve months.`;
+        if (amount >= month[currency]! * 10)
+            return `${name} yearly in ${currency} isn’t more than two months free.`;
     }
     return null;
 }
