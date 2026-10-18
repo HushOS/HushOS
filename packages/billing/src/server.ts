@@ -36,6 +36,7 @@ export {
     ensureGroupSeat,
     familyHasPlan,
     getGroupBilling,
+    MAX_REISSUES,
     paysForGroup,
     quoteUnitsChange,
     reconcileGroup,

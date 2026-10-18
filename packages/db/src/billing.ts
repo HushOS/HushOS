@@ -285,6 +285,11 @@ export type GroupSubscriptionSnapshot = {
      * pool paid before stay, or a smaller tier counts at once. Absent: by `paidUnits`.
      */
     tierPaid?: boolean;
+    /*
+     * While an upgrade's own order isn't paid: the tier paid for when it began, which the
+     * paid tier is set to (never above the product), whatever the row said before.
+     */
+    paidTierWhileWaiting?: { productId: string; quotaBytes: bigint };
     includedMembers: number;
     /* The pool the plan gives the group; a family's is fixed. */
     quotaBytes: bigint;
@@ -458,15 +463,63 @@ export async function setIntendedProduct(
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* Notes what HushOS just asked Polar for again, and when (the reconcile guard). */
+/*
+ * Notes what HushOS just asked Polar for again, when, and how many times in a
+ * row (the reconcile guard and the give-up rule); `state` null once Polar holds
+ * what HushOS wants, which resets the count.
+ */
 export async function markReissued(
     subscriptionId: string,
-    state: string,
+    state: string | null,
+    attempts: number,
     at = new Date(Date.now()),
 ) {
     await db
         .update(groupBillingSubscriptions)
-        .set({ reissuedAt: at, reissuedState: state, updatedAt: at })
+        .set({
+            reissuedAt: state === null ? null : at,
+            reissuedState: state,
+            reissueAttempts: attempts,
+            updatedAt: at,
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/*
+ * Claims the family's one queued retry until `until`: false when another is
+ * still pending (claimed by someone else and not yet due), so it is not queued twice.
+ */
+export async function claimReissueRetry(subscriptionId: string, until: Date) {
+    const now = new Date(Date.now());
+    const rows = await db
+        .update(groupBillingSubscriptions)
+        .set({ reissueRetryAt: until, updatedAt: now })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                sql`(${groupBillingSubscriptions.reissueRetryAt} is null or ${groupBillingSubscriptions.reissueRetryAt} <= ${now.toISOString()}::timestamptz)`,
+            ),
+        )
+        .returning({ id: groupBillingSubscriptions.id });
+    return rows.length === 1;
+}
+
+/* Anchors (or, with nulls, forgets) the upgrade whose order decides the tier. */
+export async function setUpgradeAnchor(
+    subscriptionId: string,
+    productId: string | null,
+    startedAt: Date | null,
+    from: { productId: string; quotaBytes: bigint } | null = null,
+) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            upgradeProductId: productId,
+            upgradeStartedAt: startedAt,
+            upgradeFromProductId: productId === null ? null : (from?.productId ?? null),
+            upgradeFromQuotaBytes: productId === null ? null : (from?.quotaBytes ?? null),
+            updatedAt: new Date(),
+        })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
@@ -585,12 +638,27 @@ export async function applyGroupState(input: {
                          * waits, else only down (a smaller tier at a renewal still unpaid). An
                          * upgrade awaiting the bank keeps the tier and pool paid before it.
                          */
-                        paidProductId: !(subscription.tierPaid ?? paid !== null)
-                            ? sql`case when ${subscription.quotaBytes.toString()}::bigint <= coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}) then ${subscription.productId}::text else coalesce(${groupBillingSubscriptions.paidProductId}, ${groupBillingSubscriptions.productId}) end`
-                            : subscription.productId,
-                        paidQuotaBytes: !(subscription.tierPaid ?? paid !== null)
-                            ? sql`least(coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}), ${subscription.quotaBytes.toString()}::bigint)`
-                            : subscription.quotaBytes,
+                        ...(subscription.paidTierWhileWaiting
+                            ? {
+                                  paidProductId:
+                                      subscription.paidTierWhileWaiting.quotaBytes <
+                                      subscription.quotaBytes
+                                          ? subscription.paidTierWhileWaiting.productId
+                                          : subscription.productId,
+                                  paidQuotaBytes:
+                                      subscription.paidTierWhileWaiting.quotaBytes <
+                                      subscription.quotaBytes
+                                          ? subscription.paidTierWhileWaiting.quotaBytes
+                                          : subscription.quotaBytes,
+                              }
+                            : {
+                                  paidProductId: !(subscription.tierPaid ?? paid !== null)
+                                      ? sql`case when ${subscription.quotaBytes.toString()}::bigint <= coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}) then ${subscription.productId}::text else coalesce(${groupBillingSubscriptions.paidProductId}, ${groupBillingSubscriptions.productId}) end`
+                                      : subscription.productId,
+                                  paidQuotaBytes: !(subscription.tierPaid ?? paid !== null)
+                                      ? sql`least(coalesce(${groupBillingSubscriptions.paidQuotaBytes}, ${groupBillingSubscriptions.quotaBytes}), ${subscription.quotaBytes.toString()}::bigint)`
+                                      : subscription.quotaBytes,
+                              }),
                         updatedAt: now,
                     },
                 });

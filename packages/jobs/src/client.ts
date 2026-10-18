@@ -11,6 +11,7 @@ export const queues = {
     cleanupExpired: 'auth.cleanup-expired',
     reconcileBilling: 'billing.reconcile',
     billingReissueCut: 'billing.reissue-cut',
+    billingReissuePending: 'billing.reissue-pending',
     driveExpireUploads: 'drive.expire-uploads',
     driveDeleteObjects: 'drive.delete-objects',
     driveReplicate: 'drive.replicate',
@@ -30,6 +31,7 @@ export type JobPayloads = {
     [queues.cleanupExpired]: { batchSize?: number };
     [queues.reconcileBilling]: Record<string, never>;
     [queues.billingReissueCut]: { groupId: string };
+    [queues.billingReissuePending]: { groupId: string };
     [queues.driveExpireUploads]: Record<string, never>;
     [queues.driveDeleteObjects]: Record<string, never>;
     [queues.driveReplicate]: Record<string, never>;
@@ -91,6 +93,19 @@ export async function ensureQueues(boss: PgBoss) {
         expireInSeconds: 5 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
     });
+    /*
+     * Its successor, sent with the group id as `singletonKey`: `stately` keeps at most one
+     * queued and one active job per family, however many reconciles ask (a queue's policy
+     * can't change once made, so billing.reissue-cut stays only to drain what it holds).
+     */
+    await boss.createQueue(queues.billingReissuePending, {
+        policy: 'stately',
+        retryLimit: 8,
+        retryDelay: 60,
+        retryBackoff: true,
+        expireInSeconds: 5 * 60,
+        retentionSeconds: 7 * 24 * 60 * 60,
+    });
     // Drive's sweeps are idempotent and bounded; one of each at a time is enough.
     for (const queue of [
         queues.driveExpireUploads,
@@ -137,10 +152,12 @@ export function getJobClient() {
 export async function enqueue<N extends QueueName>(
     name: N,
     data: JobPayloads[N],
-    options: { startAfterSeconds?: number } = {},
+    options: { startAfterSeconds?: number; singletonKey?: string } = {},
 ) {
     const boss = await getJobClient();
-    return options.startAfterSeconds
-        ? boss.send(name, data, { startAfter: options.startAfterSeconds })
-        : boss.send(name, data);
+    const send = {
+        ...(options.startAfterSeconds ? { startAfter: options.startAfterSeconds } : {}),
+        ...(options.singletonKey ? { singletonKey: options.singletonKey } : {}),
+    };
+    return Object.keys(send).length ? boss.send(name, data, send) : boss.send(name, data);
 }

@@ -89,7 +89,7 @@ function snapshotOf(
     subscription: models.Subscription,
     plan: FamilyCatalogueProduct,
     paid: boolean,
-    tierPaid: boolean,
+    tier: { paid: boolean; hold?: { productId: string; quotaBytes: bigint } },
 ): billingRepository.GroupSubscriptionSnapshot {
     const units = subscription.units ?? plan.includedMembers;
     return {
@@ -104,7 +104,8 @@ function snapshotOf(
         paidUnits: paid ? units : null,
         pendingUnits: subscription.pending_update?.units ?? null,
         pendingProductId: subscription.pending_update?.product_id ?? null,
-        tierPaid,
+        tierPaid: tier.paid,
+        ...(tier.hold ? { paidTierWhileWaiting: tier.hold } : {}),
         includedMembers: plan.includedMembers,
         quotaBytes: BigInt(plan.quotaBytes),
         currentPeriodStart: new Date(subscription.current_period_start),
@@ -152,41 +153,97 @@ async function orderState(subscriptionId: string) {
     }
 }
 
+/* Polar's clock and HushOS's may differ: an upgrade's order is looked for from this long before. */
+const ORDER_CLOCK_SKEW_MS = 60_000;
+
+/* An anchor for a product the plan isn't on is kept this long: its upgrade may be mid-flight. */
+const STRAY_ANCHOR_MS = 60 * 60 * 1000;
+
 /*
  * Whether the plan's tier is paid for, judged by its own order and never by
- * the subscription's others: a tier no bigger than the one paid for already
- * is (a downgrade, a renewal); a bigger one only once the newest order for its
- * product (the upgrade's, a `subscription_update` for that product; a raise
- * made before the upgrade is for the old product) is paid. `waitingSince` is
- * when that order was made, for the stale rule. Orders that can't be read, or
- * no order for the product at all, are not paid (logged).
+ * the subscription's others. An upgrade HushOS asked for is anchored (its
+ * product and when it was asked): its order is the newest
+ * `subscription_update` for that product made since, with nothing refunded
+ * (spike 8, T2: the change is one such order). An older order for the same
+ * product (an earlier upgrade) decides nothing, nor does one not listed yet:
+ * the tier waits, from the anchor's time for the stale rule. `settle` asks the
+ * caller to drop the anchor once its state is written: the order is paid, or
+ * the plan has moved off the product. Without an anchor, a tier no bigger than
+ * the one paid for is paid; a first checkout's tier (nothing paid yet) goes
+ * with its orders (`subscriptionPaid`); anything else bigger (a change made
+ * outside HushOS) is not, and is logged. Orders that can't be read are not paid.
  */
-async function tierState(subscription: models.Subscription, plan: FamilyCatalogueProduct) {
+async function tierState(
+    subscription: models.Subscription,
+    plan: FamilyCatalogueProduct,
+    subscriptionPaid: boolean,
+): Promise<{
+    paid: boolean;
+    waitingSince: number | null;
+    settle: boolean;
+    hold?: { productId: string; quotaBytes: bigint };
+}> {
     const row = await billingRepository.getGroupSubscription(subscription.id);
-    const paidQuota = row ? (row.paidQuotaBytes ?? row.quotaBytes) : null;
-    if (paidQuota === null || BigInt(plan.quotaBytes) <= paidQuota)
-        return { paid: true, waitingSince: null };
+    if (!row) return { paid: subscriptionPaid, waitingSince: null, settle: false };
+    const started = row.upgradeStartedAt;
+    const anchored =
+        row.upgradeProductId !== null &&
+        started !== null &&
+        row.upgradeProductId === subscription.product_id;
+    // An anchor for another product: the plan has moved off it (a revert, a refused change).
+    // Dropped only once it is old, never while its upgrade may still be on its way to Polar.
+    const stray =
+        row.upgradeProductId !== null &&
+        !anchored &&
+        (started === null || Date.now() - started.getTime() > STRAY_ANCHOR_MS);
+    const paidQuota = row.paidQuotaBytes ?? row.quotaBytes;
+    if (!anchored || !started) {
+        if (BigInt(plan.quotaBytes) <= paidQuota)
+            return { paid: true, waitingSince: null, settle: stray };
+        if (paidQuota === 0n) return { paid: subscriptionPaid, waitingSince: null, settle: stray };
+        log.warn({
+            message:
+                'A family plan’s tier is bigger than the one paid for, with no upgrade on record',
+            billing: { subscription: subscription.id, product: subscription.product_id },
+        });
+        return { paid: false, waitingSince: null, settle: stray };
+    }
+    // Until its order is paid, the most the family has is what it had paid for when it began.
+    const hold =
+        row.upgradeFromProductId !== null && row.upgradeFromQuotaBytes !== null
+            ? { productId: row.upgradeFromProductId, quotaBytes: row.upgradeFromQuotaBytes }
+            : undefined;
+    const since = started.getTime() - ORDER_CLOCK_SKEW_MS;
     let orders: models.Order[];
     try {
-        orders = (await polar().orders.list({ subscription_id: subscription.id, limit: 25 })).items;
+        orders = (
+            await polar().orders.list({
+                subscription_id: subscription.id,
+                product_id: subscription.product_id,
+                created_after: new Date(since).toISOString(),
+                sorting: ['-created_at'],
+                limit: 10,
+            })
+        ).items;
     } catch (error) {
         log.warn({
             message: 'Group orders could not be read for a tier',
             billing: { status: statusOf(error) },
         });
-        return { paid: false, waitingSince: null };
+        return { paid: false, waitingSince: started.getTime(), settle: false, hold };
     }
     const own = orders
-        .filter((order) => order.product_id === subscription.product_id)
+        .filter(
+            (order) =>
+                order.billing_reason === 'subscription_update' &&
+                order.product_id === subscription.product_id &&
+                Date.parse(order.created_at) >= since &&
+                order.refunded_amount === 0,
+        )
         .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-    if (!own) {
-        log.warn({
-            message: 'No order for a family plan’s tier: the tier paid before stands',
-            billing: { subscription: subscription.id, product: subscription.product_id },
-        });
-        return { paid: false, waitingSince: null };
-    }
-    return { paid: own.paid, waitingSince: own.paid ? null : Date.parse(own.created_at) };
+    if (!own) return { paid: false, waitingSince: started.getTime(), settle: false, hold };
+    if (own.paid) return { paid: true, waitingSince: null, settle: true };
+    return { paid: false, waitingSince: Date.parse(own.created_at), settle: false, hold };
 }
 
 /*
@@ -199,15 +256,17 @@ async function tierState(subscription: models.Subscription, plan: FamilyCatalogu
 async function applyChanged(groupId: string, subscription: models.Subscription, paid: boolean) {
     const plan = await planOf(subscription.product_id);
     if (!plan) return false;
-    const tier = await tierState(subscription, plan);
+    const tier = await tierState(subscription, plan, paid);
     await billingRepository.applyGroupState({
         groupId,
         provider: PROVIDER,
         customerId: null,
-        subscriptions: [snapshotOf(subscription, plan, paid, tier.paid)],
+        subscriptions: [snapshotOf(subscription, plan, paid, tier)],
         graceMs: graceMs(),
         complete: false,
     });
+    // Only once the paid tier is written: a failure before leaves the anchor to judge again.
+    if (tier.settle) await billingRepository.setUpgradeAnchor(subscription.id, null, null);
     return { tierPaid: tier.paid };
 }
 
@@ -250,6 +309,8 @@ export async function reconcileGroup(groupId: string) {
     const stale: string[] = [];
     // Upgrades whose own order has waited STALE_RAISE_DAYS (a raise's order doesn't count).
     const staleTier: string[] = [];
+    // Upgrade anchors to drop once this state is written (paid, or moved off the product).
+    const settled: string[] = [];
     for (const id of ids) {
         let subscription: models.Subscription;
         try {
@@ -272,11 +333,12 @@ export async function reconcileGroup(groupId: string) {
         if (orders?.oldestAt != null && Date.now() - orders.oldestAt > STALE_RAISE_DAYS * DAY)
             stale.push(subscription.id);
         const tier = ended
-            ? { paid: true, waitingSince: null }
-            : await tierState(subscription, plan);
+            ? { paid: true, waitingSince: null, settle: false }
+            : await tierState(subscription, plan, orders?.unpaid === false);
         if (tier.waitingSince !== null && Date.now() - tier.waitingSince > STALE_RAISE_DAYS * DAY)
             staleTier.push(subscription.id);
-        subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false, tier.paid));
+        if (tier.settle) settled.push(subscription.id);
+        subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false, tier));
     }
     await billingRepository.applyGroupState({
         groupId,
@@ -287,6 +349,7 @@ export async function reconcileGroup(groupId: string) {
         complete: true,
         keepIds: unresolved,
     });
+    for (const id of settled) await billingRepository.setUpgradeAnchor(id, null, null);
     const liveCount =
         subscriptions.filter((s) => !s.endedAt && LIVE.has(s.status)).length + unresolved.length;
     if (liveCount > 1)
@@ -303,7 +366,13 @@ export async function reconcileGroup(groupId: string) {
             message: 'Group plan has fewer places than admitted members',
             billing: { group: groupId, units: live.units, admitted: used },
         });
-    if (live && staleTier.includes(live.id) && paidTier(live).quotaBytes < live.quotaBytes) {
+    if (
+        live &&
+        staleTier.includes(live.id) &&
+        paidTier(live).quotaBytes < live.quotaBytes &&
+        // A first checkout still unpaid has nothing to go back to: its own tier is the paid one.
+        paidTier(live).productId !== live.productId
+    ) {
         // An upgrade whose own charge the bank never confirmed: back to the tier paid for at the
         // period's end, so a renewal never bills it. The payer's own move at or below that tier
         // stands. Withdrawn by reissueCut if the order is paid after all.
@@ -338,7 +407,9 @@ export async function reconcileGroup(groupId: string) {
         }
         return;
     }
-    if (live && stale.includes(live.id) && live.paidUnits < live.units) {
+    // A first checkout never paid has no places to go back to (and a cut to none is no cut):
+    // Polar's own retries decide whether it starts at all.
+    if (live && stale.includes(live.id) && live.paidUnits < live.units && live.paidUnits > 0) {
         log.warn({
             message: 'Unconfirmed raise cut back to the places paid for',
             billing: { group: groupId, units: live.units, paid: live.paidUnits },
@@ -405,6 +476,11 @@ async function queueCutRetry(groupId: string, startAfterSeconds?: number) {
         log.warn({ message: 'No queue for cut retries', billing: { group: groupId } });
         return;
     }
+    // One pending retry per family: claimed on its row until it is due (and the queue itself
+    // keeps one per family, stately with the group as its key).
+    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    const due = Date.now() + Math.max(startAfterSeconds ?? 0, RETRY_CLAIM_SECONDS) * 1000;
+    if (live && !(await billingRepository.claimReissueRetry(live.id, new Date(due)))) return;
     try {
         await cutRetryQueue(groupId, startAfterSeconds);
     } catch (error) {
@@ -430,6 +506,12 @@ async function queueCutRetry(groupId: string, startAfterSeconds?: number) {
  * reconcile and the retry job, never re-issue it themselves.
  */
 const REISSUE_GUARD_MS = 15 * 60 * 1000;
+
+/* How many times in a row the same request is sent before HushOS gives up and tells operators. */
+export const MAX_REISSUES = 5;
+
+/* An immediate retry (with the job's backoff) holds the family's one retry this long. */
+const RETRY_CLAIM_SECONDS = 60;
 
 /* What HushOS wants Polar's pending update to hold: a cut to `units` places, a move to `product`. */
 type Pending = { units: number | null; product: string | null };
@@ -595,16 +677,30 @@ export async function reissueCut(groupId: string, options: { fromReconcile?: boo
     const done = async () => {
         if (withdraw) await billingRepository.setIntendedProduct(live.id, null);
     };
-    if (want.units === held.units && want.product === held.product) return done();
+    if (want.units === held.units && want.product === held.product) {
+        // Polar holds it: the count of tries starts again.
+        if (live.reissueAttempts > 0 || live.reissuedState !== null)
+            await billingRepository.markReissued(live.id, null, 0);
+        return done();
+    }
     // Polar refuses changes to a plan set to end; resuming it brings them back here.
     if (subscription.cancel_at_period_end) return;
     // A reconcile soon after asking for exactly this (most likely that write's own delivery)
     // writes nothing, and queues a retry for when the window ends; a different request goes.
     const state = JSON.stringify(want);
+    const again = live.reissuedState === state;
+    // Polar keeps refusing to hold it: stop, and say so, rather than charge on retrying for ever.
+    if (again && live.reissueAttempts >= MAX_REISSUES) {
+        log.error({
+            message: 'Family plan’s scheduled change given up: Polar would not keep it',
+            billing: { group: groupId, wanted: want, held, attempts: live.reissueAttempts },
+        });
+        return;
+    }
     if (
         options.fromReconcile &&
         live.reissuedAt &&
-        live.reissuedState === state &&
+        again &&
         Date.now() - live.reissuedAt.getTime() < REISSUE_GUARD_MS
     ) {
         const wait = REISSUE_GUARD_MS - (Date.now() - live.reissuedAt.getTime());
@@ -616,7 +712,7 @@ export async function reissueCut(groupId: string, options: { fromReconcile?: boo
         return;
     }
     // Stamped first, so the deliveries this write causes find it and leave it.
-    await billingRepository.markReissued(live.id, state);
+    await billingRepository.markReissued(live.id, state, again ? live.reissueAttempts + 1 : 1);
     const after = await setPending(groupId, subscription, want);
     await done();
     // An admission that landed while the cut was asked for moves it up (see scheduleCut).
@@ -982,8 +1078,11 @@ async function changePlaces(
     }
     if (target - current > MAX_MEMBERS_PER_RAISE) return cap;
     // No raise on top of an upgrade the bank hasn't confirmed: the two orders never interleave.
+    // Polar's product, just read, against the tier paid for: a row a failed write left behind
+    // can't open a place.
     const row = await billingRepository.getLiveGroupSubscription(groupId);
-    if (row && paidTier(row).quotaBytes < row.quotaBytes) return { status: 'confirm', url: null };
+    if (row && subscription.product_id !== paidTier(row).productId)
+        return { status: 'confirm', url: null };
     let raised: models.Subscription;
     try {
         raised = await polar().subscriptions.update(subscription.id, {
@@ -1185,11 +1284,22 @@ export async function changeGroupPlan(
     if (bigger) {
         await familyOf(groupId, user.id, 'billing');
         // Nothing stacks on a charge the bank hasn't confirmed: places, or an upgrade.
-        if (live.paidUnits < live.units || paidTier(live).quotaBytes < live.quotaBytes)
+        if (
+            live.paidUnits < live.units ||
+            paidTier(live).quotaBytes < live.quotaBytes ||
+            subscription.product_id !== paidTier(live).productId
+        )
             throw new BillingError(
                 'Your bank hasn’t confirmed the last charge yet. Confirm it in Manage payment and invoices, then change the plan.',
                 409,
             );
+        // Anchored before Polar is asked, so the order this makes is the one that decides.
+        await billingRepository.setUpgradeAnchor(
+            live.id,
+            target.id,
+            new Date(Date.now()),
+            paidTier(live),
+        );
         let changed: models.Subscription;
         try {
             changed = await polar().subscriptions.update(subscription.id, {
@@ -1198,20 +1308,38 @@ export async function changeGroupPlan(
             });
         } catch (error) {
             const refused = refusedRaise(error);
-            if (refused.status === 'confirm')
+            if (refused.status === 'confirm') {
+                // The bank wants the payer: whatever Polar now holds is written, never left stale.
+                await writeAsPolarHolds(groupId, subscription.id);
                 return {
                     billing: await getGroupBilling(user, groupId),
                     url: (await portalFor(groupId, user.id)).url,
                     confirmPayment: true,
                     when: 'now',
                 };
+            }
+            // Declined: nothing changed at Polar (spike 8, T2: 0341), so there is no upgrade.
+            if (refused.status === 'declined')
+                await billingRepository.setUpgradeAnchor(live.id, null, null);
             throw planChangeError(refused);
         }
         // The move replaces any scheduled one. It counts as paid once its own order is paid:
         // until then the family keeps the tier and pool it paid for.
         await billingRepository.setIntendedProduct(live.id, null);
-        // The places are unchanged (their paid count stays); the tier by its own order.
-        const applied = await applyChanged(groupId, changed, false);
+        // The places are unchanged (their paid count stays); the tier by its own order. Polar has
+        // changed the product: a write that fails here is put right from Polar at once.
+        let applied: Awaited<ReturnType<typeof applyChanged>>;
+        try {
+            applied = await applyChanged(groupId, changed, false);
+        } catch (error) {
+            log.warn({
+                message: 'Upgrade not written after Polar took it; reconciling',
+                billing: { group: groupId, failure: String((error as Error)?.name) },
+            });
+            await reconcileGroup(groupId);
+            const fresh = await billingRepository.getLiveGroupSubscription(groupId);
+            applied = fresh ? { tierPaid: fresh.productId === paidTier(fresh).productId } : false;
+        }
         if (!applied) throw unresolvedPlan();
         const paid = applied.tierPaid;
         log.info({
@@ -1252,6 +1380,22 @@ export async function changeGroupPlan(
         billing: { group: groupId, from: current.id, to: target.id },
     });
     return done('renewal');
+}
+
+/*
+ * Writes the subscription as Polar holds it now, after a call whose answer was
+ * an error but which may have changed it (a 402 that wants the bank). A
+ * failure is left to the next reconcile, and logged.
+ */
+async function writeAsPolarHolds(groupId: string, subscriptionId: string) {
+    try {
+        await applyChanged(groupId, await polar().subscriptions.get(subscriptionId), false);
+    } catch (error) {
+        log.warn({
+            message: 'Family plan not re-read after a refused change',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+    }
 }
 
 /* A Polar failure as the payer reads it; HushOS's own refusals pass through. */

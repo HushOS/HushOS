@@ -172,6 +172,20 @@ export const groupBillingSubscriptions = pgTable(
         reissuedAt: timestamp('reissued_at', { withTimezone: true }),
         /* What that re-issue asked for: only the same request is held back, never a new one. */
         reissuedState: text('reissued_state'),
+        /* How many times in a row that same request was sent; HushOS stops at a few. */
+        reissueAttempts: integer('reissue_attempts').notNull().default(0),
+        /* Until when a queued retry is pending, so a family has one at a time. */
+        reissueRetryAt: timestamp('reissue_retry_at', { withTimezone: true }),
+        /*
+         * The upgrade being paid for: its product and when HushOS asked for it. Its order is
+         * the `subscription_update` for that product made since, never an older one; cleared
+         * once that order is paid, or the plan has moved off the product.
+         */
+        upgradeProductId: text('upgrade_product_id'),
+        upgradeStartedAt: timestamp('upgrade_started_at', { withTimezone: true }),
+        /* The tier paid for when it began: the most the family has until its order is paid. */
+        upgradeFromProductId: text('upgrade_from_product_id'),
+        upgradeFromQuotaBytes: bigint('upgrade_from_quota_bytes', { mode: 'bigint' }),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),

@@ -615,7 +615,11 @@ const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
  * at once goes to the worker's retry queue (pg-boss, with backoff).
  */
 billing.setCutRetryQueue((groupId, startAfterSeconds) =>
-    enqueue(queues.billingReissueCut, { groupId }, { startAfterSeconds }),
+    enqueue(
+        queues.billingReissuePending,
+        { groupId },
+        { startAfterSeconds, singletonKey: groupId },
+    ),
 );
 
 /* The routes' own GROUPS_ENABLED check, behind the edge's. */
