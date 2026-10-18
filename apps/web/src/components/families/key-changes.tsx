@@ -138,7 +138,6 @@ export function FolderKeys({
                     </span>
                     {manager && (
                         <Button
-                            size="sm"
                             variant="outline"
                             disabled={busy !== null || area.view.rotation !== null || !area.opened}
                             onClick={() => void replace(area)}

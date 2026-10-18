@@ -42,7 +42,7 @@ import { groupsApi } from '@/lib/groups/api';
 import { familySynced } from '@/lib/families-keys';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
-import { placesOf } from '@/lib/family-billing';
+import { paymentNeedsYou, placesOf } from '@/lib/family-billing';
 import { leaveBlocker } from '@/lib/family-leave';
 import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
@@ -173,7 +173,13 @@ function FamilyPage() {
                     Family folders
                 </Link>
                 {manager && !plan.waiting && (
-                    <Button onClick={() => setInviting(true)}>Invite someone</Button>
+                    <Button
+                        // Outline while you must fix a failed payment: Billing's button is the blue one.
+                        variant={paymentNeedsYou(plan.summary) ? 'outline' : 'default'}
+                        onClick={() => setInviting(true)}
+                    >
+                        Invite someone
+                    </Button>
                 )}
             </PageHeader>
 

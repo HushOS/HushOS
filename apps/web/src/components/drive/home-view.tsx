@@ -379,7 +379,8 @@ export function HomeView() {
                     body="Files you add or change show up here. Drop some anywhere on this page to start."
                     className="sm:pt-16"
                 >
-                    <Button onClick={() => picker.current?.pickFiles()}>
+                    {/* Outline: the header's Add is the page's one blue button. */}
+                    <Button variant="outline" onClick={() => picker.current?.pickFiles()}>
                         <FileUpIcon />
                         Upload files
                     </Button>

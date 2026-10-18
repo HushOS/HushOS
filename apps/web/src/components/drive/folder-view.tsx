@@ -1004,7 +1004,11 @@ export function FolderView({ folderId }: { folderId: string }) {
                             >
                                 {canAdd && (
                                     <>
-                                        <Button onClick={() => picker.current?.pickFiles()}>
+                                        {/* Outline: the header's Add is the page's one blue button. */}
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => picker.current?.pickFiles()}
+                                        >
                                             <FileUpIcon />
                                             Upload files
                                         </Button>

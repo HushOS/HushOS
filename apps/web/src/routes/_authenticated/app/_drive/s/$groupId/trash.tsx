@@ -152,7 +152,7 @@ function FamilyTrash() {
                         <li
                             key={row.node.id}
                             data-node-id={row.node.id}
-                            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 sm:pr-6 sm:pl-8"
+                            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-5 pl-5 sm:pr-8 sm:pl-8"
                         >
                             <FileMark node={row.node} size="list" />
                             <span className="flex min-w-0 flex-1 flex-col">
@@ -171,21 +171,29 @@ function FamilyTrash() {
                             </span>
                             {writable(row) && (
                                 <span className="flex shrink-0 gap-2">
+                                    {/*
+                                     * Icons with their words for screen readers on a phone, as Drive's
+                                     * Trash does, so the name keeps its room; 36px, 44px on touch.
+                                     */}
                                     <Button
-                                        size="sm"
                                         variant="outline"
                                         disabled={busy !== null}
+                                        title="Restore"
+                                        className="max-sm:w-9 max-sm:px-0 max-sm:pointer-coarse:w-11"
                                         onClick={() => void restore(row)}
                                     >
-                                        Restore
+                                        <RotateCcwIcon className="sm:hidden" aria-hidden="true" />
+                                        <span className="max-sm:sr-only">Restore</span>
                                     </Button>
                                     <Button
-                                        size="sm"
                                         variant="destructive-outline"
                                         disabled={busy !== null}
+                                        title="Delete forever"
+                                        className="max-sm:w-9 max-sm:px-0 max-sm:pointer-coarse:w-11"
                                         onClick={() => setDeleting(row)}
                                     >
-                                        Delete forever
+                                        <Trash2Icon className="sm:hidden" aria-hidden="true" />
+                                        <span className="max-sm:sr-only">Delete forever</span>
                                     </Button>
                                 </span>
                             )}

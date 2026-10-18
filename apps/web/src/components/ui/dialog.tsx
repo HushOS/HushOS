@@ -56,10 +56,11 @@ function DialogContent({
                     <DialogPrimitive.Close
                         data-slot="dialog-close"
                         render={
+                            // 36px, 44px on touch, its centre where the 32px button's was.
                             <Button
                                 variant="ghost"
-                                className="absolute top-4 right-4 sm:top-5 sm:right-5"
-                                size="icon-sm"
+                                className="absolute top-3.5 right-3.5 pointer-coarse:top-2.5 pointer-coarse:right-2.5 sm:top-4.5 sm:right-4.5 sm:pointer-coarse:top-3.5 sm:pointer-coarse:right-3.5"
+                                size="icon"
                             />
                         }
                     >

@@ -63,7 +63,6 @@ export function TrustAsFamily({
                 In {found.family}: {found.name} ({found.email})
             </p>
             <Button
-                size="sm"
                 variant="outline"
                 className="self-start"
                 disabled={busy}
