@@ -1,0 +1,23 @@
+DESIGN.md
+  s_c56e31c87cddde::t_ac83a110cf8cc2 396-493
+docs/groups-design.md
+  s_c56e31c87cddde::t_062ccbc4ee5290 570,572-576
+docs/groups-server.md
+  s_c56e31c87cddde::t_0e28bb22387776 5,68,236,267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c15de82de10053c1965195f86e3f0122c3050d34",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
