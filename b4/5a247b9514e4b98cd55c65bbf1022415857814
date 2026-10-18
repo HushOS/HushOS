@@ -1,0 +1,41 @@
+packages/env/src/storage.test.ts
+  s_c56e31c87cddde::t_ea706d3ad1957b 1-43
+.github/workflows/release.yml
+  s_c56e31c87cddde::t_a0cb0f7a8410a2 6-7,11-16,22,28,31-33,36-51,54,61,63,66-123,125-148
+.github/workflows/ci.yml
+  s_c56e31c87cddde::t_e6e390342a560c 48-52,335-337,339
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_2de868dc1f2126 133-134,136,139-140
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_57d6c282674288 5-11,31,264-270
+docs/self-hosting.md
+  s_c56e31c87cddde::t_ef61cabdb03a9a 137,593-605
+package.json
+  s_c56e31c87cddde::t_e45c16b48cd3d1 20
+packages/drive/src/protocol.test.ts
+  s_c56e31c87cddde::t_f570c7b12b78f8 5,52-58,81-103
+packages/drive/src/protocol.ts
+  s_c56e31c87cddde::t_7c68d63259fe1a 133-134,186-194,197-204,207
+packages/env/src/storage.ts
+  s_c56e31c87cddde::t_be8192b0540599 45-48,52-53
+release-please-config.json
+  s_c56e31c87cddde::t_44fd315f7d64db 3-4,12
+scripts/check-versions.ts
+  s_c56e31c87cddde::t_97e190472565d0 4-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b45a247b9514e4b98cd55c65bbf1022415857814",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
