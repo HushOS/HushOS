@@ -218,6 +218,7 @@ export async function createTestFamily(input: {
     await db.insert(groupMemberships).values([
         {
             groupId: id,
+            groupKind: 'family' as const,
             userId: input.organizerId,
             state: 'active',
             roles: ['billing', 'guardian', 'members'],
@@ -225,6 +226,7 @@ export async function createTestFamily(input: {
         },
         ...(input.members ?? []).map((member) => ({
             groupId: id,
+            groupKind: 'family' as const,
             userId: member.userId,
             state: 'active' as const,
             roles: member.roles ?? [],
@@ -279,7 +281,7 @@ export async function setTestMember(input: {
     };
     await db
         .insert(groupMemberships)
-        .values({ groupId: input.groupId, userId: input.userId, ...values })
+        .values({ groupId: input.groupId, groupKind: 'family', userId: input.userId, ...values })
         .onConflictDoUpdate({
             target: [groupMemberships.groupId, groupMemberships.userId],
             set: values,

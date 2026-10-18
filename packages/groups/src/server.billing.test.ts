@@ -267,6 +267,44 @@ describe('admission with billing on', () => {
         expect(polar.updates).toEqual([]);
     });
 
+    test('someone who made a family since accepting is refused before Polar is asked for a place', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 1);
+        const newcomer = await kit.member();
+        const call = await admission(fam, newcomer);
+        // One family per account: theirs, made after they accepted.
+        await kit.family(newcomer);
+        const before = await kit.head(fam.groupId);
+        polar.updates = [];
+        expect(
+            await refusal(groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call)),
+        ).toMatchObject({ code: 'in-family', status: 409, data: { reason: 'newcomer' } });
+        expect(polar.updates).toEqual([]);
+        expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
+        expect(await kit.head(fam.groupId)).toEqual(before);
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.seatLimit).toBe(1);
+    });
+
+    test('an invitee in a family hears that before hearing the family has no plan', async () => {
+        const fam = await kit.family();
+        const invitee = await kit.member();
+        await kit.family(invitee);
+        const token = randomBytes(32).toString('base64url');
+        await groupsRepository.createInvitation({
+            groupId: fam.groupId,
+            email: invitee.email,
+            normalizedEmail: invitee.email,
+            tokenHash: createHash('sha256').update(token).digest(),
+            roles: [],
+            invitedBy: fam.organizer.userId,
+            expiresAt: new Date(Date.now() + DAY),
+        });
+        // No plan here, so without the family rule first this would be `no-plan` (402).
+        expect(
+            await refusal(groups.acceptInvitation(invitee.userId, token, kit.ADDRESS)),
+        ).toMatchObject({ code: 'in-family', status: 409, data: { reason: 'self' } });
+    });
+
     test('a declined charge lets nobody in and changes nothing; the same call lands once Polar says 200', async () => {
         const fam = await kit.family();
         const subscription = await onPlan(fam, 1);

@@ -34,6 +34,9 @@ export type GroupRole = 'billing' | 'data_admin' | 'guardian' | 'members' | 'rec
 export type MembershipState = 'accepted' | 'active' | 'left' | 'removed';
 export type InvitationState = 'open' | 'accepted' | 'revoked' | 'expired';
 
+/* The index that keeps an account in at most one family; a violation of it is `in-family`. */
+export const ONE_FAMILY_INDEX = 'group_memberships_one_family_idx';
+
 export const GROUP_ROLES: readonly GroupRole[] = [
     'billing',
     'data_admin',
@@ -106,6 +109,8 @@ export const groups = pgTable(
             'groups_head_valid',
             sql`${table.rosterVersion} >= 1 and octet_length(${table.rosterDigest}) = 32 and ${table.groupKeyVersion} >= 1 and ${table.chainRevision} >= 1 and (${table.seatLimit} is null or ${table.seatLimit} >= 1)`,
         ),
+        // What a membership's (group_id, group_kind) references, so its kind is always its group's.
+        unique('groups_id_kind').on(table.id, table.kind),
     ],
 );
 
@@ -120,6 +125,14 @@ export const groupMemberships = pgTable(
         groupId: uuid('group_id')
             .notNull()
             .references(() => groups.id, { onDelete: 'cascade' }),
+        /*
+         * The group's kind, copied onto the row (and held to it by the composite
+         * foreign key below) because a partial index can't read another table:
+         * the one-family index needs it here. Every write here names it; the
+         * default is only for containers of the release before it, mid-rollout,
+         * and the foreign key refuses it for a group that isn't a family.
+         */
+        groupKind: text('group_kind').$type<GroupKind>().notNull().default('family'),
         // The entry on the rosters stays when the account goes.
         userId: uuid('user_id')
             .notNull()
@@ -143,6 +156,20 @@ export const groupMemberships = pgTable(
     (table) => [
         primaryKey({ columns: [table.groupId, table.userId] }),
         index('group_memberships_user_idx').on(table.userId),
+        foreignKey({
+            name: 'group_memberships_group_kind_fk',
+            columns: [table.groupId, table.groupKind],
+            foreignColumns: [groups.id, groups.kind],
+        }).onDelete('cascade'),
+        /*
+         * One family per account (docs/families-shared-pool.md 4): at most one
+         * active family membership. Accepted rows wait outside it, and company
+         * (`org`) memberships are never in it, so a person can be in one family
+         * and any number of companies.
+         */
+        uniqueIndex(ONE_FAMILY_INDEX)
+            .on(table.userId)
+            .where(sql`${table.groupKind} = 'family' and ${table.state} = 'active'`),
         index('group_memberships_admitted_by_idx')
             .on(table.admittedBy)
             .where(sql`${table.admittedBy} is not null`),

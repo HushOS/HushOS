@@ -21,7 +21,10 @@ test('without billing a pooled group’s folders read their own allowance, not t
         areas: 2,
         pooled: true,
     });
-    const { areaIds: older } = await createTestFamily({ organizerId: userId });
+    // Someone else's: an account is in one family at most.
+    const { areaIds: older } = await createTestFamily({
+        organizerId: (await createTestAccount()).userId,
+    });
     await billing.applyGroupState({
         groupId,
         provider: 'polar',

@@ -18,6 +18,8 @@ export type GroupErrorCode =
     | 'organizer'
     | 'payer'
     | 'no-plan'
+    /* One family per account: the caller, or the person being let in, is in another family. */
+    | 'in-family'
     | 'last-holder'
     | 'unsupported'
     | 'forbidden'

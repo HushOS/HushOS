@@ -215,11 +215,11 @@ function familyInput(creator: { userId: string }, idSeed = seed()) {
 
 async function family(
     creator: { userId: string },
-    options: { seatLimit?: number; idSeed?: string } = {},
+    options: { seatLimit?: number; idSeed?: string; kind?: 'family' | 'org' } = {},
 ) {
     await ensureIdentity(creator.userId);
     const { groupId, areaId, areaSeed, input } = familyInput(creator, options.idSeed);
-    const created = await groups.createGroup(input);
+    const created = await groups.createGroup({ ...input, kind: options.kind ?? 'family' });
     if (created.status !== 'created') throw new Error(`createGroup ${JSON.stringify(created)}`);
     if (options.seatLimit)
         await db
@@ -1777,9 +1777,10 @@ describe('departures', () => {
             await groups.appendChain(admission(first, first.head, owner.userId, person.user.id)),
         );
         // Their own group, created so its id sorts after the first: departed second, after the first.
+        // A company group: an account is in one family at most, and in any number of companies.
         let idSeed = seed();
         while (scopedId('group', person.user.id, idSeed)! < first.groupId) idSeed = seed();
-        const own = await family({ userId: person.user.id }, { idSeed });
+        const own = await family({ userId: person.user.id }, { idSeed, kind: 'org' });
         const helper = await accepted(own.groupId, person.user.id);
         await okHead(
             await groups.appendChain(admission(own, own.head, person.user.id, helper.userId)),

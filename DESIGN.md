@@ -425,11 +425,12 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Open anyway, beside Download (images past 100 MB: "This file is 150 MB." and "Opening it uses a lot of memory, and this device may not manage to show it."; Office files and CSV past 32 MB: "Opening it uses a lot of memory and may be slow on this device."; past the ceiling, 300 MB for images (less where the browser says the device has little memory) and 64 MB for Office, "This file is 400 MB, too large to preview here." and "Download it to open it in another app.")
     - Families (web):
         - Families
-        - Create a family
+        - Create a family ("You’re in Lindqvist family. Leave it before you create another." in place of the dialog's description for someone already in one, with the field and Create family disabled: an account is in one family at most)
         - Invite someone
         - Cancel invitation (asks once: "Cancel the invitation to sam@example.com?", "The link in their email stops working. You can invite them again.", Keep invitation, Cancel invitation)
         - Waiting to join
-        - Let them in
+        - Let them in ("They’ve joined another family since they accepted. They can join yours once they leave it." when they have, never naming that family)
+        - Joining while in a family (the invitation's page, Accept disabled: "You’re in Lindqvist family. To join Ortega family, leave yours first, from its page. This invitation stays open until 26 October." then Open Lindqvist family)
         - Not now (asks once: "Turn Sam down?", Turn down)
         - They match
         - They don't match

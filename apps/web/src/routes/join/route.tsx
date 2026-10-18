@@ -6,7 +6,7 @@ import { Spinner } from '@/components/motion';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { familyKeys } from '@/lib/families-shell';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
-import { errorCopy } from '@/lib/groups/copy';
+import { errorCopy, familyField, joinInFamilyCopy } from '@/lib/groups/copy';
 import { rememberReturn } from '@/lib/return-to';
 import { forgetSession, sessionQueryOptions } from '@/lib/session';
 import { signOut } from '@/lib/sign-out';
@@ -39,7 +39,9 @@ export const Route = createFileRoute('/join')({
  * opened (route 14) and accepted (route 15), which leads to the join screen.
  * The tab's copy goes once the invitation is accepted, turns out used up, is
  * for another address, or the person switches account. Accepting lets nobody
- * in: the words and the join code come next.
+ * in: the words and the join code come next. Someone already in a family
+ * (one per account) is told to leave theirs first, and can't accept; the
+ * invitation stays open, so they come back to the same link.
  */
 
 const KEPT = 'hushos.invite';
@@ -242,6 +244,10 @@ function OpenInvitation({
     const invitation = opened.data;
     const inviter = invitation.inviter;
     const code = error instanceof GroupApiError ? error.code : null;
+    // Theirs as opening the invitation found it, or as accepting did (they joined one meanwhile).
+    const yours =
+        invitation.inFamily ??
+        (code === 'in-family' && error instanceof GroupApiError ? familyField(error.data) : null);
     return (
         <AuthLayout
             title={
@@ -253,11 +259,24 @@ function OpenInvitation({
             art="JOIN"
             footer={signedInAs}
         >
-            <p className="text-[15px] leading-relaxed">
-                After you accept, you and {inviter ? inviter.name.split(/\s+/)[0] : 'they'} check
-                it’s really each other, on a call or in person. Then you’re let in.
-            </p>
-            {error !== null && code === 'already-member' ? (
+            {!yours && (
+                <p className="text-[15px] leading-relaxed">
+                    After you accept, you and {inviter ? inviter.name.split(/\s+/)[0] : 'they'}{' '}
+                    check it’s really each other, on a call or in person. Then you’re let in.
+                </p>
+            )}
+            {yours ? (
+                <AuthNote tone="info">
+                    {joinInFamilyCopy(yours.name, invitation.name, invitation.expiresAt)}{' '}
+                    <Link
+                        to="/app/families/$groupId"
+                        params={{ groupId: yours.groupId }}
+                        className={authLink}
+                    >
+                        Open {yours.name}
+                    </Link>
+                </AuthNote>
+            ) : error !== null && code === 'already-member' ? (
                 <AuthNote tone="info" title="You’re already in this family">
                     <Link
                         to="/app/families/$groupId"
@@ -277,7 +296,7 @@ function OpenInvitation({
             <AuthActions
                 action={
                     <Button
-                        disabled={accepting || code === 'email-mismatch'}
+                        disabled={accepting || code === 'email-mismatch' || yours !== null}
                         onClick={() => void accept()}
                     >
                         {accepting ? 'Accepting…' : 'Accept'}

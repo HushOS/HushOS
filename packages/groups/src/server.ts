@@ -103,6 +103,28 @@ const forbidden = (message = 'Only someone who manages the group can do that.') 
 const unavailable = () =>
     new GroupError('unavailable', 'Groups are temporarily unavailable. Please try again.', 503);
 
+/*
+ * One family per account (docs/families-shared-pool.md 3.2). The caller's own
+ * family is named to the caller; a newcomer's never is, to the family letting
+ * them in. `data.reason` tells the web which sentence to show.
+ */
+const inYourFamily = (family: { groupId: string; name: string }, invitedTo?: string) =>
+    new GroupError(
+        'in-family',
+        invitedTo
+            ? `You’re in ${family.name}. To join ${invitedTo}, leave yours first.`
+            : `You’re in ${family.name}. Leave it before you create another.`,
+        409,
+        { reason: 'self', family },
+    );
+const newcomerInFamily = () =>
+    new GroupError(
+        'in-family',
+        'They’ve joined another family since they accepted. They can join yours once they leave it.',
+        409,
+        { reason: 'newcomer' },
+    );
+
 const FAMILY_ROLES: readonly GroupRoleWire[] = ['billing', 'guardian', 'members'];
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -787,6 +809,8 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             );
         case 'not-pending':
             throw new GroupError('not-pending', 'This person has not accepted an invitation.', 409);
+        case 'in-family':
+            throw newcomerInFamily();
         case 'epoch-stale':
             throw new GroupError(
                 'epoch-stale',
@@ -1210,6 +1234,10 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
     const creationDigest = createHash('sha256').update(canonicalJson(body)).digest();
     const stored = await storedCreation(userId, body.id, creationDigest);
     if (stored) return { group: groupView(stored), replayed: true };
+    // Before anything is spent or checked: the repository asks again under the creator's lock.
+    // This very family, landed since storedCreation looked, is the repository's replay to answer.
+    const family = await groupsRepository.familyOf(userId);
+    if (family && family.groupId !== body.id) throw inYourFamily(family);
     await limit(`groups:create:user:${userId}`, 5, DAY);
     await limit('groups:create:global', 1000, 60 * 60 * 1000);
     const name = groupName(body.name);
@@ -1336,6 +1364,12 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
             );
         case 'area-limit':
             throw new GroupError('area-limit', 'This group has no room for another folder.', 409);
+        case 'in-family': {
+            // Admitted elsewhere between the check above and the write.
+            const now = await groupsRepository.familyOf(userId);
+            if (now) throw inYourFamily(now);
+            throw unavailable();
+        }
         case 'created':
         case 'replayed': {
             const group = await groupsRepository.getGroupRow(body.id);
@@ -1798,7 +1832,10 @@ export async function openInvitation(userId: string, token: string, address: str
     await limit(`invitations:open:user:${userId}`, 30, 15 * 60 * 1000);
     const found = await groupsRepository.openInvitation(invitationHash(token));
     if (!found) throw new GroupError('gone', 'This invitation is no longer open.', 410);
+    // The caller's own family, so the join page can say to leave it first; never this one.
+    const family = found.group.kind === 'family' ? await groupsRepository.familyOf(userId) : null;
     return {
+        inFamily: family && family.groupId !== found.group.id ? family : null,
         invitationId: found.invitation.id,
         groupId: found.group.id,
         kind: found.group.kind,
@@ -1816,8 +1853,14 @@ export async function openInvitation(userId: string, token: string, address: str
 export async function acceptInvitation(userId: string, token: string, address: string) {
     await limit(`invitations:accept:address:${address}`, 30, 15 * 60 * 1000);
     await limit(`invitations:accept:user:${userId}`, 10, 15 * 60 * 1000);
-    // A family whose plan lapsed takes nobody new: accepting would only wait for a place.
     const opened = await groupsRepository.openInvitation(invitationHash(token));
+    // One family per account, before the plan: leaving theirs is the first thing they must do.
+    if (opened?.group.kind === 'family') {
+        const family = await groupsRepository.familyOf(userId);
+        if (family && family.groupId !== opened.group.id)
+            throw inYourFamily(family, opened.group.name);
+    }
+    // A family whose plan lapsed takes nobody new: accepting would only wait for a place.
     if (opened && !(await familyHasPlan(opened.group.id)))
         throw new GroupError(
             'no-plan',
@@ -1842,6 +1885,8 @@ export async function acceptInvitation(userId: string, token: string, address: s
             );
         case 'already-member':
             throw new GroupError('already-member', 'You are already in this group.', 409);
+        case 'in-family':
+            throw inYourFamily(result.family, opened?.group.name ?? 'this family');
         case 'unavailable':
             throw unavailable();
     }
@@ -1910,6 +1955,13 @@ export async function admit(
     targetId: string,
     call: RosterCall & { keySeal?: SealWire },
 ) {
+    /*
+     * One family per account, before the chain is checked and before a place is paid for;
+     * asked only once the caller is known to manage this family, so nobody else learns
+     * whether someone is in a family. The repository asks again under the lock.
+     */
+    await membershipOf(groupId, userId, 'members');
+    if (await groupsRepository.waitingButInFamily(groupId, targetId)) throw newcomerInFamily();
     return writeChain(
         groupId,
         userId,
