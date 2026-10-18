@@ -1,0 +1,21 @@
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/f.$folderId.tsx
+  s_c56e31c87cddde::t_5df3044c0c2acb 32-37,44-52
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_641a8847f834dd 537-554,571-578
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d7e6458c62318fb44414fa8fe6d97d7c832b130b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
