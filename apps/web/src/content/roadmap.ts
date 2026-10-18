@@ -209,6 +209,16 @@ export const sections: RoadmapSection[] = [
                 body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version.',
                 links: [{ kind: 'docs', path: 'docs/editing-design.md', label: 'Read the design' }],
             },
+            {
+                id: 'file-tools',
+                status: 'next',
+                area: 'Drive',
+                title: 'File tools',
+                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device.',
+                links: [
+                    { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
+                ],
+            },
         ],
     },
     {
@@ -223,6 +233,13 @@ export const sections: RoadmapSection[] = [
                 title: 'Notes and documents',
                 body: 'Write notes and documents in HushOS itself, kept under the same keys as your files. This is new writing, apart from editing the files you already have.',
                 links: [{ kind: 'blog', slug: 'hushos-1-0', label: 'Where it fits' }],
+            },
+            {
+                id: 'editing-together',
+                status: 'later',
+                area: 'Drive',
+                title: 'Editing together',
+                body: 'Edit the same document with other people at the same time, with every change end-to-end encrypted between your devices.',
             },
             {
                 id: 'messages',
