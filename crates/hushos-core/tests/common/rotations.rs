@@ -105,6 +105,7 @@ fn member_ledger(account: usize) -> Arc<AreaLedger> {
         .open_account(
             person.user_id.clone(),
             base64url_decode(person.served.signing_public_key.clone()).unwrap(),
+            vec![9u8; 32],
         )
         .unwrap();
     ledger.commit(Arc::clone(&family().chain)).unwrap();

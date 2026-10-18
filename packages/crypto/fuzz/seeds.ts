@@ -287,6 +287,51 @@ export function documents(target: Target): Uint8Array[] {
                     ],
                 }),
                 json({ kind: 'groupFingerprint', groupId: GROUP, key: g.groupKeys[0] }),
+                // Each twin's chain records as the device record cases hold them, and no record.
+                ...[coreLedger(), webLedger()].flatMap((f: Json) =>
+                    f.deviceRecords.cases
+                        .filter((k: Json) => k.recordValue !== null)
+                        .map((k: Json) =>
+                            json({
+                                kind: 'device_record',
+                                record: k.recordValue,
+                                settings: k.settingsPin !== null,
+                                start: k.start,
+                            }),
+                        ),
+                ),
+                json({ kind: 'device_record', settings: true, start: 0 }),
+                // A chain committed first (the floor), and a server serving short of it or of the record.
+                ...coreLedger()
+                    .deviceRecords.cases.filter(
+                        (k: Json) => k.recordValue !== null && k.recordVersion === 2,
+                    )
+                    .slice(0, 2)
+                    .flatMap((k: Json) => [
+                        json({
+                            kind: 'device_record',
+                            record: k.recordValue,
+                            settings: false,
+                            start: 2,
+                            through: 2,
+                            held: 3,
+                        }),
+                        json({
+                            kind: 'device_record',
+                            record: k.recordValue,
+                            settings: false,
+                            start: 0,
+                            through: 3,
+                            held: 2,
+                        }),
+                        json({
+                            kind: 'device_record',
+                            record: k.recordValue,
+                            settings: true,
+                            start: 0,
+                            through: 1,
+                        }),
+                    ]),
             ];
         }
         case 'accept':

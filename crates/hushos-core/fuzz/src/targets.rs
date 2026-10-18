@@ -573,8 +573,88 @@ pub fn pins(value: &Value) -> Option<Value> {
             let key = shape::group_key(value.get("key")?)?;
             either(group_fingerprint(text(value, "groupId")?, key), |print| json!(print))
         }
+        "device_record" => return device_record(value),
         _ => return None,
     })
+}
+
+/*
+ * A chain record holding `record` (any JSON; none when absent), sealed for
+ * person 1 of the device record fixtures and accepted in the core's order
+ * (accept_served, following FetchFromVersionOne) against the fixture family's
+ * served chain, from `start` (0 to 3), with the settings pin at roster 1 when
+ * `settings`: the full outcome, which the web's order must match. Invariant:
+ * an accepted chain's pin is at its roster version and is a pin.
+ */
+fn device_record(value: &Value) -> Option<Value> {
+    use crate::device_records;
+    let start = number(value, "start")?;
+    let settings = value.get("settings")?.as_bool()?;
+    // How far the server serves (1 to 3, all of it when absent) and the chain committed first (0 for none).
+    let through = shape::optional_number(value, "through")?.unwrap_or(3);
+    let held = shape::optional_number(value, "held")?.unwrap_or(0);
+    if start > through || !(1..=3).contains(&through) || held > 3 {
+        return None;
+    }
+    let cases = fixtures::core_ledger()["deviceRecords"]["cases"].as_array()?;
+    let named = |name: &str| cases.iter().find(|c| c["name"] == name);
+    let whole = named("continuation-refused-then-from-version-1")?["served"]
+        .as_array()?
+        .iter()
+        .find(|s| s["after"] == 0)?
+        .clone();
+    let up_to = |n: u64| -> Option<Value> {
+        let rosters: Vec<Value> = whole["rosters"].as_array()?.iter().take(n as usize).cloned().collect();
+        Some(json!({ "after": 0, "rosters": rosters, "successions": [] }))
+    };
+    let full = up_to(through)?;
+    let settings_at_1 = named("record-after-a-master-key-rotation")?["settingsPin"].clone();
+    let f = device_records::family();
+    let record = value.get("record").map(|record| {
+        chain_record_seal_value(&device_records::root(), &f.p1.user_id, crate::groups::GROUP, record).unwrap()
+    });
+    let mut served = vec![full.clone()];
+    if start > 0 {
+        let rosters: Vec<Value> = full["rosters"].as_array()?.iter().skip(start as usize).cloned().collect();
+        served.insert(0, json!({ "after": start, "rosters": rosters, "successions": [] }));
+    }
+    let case = json!({
+        "name": "fuzz",
+        "record": record,
+        "settingsPin": if settings { settings_at_1.clone() } else { Value::Null },
+        "held": if held > 0 { up_to(held)? } else { Value::Null },
+        "heldSettingsPin": settings_at_1,
+        "start": start,
+        "served": served,
+        "firstKeys": cases[0]["firstKeys"],
+        "signerKeys": cases[0]["signerKeys"],
+    });
+    let (outcome, _) = device_records::run(&case);
+    if outcome["status"] == "accepted" {
+        assert_eq!(
+            outcome["pin"]["rosterVersion"], outcome["rosterVersion"],
+            "the pin is at the chain's roster"
+        );
+        let pin = crate::groups::pin_from(&outcome["pin"]);
+        assert!(group_pin_check(crate::groups::GROUP.into(), pin).is_ok(), "an accepted pin is a pin");
+        // The record's own pin, whenever it is a pin, is a mark the accepted chain reaches and passes through.
+        let marked = value
+            .get("record")
+            .and_then(|record| record.get("pin"))
+            .and_then(shape::group_pin)
+            .and_then(|pin| group_pin_check(crate::groups::GROUP.into(), pin).ok());
+        let version = outcome["rosterVersion"].as_u64().unwrap();
+        // The chain committed first is a floor: never accepted below it.
+        assert!(version >= held, "accepted below the chain this session committed");
+        if let Some(pin) = marked {
+            assert!(version >= pin.roster_version, "accepted below the record's pin");
+            let statement =
+                whole["rosters"][(pin.roster_version - 1) as usize]["statement"].as_str().unwrap();
+            let digest = roster_digest(base64url_decode(statement.into()).unwrap());
+            assert_eq!(digest, pin.roster_digest, "accepted through another roster than the record's pin");
+        }
+    }
+    Some(ok(outcome))
 }
 
 /*

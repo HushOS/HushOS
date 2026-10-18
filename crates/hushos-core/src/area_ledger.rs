@@ -51,7 +51,7 @@ use crate::bytes::{random, SecretBytes};
 use crate::canonical::uuid;
 use crate::drive::{node_open_checked, node_wrap_checked, previous_root_key_open, NodeKeyContext};
 use crate::error::{input, CoreError, CoreResult};
-use crate::group_trust::AcceptedRosters;
+use crate::group_trust::{AcceptedRosters, GroupPin};
 use crate::group_trust::{GroupReading, GroupVerdict, SuccessionCache};
 use crate::group_verdicts::{
     copy_prior, GroupWriter, Judge, RecordReader, RecordStatement, RecordVerdict, ServedRecord,
@@ -112,6 +112,20 @@ pub const OLDER_CHAIN: &str = "This device already holds a later member list for
 /// (core step 3, `accept_served`) answers the fork before this.
 pub const SPLIT_CHAIN: &str = "This family’s member list was shown differently to this device.";
 
+/// Settings served as none after settings that opened, within one unlock.
+const OLDER_SETTINGS: &str =
+    "The server sent older settings than this device has opened, so nothing was changed.";
+/// An acceptance before the app opened the account's settings.
+pub(crate) const OPEN_SETTINGS: &str = "Open your settings first.";
+
+/* What an acceptance needs of the unlocked account. */
+pub(crate) struct ServedAccount {
+    pub(crate) user_id: String,
+    pub(crate) signing_public_key: Vec<u8>,
+    pub(crate) store_key: Zeroizing<[u8; 32]>,
+    pub(crate) generation: u64,
+}
+
 /// Why a family folder may not be written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -149,6 +163,8 @@ pub struct AreaOpened {
     pub version: u64,
     pub writable: bool,
     pub reason: Option<AreaBlock>,
+    /// The area as a pin may record it ([`crate::merge_pin`]): the only way an area enters one.
+    pub pin_area: Arc<crate::device_record::OpenedArea>,
 }
 
 /// A node key envelope as a listing serves it, with its previous one while a rotation runs.
@@ -277,6 +293,25 @@ struct State {
     forked: std::collections::HashSet<String>,
     /* The unlocked account: its user id and current signing public key (open_account). */
     account: Option<(String, Vec<u8>)>,
+    /* The device store key, derived from the account root at open_account; wiped when dropped. */
+    store_key: Option<Zeroizing<[u8; 32]>>,
+    /* Bumped by open_account and clear: an acceptance commits only under the account it began with. */
+    generation: u64,
+    /* The settings document's group pins as last opened (use_settings), and whether it opened. */
+    settings: Option<Settings>,
+    /*
+     * Per family, the highest chain committed in this session: accept_served's
+     * floor and mark. A refusal's uncommit never drops it; only forget_group and
+     * clear do, so a run that lost to a later commit can never take an older chain.
+     */
+    floors: HashMap<String, Arc<AcceptedRosters>>,
+}
+
+/* The settings the app last opened for the account: their group pins, or none when no document opened. */
+struct Settings {
+    user_id: String,
+    pins: HashMap<String, GroupPin>,
+    opened: bool,
 }
 
 fn slot(workspace_id: &str, node_id: &str) -> Slot {
@@ -483,6 +518,18 @@ impl State {
     }
 
     fn commit(&mut self, chain: Arc<AcceptedRosters>) -> CoreResult<()> {
+        // The family's floor first: the highest chain committed this session, which a refusal's
+        // uncommit leaves in place, so no chain below it (or beside it) is ever committed again.
+        if let Some(floor) = self.floors.get(&chain.group_id) {
+            if floor.roster.roster_version > chain.roster.roster_version {
+                return Err(refused(OLDER_CHAIN));
+            }
+            if floor.roster.roster_version == chain.roster.roster_version
+                && floor.roster_digest != chain.roster_digest
+            {
+                return Err(refused(SPLIT_CHAIN));
+            }
+        }
         if let Some(held) = self.chains.get(&chain.group_id) {
             if held.roster.roster_version > chain.roster.roster_version {
                 return Err(refused(OLDER_CHAIN));
@@ -508,6 +555,13 @@ impl State {
             }
         }
         self.forked.remove(&group_id);
+        let higher = self
+            .floors
+            .get(&group_id)
+            .is_none_or(|floor| floor.roster.roster_version < chain.roster.roster_version);
+        if higher {
+            self.floors.insert(group_id.clone(), Arc::clone(&chain));
+        }
         self.chains.insert(group_id, chain);
         Ok(())
     }
@@ -535,6 +589,7 @@ impl State {
         self.opened.remove(group_id);
         self.chains.remove(group_id);
         self.forked.remove(group_id);
+        self.floors.remove(group_id);
     }
 
     /* The reader the app passes, held to the unlocked account: its id and its current signing key. */
@@ -1148,19 +1203,6 @@ impl AreaLedger {
         Arc::new(AreaLedger::default())
     }
 
-    /// A family's chain, accepted from what the server served (never a staged
-    /// one): its areas are written under the versions it lists, and only its
-    /// own areas (an area is resolved only through the family it was opened
-    /// under; another family listing it is only reported). A new write
-    /// version needs its root seen again; a retired area is written no more.
-    /// Refused ([`OLDER_CHAIN`]) for a chain older than the one held, and
-    /// ([`SPLIT_CHAIN`]) for another chain at the version held: an app then
-    /// writes nothing of that acceptance (record, pin), and shows the second
-    /// as the fork.
-    pub fn commit(&self, chain: Arc<AcceptedRosters>) -> CoreResult<()> {
-        self.lock().commit(chain)
-    }
-
     /// A refusal (`fork` false) or a fork (`fork` true) for the family: none of its areas is written
     /// until a chain is committed again. After a fork, its records read by personal keys alone
     /// ([`AreaLedger::record_verdict`]); a commit or forgetting the family clears it.
@@ -1169,14 +1211,67 @@ impl AreaLedger {
     }
 
     /// The unlocked account: its user id and current signing public key, as its open identity
-    /// proves them. Every verdict's reader and every walk's signing seed must be this account's;
-    /// a lock ([`AreaLedger::clear`]) forgets it.
-    pub fn open_account(&self, user_id: String, signing_public_key: Vec<u8>) -> CoreResult<()> {
+    /// proves them, and its root (`account_key`, 32 bytes), from which the device store's key is
+    /// derived and held (`hushos/group/device-store/v1`). Every verdict's reader, every walk's
+    /// signing seed and every device record must be this account's; a lock
+    /// ([`AreaLedger::clear`]) forgets it and wipes the key. Opening another account (or the same
+    /// one again, after a master-key rotation) keeps no acceptance begun under the last one.
+    pub fn open_account(
+        &self,
+        user_id: String,
+        signing_public_key: Vec<u8>,
+        account_key: Vec<u8>,
+    ) -> CoreResult<()> {
+        let account_key = Zeroizing::new(account_key);
         uuid(&user_id, "user id")?;
         if signing_public_key.len() != 32 {
             return Err(input("Invalid signing key."));
         }
-        self.lock().account = Some((user_id.to_lowercase(), signing_public_key));
+        let store_key = crate::device_record::store_key(&account_key)?;
+        let mut state = self.lock();
+        // Another account than the one open: nothing of the last one stays (keys, chains, floors,
+        // settings), as the web's unlock of another user forgets the Drive keys and the families.
+        let another = state.account.as_ref().is_some_and(|(held, _)| !held.eq_ignore_ascii_case(&user_id));
+        if another {
+            let generation = state.generation + 1;
+            *state = State::default();
+            state.generation = generation;
+        }
+        state.account = Some((user_id.to_lowercase(), signing_public_key));
+        state.store_key = Some(store_key);
+        Ok(())
+    }
+
+    /// Settings served as a version 1 document, which opens nowhere and is not
+    /// "no settings" either (the worker's `legacySettings`): after settings that
+    /// opened in this unlock it is a rollback, refused; otherwise nothing is set,
+    /// so acceptance stays refused until settings that open are used.
+    pub fn legacy_settings(&self, user_id: String) -> CoreResult<()> {
+        uuid(&user_id, "user id")?;
+        let state = self.lock();
+        let held = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(&user_id));
+        if held.is_some_and(|held| held.opened) {
+            return Err(refused(OLDER_SETTINGS));
+        }
+        Ok(())
+    }
+
+    /// The group pins of the settings document the app just opened for `user_id`, or `None` when
+    /// the server served none; a version 1 document is [`AreaLedger::legacy_settings`]. Within one unlock,
+    /// settings that opened never give way to none: refused, and the pins held stay (decision D7;
+    /// the worker's `useSettings`). [`AreaLedger::accept_served`] takes its settings pin from here.
+    pub fn use_settings(&self, user_id: String, pins: Option<HashMap<String, GroupPin>>) -> CoreResult<()> {
+        uuid(&user_id, "user id")?;
+        let mut state = self.lock();
+        let held = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(&user_id));
+        if pins.is_none() && held.is_some_and(|held| held.opened) {
+            return Err(refused(OLDER_SETTINGS));
+        }
+        state.settings = Some(Settings {
+            user_id: user_id.to_lowercase(),
+            opened: pins.is_some(),
+            pins: pins.unwrap_or_default(),
+        });
         Ok(())
     }
 
@@ -1188,7 +1283,10 @@ impl AreaLedger {
 
     /// Every key, wiped: a lock or a sign-out.
     pub fn clear(&self) {
-        *self.lock() = State::default();
+        let mut state = self.lock();
+        let generation = state.generation + 1;
+        *state = State::default();
+        state.generation = generation;
     }
 
     /// A family folder's key at `version`, as a grant (`area_grant_open`) or
@@ -1236,7 +1334,12 @@ impl AreaLedger {
             served_version,
             latest,
         );
-        Ok(AreaOpened { version, writable: reason.is_none(), reason })
+        Ok(AreaOpened {
+            version,
+            writable: reason.is_none(),
+            reason,
+            pin_area: crate::device_record::OpenedArea::new(group_id_of_area.clone(), workspace_id, version),
+        })
     }
 
     /// The account's own workspace, its key at `version` opened from its grant
@@ -1397,7 +1500,7 @@ impl AreaLedger {
     /// use hushos_core::*;
     /// let ledger = AreaLedger::new();
     /// let seed = random_bytes(32)?;
-    /// ledger.open_account("00000001-abcd-4abc-8abc-abcdefabcdef".into(), signing_public_key(seed.clone())?)?;
+    /// ledger.open_account("00000001-abcd-4abc-8abc-abcdefabcdef".into(), signing_public_key(seed.clone())?, vec![9u8; 32])?;
     /// let personal = "f0f0f0f0-0000-4000-8000-00000000000f";
     /// ledger.open_personal_workspace(personal.into(), 1, random_bytes(32)?)?;
     /// let node = RotatingNode {
@@ -1492,7 +1595,7 @@ impl AreaLedger {
     /// };
     /// let ledger = AreaLedger::new();
     /// let account = "00000001-abcd-4abc-8abc-abcdefabcdef";
-    /// ledger.open_account(account.into(), me.current.clone())?;
+    /// ledger.open_account(account.into(), me.current.clone(), vec![9u8; 32])?;
     /// let reader = RecordReader { user_id: account.into(), keys: me };
     /// // A folder no family opened here: no family speaks for it.
     /// let refused = ledger
@@ -1569,7 +1672,7 @@ impl AreaLedger {
     /// };
     /// let ledger = AreaLedger::new();
     /// let account = "00000001-abcd-4abc-8abc-abcdefabcdef";
-    /// ledger.open_account(account.into(), me.current.clone())?;
+    /// ledger.open_account(account.into(), me.current.clone(), vec![9u8; 32])?;
     /// let reader = RecordReader { user_id: account.into(), keys: me };
     /// // No family chain committed here: nothing is copied out on its word.
     /// let refused = ledger
@@ -1687,6 +1790,97 @@ impl AreaLedger {
                 fresh_key: Some(SecretBytes::new(fresh.to_vec())),
             },
         })
+    }
+
+    /// A family's chain, accepted from what the server served (never a staged
+    /// one): its areas are written under the versions it lists, and only its
+    /// own areas (an area is resolved only through the family it was opened
+    /// under; another family listing it is only reported). A new write
+    /// version needs its root seen again; a retired area is written no more.
+    /// Refused ([`OLDER_CHAIN`]) for a chain older than the family's floor (the
+    /// highest committed this session, kept across refusals) or the one held,
+    /// and ([`SPLIT_CHAIN`]) for another chain at that version. Not exported:
+    /// apps commit only through [`AreaLedger::accept_served`] (Core 4's join
+    /// and creation will go through it too); the shared scenarios and tests
+    /// call it directly.
+    pub fn commit(&self, chain: Arc<AcceptedRosters>) -> CoreResult<()> {
+        self.lock().commit(chain)
+    }
+
+    /* The chain committed for the family, if any (accept_served's mark and floor). */
+    #[cfg(test)]
+    pub(crate) fn held_chain(&self, group_id: &str) -> Option<Arc<AcceptedRosters>> {
+        self.lock().chains.get(group_id).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_forked(&self, group_id: &str) -> bool {
+        self.lock().forked.contains(group_id)
+    }
+
+    /* The unlocked account as an acceptance runs for it: user id, signing key, store key and generation. */
+    pub(crate) fn served_account(&self) -> Option<ServedAccount> {
+        let state = self.lock();
+        let (user_id, signing_public_key) = state.account.clone()?;
+        let store_key = state.store_key.clone()?;
+        Some(ServedAccount { user_id, signing_public_key, store_key, generation: state.generation })
+    }
+
+    /* The settings pin for the family, from the settings the account last opened; refused before any. */
+    pub(crate) fn settings_pin(&self, user_id: &str, group_id: &str) -> CoreResult<Option<GroupPin>> {
+        let state = self.lock();
+        let settings = state
+            .settings
+            .as_ref()
+            .filter(|held| held.user_id.eq_ignore_ascii_case(user_id))
+            .ok_or_else(|| refused(OPEN_SETTINGS))?;
+        Ok(settings.pins.get(group_id).cloned())
+    }
+
+    /* The highest chain committed for the family in this session (accept_served's floor and mark). */
+    pub(crate) fn floor(&self, group_id: &str) -> Option<Arc<AcceptedRosters>> {
+        self.lock().floors.get(group_id).cloned()
+    }
+
+    /*
+     * An acceptance's commit, under the lock: still the account it began with
+     * (`NOT_THIS_ACCOUNT` after a lock, a sign-out or another account), never
+     * below or beside the family's floor (`OLDER_CHAIN`, `SPLIT_CHAIN`: a run
+     * another overtook, even one a refusal uncommitted since), then commit.
+     */
+    pub(crate) fn commit_served(
+        &self,
+        chain: Arc<AcceptedRosters>,
+        generation: u64,
+    ) -> CoreResult<Zeroizing<[u8; 32]>> {
+        let mut state = self.lock();
+        let store_key = state.store_key.clone().filter(|_| state.generation == generation);
+        let Some(store_key) = store_key else {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        };
+        state.commit(chain)?;
+        // The record is sealed under the key held now (a master-key rotation meanwhile included).
+        Ok(store_key)
+    }
+
+    /*
+     * A refusal (`fork` none: a fork stays a fork) or a fork (`Some(true)`) of an
+     * acceptance, under the account and session it began in; otherwise
+     * `NOT_THIS_ACCOUNT`, and nothing of the family is touched.
+     */
+    pub(crate) fn uncommit_served(
+        &self,
+        group_id: &str,
+        generation: u64,
+        fork: Option<bool>,
+    ) -> CoreResult<()> {
+        let mut state = self.lock();
+        if state.generation != generation || state.account.is_none() {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        let fork = fork.unwrap_or_else(|| state.forked.contains(group_id));
+        state.uncommit(group_id, fork);
+        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -2077,9 +2271,11 @@ mod tests {
         assert_eq!(ledger.key_at_epoch(AREA.into(), node(2), 1).unwrap(), folder.key);
         // A refusal for the group stops writes until a chain is committed again.
         let refused = writable_at(1);
+        let held = refused.held_chain(GROUP).unwrap();
         refused.uncommit(GROUP.into(), false);
         assert_eq!(message(refused.require_writable(AREA.into())), NOT_CHECKED_KEYS);
-        refused.commit(chain(vec![vec![Row::Key(1)]])).unwrap();
+        // The same chain again (another one at its version would be below or beside the floor).
+        refused.commit(held).unwrap();
         assert!(refused.require_writable(AREA.into()).is_ok());
         refused.forget_group(GROUP.into());
         assert!(!refused.is_area(AREA.into()));
@@ -2441,7 +2637,7 @@ mod tests {
         /* Person `n`'s ledger: the account opened, the area writable at version 2, its top level opened. */
         fn ledger(&self, n: usize) -> Arc<AreaLedger> {
             let ledger = AreaLedger::new();
-            ledger.open_account(self.id(n), self.keys(n).current).unwrap();
+            ledger.open_account(self.id(n), self.keys(n).current, vec![9u8; 32]).unwrap();
             ledger.commit(Arc::clone(&self.chain)).unwrap();
             open(&ledger, 2, 2);
             ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();

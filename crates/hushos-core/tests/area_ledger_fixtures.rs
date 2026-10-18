@@ -6,12 +6,15 @@
 //! envelope the web's ledger made opens here to the key it says. The other
 //! direction is `packages/crypto/src/area-ledger-fixtures.test.ts`. The
 //! nodes the web walked (`rotations`) read here as both twins declare, and
-//! walk here to the same records. Regenerate both with `bun run fixtures:groups`.
+//! walk here to the same records. The web's chain records (`deviceRecords`)
+//! open here and reach here what they reached on the web, the app's own
+//! records open as sealed and nowhere else, and the merge cases give here what
+//! they gave there. Regenerate both with `bun run fixtures:groups`.
 
 mod common;
 
 use common::area_ledger::*;
-use common::rotations;
+use common::{device_records, rotations};
 use hushos_core::RotatingNode;
 use serde_json::{json, Value};
 
@@ -123,4 +126,66 @@ fn every_node_the_web_walked_reads_here_as_both_twins_declared_and_walks_here_al
     }
     assert!(rekeyed >= 10, "only {rekeyed} re-keyed records were read");
     assert_eq!((refused, stale), (2, 1));
+}
+
+fn web_device_records() -> Value {
+    let web: Value = serde_json::from_str(include_str!("../fixtures/web-area-ledger.json"))
+        .expect("fixtures/web-area-ledger.json is JSON");
+    web["deviceRecords"].clone()
+}
+
+#[test]
+fn every_chain_record_the_web_sealed_reaches_here_what_it_reached_there() {
+    let theirs = web_device_records()["cases"].as_array().expect("the web's device record cases").clone();
+    let ours = device_records::device_cases();
+    assert_eq!(theirs.len(), ours.len(), "the web ran every case");
+    let mut read_cache = 0;
+    for (case, mine) in theirs.iter().zip(&ours) {
+        assert_eq!(case["name"], mine["name"]);
+        let (outcome, _) = device_records::run(case);
+        // The case as this core declares it, and exactly what the web reached on the same bytes.
+        assert!(device_records::says(&outcome, &mine["expected"]), "{}: {outcome}", case["name"]);
+        assert_eq!(outcome, case["outcome"], "{}: as on the web", case["name"]);
+        // A continuation of only the rosters after the web's record, never fetched from 1: its cache was read here.
+        if case["start"].as_u64() > Some(0)
+            && outcome["status"] == "accepted"
+            && outcome["fromVersionOne"] == false
+        {
+            read_cache += 1;
+        }
+    }
+    assert_eq!(read_cache, 2, "the web's cache was continued here, cold and warm");
+}
+
+#[test]
+fn the_web_s_own_records_open_here_as_sealed_and_nowhere_else() {
+    let stores = web_device_records()["stores"].clone();
+    let envelope = stores["envelope"].as_str().unwrap();
+    let rows = stores["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    for row in rows {
+        assert_eq!(device_records::open_row(envelope, row), row["value"], "{}", row["name"]);
+    }
+}
+
+#[test]
+fn every_merge_case_gives_here_what_it_states_and_what_the_web_gave() {
+    let theirs = web_device_records()["mergePins"].as_array().unwrap().clone();
+    let cases = device_records::merge_cases();
+    assert_eq!(theirs.len(), cases.len());
+    for (case, web) in cases.iter().zip(&theirs) {
+        assert_eq!(case["name"], web["name"]);
+        let ours = device_records::merge_result(case);
+        assert_eq!(ours, case["expected"], "{}", case["name"]);
+        assert_eq!(ours, web["result"], "{}: as on the web", case["name"]);
+    }
+}
+
+#[test]
+fn the_overtaken_words_are_the_web_s() {
+    let theirs = web_device_records()["raceMessages"].clone();
+    assert_eq!(
+        theirs,
+        json!([hushos_core::served_race_message(false), hushos_core::served_race_message(true)])
+    );
 }

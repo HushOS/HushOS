@@ -1,4 +1,5 @@
 import type { CryptoResults, GroupPin } from '@hushos/crypto';
+import { mergePin, pinAhead, type OpenedArea } from '@hushos/crypto/pins';
 import type { GroupContext } from './context';
 
 /*
@@ -29,64 +30,15 @@ import type { GroupContext } from './context';
  * it again over another history stays refused.
  */
 
-export type OpenedArea = CryptoResults['groupOpenArea']['pinArea'];
 type Accepted = Extract<CryptoResults['groupAccept'], { status: 'accepted' }>;
 type Fork = Extract<CryptoResults['groupAccept'], { status: 'fork' }>;
 export type Reaccepted = Pick<Accepted, 'pin'> | Fork;
 
 /*
- * `next`, with the opened areas folded in, as it may be saved over `current`:
- * - null when `current` is ahead of it (a later roster or group key), so it
- *   must not be written;
- * - 'conflict' when the two name other first keys, or other rosters or group
- *   keys at one version: never saved over, and acceptance (run again with the
- *   settings pin as a mark) says what it is.
+ * mergePin and pinAhead live in @hushos/crypto/pins (pure, with a Rust twin,
+ * `merge_pin` and `pin_ahead`): an opened area is groupOpenArea's `pinArea`.
  */
-export function mergePin(
-    current: GroupPin | null,
-    next: GroupPin,
-    opened: readonly OpenedArea[] = [],
-): GroupPin | null | 'conflict' {
-    if (current) {
-        if (
-            current.firstEd25519PublicKey !== next.firstEd25519PublicKey ||
-            current.firstMlDsaPublicKeyDigest !== next.firstMlDsaPublicKeyDigest
-        )
-            return 'conflict';
-        if (
-            (current.rosterVersion === next.rosterVersion &&
-                current.rosterDigest !== next.rosterDigest) ||
-            (current.keyVersion === next.keyVersion &&
-                current.groupKeyDigest !== next.groupKeyDigest)
-        )
-            return 'conflict';
-        if (current.rosterVersion > next.rosterVersion || current.keyVersion > next.keyVersion)
-            return null;
-    }
-    const areas: Record<string, number> = { ...current?.areas };
-    for (const [workspaceId, version] of Object.entries(next.areas))
-        areas[workspaceId] = Math.max(areas[workspaceId] ?? 0, version);
-    for (const { workspaceId, version } of opened)
-        areas[workspaceId] = Math.max(areas[workspaceId] ?? 0, version);
-    return {
-        ...next,
-        // The earliest words check stands, whichever side made it.
-        checkedAt:
-            current && current.checkedAt < next.checkedAt ? current.checkedAt : next.checkedAt,
-        areas,
-    };
-}
-
-/* Whether saving `next` over `current` records anything new. */
-export function pinAhead(current: GroupPin | null, next: GroupPin) {
-    if (!current) return true;
-    if (next.rosterVersion > current.rosterVersion || next.keyVersion > current.keyVersion)
-        return true;
-    if (next.checkedAt < current.checkedAt) return true;
-    return Object.entries(next.areas).some(
-        ([workspaceId, version]) => version > (current.areas[workspaceId] ?? 0),
-    );
-}
+export type { OpenedArea };
 
 const ATTEMPTS = 4;
 
@@ -119,7 +71,7 @@ export async function settlePin(
         const current = settings.groups?.[groupId] ?? null;
         // An acceptance that wrote no pin has none to save.
         if (!pin) return { status: 'settled', pin: current };
-        const merged = mergePin(current, pin, options.opened);
+        const merged = mergePin(groupId, current, pin, options.opened);
         if (merged === null || merged === 'conflict') {
             // Another device holds a higher or another mark: accept again against it.
             const fork = await again();

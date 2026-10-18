@@ -40,6 +40,11 @@ export type JoinRow = { userId: string; groupId: string; envelope: string };
 
 export interface GroupStore {
     chain(userId: string, groupId: string): Promise<ChainRow | null>;
+    /*
+     * Writes the record unless one at a later roster version is stored: records
+     * reach disk in commit order, so an acceptance that finished late never
+     * puts an older record back (a rollback the next sync would accept from).
+     */
     putChain(row: ChainRow): Promise<void>;
     deleteChain(userId: string, groupId: string): Promise<void>;
     /* The outbox of one group, or of every group this account has entries for. */
@@ -89,7 +94,12 @@ export function createIndexedDbGroupStore(name = GROUPS_DATABASE): GroupStore {
             return rest;
         },
         async putChain(row) {
-            await (await open()).put('chains', { ...row, key: keyOf(row.userId, row.groupId) });
+            const tx = (await open()).transaction('chains', 'readwrite');
+            const key = keyOf(row.userId, row.groupId);
+            const stored = await tx.store.get(key);
+            if (!stored || stored.rosterVersion <= row.rosterVersion)
+                await tx.store.put({ ...row, key });
+            await tx.done;
         },
         async deleteChain(userId, groupId) {
             await (await open()).delete('chains', keyOf(userId, groupId));
@@ -144,7 +154,11 @@ export function createMemoryGroupStore(): GroupStore {
     const copy = <T>(value: T) => structuredClone(value);
     return {
         chain: async (userId, groupId) => copy(chains.get(keyOf(userId, groupId)) ?? null),
-        putChain: async (row) => void chains.set(keyOf(row.userId, row.groupId), copy(row)),
+        putChain: async (row) => {
+            const stored = chains.get(keyOf(row.userId, row.groupId));
+            if (!stored || stored.rosterVersion <= row.rosterVersion)
+                chains.set(keyOf(row.userId, row.groupId), copy(row));
+        },
         deleteChain: async (userId, groupId) => void chains.delete(keyOf(userId, groupId)),
         outbox: async (userId, groupId) =>
             [...outbox.values()]

@@ -1,0 +1,544 @@
+{
+    "about": "merge_pin and pin_ahead (packages/crypto/src/pins.ts mergePin, pinAhead): each case's stated result, which both twins must give (tests/common/device_records.rs, src/device-record-testkit.ts); `ahead` is pin_ahead(current, merged); `refused` is an opened area of another family than `groupId`.",
+    "cases": [
+        {
+            "name": "no-current-pin",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": null,
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {}
+            },
+            "opened": [
+                {
+                    "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "version": 2
+                }
+            ],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "2026-06-01T00:00:00.000Z",
+                    "keyVersion": 1,
+                    "groupKeyDigest": "key1",
+                    "rosterVersion": 3,
+                    "rosterDigest": "roster3",
+                    "areas": {
+                        "80558a81-8dfc-8914-8447-0417b55e2ec5": 2
+                    }
+                },
+                "ahead": true
+            }
+        },
+        {
+            "name": "higher",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 2,
+                    "a0558a81-8dfc-4914-8447-0417b55e2ec5": 1
+                }
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 1,
+                    "b0558a81-8dfc-4914-8447-0417b55e2ec5": 3
+                }
+            },
+            "opened": [
+                {
+                    "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+                    "workspaceId": "a0558a81-8dfc-4914-8447-0417b55e2ec5",
+                    "version": 4
+                }
+            ],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "2026-01-01T00:00:00.000Z",
+                    "keyVersion": 2,
+                    "groupKeyDigest": "key2",
+                    "rosterVersion": 5,
+                    "rosterDigest": "roster5",
+                    "areas": {
+                        "80558a81-8dfc-8914-8447-0417b55e2ec5": 2,
+                        "a0558a81-8dfc-4914-8447-0417b55e2ec5": 4,
+                        "b0558a81-8dfc-4914-8447-0417b55e2ec5": 3
+                    }
+                },
+                "ahead": true
+            }
+        },
+        {
+            "name": "the-same",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 2
+                }
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 2
+                }
+            },
+            "opened": [],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "2026-01-01T00:00:00.000Z",
+                    "keyVersion": 1,
+                    "groupKeyDigest": "key1",
+                    "rosterVersion": 3,
+                    "rosterDigest": "roster3",
+                    "areas": {
+                        "80558a81-8dfc-8914-8447-0417b55e2ec5": 2
+                    }
+                },
+                "ahead": false
+            }
+        },
+        {
+            "name": "lower-roster",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 4,
+                "rosterDigest": "roster4",
+                "areas": {}
+            },
+            "opened": [
+                {
+                    "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "version": 9
+                }
+            ],
+            "expected": "behind"
+        },
+        {
+            "name": "lower-group-key",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 6,
+                "rosterDigest": "roster6",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "behind"
+        },
+        {
+            "name": "conflict-roster",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "another",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "conflict"
+        },
+        {
+            "name": "conflict-group-key",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "another",
+                "rosterVersion": 6,
+                "rosterDigest": "roster6",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "conflict"
+        },
+        {
+            "name": "conflict-first-ed25519",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "b3RoZXI",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 6,
+                "rosterDigest": "roster6",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "conflict"
+        },
+        {
+            "name": "conflict-first-ml-dsa",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "b3RoZXI",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 6,
+                "rosterDigest": "roster6",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "conflict"
+        },
+        {
+            "name": "conflict-before-lower",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "another",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "conflict"
+        },
+        {
+            "name": "earlier-check-only",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2025-12-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "2025-12-01T00:00:00.000Z",
+                    "keyVersion": 1,
+                    "groupKeyDigest": "key1",
+                    "rosterVersion": 3,
+                    "rosterDigest": "roster3",
+                    "areas": {}
+                },
+                "ahead": true
+            }
+        },
+        {
+            "name": "higher-area-only",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 2
+                }
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 3
+                }
+            },
+            "opened": [],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "2026-01-01T00:00:00.000Z",
+                    "keyVersion": 1,
+                    "groupKeyDigest": "key1",
+                    "rosterVersion": 3,
+                    "rosterDigest": "roster3",
+                    "areas": {
+                        "80558a81-8dfc-8914-8447-0417b55e2ec5": 3
+                    }
+                },
+                "ahead": true
+            }
+        },
+        {
+            "name": "opened-area-only",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 2
+                }
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {}
+            },
+            "opened": [
+                {
+                    "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "version": 3
+                },
+                {
+                    "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+                    "workspaceId": "80558a81-8dfc-8914-8447-0417b55e2ec5",
+                    "version": 1
+                }
+            ],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "2026-01-01T00:00:00.000Z",
+                    "keyVersion": 1,
+                    "groupKeyDigest": "key1",
+                    "rosterVersion": 3,
+                    "rosterDigest": "roster3",
+                    "areas": {
+                        "80558a81-8dfc-8914-8447-0417b55e2ec5": 3
+                    }
+                },
+                "ahead": true
+            }
+        },
+        {
+            "name": "check-times-by-utf-16",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "𐀀",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "｡",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": {
+                "merged": {
+                    "firstEd25519PublicKey": "Zmlyc3Q",
+                    "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                    "checkedAt": "𐀀",
+                    "keyVersion": 1,
+                    "groupKeyDigest": "key1",
+                    "rosterVersion": 3,
+                    "rosterDigest": "roster3",
+                    "areas": {}
+                },
+                "ahead": false
+            }
+        },
+        {
+            "name": "opened-under-another-family",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 3,
+                "rosterDigest": "roster3",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 2,
+                    "a0558a81-8dfc-4914-8447-0417b55e2ec5": 1
+                }
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {
+                    "80558a81-8dfc-8914-8447-0417b55e2ec5": 1,
+                    "b0558a81-8dfc-4914-8447-0417b55e2ec5": 3
+                }
+            },
+            "opened": [
+                {
+                    "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+                    "workspaceId": "a0558a81-8dfc-4914-8447-0417b55e2ec5",
+                    "version": 4
+                },
+                {
+                    "groupId": "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b",
+                    "workspaceId": "b0558a81-8dfc-4914-8447-0417b55e2ec5",
+                    "version": 9
+                }
+            ],
+            "expected": "refused"
+        }
+    ]
+}

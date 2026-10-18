@@ -48,6 +48,7 @@ Twins of the device store and the pin rules: `group_device_record_seal/open` (HK
 
 - **Tests:** shared fixtures: a record sealed by each twin opens in the other; a record from another account or group, or after a master-key rotation, refused; a cache refused (damaged, a newer `cacheVersion`) takes the from-version-1 path and a chain cut below the record's pin is still a rollback; `merge_pin` conflict, lower and higher cases; fuzz kind `device_record` in `pins`.
 - **Proof:** as Core 1.
+- **Built:** `crates/hushos-core/src/device_record.rs`; the web's acceptance order moved into `packages/crypto/src/record-acceptance.ts` (`acceptFromRecord`, `sync.ts` calls it) and `mergePin`/`pinAhead` into `packages/crypto/src/pins.ts`. `accept_served` is an `AreaLedger` method (it needs the committed chain, the settings and the account's store key) and answers `FetchFromVersionOne` where the web fetches again. The review (two, "merge after fixes") added: a per-family floor (the highest chain committed this session) that a refusal's uncommit never drops, in both twins, so a run that lost to a background commit can never take an older chain after a refusal; `Overtaken { split }` and `served_race_message`; a race on the continuation fetching from version 1 once; the account's root held by `open_account`, re-checked at commit; `use_settings` with the downgrade refusal; records written in commit order (the web's `putChain` refuses a lower version); `OpenedArea` carrying its family.
 
 ### Core 4: the join preview and successor consent
 
@@ -74,7 +75,8 @@ The bodies that rotate areas: removal (roster marking left, a rotation per live 
 
 `HushOSKit`: `GroupsAPI` (routes 2, 3, 5, 6, 25), `FamilySync` (an actor: fetch, `accept_served` with the device record in `local/groups/` under `Unbacked`, the settings pin through `updateSettings`, `open_area`, the root listed through the ledger), and a `Family` space beside the personal one in `DriveStore`. Screens: Families in Account (a row per family, as the web's sidebar row: decision 1c), the family page (members, roles, "Verified by Lindqvist family" in Info), the family folder list (the same Files list, read only), the hard warning ("Lindqvist family's member list was shown differently to you") and Couldn't check states. Native structure, Paper accent, no custom cards (apps/ios/AGENTS.md).
 
-- **Tests:** `HushOSKitTests` with the stub server: a served chain short of the device record is refused and the family shows Couldn't check; a fork shows the warning and opens nothing; a not-member answer wipes local state but keeps the settings pin (D7 reversed).
+- **Records in commit order:** `FamilySync` writes the record `accept_served` returns only if no stored record is at a later roster version (a compare under the same file lock), and before it settles the pin into settings, as the web does; `FetchFromVersionOne` is called again with the same record; `Overtaken` is read again three times, then `served_race_message`.
+- **Tests:** `HushOSKitTests` with the stub server: a served chain short of the device record is refused and the family shows Couldn't check; a fork shows the warning and opens nothing; a not-member answer wipes local state but keeps the settings pin (D7 reversed); a late acceptance never writes an older record over a newer one.
 - **Proof:** simulator screenshots (iPhone 18 Pro) of the Families row, a family page, a family folder with a file a web member wrote, and its Info line; the same account on the web shows the same names and marks.
 
 ### iOS 2: writes in family folders
@@ -93,7 +95,7 @@ The invitation link (`/join#invite=`, `AppLinks`), accept, the own-words screen 
 
 ### iOS 4: leaving, and members' due work
 
-Leave (route 20, with the organizer and last-holder refusals as the server words them), the local wipe, and the member side of a removal: walks of family folders this device has its own reason to run (`ownReasonToWalk`), in the foreground and, by owner decision, as a `BGProcessingTask` so a walk finishes while the app is closed, through `rotate_node`. A background acceptance and a foreground one can race; `commit` refusing an older chain (Core 1) is what keeps the loser from writing an older record or pin.
+Leave (route 20, with the organizer and last-holder refusals as the server words them), the local wipe, and the member side of a removal: walks of family folders this device has its own reason to run (`ownReasonToWalk`), in the foreground and, by owner decision, as a `BGProcessingTask` so a walk finishes while the app is closed, through `rotate_node`. A background acceptance and a foreground one can race; the ledger's floor (Core 3: never dropped by a refusal) and `commit` refusing an older chain (Core 1) keep the loser from committing, and the record is still written only in commit order (no record over one at a later roster version), so the loser writes no older record or pin. The background task and the app share one `AreaLedger` only within a process; across processes the record's version compare is what holds.
 
 - **Tests:** leaving wipes the family's keys, record and Files domain, and keeps the settings pin; a walk resumes after the app is killed mid-batch (the pending keys are dropped, the batch resent).
 - **Proof:** simulator: leave a family; its folders vanish from the app and Files; the web shows the member as left.
@@ -155,10 +157,12 @@ Objects (no constructors except where stated; Swift and Kotlin cannot forge them
 
 - Core 1: `AreaLedger::{commit (refuses an older chain: OLDER_CHAIN), uncommit, forget_group, clear, open_area, is_area, read_version, write_version, require_writable, open_listed_node, node_key, key_at_epoch, writable_node_key, new_node_key, forget_node_key, rewrap_node, rotate_key, rotate_commit, rotate_drop, rotate_drop_all, open_personal_workspace, foreign_listings, refuse_own_workspace}`; `ServedNodeKey`, `RotatingNodeKey`, `HeldNodeKey`, `NewNodeKey`, `RotatedKey`, `AreaOpened`, `AreaBlock`, `ForeignListing`; `previous_root_key_wrap/open`.
 - Core 2: `AreaLedger::{rotate_node, record_verdict, copy_form, open_account}`, `uncommit(group_id, fork)` (`rotate_key` withdrawn); `RotatingNode`, `RotatingVersion`, `ServedRekey`, `RotatedNode`, `RotatedVersion`, `RotatedRecord`, `RekeyOut`, `GroupWriter`, `RecordReader`, `RecordStatement`, `ServedRecord`, `RecordVerdict`.
-- Core 3: `group_device_record_seal/open`, `accept_served`, `merge_pin`, `pin_ahead`; `DeviceRecord`.
+- Core 3: `AreaLedger::{open_account (now with the account root), use_settings, legacy_settings, accept_served, group_device_record_seal, group_device_record_open}` (`commit` is no longer exported: apps commit only through `accept_served`), `merge_pin`, `pin_ahead`, `served_race_message`; `ServedChain`, `ServedAcceptance` (`Accepted`, `Fork`, `RecordUnreadable`, `FetchFromVersionOne`, `Overtaken`), `DeviceStore` (`Outbox`, `Joins`), `OpenedArea` (object; `AreaOpened::pin_area`), `PinMerge`.
 - Core 4: `group_join_preview`, `join_check`, `succession_consent_sign`, `links_needing_consent`.
 - Core 5a: `stage_roster`, `admit_body`, `roles_body`, `handover_body`.
 - Core 5b: `removal_body`, `area_rotation_body`, `area_delete_body`, `previous_root_repair`.
+
+App review rules for Core 3: the only `next` an app passes `merge_pin` is `ServedAcceptance::Accepted`'s `pin`, and the only `opened` areas are `AreaOpened::pin_area`; records reach disk in commit order.
 
 Rules for every addition: no parameter named after a C keyword; doc comment with a runnable example; a unit test in the same file; a fixture in both directions for anything sealed, signed or decided; a fuzz target or kind for anything that parses served data.
 
@@ -171,7 +175,7 @@ Taken by the owner (2026-10-18):
 - **Android:** ships on Google Play; billing as on iOS (read only, no link).
 - **Background key changes:** yes: `BGProcessingTask` on iOS, WorkManager on Android. The older-chain refusal (Core 1) is required for it.
 
-Still open:
+- **Files and DocumentsProvider:** one location per family: yes (iOS 6, Android 6).
+- **Minimum app version** for W1 step 3 and W2 step 2: 1.0.0.
 
-1. **Files and DocumentsProvider.** One location per family (recommended: yes, iOS 6 and Android 6), and whether Files writes ship with reads.
-2. **Minimum app version** for W1 step 3 and W2 step 2: how long protocol 3 apps keep working before "Update HushOS".
+Still open: whether Files writes ship with reads (iOS 6).

@@ -18,6 +18,18 @@ import {
     type StaleChild,
 } from './rotation-testkit';
 import type { RotateNodeInput } from './rotation-records';
+import { servedRaceMessage } from './record-acceptance';
+import {
+    SPECS,
+    mergeResult,
+    openRow,
+    run,
+    says,
+    type DeviceCase,
+    type MergeCase,
+    type Outcome,
+    type StoreRow,
+} from './device-record-testkit';
 
 /*
  * The core's run of the shared scenarios
@@ -26,7 +38,10 @@ import type { RotateNodeInput } from './rotation-records';
  * opens here to the key it says. The other direction is
  * crates/hushos-core/tests/area_ledger_fixtures.rs. The nodes the core
  * walked (`rotations`) read here as both twins declare, and walk here to the
- * same records. Regenerate both with
+ * same records. The core's chain records (`deviceRecords`) open here and reach
+ * here what they reached in the core, its own records open as sealed and
+ * nowhere else, and the merge cases give here what they gave there.
+ * Regenerate both with
  * `bun run fixtures:groups` at the repository root.
  */
 
@@ -110,5 +125,66 @@ describe('the nodes the core walked, read here', () => {
         const again = await walk({ ...c, nodes: theirs.nodes, stale: theirs.stale ?? undefined });
         expect(shapesOf(again.rotated)).toEqual(c.shapes);
         expect(again.writes).toEqual(c.writes);
+    });
+});
+
+describe('the chain records the core sealed, accepted here', () => {
+    type Run = DeviceCase & { outcome: Outcome };
+    const records = (
+        core as unknown as {
+            deviceRecords: {
+                cases: Run[];
+                stores: { envelope: string; rows: StoreRow[] };
+                mergePins: { name: string; result: unknown }[];
+                raceMessages: string[];
+            };
+        }
+    ).deviceRecords;
+
+    it('ran every case, two continuing the core’s cache without fetching from version 1', () => {
+        expect(records.cases.map((c) => c.name)).toEqual(SPECS.map((spec) => spec.name));
+        const continued = records.cases.filter(
+            (c) => c.start > 0 && c.outcome.status === 'accepted' && !c.outcome.fromVersionOne,
+        );
+        expect(continued.map((c) => c.name)).toEqual([
+            'continues-the-cache',
+            'warm-record-at-the-committed-version',
+        ]);
+    });
+
+    it.each(records.cases.map((c, index) => [c.name, index] as const))('%s', async (_, index) => {
+        const theirs = records.cases[index]!;
+        const { outcome } = await run(theirs);
+        // As this twin declares the case, and exactly what the core reached on the same bytes.
+        expect(says(outcome, SPECS[index]!.expected), JSON.stringify(outcome)).toBe(true);
+        expect(outcome).toEqual(theirs.outcome);
+    });
+
+    it('opens the core’s own records as sealed and nowhere else', async () => {
+        expect(records.stores.rows).toHaveLength(5);
+        for (const row of records.stores.rows)
+            expect(await openRow(records.stores.envelope, row), row.name).toEqual(row.value);
+    });
+
+    it('gives every merge case what it states and what the core gave', () => {
+        const { cases } = JSON.parse(
+            readFileSync(
+                new URL(
+                    '../../../crates/hushos-core/fixtures/merge-pin-cases.json',
+                    import.meta.url,
+                ),
+                'utf8',
+            ),
+        ) as { cases: MergeCase[] };
+        expect(records.mergePins.map((m) => m.name)).toEqual(cases.map((c) => c.name));
+        for (const [index, c] of cases.entries()) {
+            const ours = mergeResult(c);
+            expect(ours, c.name).toEqual(c.expected);
+            expect(ours, c.name).toEqual(records.mergePins[index]!.result);
+        }
+    });
+
+    it('says the core’s words after three overtaken runs', () => {
+        expect(records.raceMessages).toEqual([servedRaceMessage(false), servedRaceMessage(true)]);
     });
 });

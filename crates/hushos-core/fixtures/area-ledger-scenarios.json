@@ -3175,6 +3175,52 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "a refusal never lowers the floor: no older chain, nor another at its version, is committed after it",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "uncommit",
+                    "expect": "ok"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "older-chain"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2-split",
+                    "expect": "split-chain"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": false,
+                        "read": null,
+                        "write": null
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "forget",
+                    "expect": "ok"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                }
+            ]
         }
     ]
 }

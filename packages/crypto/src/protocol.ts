@@ -103,3 +103,15 @@ export const OLDER_CHAIN =
  * chain as a mark reports it as a fork (the hard warning) before this.
  */
 export const SPLIT_CHAIN = 'This family’s member list was shown differently to this device.';
+
+/*
+ * An acceptance whose session was forgotten (a lock, a sign-out) or whose
+ * account changed before it ended, or one run before the account was unlocked
+ * or its settings opened: nothing of it is kept, and the order of attempts
+ * (record-acceptance.ts) passes it straight to the caller. The core's
+ * NOT_THIS_ACCOUNT, NO_ACCOUNT and its settings refusal say the same.
+ */
+export const NOT_THIS_ACCOUNT = "These keys are not this account's. Unlock again and retry.";
+export const NO_ACCOUNT = 'Unlock your account first.';
+/* An acceptance before the account's settings were opened in this session. */
+export const OPEN_SETTINGS = 'Open your settings first.';

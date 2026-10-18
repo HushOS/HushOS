@@ -143,6 +143,12 @@ export function createAreaLedger() {
      * highest version opened. What the group session committed and opened.
      */
     const chains = new Map<string, AcceptedRosters>();
+    /*
+     * Per family, the highest chain committed in this session: a refusal's
+     * uncommit never drops it (only forgetting the family does), so no chain
+     * below it, or beside it, is committed again (the core's `floors`).
+     */
+    const floors = new Map<string, AcceptedRosters>();
     const opened = new Map<string, Map<string, number>>();
     /* Each area's write version, from its own family's committed chain only (F9), by `${groupId}/${workspaceId}`. */
     const areaWrite = new Map<string, number>();
@@ -347,6 +353,15 @@ export function createAreaLedger() {
      * a retired area (a deleted family folder, design 2.10) is written no more.
      */
     function commit(chain: AcceptedRosters) {
+        const floor = floors.get(chain.groupId);
+        if (floor && floor.roster.rosterVersion > chain.roster.rosterVersion)
+            throw new CryptoError(OLDER_CHAIN);
+        if (
+            floor &&
+            floor.roster.rosterVersion === chain.roster.rosterVersion &&
+            floor.rosterDigest !== chain.rosterDigest
+        )
+            throw new CryptoError(SPLIT_CHAIN);
         const held = chains.get(chain.groupId);
         if (held && held.roster.rosterVersion > chain.roster.rosterVersion)
             throw new CryptoError(OLDER_CHAIN);
@@ -358,6 +373,8 @@ export function createAreaLedger() {
         )
             throw new CryptoError(SPLIT_CHAIN);
         chains.set(chain.groupId, chain);
+        if (!floor || floor.roster.rosterVersion < chain.roster.rosterVersion)
+            floors.set(chain.groupId, chain);
         for (const workspaceId of Object.keys(chain.areaKeys)) {
             const key = areaSlot(chain.groupId, workspaceId);
             const version = areaWriteVersion(chain, workspaceId);
@@ -380,10 +397,20 @@ export function createAreaLedger() {
             for (const key of map.keys()) if (key.startsWith(`${groupId}/`)) map.delete(key);
         opened.delete(groupId);
         chains.delete(groupId);
+        floors.delete(groupId);
     }
     /* Every family: what forgetting every group drops. */
     function forgetAllGroups() {
-        for (const groupId of new Set([...chains.keys(), ...opened.keys()])) forgetGroup(groupId);
+        for (const groupId of new Set([...chains.keys(), ...opened.keys(), ...floors.keys()]))
+            forgetGroup(groupId);
+    }
+    /* The highest chain committed for the family this session: acceptance's floor and mark. */
+    function floor(groupId: string) {
+        return floors.get(groupId);
+    }
+    /* The chain committed for the family now, if any (none after a refusal or a fork). */
+    function committedChain(groupId: string) {
+        return chains.get(groupId);
     }
     /*
      * An area key a grant (or self-grant) opened at `version`, with the
@@ -1050,6 +1077,8 @@ export function createAreaLedger() {
         rootSeen,
         commit,
         uncommit,
+        floor,
+        committedChain,
         forgetGroup,
         forgetAllGroups,
         openArea,

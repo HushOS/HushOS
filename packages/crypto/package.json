@@ -17,6 +17,7 @@
         "./fingerprint": "./src/fingerprint.ts",
         "./links": "./src/links.ts",
         "./pins": "./src/pins.ts",
+        "./record-acceptance": "./src/record-acceptance.ts",
         "./rekeyed-scope": "./src/rekeyed-scope.ts",
         "./signatures": "./src/signatures.ts",
         "./ids": "./src/ids.ts",

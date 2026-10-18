@@ -68,8 +68,24 @@ import {
     openWithOriginKey,
 } from '../src/drive';
 import { opensAsMade, readSteps, runSteps } from '../src/area-ledger-testkit';
+import {
+    ROOT as DEVICE_ROOT,
+    family as deviceFamily,
+    run as runDeviceCase,
+} from '../src/device-record-testkit';
+import { sealDeviceRecord } from '../src/session-groups';
 import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
-import { chain, core, groups, people, shareGrantee, signed, web, type Json } from './fixtures';
+import {
+    chain,
+    core,
+    coreLedger,
+    groups,
+    people,
+    shareGrantee,
+    signed,
+    web,
+    type Json,
+} from './fixtures';
 
 /*
  * Every target as one function from the input bytes to a verdict, the same
@@ -928,9 +944,108 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
                 (print) => print,
             );
         }
+        case 'device_record':
+            return deviceRecord(value);
         default:
             return undefined;
     }
+}
+
+/*
+ * A chain record holding `record` (any JSON; none when absent), sealed for
+ * person 1 of the device record fixtures and accepted in the web's order
+ * (record-acceptance.ts driving the worker's groupAccept) against the fixture
+ * family's served chain, from `start` (0 to 3), with the settings pin at
+ * roster 1 when `settings`: the full outcome, which the core's
+ * accept_served must match. Invariant: an accepted chain's pin is at its
+ * roster version and is a pin.
+ */
+async function deviceRecord(value: Doc): Promise<Verdict | undefined> {
+    const start = number(value, 'start');
+    // How far the server serves (1 to 3, all of it when absent) and the chain committed first (0 for none).
+    const through = optionalNumber(value, 'through');
+    const held = optionalNumber(value, 'held');
+    if (
+        start === undefined ||
+        through === undefined ||
+        held === undefined ||
+        typeof value.settings !== 'boolean'
+    )
+        return undefined;
+    const upTo = through ?? 3;
+    const heldThrough = held ?? 0;
+    if (start > upTo || upTo < 1 || upTo > 3 || heldThrough > 3) return undefined;
+    const cases = coreLedger().deviceRecords.cases as Json[];
+    const named = (name: string) => cases.find((c) => c.name === name);
+    const whole = named('continuation-refused-then-from-version-1').served.find(
+        (s: Json) => s.after === 0,
+    );
+    const prefix = (n: number) => ({
+        after: 0,
+        rosters: whole.rosters.slice(0, n),
+        successions: [],
+    });
+    const full = prefix(upTo);
+    const settingsAt1 = named('record-after-a-master-key-rotation').settingsPin;
+    const f = await deviceFamily();
+    const record =
+        value.record === undefined
+            ? null
+            : await sealDeviceRecord(
+                  DEVICE_ROOT.slice(),
+                  f.p1.userId,
+                  GROUP,
+                  'chains',
+                  value.record,
+              );
+    const served = [full];
+    if (start > 0)
+        served.unshift({ after: start, rosters: full.rosters.slice(start), successions: [] });
+    const { outcome } = await runDeviceCase({
+        name: 'fuzz',
+        record,
+        recordVersion: null,
+        settingsPin: value.settings ? settingsAt1 : null,
+        held: heldThrough > 0 ? prefix(heldThrough) : null,
+        heldSettingsPin: settingsAt1,
+        start,
+        served,
+        firstKeys: cases[0].firstKeys,
+        signerKeys: cases[0].signerKeys,
+        expected: { status: 'refused' },
+    });
+    if (outcome.status === 'accepted') {
+        invariant(
+            outcome.pin.rosterVersion === outcome.rosterVersion,
+            'the pin is at the chain’s roster',
+        );
+        invariant(await holds(() => checkGroupPin(GROUP, outcome.pin)), 'an accepted pin is a pin');
+        // The record's own pin, whenever it is a pin, is a mark the accepted chain reaches and passes through.
+        const record = value.record;
+        let marked: ReturnType<typeof checkGroupPin> | null = null;
+        try {
+            marked = isObject(record) ? checkGroupPin(GROUP, record.pin) : null;
+        } catch {
+            marked = null;
+        }
+        // The chain committed first is a floor: never accepted below it.
+        invariant(
+            outcome.rosterVersion >= heldThrough,
+            'accepted below the chain this session committed',
+        );
+        if (marked) {
+            invariant(
+                outcome.rosterVersion >= marked.rosterVersion,
+                'accepted below the record’s pin',
+            );
+            const statement = whole.rosters[marked.rosterVersion - 1].statement as string;
+            invariant(
+                (await rosterDigest(decode(statement))) === marked.rosterDigest,
+                'accepted through another roster than the record’s pin',
+            );
+        }
+    }
+    return ok(outcome);
 }
 
 /* A case's area root probe (design 2.10), when it is one the Rust core can hold too. */

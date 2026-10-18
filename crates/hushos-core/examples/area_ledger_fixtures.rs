@@ -6,10 +6,15 @@
 //! `packages/crypto/src/__fixtures__/core-area-ledger.json`; each scenario's
 //! stated outcomes are checked before anything is written. Also the nodes this
 //! core walked (`rotations`, `tests/common/rotations.rs`), each read back here
-//! as its case declares before it is written, for the web to read.
+//! as its case declares before it is written, for the web to read; and the
+//! chain records this core sealed and the outcomes it reached on them
+//! (`deviceRecords`, `tests/common/device_records.rs`), each checked against
+//! its case before it is written.
 
 #[path = "../tests/common/area_ledger.rs"]
 mod area_ledger;
+#[path = "../tests/common/device_records.rs"]
+mod device_records;
 #[path = "../tests/common/groups.rs"]
 mod groups;
 #[path = "../tests/common/rekeyed.rs"]
@@ -43,7 +48,31 @@ fn main() {
         "generatedBy": "crates/hushos-core/examples/area_ledger_fixtures.rs",
         "scenarios": runs,
         "rotations": rotations,
+        "deviceRecords": device_records_fixture(),
     });
     fs::write(&out, serde_json::to_string_pretty(&document).unwrap() + "\n").expect("written");
     println!("wrote packages/crypto/src/__fixtures__/core-area-ledger.json");
+}
+
+/* Each device record case with this core's record and outcome, the app's own records, and the merge cases' results. */
+fn device_records_fixture() -> Value {
+    let cases: Vec<Value> = device_records::device_cases()
+        .into_iter()
+        .map(|mut case| {
+            let (outcome, _) = device_records::run(&case);
+            assert!(device_records::says(&outcome, &case["expected"]), "{}: {outcome}", case["name"]);
+            case["outcome"] = outcome;
+            case
+        })
+        .collect();
+    let merges: Vec<Value> = device_records::merge_cases()
+        .iter()
+        .map(|case| {
+            let result = device_records::merge_result(case);
+            assert_eq!(result, case["expected"], "{}", case["name"]);
+            json!({ "name": case["name"], "result": result })
+        })
+        .collect();
+    let race_messages = [hushos_core::served_race_message(false), hushos_core::served_race_message(true)];
+    json!({ "cases": cases, "stores": device_records::store_rows(), "mergePins": merges, "raceMessages": race_messages })
 }
