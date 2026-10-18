@@ -1996,13 +1996,11 @@ export function createGroupSession(host: GroupHost) {
         }
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
-        // The highest chain this session committed for the family (its floor, which a refusal never
-        // drops) is one of the person's marks: served short of it, the run lost a race with a later
-        // one (or the server rolled back), and nothing of it is kept; served through another roster
-        // at a version it fixes, the acceptance below reports the fork, the hard warning, and never
-        // commits it.
-        // The floor: the highest chain this session committed for the family (the ledger keeps it,
-        // and a refusal never drops it).
+        // The floor, the highest chain this session committed for the family (the ledger keeps it,
+        // and a refusal never drops it), is one of the person's marks: served short of it, the run
+        // lost a race with a later one (or the server rolled back), and nothing of it is kept;
+        // served through another roster at a version it fixes, the acceptance below reports the
+        // fork, the hard warning, and never commits it.
         const held = ledger.floor(groupId);
         if (held && servedHead(input.served, cache) < held.roster.rosterVersion)
             throw new CryptoError(OLDER_CHAIN);

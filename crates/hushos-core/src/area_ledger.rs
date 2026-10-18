@@ -1214,8 +1214,9 @@ impl AreaLedger {
     /// proves them, and its root (`account_key`, 32 bytes), from which the device store's key is
     /// derived and held (`hushos/group/device-store/v1`). Every verdict's reader, every walk's
     /// signing seed and every device record must be this account's; a lock
-    /// ([`AreaLedger::clear`]) forgets it and wipes the key. Opening another account (or the same
-    /// one again, after a master-key rotation) keeps no acceptance begun under the last one.
+    /// ([`AreaLedger::clear`]) forgets it and wipes the key. Opening another account clears every
+    /// family's state and keeps no acceptance begun under the last one; opening the same account
+    /// again (after a master-key rotation) keeps it all, and later records seal under the new key.
     pub fn open_account(
         &self,
         user_id: String,
