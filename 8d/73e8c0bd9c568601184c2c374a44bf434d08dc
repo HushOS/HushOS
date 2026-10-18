@@ -1,0 +1,117 @@
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_9dc16bd65ca226 104
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_c56e31c87cddde::t_e09cb4339cfbdf 108-132
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c56e31c87cddde::t_b96f8e57a62f82 44-49,53,57
+apps/web/src/components/families/let-in-dialog.tsx
+  s_c56e31c87cddde::t_8768555b8050ef 176-178,215-226
+apps/web/src/lib/groups/delete-folder.test.ts
+  s_c56e31c87cddde::t_82cce411d63f3a 9
+apps/web/src/lib/groups/join.test.ts
+  s_c56e31c87cddde::t_c34e9bb22707b4 192-198
+apps/web/src/lib/groups/join.ts
+  s_c56e31c87cddde::t_c8e68a88fa63cf 399-401,403,406
+apps/web/src/lib/groups/outbox.test.ts
+  s_c56e31c87cddde::t_3de8c0191523c8 78-89,384,399,404,415,421-422,428,447-449,458,483,489,531
+apps/web/src/lib/groups/outbox.ts
+  s_c56e31c87cddde::t_b7a62c8defa92e 1-8,96-98,152,154,468-469,471-472,474-487,499-500,504,548-572,622,797-800,824-825,838
+apps/web/src/lib/groups/removal.test.ts
+  s_c56e31c87cddde::t_043dfd32815d0f 10
+apps/web/src/lib/groups/test-harness.ts
+  s_c56e31c87cddde::t_f592252b835713 253-264
+crates/hushos-core/AGENTS.md
+  s_c56e31c87cddde::t_a60c72de3994bf 148-159
+crates/hushos-core/examples/roster_call_fixtures.rs
+  s_c56e31c87cddde::t_38fe3867a754ae 1-31
+crates/hushos-core/fixtures/outbox-steps.json
+  s_c56e31c87cddde::t_7c3bf46d7d97cf 1-180
+crates/hushos-core/fixtures/roster-call-sessions.json
+  s_c56e31c87cddde::t_5aada53e8552fd 1-307
+crates/hushos-core/fixtures/web-roster-calls.json
+  s_c56e31c87cddde::t_3bd9b40803fb45 1-924
+crates/hushos-core/fuzz/src/fixtures.rs
+  s_c56e31c87cddde::t_d212e6b31449a5 53-58
+crates/hushos-core/fuzz/src/lib.rs
+  s_c56e31c87cddde::t_8e8c8a08558a98 36-40
+crates/hushos-core/fuzz/src/targets.rs
+  s_c56e31c87cddde::t_9df9359a6d89c2 676-679,1406-1595
+crates/hushos-core/src/area_ledger.rs
+  s_c56e31c87cddde::t_b14ca1f7945e91 88,121-131,323-328,335-336,597-599,628,1324-1336,1338-1348,1358,1968-1975,2002-2096
+crates/hushos-core/src/consent.rs
+  s_c56e31c87cddde::t_a13b27a2f65e7a 35,51
+crates/hushos-core/src/device_record.rs
+  s_c56e31c87cddde::t_d646041df8723e 76,79-80,84,849,890,892-895,900-901,920,1225-1229,1748,1807,1809,1815
+crates/hushos-core/src/groups.rs
+  s_c56e31c87cddde::t_8307de5b0a2c4a 1904,1911-1912,1927,2025,2041
+crates/hushos-core/src/identity.rs
+  s_c56e31c87cddde::t_627b977cf439d9 578-631
+crates/hushos-core/src/join.rs
+  s_c56e31c87cddde::t_acc4d58cbf5cd3 763,862,881,1021,1115,1372-1376
+crates/hushos-core/src/lib.rs
+  s_c56e31c87cddde::t_72f3f4200339f7 36,61
+crates/hushos-core/src/roster_calls.rs
+  s_c56e31c87cddde::t_fd2df1e84620a5 1-1398
+crates/hushos-core/src/roster_calls/tests.rs
+  s_c56e31c87cddde::t_170dd7125438c0 1-1233
+crates/hushos-core/tests/common/device_records.rs
+  s_c56e31c87cddde::t_659128fcfd6ae7 476
+crates/hushos-core/tests/common/join.rs
+  s_c56e31c87cddde::t_fefee0c177c83c 255-257,375
+crates/hushos-core/tests/common/mod.rs
+  s_c56e31c87cddde::t_65f3f5c0044def 8
+crates/hushos-core/tests/common/roster_calls.rs
+  s_c56e31c87cddde::t_bc0974134c3444 1-1340
+crates/hushos-core/tests/roster_call_fixtures.rs
+  s_c56e31c87cddde::t_626e56d5a02827 1-50
+docs/groups-mobile-plan.md
+  s_c56e31c87cddde::t_7ccd328c2a5bc4 68,94-114,127,160,188,215
+package.json
+  s_c56e31c87cddde::t_01d61d8e2c78cc 29
+packages/crypto/fuzz/fixtures.ts
+  s_c56e31c87cddde::t_4d11148535fd17 60-64
+packages/crypto/fuzz/seeds.ts
+  s_c56e31c87cddde::t_a9b019456620ec 10-11,416-520
+packages/crypto/fuzz/verdicts.ts
+  s_c56e31c87cddde::t_88ee972541b1f5 97-108,114,1099-1106,1892-2021
+packages/crypto/package.json
+  s_c56e31c87cddde::t_528cbd908ec170 37
+packages/crypto/scripts/roster-call-fixtures.ts
+  s_c56e31c87cddde::t_521c51762a322e 1-22
+packages/crypto/src/__fixtures__/core-roster-calls.json
+  s_c56e31c87cddde::t_2f1b09cb11977d 1-924
+packages/crypto/src/index.ts
+  s_c56e31c87cddde::t_71b8cf96c18a0c 54-61
+packages/crypto/src/join-fixtures.test.ts
+  s_c56e31c87cddde::t_b7a496b8130cef 63,79
+packages/crypto/src/outbox.test.ts
+  s_c56e31c87cddde::t_e4de0fedb0c3d1 1-76
+packages/crypto/src/outbox.ts
+  s_c56e31c87cddde::t_b016efbaffc67f 1-194
+packages/crypto/src/roster-call-fixtures.test.ts
+  s_c56e31c87cddde::t_4d09b955e0735d 1-43
+packages/crypto/src/roster-calls-testkit.ts
+  s_c56e31c87cddde::t_016e8e8705d412 1-1524
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_4901946bbd64db 329-334,566-568,633-637,1289-1295,1473-1474,1499-1505,1507-1527,2788-2790,2808,2815-2818,2837-2857,2859,2931-2934,3016-3018,3088-3090,3246-3260,3262,3407
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_ea5196004ff6b3 111-112,134-138,143-153,346,858,912-929,1112,1138,1186,1254,1474,2617-2627,2629-2646,2648-2671,3921
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_51fed2fc37a9e2 2,20-26,40,42,52,84-85,3232-3434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8d73e8c0bd9c568601184c2c374a44bf434d08dc",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
