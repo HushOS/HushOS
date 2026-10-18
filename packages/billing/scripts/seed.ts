@@ -162,12 +162,9 @@ for (const tier of tiers) {
  * 0.8; INR follows the personal plans' ratio (199/399/699 rupees against 5/10/15
  * dollars, about 40 to the dollar and nearer 47 at the top): 399, 799 and 1,399
  * rupees, so Plus costs what personal Pro does and Pro and Max twice personal Pro
- * and Max, and 59 rupees a member. A year is ten months in every currency.
- *
- * FAMILY_PRICES_CONFIRMED gates production: the owner confirmed the currency
- * table on 2026-10-19. Nothing in CI, Docker or `dev` runs this file.
+ * and Max, and 59 rupees a member. A year is ten months in every currency
+ * (confirmed by the owner on 2026-10-19).
  */
-const FAMILY_PRICES_CONFIRMED = true;
 const archiveLegacyFamily = process.argv.includes('--archive-legacy-family');
 const familyIncluded = 4;
 const familyPerMember = { usd: 150, eur: 150, gbp: 120, inr: 5900 } as Amounts;
@@ -246,82 +243,73 @@ function sameUnitPrice(
 
 /* Every family product this run wants, by name, so the archive step can check they all exist. */
 const familyNames: string[] = [];
-if (environment === 'production' && !FAMILY_PRICES_CONFIRMED) {
-    console.log(
-        '  skipped  Family plans: their prices are not confirmed (FAMILY_PRICES_CONFIRMED)',
-    );
-} else {
-    for (const tier of familyTiers) {
-        const storage =
-            tier.quota >= 1024n * GIB
-                ? `${tier.quota / (1024n * GIB)} TB`
-                : `${tier.quota / GIB} GB`;
-        for (const interval of ['month', 'year'] as const) {
-            const name = `${tier.name} (${interval === 'month' ? 'monthly' : 'yearly'})`;
-            familyNames.push(name);
-            const description = `${storage} of end-to-end encrypted storage for the whole family, ${familyIncluded} members included.`;
-            const metadata = {
-                [PLAN_METADATA_KEY]: 'family',
-                [GROUP_KIND_METADATA_KEY]: 'family',
-                [TIER_METADATA_KEY]: tier.tier,
-                [QUOTA_METADATA_KEY]: tier.quota.toString(),
-                [INCLUDED_MEMBERS_METADATA_KEY]: String(familyIncluded),
-                [RECOMMENDED_METADATA_KEY]: tier.recommended ? 'true' : 'false',
-            };
-            const creates = familyPrices(tier.base, interval);
-            const current = existing.get(name);
-            if (!current) {
-                const product = await polar.products.create({
-                    name,
-                    description,
-                    recurring_interval: interval,
-                    prices: creates,
-                    metadata,
-                });
-                existing.set(name, product);
-                console.log(`  created  ${name}  ${product.id}`);
-                continue;
-            }
-            if (!update) {
-                console.log(`  exists   ${name}`);
-                continue;
-            }
-            // Both kinds of price are matched per currency; a price left out would be archived.
-            const live = current.prices.filter(
-                (price): price is models.ProductPriceFixed | models.ProductPriceUnitBased =>
-                    'amount_type' in price &&
-                    !price.is_archived &&
-                    (price.amount_type === 'fixed' || price.amount_type === 'unit_based'),
-            );
-            const prices = creates.map((create) => {
-                const row = live.find(
-                    (price) =>
-                        price.amount_type === create.amount_type &&
-                        price.price_currency === create.price_currency,
-                );
-                if (!row) return create;
-                const same =
-                    row.amount_type === 'fixed' && create.amount_type === 'fixed'
-                        ? row.price_amount === create.price_amount
-                        : row.amount_type === 'unit_based' && create.amount_type === 'unit_based'
-                          ? sameUnitPrice(row, create)
-                          : false;
-                return same ? { id: row.id } : create;
+for (const tier of familyTiers) {
+    const storage =
+        tier.quota >= 1024n * GIB ? `${tier.quota / (1024n * GIB)} TB` : `${tier.quota / GIB} GB`;
+    for (const interval of ['month', 'year'] as const) {
+        const name = `${tier.name} (${interval === 'month' ? 'monthly' : 'yearly'})`;
+        familyNames.push(name);
+        const description = `${storage} of end-to-end encrypted storage for the whole family, ${familyIncluded} members included.`;
+        const metadata = {
+            [PLAN_METADATA_KEY]: 'family',
+            [GROUP_KIND_METADATA_KEY]: 'family',
+            [TIER_METADATA_KEY]: tier.tier,
+            [QUOTA_METADATA_KEY]: tier.quota.toString(),
+            [INCLUDED_MEMBERS_METADATA_KEY]: String(familyIncluded),
+            [RECOMMENDED_METADATA_KEY]: tier.recommended ? 'true' : 'false',
+        };
+        const creates = familyPrices(tier.base, interval);
+        const current = existing.get(name);
+        if (!current) {
+            const product = await polar.products.create({
+                name,
+                description,
+                recurring_interval: interval,
+                prices: creates,
+                metadata,
             });
-            const samePrices =
-                prices.every((price) => 'id' in price) && live.length === creates.length;
-            const sameRest =
-                current.description === description &&
-                Object.entries(metadata).every(
-                    ([key, value]) => String(current.metadata[key]) === value,
-                );
-            if (samePrices && sameRest) {
-                console.log(`  current  ${name}`);
-                continue;
-            }
-            await polar.products.update(current.id, { description, metadata, prices });
-            console.log(`  updated  ${name}`);
+            existing.set(name, product);
+            console.log(`  created  ${name}  ${product.id}`);
+            continue;
         }
+        if (!update) {
+            console.log(`  exists   ${name}`);
+            continue;
+        }
+        // Both kinds of price are matched per currency; a price left out would be archived.
+        const live = current.prices.filter(
+            (price): price is models.ProductPriceFixed | models.ProductPriceUnitBased =>
+                'amount_type' in price &&
+                !price.is_archived &&
+                (price.amount_type === 'fixed' || price.amount_type === 'unit_based'),
+        );
+        const prices = creates.map((create) => {
+            const row = live.find(
+                (price) =>
+                    price.amount_type === create.amount_type &&
+                    price.price_currency === create.price_currency,
+            );
+            if (!row) return create;
+            const same =
+                row.amount_type === 'fixed' && create.amount_type === 'fixed'
+                    ? row.price_amount === create.price_amount
+                    : row.amount_type === 'unit_based' && create.amount_type === 'unit_based'
+                      ? sameUnitPrice(row, create)
+                      : false;
+            return same ? { id: row.id } : create;
+        });
+        const samePrices = prices.every((price) => 'id' in price) && live.length === creates.length;
+        const sameRest =
+            current.description === description &&
+            Object.entries(metadata).every(
+                ([key, value]) => String(current.metadata[key]) === value,
+            );
+        if (samePrices && sameRest) {
+            console.log(`  current  ${name}`);
+            continue;
+        }
+        await polar.products.update(current.id, { description, metadata, prices });
+        console.log(`  updated  ${name}`);
     }
 }
 
@@ -334,9 +322,7 @@ if (environment === 'production' && !FAMILY_PRICES_CONFIRMED) {
  * reads it for them.
  */
 if (archiveLegacyFamily) {
-    const missing = familyNames.length
-        ? familyNames.filter((name) => !existing.has(name))
-        : ['the family tiers (skipped above)'];
+    const missing = familyNames.filter((name) => !existing.has(name));
     if (missing.length) {
         console.log(`  kept     Family (monthly), Family (yearly): ${missing.join(', ')} missing`);
     } else {
