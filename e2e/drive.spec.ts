@@ -396,31 +396,36 @@ test('the viewer lives in the URL: a name link opens it, arrows replace the entr
     await expect(dialog(page)).toHaveCount(0);
     await expect(page).not.toHaveURL(/preview=/);
 
-    // A modifier click opens the same preview in a new tab.
-    const [tab] = await Promise.all([
-        page.context().waitForEvent('page'),
-        row(page, 'notes.md')
-            .getByRole('link', { name: 'notes.md' })
-            .click({ modifiers: ['ControlOrMeta'] }),
-    ]);
-    // The tab is read directly, not through expect(tab) or a tab locator: when its
-    // first page arrives before Playwright has finished attaching to the tab (a fast
-    // dev server on CI), Playwright keeps that load as a navigation still to finish,
-    // and every expect on the tab then waits for it for good. A fresh tab
-    // server-renders /app from cold, which on a shared CI dev server takes a while.
-    await expect.poll(() => tab.url(), { timeout: 60_000 }).toMatch(/preview=/);
-    await expect
-        .poll(
-            () =>
-                tab
-                    .evaluate(
-                        () =>
-                            document.querySelector('[data-slot=dialog-content]')?.textContent ?? '',
-                    )
-                    .catch(() => ''),
-            { timeout: 60_000 },
-        )
-        .toContain('notes.md');
+    // A modifier click is left to the browser, which opens the link in a new tab, and
+    // that link opens the same preview. The tab the browser would open is not driven:
+    // when a background tab's first page lands before Playwright has attached to it
+    // (the production server answers in milliseconds), Playwright never reports the
+    // tab, and a wait on it hangs until the test times out. So a listener on the
+    // document, behind React's own (the root is hydrated onto the document), notes
+    // whether the app claimed the click and then stops the browser opening the tab, and
+    // the link's address is opened in a page of its own.
+    await page.evaluate(() => {
+        document.addEventListener(
+            'click',
+            (event) => {
+                document.documentElement.dataset.modifierClick = event.defaultPrevented
+                    ? 'claimed'
+                    : 'left';
+                event.preventDefault();
+            },
+            { once: true },
+        );
+    });
+    const link = row(page, 'notes.md').getByRole('link', { name: 'notes.md' });
+    await link.click({ modifiers: ['ControlOrMeta'] });
+    await expect(page.locator('html')).toHaveAttribute('data-modifier-click', 'left');
+    await expect(dialog(page)).toHaveCount(0);
+    await expect(page).not.toHaveURL(/preview=/);
+    const href = await link.getAttribute('href');
+    expect(href).toMatch(/preview=/);
+    const tab = await page.context().newPage();
+    await tab.goto(href!);
+    await expect(dialog(tab)).toContainText('notes.md', { timeout: 60_000 });
     await tab.close();
 
     // Closing from the viewer's own control also steps back, so the history has no leftover entry.
