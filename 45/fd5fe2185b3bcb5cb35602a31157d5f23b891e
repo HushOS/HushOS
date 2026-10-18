@@ -1,0 +1,31 @@
+DESIGN.md
+  s_c56e31c87cddde::t_6e012dd1c0987f 462
+apps/web/src/components/families/family-billing.tsx
+  s_c56e31c87cddde::t_ac41fbe1d4624c 478
+apps/web/src/lib/pricing-faq.ts
+  s_c56e31c87cddde::t_ca760844fa11aa 27
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_c56e31c87cddde::t_73f0b50021684e 477
+apps/web/src/routes/pricing/route.tsx
+  s_c56e31c87cddde::t_c82236c55c4d1f 449
+packages/billing/src/seed-prices.test.ts
+  s_c56e31c87cddde::t_1fe6f44d4ac5df 61-66
+packages/billing/src/seed-prices.ts
+  s_c56e31c87cddde::t_bc0045de9d7a52 9-12,107-108,118-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "45fd5fe2185b3bcb5cb35602a31157d5f23b891e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
