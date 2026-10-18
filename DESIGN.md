@@ -483,10 +483,10 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - The server's refusals (declined, confirm with the bank, the caps, payer) are shown in its own words.
     - Family on the pricing page (public, only where the server serves families and sells plans, following the page's currency and Monthly or Yearly):
         - Family
-        - "Family folders for up to 4 members, end-to-end encrypted."
-        - "Every member can open them. The storage is for family folders; each member’s own files stay on their own plan, Free included."
-        - Create a family (signed out, it signs up first and lands on Families)
-        - the three tiers, each Family Plus, Pro or Max with its storage, "$20 a month" (a yearly plan as its month, "$16.67 a month" with "Billed $200 yearly."; monthly adds "Billed monthly. $200 a year if you pay yearly."), "For up to 4 members, sharing 2 TB." and "Then $1.50 a month for each member after that, up to 20." ("$15 a year" on the yearly plan)
+        - "Family folders for up to 20 people." (the most a family can have)
+        - "Each plan includes 4 members, and every member can open the folders. The storage is for family folders; each member’s own files stay on their own plan, Free included."
+        - Create a family (level with the headline's first line on a wide screen, full width under the words on a phone; signed out, it signs up first and lands on Families)
+        - the three tiers, each Family Plus, Pro or Max with its storage, "$20 a month" (monthly adds "Billed monthly. $192 a year if you pay yearly."; a yearly plan shows its month when the year splits into twelve whole units of the currency, "$16 a month" with "Billed $192 yearly.", and otherwise the year alone, "$190 a year" with "Billed yearly.", never a month with cents; the personal cards do the same) and "Each extra member is $1.50 a month." ("$15 a year" on the yearly plan). The included members and the most a family can have are said once, above the tiers.
         - "Plus tax where it applies; Polar adds it at checkout. Family folders are on the web for now."
         - with it shown the lede reads "Paid plans add space; a family plan adds folders you share with up to 20 members." and the questions add the family ones, which are absent, with the original lede and answers, everywhere else
     - Names and jargon:

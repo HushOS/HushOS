@@ -13,13 +13,8 @@ import { authClient } from '@/lib/auth-client';
 import { agreeValue, authError, emailValue } from '@/lib/form';
 import { getOfferLandingServerFn, getReferralLandingServerFn } from '@/lib/growth';
 import { pickCurrency } from '@/lib/currency';
-import { currenciesOf, priceOf } from '@/lib/plans';
-import {
-    catalogueQueryOptions,
-    formatMoney,
-    formatQuota,
-    localeHintQueryOptions,
-} from '@/lib/queries';
+import { currenciesOf, formatPrice, priceOf, yearlyPrice, yearsByMonth } from '@/lib/plans';
+import { catalogueQueryOptions, formatQuota, localeHintQueryOptions } from '@/lib/queries';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -320,8 +315,13 @@ function ChosenPlan({ id }: { id: string }) {
                 </span>
                 <span className="text-sm">
                     {plan.interval === 'year'
-                        ? `${formatMoney(Math.round(price.amount / 12), price.currency)} a month, billed ${formatMoney(price.amount, price.currency)} yearly.`
-                        : `${formatMoney(price.amount, price.currency)} a month.`}{' '}
+                        ? // Written as the pricing page wrote it, by the month or by the year.
+                          yearlyPrice(
+                              price.amount,
+                              price.currency,
+                              yearsByMonth(catalogue, currency),
+                          ).line
+                        : `${formatPrice(price.amount, price.currency)} a month.`}{' '}
                     You pay after your account is set up.
                 </span>
             </span>

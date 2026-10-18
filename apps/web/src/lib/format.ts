@@ -30,6 +30,13 @@ export function formatSpace(bytes: string | number, locale?: string) {
     return Number(bytes) >= GIB ? formatQuota(bytes, locale) : formatBytes(bytes);
 }
 
+/*
+ * The locale prices are written in on pages the server renders (pricing, sign-up), so the
+ * server and every browser write them alike: "$5", "€5", "£5", "₹3,900", never en-GB's "US$5"
+ * in one and "$5" in the other, which React reports as a hydration mismatch.
+ */
+export const PRICE_LOCALE = 'en-US';
+
 /* Minor units and an ISO currency code, as Polar reports them; whole amounts drop the cents. */
 export function formatMoney(amount: number, currency: string, locale?: string) {
     return new Intl.NumberFormat(locale, {

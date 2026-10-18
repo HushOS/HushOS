@@ -10,6 +10,7 @@ import {
     type Route,
 } from '@playwright/test';
 import {
+    hydrated,
     newContext,
     PASSWORD,
     registerAccount,
@@ -1544,6 +1545,48 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(
             maya.page.getByRole('button', { name: 'Manage payment and invoices' }),
         ).toHaveCount(0);
+    });
+});
+
+/*
+ * The pricing page's Create a family, pressed signed out: it signs up first and lands on
+ * Families, through the return it keeps in this browser (rememberReturn, for an hour). The
+ * section shows only where the server sells plans and lists a family plan, so this skips
+ * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
+ * (verify-hushos `launch --billing polar`).
+ */
+test.describe('creating a family from the pricing page', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('someone without an account signs up from Create a family and lands on Families', async ({
+        browser,
+        request,
+    }) => {
+        const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
+            enabled?: boolean;
+            families?: unknown[];
+        };
+        test.skip(
+            !catalogue.enabled || !catalogue.families?.length,
+            'Billing is off or sells no family plan, so the pricing page has no family section.',
+        );
+        test.setTimeout(300_000);
+        const page = await (await newContext(browser)).newPage();
+        await page.goto('/pricing', { waitUntil: 'networkidle' });
+        const create = page
+            .locator('[data-family-plan]')
+            .getByRole('link', { name: 'Create a family', exact: true });
+        // A press before hydration follows the link without keeping the return.
+        await hydrated(create);
+        await create.click();
+        await expect(page).toHaveURL(/\/register$/);
+        await registerAccount(page, 'Rosa Ekström', undefined, {
+            viaCurrentPage: true,
+            landsOn: /\/app\/families$/,
+        });
+        await expect(page.getByRole('heading', { level: 1, name: 'Families' })).toBeVisible({
+            timeout: 60_000,
+        });
     });
 });
 

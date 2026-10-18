@@ -1,5 +1,4 @@
-import { formatMoney } from '@/lib/format';
-import { familyPrice, type FamilyOffer } from '@/lib/plans';
+import { familyPrice, formatPrice, type FamilyOffer } from '@/lib/plans';
 
 /* The pricing page's questions: the visible FAQ and the FAQPage markup in its head. */
 export type Question = { q: string; a: string };
@@ -53,7 +52,7 @@ export function faqFor(family: readonly FamilyOffer[], currency = 'usd'): Questi
     const price = familyPrice(first.plan, currency);
     const perMonth = first.plan.interval === 'month';
     const extra = price
-        ? ` Each member after that is ${formatMoney(price.perMember, price.currency)} ${perMonth ? 'a month' : 'a year'}, up to ${maxMembers}.`
+        ? ` Each member after that is ${formatPrice(price.perMember, price.currency)} ${perMonth ? 'a month' : 'a year'}, up to ${maxMembers}.`
         : ` A family can have up to ${maxMembers} members.`;
     return [
         {
