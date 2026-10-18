@@ -241,6 +241,20 @@ extension Auth {
         ]
     }
 
+    /*
+     * Every grant a rotation's challenge serves, under the new root. A family folder's self-grant
+     * opens only as its family's, so it is rewrapped as one: the server names the family
+     * (`groupId`), and a wrong or missing one makes the core refuse, never guess.
+     */
+    static func rewrapGrants(_ served: [[String: Any]], userId: String, oldRoot: Data, newRoot: Data, keyVersion: UInt64) throws -> [WorkspaceGrant] {
+        try served.map { row in
+            if let groupId = row["groupId"] as? String {
+                return try areaSelfGrantRewrap(userId: userId, groupId: groupId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: row), keyVersion: keyVersion)
+            }
+            return try workspaceGrantRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: row), keyVersion: keyVersion)
+        }
+    }
+
     /* The recovery key envelope the server keeps, and whether the person confirmed saving the phrase. */
     public static func recoveryKey() async throws -> (envelope: RecoveryEnvelope, confirmed: Bool) {
         let reply = try await call("/api/auth/recovery-key")
@@ -286,14 +300,7 @@ extension Auth {
         let settingsKey = try (challenge["settingsKey"] as? [String: Any]).map {
             try settingsKeyRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, envelope: settingsKeyEnvelope(from: $0))
         }
-        // A family folder's self-grant opens only as its family's, so it is rewrapped as one: the
-        // server names the family, and a wrong or missing one makes the core refuse, never guess.
-        let workspaces = try workspacesJson.map { served -> WorkspaceGrant in
-            if let groupId = served["groupId"] as? String {
-                return try areaSelfGrantRewrap(userId: userId, groupId: groupId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: served), keyVersion: keyVersion)
-            }
-            return try workspaceGrantRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: served), keyVersion: keyVersion)
-        }
+        let workspaces = try rewrapGrants(workspacesJson, userId: userId, oldRoot: oldRoot, newRoot: newRoot, keyVersion: keyVersion)
         var body: [String: Any] = [
             "action": "master-key", "attemptToken": attemptToken, "finishLoginRequest": finish.request,
             "registrationRecord": registered.record,

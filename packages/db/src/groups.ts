@@ -23,6 +23,7 @@ import {
 import {
     accountIdentities,
     accountIdentityHistory,
+    accountKeys,
     areaGrants,
     driveLinks,
     driveNodes,
@@ -328,6 +329,25 @@ const refuse = (result: unknown): never => {
 };
 const invalid = (reason: string): never => refuse({ status: 'invalid', reason });
 const membersChanged = (reason: string): never => refuse({ status: 'members-changed', reason });
+
+/*
+ * Whether a self-grant `userId` is about to write is wrapped under their current
+ * account key. A master-key rotation (changeAccountSecurity) holds the user's row
+ * `for update` while it swaps the root and rewraps every workspace_keys row; the
+ * share lock here waits for it, or holds it off until this write commits, so a
+ * self-grant is never stored under a root the rotation just retired (it would
+ * open for nobody, and the next rotation would refuse the account's rows). A
+ * rotation that waited sees the new row and is refused, to be retried with it.
+ * Take it before the workspace_keys write, and after the group's and areas' locks.
+ */
+async function selfGrantUnderCurrentRoot(tx: Tx, userId: string, keyVersion: number) {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('share');
+    const [account] = await tx
+        .select({ keyVersion: accountKeys.keyVersion })
+        .from(accountKeys)
+        .where(eq(accountKeys.userId, userId));
+    return account !== undefined && account.keyVersion === keyVersion;
+}
 
 /* Whether `error` is a deadlock or serialization failure: retryable, answered `unavailable`. */
 function transient(error: unknown) {
@@ -770,6 +790,8 @@ async function insertArea(tx: Tx, groupId: string, uploader: string, area: AreaI
     await tx
         .insert(workspaceStorage)
         .values({ workspaceId: area.workspaceId, baseQuotaBytes: area.quotaBytes });
+    if (!(await selfGrantUnderCurrentRoot(tx, uploader, area.selfGrant.keyVersion)))
+        invalid('self-grant-key-version');
     await tx
         .insert(workspaceKeys)
         .values({ ...area.selfGrant, workspaceId: area.workspaceId, userId: uploader });
@@ -862,6 +884,8 @@ async function applyRotation(tx: Tx, groupId: string, uploader: string, rotation
      * the area's lock, that the writer holds the area (requireStillWriter), and a holder
      * may so far have had only a grant of it. The whole call commits or none of it does.
      */
+    if (!(await selfGrantUnderCurrentRoot(tx, uploader, rotation.selfGrant.keyVersion)))
+        invalid('self-grant-key-version');
     await tx
         .insert(workspaceKeys)
         .values({ ...rotation.selfGrant, workspaceId: rotation.workspaceId, userId: uploader })
@@ -2795,6 +2819,9 @@ export async function putSelfGrant(input: {
                         ),
                     );
                 if (!granted) return { status: 'no-grant' as const };
+                // Wrapped under a root a rotation has since replaced: re-made from the area grant.
+                if (!(await selfGrantUnderCurrentRoot(tx, input.userId, input.grant.keyVersion)))
+                    return { status: 'stale' as const };
                 await tx
                     .insert(workspaceKeys)
                     .values({
