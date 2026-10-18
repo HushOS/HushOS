@@ -892,3 +892,50 @@ describe('sealing again outside one’s own Drive', () => {
         expect(h.sealedFor).toEqual(['g1']);
     });
 });
+
+describe('a lock in the middle of sealing again', () => {
+    test('shares left when the client locks stay owed: failed, never refused, and the grantee is not marked done', async () => {
+        const h = harness();
+        const B = 'folder-b';
+        let pendingAll = true;
+        const done: string[][] = [];
+        let client: ReturnType<typeof createDriveClient>;
+        const api = {
+            ...h.api,
+            sharedByMe: async () => ({
+                shares: [A, B].map((id) => ({
+                    id: `share-${id}`,
+                    suite: 4,
+                    node: node(id, ROOT),
+                    grantee: { id: 'g1' },
+                    granteeIdentity: identity('g1'),
+                })),
+                links: [],
+            }),
+            // The person locks as soon as the first share is through.
+            resealShare: async (ws: string, shareId: string, input: unknown) => {
+                const result = await h.api.resealShare(ws, shareId, input as never);
+                client.close();
+                return result;
+            },
+        } as unknown as DriveApi;
+        client = createDriveClient(h.rpc, api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: { [A]: ['g1'], [B]: ['g1'] }, links: {} }),
+            resealPending: async () => ['g1'],
+            resealedTo: async (ids) => {
+                done.push(ids);
+            },
+            resealAll: async () => pendingAll,
+            resealedAll: async () => {
+                pendingAll = false;
+            },
+        });
+        await client.open('owner');
+        expect(await client.upgradeShares()).toEqual({ resealed: 1, refused: 0 });
+        expect(h.resealed).toEqual([`share-${A}`]);
+        // The share to B never went through: g1 is still owed it, and so is the whole re-seal.
+        expect(done).toEqual([]);
+        expect(pendingAll).toBe(true);
+    });
+});

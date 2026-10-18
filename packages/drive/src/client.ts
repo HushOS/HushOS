@@ -1194,6 +1194,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function upgradeShares(input: { all?: boolean } = {}) {
         if (!currentUserId || !options.trustGrantee || !options.ledger)
             return { resealed: 0, refused: 0 };
+        // Read once: a lock mid-pass clears `workspace`, and a share must then count as failed
+        // (owed again later), never as refused, which would mark its grantee done.
+        const ownWorkspace = workspace?.workspaceId;
+        if (!ownWorkspace) return { resealed: 0, refused: 0 };
         const [mine, ledger] = await Promise.all([api.sharedByMe(), options.ledger.read()]);
         // Each grantee the owner shared with, checked against their pin once: a pin that
         // follows a succession here asks for what was shared to be sealed to the new keys.
@@ -1223,7 +1227,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             if (share.suite === 4 && !all && !waiting.has(grantee)) continue;
             // Only a share in this account's own Drive: one it made elsewhere is in a family folder,
             // where sharing is not offered (design 3.4) and the worker and server refuse to seal.
-            if (options.view || share.node.workspaceId !== workspace?.workspaceId) {
+            if (options.view || share.node.workspaceId !== ownWorkspace) {
                 refused++;
                 continue;
             }
