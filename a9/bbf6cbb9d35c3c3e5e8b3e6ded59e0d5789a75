@@ -1,0 +1,47 @@
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_e0f709763dc51e 618-622
+docs/groups-design.md
+  s_c56e31c87cddde::t_67c984fc05f042 356
+docs/self-hosting.md
+  s_c56e31c87cddde::t_3b4a6279b0a43a 545-546
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_8994a233f71c83 92,107-108,156-161,164-174,176-185,187-216,219-227,233,236-242,244-246,259,264,268-269,312-313,336-337,340-341,352,369-375,410-412,479-483,510-515,680-685,691-699,703,715,1081-1082,1084-1085,1287-1291,1296-1302,1311-1313,1320-1323,1329-1342,1385-1400
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_55653cf6b7fc1c 187-190,192-193,489-494,498,502,504-506,508-513,566-571,579-580,590,635,674-683,754,2877-2880,2893,2982-2987,3060-3284
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_ecbcffc369720d 39
+packages/db/drizzle/20261018011558_group_plan_tiers/migration.sql
+  s_c56e31c87cddde::t_d40803ed41745d 1-4,12-17
+packages/db/drizzle/20261018011558_group_plan_tiers/snapshot.json
+  s_c56e31c87cddde::t_f1613ed8986d01 4,5859-5936
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_2afc260c75f321 288-292,466-470,473-474,479-522,641-661
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_dd1df30490cff7 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_82014709f87dd7 175-188
+packages/jobs/src/client.test.ts
+  s_c56e31c87cddde::t_dd86ad75ee6645 21-22,49-63
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_516ddcf36891f7 14,34,96-108,155,158-162
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_c56e31c87cddde::t_fcbb6fcd6ad5e6 54-56
+packages/jobs/src/worker.ts
+  s_c56e31c87cddde::t_ab41e02c8fa659 91,93-100,102-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a9bbf6cbb9d35c3c3e5e8b3e6ded59e0d5789a75",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
