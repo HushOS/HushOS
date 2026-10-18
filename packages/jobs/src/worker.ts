@@ -88,14 +88,25 @@ if (billingEnabled()) {
         },
     );
     // The daily reconcile re-issues a family's lost cut too; a failure there is queued here.
-    setCutRetryQueue((groupId) => boss.send(queues.billingReissueCut, { groupId }));
-    await boss.work<JobPayloads[typeof queues.billingReissueCut]>(
-        queues.billingReissueCut,
-        { batchSize: 1, pollingIntervalSeconds: 30 },
-        async ([job]) => {
-            if (job) await reissueGroupCut(job);
-        },
+    // One pending retry per family: the stately queue, keyed by the group.
+    setCutRetryQueue((groupId, startAfterSeconds) =>
+        boss.send(
+            queues.billingReissuePending,
+            { groupId },
+            {
+                singletonKey: groupId,
+                ...(startAfterSeconds ? { startAfter: startAfterSeconds } : {}),
+            },
+        ),
     );
+    for (const queue of [queues.billingReissuePending, queues.billingReissueCut] as const)
+        await boss.work<JobPayloads[typeof queue]>(
+            queue,
+            { batchSize: 1, pollingIntervalSeconds: 30 },
+            async ([job]) => {
+                if (job) await reissueGroupCut(job);
+            },
+        );
 } else await boss.unschedule(queues.reconcileBilling);
 
 /*

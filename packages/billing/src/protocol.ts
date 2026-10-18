@@ -16,6 +16,17 @@ export const GROUP_KIND_METADATA_KEY = 'hushos_group_kind';
 export const INCLUDED_MEMBERS_METADATA_KEY = 'included_members';
 export const QUOTA_PER_MEMBER_METADATA_KEY = 'quota_bytes_per_member';
 
+/*
+ * Which family tier a product is (Family Plus, Pro or Max): `hushos_tier` on
+ * both its monthly and yearly product. Tiers are ordered by their pool, never
+ * by this key; the key names the tier for the seed and the operator. A family
+ * product without one is the single Family plan that came before the tiers,
+ * kept readable for anyone still on it; one with any other value is dropped.
+ */
+export const TIER_METADATA_KEY = 'hushos_tier';
+export const FAMILY_TIERS = ['plus', 'pro', 'max'] as const;
+export type FamilyTier = (typeof FAMILY_TIERS)[number];
+
 /* A group's customer at the provider is keyed `group:<groupId>`; a person's by their user id. */
 export const GROUP_CUSTOMER_PREFIX = 'group:';
 
@@ -66,6 +77,59 @@ export function quoteUnitsChange(input: {
     const now = (input.now ?? new Date()).getTime();
     const left = Math.min(total, Math.max(0, Math.floor((input.periodEnd.getTime() - now) / 1000)));
     return Number((BigInt(added) * BigInt(input.perMember) * BigInt(left)) / BigInt(total));
+}
+
+/*
+ * About what Polar charges at once for moving a family to a bigger tier of the
+ * same billing period with `invoice` proration, before tax. The period does
+ * not restart (spike 8, T2): Polar charges each price of the new plan (the
+ * base, and the members past those included) for the part of the period left
+ * and credits each of the old plan's, by the second, every line rounded to the
+ * nearest minor unit (a plan change's lines round; a raise's truncate). T2:
+ * 3000 against 2000 with 0.98961 of the period left was 990 net. The page
+ * still says "about": tax, and Polar's exact second, come on top. A move to a
+ * smaller tier waits for the renewal and costs nothing now.
+ */
+export function quoteTierChange(input: {
+    from: { base: number; perMember: number; includedMembers: number };
+    to: { base: number; perMember: number; includedMembers: number };
+    units: number;
+    periodStart: Date;
+    periodEnd: Date;
+    now?: Date;
+}) {
+    const total = BigInt(
+        Math.floor((input.periodEnd.getTime() - input.periodStart.getTime()) / 1000),
+    );
+    if (total <= 0n) return 0;
+    const now = (input.now ?? new Date()).getTime();
+    const left = BigInt(
+        Math.min(Number(total), Math.max(0, Math.floor((input.periodEnd.getTime() - now) / 1000))),
+    );
+    // One line, prorated and rounded half up to the minor unit.
+    const line = (amount: number) => (BigInt(amount) * left * 2n + total) / (2n * total);
+    const lines = (plan: typeof input.from) =>
+        line(plan.base) + line(plan.perMember * Math.max(0, input.units - plan.includedMembers));
+    const charge = lines(input.to) - lines(input.from);
+    return charge > 0n ? Number(charge) : 0;
+}
+
+const GIB = 1024n ** 3n;
+
+/*
+ * Space as the app writes it (in 1024s, labelled GB and TB, at most two
+ * decimals), either to the nearest hundredth or, for how much to free, rounded
+ * up so freeing it is always enough: "1.2 TB", "428.01 GB", "0.01 MB". Shared,
+ * so the page and the server's refusal give the same figures.
+ */
+export function spaceOf(bytes: bigint, round: 'nearest' | 'up' = 'nearest') {
+    const unit = bytes >= 1024n * GIB ? 1024n * GIB : bytes >= GIB ? GIB : 1024n * 1024n;
+    const label = unit === GIB ? 'GB' : unit === GIB * 1024n ? 'TB' : 'MB';
+    const hundredths =
+        round === 'up' ? (bytes * 100n + unit - 1n) / unit : (bytes * 100n + unit / 2n) / unit;
+    const whole = hundredths / 100n;
+    const fraction = (hundredths % 100n).toString().padStart(2, '0').replace(/0+$/, '');
+    return `${whole}${fraction ? `.${fraction}` : ''} ${label}`;
 }
 
 /* The organisation's default payment currency at the provider; every plan has a price in it. */

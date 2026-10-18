@@ -38,6 +38,8 @@ test('without billing a pooled group’s folders read their own allowance, not t
                 units: 6,
                 paidUnits: 6,
                 pendingUnits: null,
+                pendingProductId: null,
+                paidTier: { productId: 'prod_family', quotaBytes: 100n },
                 includedMembers: 6,
                 quotaBytes: 100n,
                 currentPeriodStart: new Date(Date.now() - 1000),

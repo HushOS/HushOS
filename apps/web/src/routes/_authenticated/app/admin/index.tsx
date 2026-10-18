@@ -88,6 +88,13 @@ function StatGrid({ stats }: { stats: Stat[] }) {
 
 const count = (value: number) => value.toLocaleString();
 
+/* Why a family's plan change is stuck, by the reason billing records. */
+const stuckReasons: Record<string, string> = {
+    'not-kept': 'Polar accepted the change five times and kept none of it.',
+    'revert-unavailable':
+        'An upgrade unpaid for over a week, and the plan it was paid for is no longer offered, so it can’t be moved back. The family keeps the smaller storage meanwhile.',
+};
+
 function AdminPage() {
     const overview = useQuery(adminOverviewQueryOptions);
     const billing = useBillingEnabled();
@@ -171,6 +178,12 @@ function AdminPage() {
                                 to: { to: '/app/admin/reports' },
                             },
                             {
+                                label: 'Plan changes stuck',
+                                value: count(data.stuckPlanChanges.length),
+                                tone: data.stuckPlanChanges.length > 0 ? 'danger' : undefined,
+                                anchor: '#stuck-plan-changes',
+                            },
+                            {
                                 label: 'On hold',
                                 value: count(data.reports.held),
                                 to: { to: '/app/admin/reports', search: { status: 'held' } },
@@ -238,6 +251,49 @@ function AdminPage() {
                         back. Otherwise the file shows as unavailable to its owner until it is
                         recovered by hand.
                     </p>
+                    {data.stuckPlanChanges.length > 0 && (
+                        <>
+                            <h2
+                                id="stuck-plan-changes"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Plan changes stuck
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Wanted at renewal</th>
+                                        <th className={th}>Why</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.stuckPlanChanges.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={td}>{row.subscriptionId}</td>
+                                            <td className={td}>{row.wanted ?? '–'}</td>
+                                            <td className={cn(td, 'font-sans')}>
+                                                {stuckReasons[row.reason ?? ''] ??
+                                                    row.reason ??
+                                                    '–'}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                HushOS can’t make these plan changes itself. Set the change on the
+                                subscription in Polar’s dashboard; the row goes once the plan is as
+                                it should be.
+                            </p>
+                        </>
+                    )}
                 </>
             )}
         </OperatorPage>

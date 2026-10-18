@@ -36,7 +36,8 @@ import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
 import {
     currenciesOf,
-    familyOffer,
+    FAMILY_POOL_LINE,
+    familyOffers,
     priceOf,
     pricingLede,
     TAX_LINE,
@@ -96,7 +97,7 @@ export const Route = createFileRoute('/pricing')({
     head: ({ loaderData }) => {
         if (!loaderData) return {};
         const { origin, catalogue, currency } = loaderData;
-        const faq = faqFor(familyOffer(catalogue, 'month', currency));
+        const faq = faqFor(familyOffers(catalogue, 'month', currency), currency);
         const description = `Start free with ${formatQuota(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
         return {
             meta: [
@@ -247,8 +248,8 @@ function PricingPage() {
     const tiers = tiersOf(catalogue.plans);
     const free = formatQuota(catalogue.freeQuotaBytes);
     // Only where the server serves families and sells plans: it lists none otherwise.
-    const family = familyOffer(catalogue, interval, currency);
-    const questions = faqFor(familyOffer(catalogue, 'month', currency));
+    const family = familyOffers(catalogue, interval, currency);
+    const questions = faqFor(familyOffers(catalogue, 'month', currency), currency);
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
     const live =
@@ -510,7 +511,9 @@ function PricingPage() {
                                 {currency !== detected &&
                                     ' Checkout charges in the currency of the country you are in.'}
                             </p>
-                            {family && <FamilySection offer={family} hasSession={hasSession} />}
+                            {family.length > 0 && (
+                                <FamilySection offers={family} hasSession={hasSession} />
+                            )}
 
                             <div className="flex flex-col gap-4 rounded-xl bg-muted p-6">
                                 <h2 className="text-lg font-bold">Every plan, including Free</h2>
@@ -641,51 +644,76 @@ function Business() {
 }
 
 /*
- * The family plan, shown only where the server serves families and sells plans.
- * Choosing one happens on the family's own page, after it is made: signed in,
- * the button opens Families; signed out, it signs up first and lands there.
+ * The family tiers, shown only where the server serves families and sells
+ * plans, priced like the personal cards above (the same currency and the same
+ * Monthly or Yearly). Choosing one happens on the family's own page, after it
+ * is made: signed in, the button opens Families; signed out, it signs up first
+ * and lands there.
  */
-function FamilySection({ offer, hasSession }: { offer: FamilyOffer; hasSession: boolean }) {
+function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSession: boolean }) {
+    const first = offers[0]!;
     return (
         <section
             aria-labelledby="family-plan"
             data-family-plan
-            className="grid gap-6 rounded-xl border border-rule bg-card p-6 lg:grid-cols-[7fr_5fr] lg:gap-10 lg:p-7"
+            className="flex flex-col gap-6 rounded-xl border border-rule bg-card p-6 lg:p-7"
         >
-            <div className="flex flex-col gap-3">
-                <h2 id="family-plan" className="text-[17px] font-bold">
-                    Family
-                </h2>
-                <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
-                    {offer.size}
-                </p>
-                <p className="max-w-[36em] text-base leading-relaxed">
-                    Family folders that every member can open, end-to-end encrypted. {offer.pool}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                    Family folders are on the web for now.
-                </p>
-            </div>
-            <div className="flex flex-col gap-4 border-t border-rule pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10">
-                <div className="flex flex-col gap-1 tabular-nums">
-                    <span className="text-[22px] font-bold">{offer.price}</span>
-                    <span className="text-sm leading-snug text-muted-foreground">
-                        {offer.billed}
-                    </span>
-                    <span className="text-sm leading-snug text-muted-foreground">
-                        {offer.extra}
-                    </span>
-                    <span className="text-sm leading-snug text-muted-foreground">{TAX_LINE}</span>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between lg:gap-10">
+                <div className="flex flex-col gap-3">
+                    <h2 id="family-plan" className="text-[17px] font-bold">
+                        Family
+                    </h2>
+                    <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
+                        Family folders for up to {first.plan.includedMembers} members, end-to-end
+                        encrypted.
+                    </p>
+                    <p className="max-w-[40em] text-base leading-relaxed">
+                        Every member can open them. {FAMILY_POOL_LINE}
+                    </p>
                 </div>
                 <Link
                     to={hasSession ? '/app/families' : '/register'}
                     // Signed out: the new account lands on Families once it is set up.
                     onClick={hasSession ? undefined : () => rememberReturn('/app/families')}
-                    className={buttonVariants({ size: 'lg', className: 'w-full' })}
+                    className={buttonVariants({
+                        size: 'lg',
+                        className: 'w-full shrink-0 lg:w-fit',
+                    })}
                 >
                     Create a family
                 </Link>
             </div>
+            <ul className="grid gap-4 lg:grid-cols-3">
+                {offers.map((offer) => (
+                    <li
+                        key={offer.plan.id}
+                        data-family-tier={offer.plan.tier ?? offer.plan.id}
+                        className="flex flex-col gap-4 rounded-lg border border-rule p-5"
+                    >
+                        <div className="flex flex-col gap-2">
+                            <span className="text-[17px] font-bold">{offer.name}</span>
+                            <span className="text-[32px] leading-none font-extrabold tracking-[-0.03em] tabular-nums">
+                                {offer.storage}
+                            </span>
+                        </div>
+                        <div className="flex flex-col gap-1 border-t border-rule pt-4 tabular-nums">
+                            <span className="text-[22px] font-bold">{offer.price}</span>
+                            <span className="text-sm leading-snug text-muted-foreground">
+                                {offer.billed}
+                            </span>
+                            <span className="text-sm leading-snug text-muted-foreground">
+                                {offer.size}
+                            </span>
+                            <span className="text-sm leading-snug text-muted-foreground">
+                                {offer.extra}
+                            </span>
+                        </div>
+                    </li>
+                ))}
+            </ul>
+            <p className="text-sm text-muted-foreground">
+                {TAX_LINE} Family folders are on the web for now.
+            </p>
         </section>
     );
 }

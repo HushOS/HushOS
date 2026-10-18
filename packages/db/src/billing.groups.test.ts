@@ -26,6 +26,11 @@ const GIB = 1_073_741_824n;
 function plan(overrides: Partial<GroupSubscriptionSnapshot> = {}): GroupSubscriptionSnapshot {
     const units = overrides.units ?? 6;
     return {
+        // Paid for, unless a test says otherwise: the product's own tier.
+        paidTier: {
+            productId: overrides.productId ?? 'prod_family',
+            quotaBytes: overrides.quotaBytes ?? 100n,
+        },
         id: 'sub_family',
         productId: 'prod_family',
         productName: 'Family (monthly)',
@@ -36,6 +41,7 @@ function plan(overrides: Partial<GroupSubscriptionSnapshot> = {}): GroupSubscrip
         units,
         paidUnits: units,
         pendingUnits: null,
+        pendingProductId: null,
         includedMembers: 6,
         quotaBytes: 100n,
         currentPeriodStart: new Date(Date.now() - DAY),
@@ -187,6 +193,129 @@ describe('the pool', () => {
         expect(await getStorage(areaIds[0]!)).toMatchObject({ allowance: 0n, used: 60n });
         expect(await seatLimit(groupId)).toBeNull();
         expect(await billing.getLiveGroupSubscription(groupId)).toBeNull();
+    });
+});
+
+describe('tier moves', () => {
+    test('a move to a smaller tier changes neither the pool nor the seats until Polar applies it', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan({ units: 7, quotaBytes: 4096n * GIB })]);
+        await apply(groupId, [
+            plan({ units: 7, quotaBytes: 4096n * GIB, pendingProductId: 'prod_plus' }),
+        ]);
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(4096n * GIB);
+        expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
+            pendingProductId: 'prod_plus',
+            productId: 'prod_family',
+        });
+        // At the renewal the product and its pool change together; the places stay.
+        await apply(groupId, [plan({ units: 7, productId: 'prod_plus', quotaBytes: 800n * GIB })]);
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(800n * GIB);
+        expect((await billing.getLiveGroupSubscription(groupId))?.pendingProductId).toBeNull();
+    });
+
+    test('the pool is the lesser of the tier paid for and the product’s', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({ organizerId: userId, pooled: true });
+        const allowance = async () => (await getStorage(areaIds[0]!))?.allowance;
+        const pro = { productId: 'prod_pro', quotaBytes: 2048n * GIB };
+        await apply(groupId, [plan({ units: 5, ...pro })]);
+        expect(await allowance()).toBe(2048n * GIB);
+        // On Family Max, Family Pro paid for (the upgrade's order waits): Family Pro's pool.
+        await apply(groupId, [
+            plan({ units: 5, productId: 'prod_max', quotaBytes: 4096n * GIB, paidTier: pro }),
+        ]);
+        expect(await allowance()).toBe(2048n * GIB);
+        expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
+            productId: 'prod_max',
+            paidProductId: 'prod_pro',
+            paidQuotaBytes: 2048n * GIB,
+        });
+        // On Family Plus from a renewal not yet paid, Family Pro still the last paid: Plus's pool.
+        await apply(groupId, [
+            plan({ units: 5, productId: 'prod_plus', quotaBytes: 800n * GIB, paidTier: pro }),
+        ]);
+        expect(await allowance()).toBe(800n * GIB);
+        // Nothing paid at all: nothing.
+        await apply(groupId, [
+            plan({ units: 5, productId: 'prod_max', quotaBytes: 4096n * GIB, paidTier: null }),
+        ]);
+        expect(await allowance()).toBe(0n);
+        expect((await billing.getLiveGroupSubscription(groupId))?.paidProductId).toBeNull();
+    });
+
+    test('a plan first seen with nothing paid has no pool and no places', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [
+            plan({ units: 4, paidUnits: null, quotaBytes: 2048n * GIB, paidTier: null }),
+        ]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(0n);
+        expect(await seatLimit(groupId)).toBe(1);
+        await apply(groupId, [plan({ units: 4, quotaBytes: 2048n * GIB })]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(2048n * GIB);
+        expect(await seatLimit(groupId)).toBe(4);
+    });
+
+    test('orders that couldn’t be read leave the tier paid for as it was', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({ organizerId: userId, pooled: true });
+        const since = new Date('2026-10-10T00:00:00Z');
+        await apply(groupId, [
+            plan({
+                productId: 'prod_max',
+                quotaBytes: 4096n * GIB,
+                paidTier: { productId: 'prod_pro', quotaBytes: 2048n * GIB },
+                tierMismatchSince: since,
+            }),
+        ]);
+        await apply(groupId, [
+            plan({
+                productId: 'prod_max',
+                quotaBytes: 4096n * GIB,
+                paidTier: undefined,
+                tierMismatchSince: undefined,
+            }),
+        ]);
+        expect((await getStorage(areaIds[0]!))?.allowance).toBe(2048n * GIB);
+        expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
+            paidProductId: 'prod_pro',
+            tierMismatchSince: since,
+        });
+        // Paid: the difference is gone, and with it the date.
+        await apply(groupId, [
+            plan({ productId: 'prod_max', quotaBytes: 4096n * GIB, tierMismatchSince: null }),
+        ]);
+        expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
+            paidProductId: 'prod_max',
+            tierMismatchSince: null,
+        });
+    });
+
+    test('a recorded move outlives a rewrite from Polar, is listed for re-issue, and clears', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan({ units: 6 })]);
+        expect(await billing.listIntendedCuts()).toEqual([]);
+        await billing.setIntendedProduct('sub_family', 'prod_plus');
+        // A raise deleted Polar's pending update: the read model loses it, the record does not.
+        await apply(groupId, [plan({ units: 7, pendingProductId: null })]);
+        expect(await billing.getLiveGroupSubscription(groupId)).toMatchObject({
+            pendingProductId: null,
+            intendedProductId: 'prod_plus',
+        });
+        expect(await billing.listIntendedCuts()).toEqual([
+            { groupId, subscriptionId: 'sub_family' },
+        ]);
+        await billing.setIntendedProduct('sub_family', null);
+        expect(await billing.listIntendedCuts()).toEqual([]);
+        // An ended plan's record is never listed.
+        await billing.setIntendedProduct('sub_family', 'prod_plus');
+        await apply(groupId, [plan({ endedAt: new Date(), status: 'canceled' })]);
+        expect(await billing.listIntendedCuts()).toEqual([]);
     });
 });
 

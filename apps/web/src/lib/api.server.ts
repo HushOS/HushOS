@@ -614,7 +614,13 @@ const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
  * A family's scheduled cut that Polar lost to a raise and could not be put back
  * at once goes to the worker's retry queue (pg-boss, with backoff).
  */
-billing.setCutRetryQueue((groupId) => enqueue(queues.billingReissueCut, { groupId }));
+billing.setCutRetryQueue((groupId, startAfterSeconds) =>
+    enqueue(
+        queues.billingReissuePending,
+        { groupId },
+        { startAfterSeconds, singletonKey: groupId },
+    ),
+);
 
 /* The routes' own GROUPS_ENABLED check, behind the edge's. */
 function groupsGate() {
@@ -1211,6 +1217,19 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 await billingMutation(request, sessionToken),
                 params.id,
                 body.units,
+            ),
+    )
+    .post(
+        '/billing/groups/:id/plan',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ productId: t.String({ minLength: 1, maxLength: 100 }) }),
+        },
+        async ({ request, sessionToken, params, body }) =>
+            billing.changeGroupPlan(
+                await billingMutation(request, sessionToken),
+                params.id,
+                body.productId,
             ),
     )
     .post(

@@ -39,6 +39,7 @@ Status: research, 15 October 2026; the card-free sandbox runs of 17 October are 
 4. **Billing handover completes only once the new payer has added a card**; until then the old payer stays the payer, and is told so.
 5. **A payer's account cannot be deleted** until they hand billing over or cancel the group plan.
 6. **A Business pool grows with each paid member** (`quota_bytes_per_member`); a Family pool is fixed per plan.
+7. **Three family tiers replace the single Family plan** (owner, 2026-10-18): Family Plus 800 GB, Pro 2 TB and Max 4 TB at 10, 20 and 30 USD a month, four members included, then 1.50 USD a member a month on every tier, up to 20 (EUR at parity, GBP at 0.8, INR 399, 799 and 1,399 rupees and 59 a member; a year is ten months). A bigger tier starts now with `invoice` proration; a smaller one at the renewal with `next_period`, which needs a recorded move re-issued after any raise, as cuts are. The 15 USD, six-included, 2.00-a-member figures in sections 6 and 8 are the experiments' placeholders, not prices.
 
 Experiments E5 (refund maths) and the refund half of E4 are no longer needed; the others still confirm Polar's behaviour before groups-design 3.5 is built.
 
@@ -207,7 +208,7 @@ The calculator moves money, so `AGENTS.md` requires a Vitest suite beside it. It
 
 ## 5. Recommended design
 
-**Products.** Four products: Family (monthly), Family (yearly), Business (monthly) and Business (yearly), seeded by `seed.ts`.
+**Products.** Family Plus, Family Pro and Family Max, each monthly and yearly, and Business (monthly) and Business (yearly), seeded by `seed.ts`. Each family tier carries `hushos_tier`.
 
 - `recurring_interval`: `month` or `year`.
 - Per currency (`usd`, `eur`, `gbp`, `inr`):
@@ -671,6 +672,62 @@ These ran on the `2026-04` API path, as everything above did. Main is moving to 
 - **After each change**, a `2026-04` re-read of the subscription matched the `2026-10` response exactly.
 
 **Nothing differs.** The E3 free subscription now stands at 10 units with a pending cut to 9.
+
+### Family tiers, T1 and T2 (2026-10-18)
+
+These runs use the seeded tier products of PR #65:
+
+- Family Plus (monthly) `1b9924fe-…`: 10 USD or ₹399;
+- Family Pro (monthly) `f43e960e-…`: 20 USD or ₹799;
+- Family Max (monthly) `2e97ab39-…`: 30 USD or ₹1,399.
+
+Each has 4 members included, `minimum_units: 4`, and 1.50 USD or ₹59 per extra member a month. `EXPFREE` was extended to the three monthly tiers. The scripts are `t1-pending-coexist.ts`, `t1-followup.ts` and `t2-tier-upgrade.ts`. The worktree was not rebased onto `origin/main`, because it had uncommitted changes.
+
+**T1. A pending product change and a pending units change coexist: they merge into one `pending_update`.** Free Family Pro (monthly) subscriptions at 6 units:
+
+| Run | Step                                        | `pending_update` after                                      |
+| --- | ------------------------------------------- | ----------------------------------------------------------- |
+| A   | 1. `units: 5`, `next_period`                | `{ product_id: null, units: 5 }`, id `1176135e`             |
+| A   | 2. `product_id: Plus`, `next_period`        | `{ product_id: Plus, units: 5 }`, same id                   |
+| A   | 3. `units: 4`, `next_period`                | `{ product_id: Plus, units: 4 }`, same id                   |
+| A   | 4. `units: 7`, `invoice` (immediate raise)  | `{ product_id: Plus, units: null }`, same id; `units` is 7  |
+| B   | 1. `product_id: Plus`, `next_period`        | `{ product_id: Plus, units: null }`, id `f79ecf45`          |
+| B   | 2. `units: 5`, `next_period`                | `{ product_id: Plus, units: 5 }`, same id                   |
+| B   | 3. `product_id: Max`, `next_period`         | `{ product_id: Max, units: 5 }`, same id                    |
+| B   | 4. `product_id: Max`, `invoice` (immediate) | null; the product is Max now, `units` 6                     |
+| C   | `product_id` and `units` in one call        | 422 `RequestValidationError`: no update schema accepts both |
+
+- **Order does not matter.** Each `next_period` change overwrites only its own field of the one pending update; the other field is kept.
+- **An immediate units raise clears only the pending units**, and keeps a pending product change.
+- **An immediate product change clears the whole pending update**, units included.
+- **Both changes cannot go in one request.** HushOS must send two calls.
+
+**T2. A mid-period tier change with `invoice` charges the prorated difference, and keeps the period.**
+
+- **The first target declined.** `90197bd1-…` is INR, 9 units, on exp-Family; its default card is 0341.
+    - A product change to Family Pro with `next_period` set `pending_update.product_id` and charged nothing; `{ pending_update: null }` then cleared it.
+    - The same change with `invoice` returned 402 `{"error":"PaymentFailed","detail":"Payment failed with reason: card_error."}`. The product stayed exp-Family, units stayed 9, the period stayed 2026-10-17T04:32Z to 2026-11-17, and no order of any status was left.
+    - **This is the 0341 decline the E3 runs could not reach, and it rolls back exactly as E8's decline did.** The 16:45Z raise the day before, made 28 seconds after 0341 was added, was paid. The likeliest reading is that the default change had not yet reached the subscription; without `payments:read` this is unconfirmed.
+- **Then the E6 team subscription.** `67975e71-…` is USD, 7 units, on exp-Family; its only card is the payer's 4242, which is also the default. The period runs 2026-10-17T16:40:06Z to 2026-11-17T16:40:06Z, 31 days.
+
+    | Change (both `invoice`) | At (2026-10-18) | Order lines (USD minor units)                                                                                                                                 | Net | Tax | Total |
+    | ----------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | --- | ----- |
+    | exp-Family → Family Pro | 00:23:42Z       | Pro base `+1979`; Pro `(7 members)` `+445`; remaining exp-Family `−1484`; remaining exp-Family `(7 members)` `−198`; each "From Oct 18, 2026 to Nov 17, 2026" | 742 | 134 | 876   |
+    | Family Pro → Family Max | 00:23:50Z       | remaining Pro `−1979`; remaining Pro `(7 members)` `−445`; Max base `+2969`; Max `(7 members)` `+445`                                                         | 990 | 178 | 1168  |
+    - **The period did not restart.** `current_period_start` and `current_period_end` are unchanged by both changes.
+    - **The subscription amount** went 1700 → 2450 → 3450.
+    - **The charge is the prorated difference, not a full new period.** The fraction left at 00:23:50 is 2,650,576 / 2,678,400 s = 0.98961. Max minus Pro is (3000 − 2000) × 0.98961 = 989.6, charged as 990 net. The member lines cancel, because Pro and Max charge the same per member.
+    - **Rounding.** On product changes each line is rounded to the nearest minor unit: 2968.8 → 2969, 197.9 → 198, 1484.4 → 1484. The units-only raises in E3, E4 and E8 instead came out at the truncated value: 199.99 → 199 and 1999.99 → 1999. HushOS cannot reproduce Polar's figure to the minor unit in every case.
+    - **Tax** is 18% (GST from the payer's Indian address) on each order.
+    - **Which card paid** is not visible (`payments:read` is missing). The only card on file is the payer's 4242.
+
+### Order shape for the paid tier (2026-10-18)
+
+HushOS reads a family's paid tier from its newest paid order (groups-design 3.5). A sandbox check confirmed what that relies on:
+
+- **A product-change order names the new product at the order level.** `product_id` (and the nested `product`) is the new tier, `billing_reason` is `subscription_update`, `status` is `paid`, `paid` is `true` and `refunded_amount` is 0. Its line items carry price ids only: the credit lines map to the old product's prices and the charge lines to the new one's.
+- **A 100%-off checkout order is paid.** `status` is `paid`, `paid` is `true`, `net_amount` is 0.
+- **A refunded order's shape is unverified**: the token has no refunds scopes. HushOS treats an order as refunded whole when its `status` is `refunded` or its `refunded_amount` reaches its `net_amount`, and counts a partly refunded one as still paying for its tier. Check this against a real refund before relying on it.
 
 ### Design consequences for groups-design 3.5
 

@@ -92,6 +92,10 @@ export function refusalCopy(
                     return 'Your bank wants you to confirm the charge for another place. Confirm it, then let them in again.';
                 case 'payment':
                     return 'The payment for another place didn’t go through. Nobody was let in.';
+                case 'busy':
+                    return 'Another change to this plan is in progress. Try again in a moment.';
+                case 'changed':
+                    return 'The charge went through but the plan changed at the same time. Refresh to see your places.';
             }
             const used = numberField(data, 'used');
             const limit = numberField(data, 'limit');

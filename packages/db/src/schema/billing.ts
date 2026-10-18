@@ -148,6 +148,65 @@ export const groupBillingSubscriptions = pgTable(
          * STALE_RAISE_DAYS), not the payer's: it is withdrawn if the raise is paid.
          */
         intendedStale: boolean('intended_stale').notNull().default(false),
+        /*
+         * A smaller tier the plan moves to at the period's end (`pending_update.product_id`),
+         * and the one HushOS last asked for: kept like `intended_units`, because a raise
+         * deletes the whole pending update at Polar and the move must be asked for again.
+         */
+        pendingProductId: text('pending_product_id'),
+        intendedProductId: text('intended_product_id'),
+        /* The move above is the stale rule's (an upgrade unpaid past STALE_RAISE_DAYS), not the payer's. */
+        intendedProductStale: boolean('intended_product_stale').notNull().default(false),
+        /*
+         * The tier paid for: the product of the subscription's newest paid, unrefunded order
+         * (a checkout, a renewal or a change), re-derived from Polar on every reconcile, and
+         * that product's pool. Null and 0 while nothing is paid. Drive's pool is the lesser of
+         * this and the product's, so an unpaid upgrade gives nothing and a smaller tier at a
+         * renewal counts at once.
+         */
+        paidProductId: text('paid_product_id'),
+        paidQuotaBytes: bigint('paid_quota_bytes', { mode: 'bigint' }),
+        /*
+         * Since when the product has been bigger than the tier paid for (an upgrade unpaid):
+         * the oldest unpaid change order for it, or when HushOS first saw the difference.
+         * Past STALE_RAISE_DAYS the plan is moved back at the period's end; null once they match.
+         */
+        tierMismatchSince: timestamp('tier_mismatch_since', { withTimezone: true }),
+        /*
+         * When HushOS last asked Polar again for a cut or a tier move. A reconcile skips the
+         * re-issue for a while after, so the webhook a re-issue causes never causes another.
+         */
+        reissuedAt: timestamp('reissued_at', { withTimezone: true }),
+        /* What that re-issue asked for: only the same request is held back, never a new one. */
+        reissuedState: text('reissued_state'),
+        /*
+         * How many times in a row Polar answered that same request with 200 and didn't keep it;
+         * failures (5xx, timeouts) don't count. HushOS stops at a few.
+         */
+        reissueAttempts: integer('reissue_attempts').notNull().default(0),
+        /* Until when a queued retry is pending, so a family has one at a time. */
+        reissueRetryAt: timestamp('reissue_retry_at', { withTimezone: true }),
+        /*
+         * When HushOS gave up asking Polar again (MAX_REISSUES answers of 200 that Polar didn't
+         * keep): shown to operators on the management page until Polar holds the change.
+         */
+        reissueGaveUpAt: timestamp('reissue_gave_up_at', { withTimezone: true }),
+        /*
+         * Why: `not-kept` (Polar answered 200 and kept nothing, MAX_REISSUES times) or
+         * `revert-unavailable` (an unpaid upgrade past STALE_RAISE_DAYS whose paid tier is no
+         * longer offered, so there is nothing to move it back to).
+         */
+        reissueStuckReason: text('reissue_stuck_reason'),
+        /*
+         * A place purchase or an upgrade under way, until when: the two never run at once for
+         * a family, so a raise's order can't be taken for an unconfirmed upgrade's.
+         */
+        changeClaimUntil: timestamp('change_claim_until', { withTimezone: true }),
+        /*
+         * Orders HushOS refused to credit: a raise Polar billed on another product than the one
+         * it was asked on. They never count as paying for a tier.
+         */
+        uncreditedOrderIds: text('uncredited_order_ids').array(),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),

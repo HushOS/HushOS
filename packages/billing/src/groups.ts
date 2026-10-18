@@ -12,6 +12,7 @@ import {
     PROVIDER,
     billingEnabled,
     getFamilyCatalogue,
+    offeredFamilies,
     polar,
     statusOf,
     unavailable,
@@ -24,10 +25,11 @@ import {
     STALE_RAISE_DAYS,
     UNPAID_GROUP_SEATS,
     quoteUnitsChange,
+    spaceOf,
 } from './protocol';
 
 /* Pure, so the web quotes a raise with the server's own arithmetic. */
-export { quoteUnitsChange };
+export { quoteUnitsChange, spaceOf };
 
 /*
  * Family billing (docs/groups-design.md 3.5, docs/polar-group-billing-spike.md
@@ -87,6 +89,7 @@ function snapshotOf(
     subscription: models.Subscription,
     plan: FamilyCatalogueProduct,
     paid: boolean,
+    tier: TierState,
 ): billingRepository.GroupSubscriptionSnapshot {
     const units = subscription.units ?? plan.includedMembers;
     return {
@@ -100,6 +103,8 @@ function snapshotOf(
         units,
         paidUnits: paid ? units : null,
         pendingUnits: subscription.pending_update?.units ?? null,
+        pendingProductId: subscription.pending_update?.product_id ?? null,
+        ...(tier.known ? { paidTier: tier.paidTier, tierMismatchSince: tier.mismatchSince } : {}),
         includedMembers: plan.includedMembers,
         quotaBytes: BigInt(plan.quotaBytes),
         currentPeriodStart: new Date(subscription.current_period_start),
@@ -148,19 +153,123 @@ async function orderState(subscriptionId: string) {
 }
 
 /*
+ * An order refunded whole: Polar marks it `refunded`, or its refunds reach what it
+ * charged. A partial refund (a goodwill credit) leaves it paying for its tier; an
+ * order that charged nothing (a 100%-off checkout) is never "refunded" by being free.
+ */
+function fullyRefunded(order: models.Order) {
+    return (
+        order.status === 'refunded' ||
+        (order.refunded_amount > 0 && order.refunded_amount >= order.net_amount)
+    );
+}
+
+/* The orders that pay for a tier: a checkout, a renewal, a change. */
+const TIER_ORDER_REASONS = new Set([
+    'subscription_create',
+    'subscription_cycle',
+    'subscription_update',
+]);
+
+/*
+ * The tier a subscription has paid for, re-derived from Polar's orders: the
+ * product of its newest paid, unrefunded checkout, renewal or change order
+ * (newest by when it was made), and that product's pool. Pending orders don't
+ * count, nor orders refunded whole (a partial refund still pays for the tier). So a paid upgrade gives its tier, an
+ * unpaid one leaves the last paid order's tier in force, and a paid renewal of
+ * the bigger tier gives it whatever change order still waits. A raise is a
+ * change order for the product it was made on, which places are refused off
+ * (changePlaces), so it never names a tier not paid for. `mismatchSince`:
+ * while the product's pool is bigger than the paid tier's (an upgrade
+ * unpaid), the date kept from the first time HushOS saw it, or the oldest
+ * unpaid change order for the product if older; null otherwise, and while
+ * nothing is paid (no tier to go back to). `known` is false when the orders
+ * can't be read: the row keeps what it had.
+ */
+type TierState =
+    | { known: false }
+    | {
+          known: true;
+          paidTier: { productId: string; quotaBytes: bigint } | null;
+          mismatchSince: Date | null;
+      };
+
+async function tierStateOf(
+    subscription: models.Subscription,
+    plan: FamilyCatalogueProduct,
+): Promise<TierState> {
+    let orders: models.Order[];
+    try {
+        orders = (
+            await polar().orders.list({
+                subscription_id: subscription.id,
+                sorting: ['-created_at'],
+                limit: 100,
+            })
+        ).items;
+    } catch (error) {
+        log.warn({
+            message: 'Group orders could not be read for a tier',
+            billing: { status: statusOf(error) },
+        });
+        return { known: false };
+    }
+    const catalogue = await getFamilyCatalogue();
+    const row = await billingRepository.getGroupSubscription(subscription.id);
+    const uncredited = new Set(row?.uncreditedOrderIds ?? []);
+    const newest = orders
+        .filter(
+            (order) =>
+                order.paid &&
+                !fullyRefunded(order) &&
+                !uncredited.has(order.id) &&
+                TIER_ORDER_REASONS.has(order.billing_reason) &&
+                catalogue.some((candidate) => candidate.id === order.product_id),
+        )
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+    const paidPlan = newest && catalogue.find((candidate) => candidate.id === newest.product_id);
+    const paidTier = paidPlan
+        ? { productId: paidPlan.id, quotaBytes: BigInt(paidPlan.quotaBytes) }
+        : null;
+    if (!paidTier || BigInt(plan.quotaBytes) <= paidTier.quotaBytes)
+        return { known: true, paidTier, mismatchSince: null };
+    // Only change orders made since the tier paid for: an old one left unpaid months ago (an
+    // upgrade that was reverted) doesn't start the clock on a fresh upgrade to the same tier.
+    const paidAt = newest ? Date.parse(newest.created_at) : 0;
+    const unpaid = orders
+        .filter(
+            (order) =>
+                !order.paid &&
+                order.billing_reason === 'subscription_update' &&
+                order.product_id === subscription.product_id &&
+                Date.parse(order.created_at) > paidAt,
+        )
+        .map((order) => Date.parse(order.created_at))
+        .filter((at) => !Number.isNaN(at));
+    const seen = row?.tierMismatchSince?.getTime() ?? Date.now();
+    return {
+        known: true,
+        paidTier,
+        mismatchSince: new Date(Math.min(seen, ...unpaid)),
+    };
+}
+
+/*
  * One subscription as a change returned it, written without touching the
  * group's others. `paid` says the places it now has are paid for (a raise
  * Polar answered with 200 and no order waits); otherwise the paid count stays
- * where it was.
+ * where it was. The tier paid for is re-derived from Polar's orders
+ * (tierStateOf). False when the product isn't a family plan.
  */
 async function applyChanged(groupId: string, subscription: models.Subscription, paid: boolean) {
     const plan = await planOf(subscription.product_id);
     if (!plan) return false;
+    const tier = await tierStateOf(subscription, plan);
     await billingRepository.applyGroupState({
         groupId,
         provider: PROVIDER,
         customerId: null,
-        subscriptions: [snapshotOf(subscription, plan, paid)],
+        subscriptions: [snapshotOf(subscription, plan, paid, tier)],
         graceMs: graceMs(),
         complete: false,
     });
@@ -204,6 +313,8 @@ export async function reconcileGroup(groupId: string) {
     const subscriptions: billingRepository.GroupSubscriptionSnapshot[] = [];
     const unresolved: string[] = [];
     const stale: string[] = [];
+    // Products bigger than the tier paid for, for more than STALE_RAISE_DAYS (an unpaid upgrade).
+    const staleTier: string[] = [];
     for (const id of ids) {
         let subscription: models.Subscription;
         try {
@@ -225,7 +336,14 @@ export async function reconcileGroup(groupId: string) {
         const orders = ended ? null : await orderState(subscription.id);
         if (orders?.oldestAt != null && Date.now() - orders.oldestAt > STALE_RAISE_DAYS * DAY)
             stale.push(subscription.id);
-        subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false));
+        const tier: TierState = ended ? { known: false } : await tierStateOf(subscription, plan);
+        if (
+            tier.known &&
+            tier.mismatchSince &&
+            Date.now() - tier.mismatchSince.getTime() > STALE_RAISE_DAYS * DAY
+        )
+            staleTier.push(subscription.id);
+        subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false, tier));
     }
     await billingRepository.applyGroupState({
         groupId,
@@ -243,7 +361,7 @@ export async function reconcileGroup(groupId: string) {
             message: 'Group has more than one live subscription',
             billing: { group: groupId, live: liveCount },
         });
-    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    let live = await billingRepository.getLiveGroupSubscription(groupId);
     if (live && (await revokeWithoutPayer(groupId, live))) return;
     const used = await groupsRepository.seatsUsed(groupId);
     // Changed outside HushOS (the dashboard, support): never remove anyone, but say so.
@@ -252,6 +370,50 @@ export async function reconcileGroup(groupId: string) {
             message: 'Group plan has fewer places than admitted members',
             billing: { group: groupId, units: live.units, admitted: used },
         });
+    if (
+        live &&
+        staleTier.includes(live.id) &&
+        live.paidProductId !== null &&
+        paidTier(live).quotaBytes < live.quotaBytes
+    ) {
+        // An upgrade the bank never confirmed: back to the tier paid for at the period's end, so
+        // a renewal never bills it. The payer's own move at or below that tier stands. Withdrawn
+        // by reissueCut as soon as the tier paid for matches the product.
+        const tier = { productId: live.paidProductId, quotaBytes: paidTier(live).quotaBytes };
+        const catalogue = await getFamilyCatalogue();
+        const back = catalogue.find((candidate) => candidate.id === tier.productId);
+        const own = live.intendedProductId
+            ? catalogue.find((candidate) => candidate.id === live?.intendedProductId)
+            : undefined;
+        if (!back || !offeredFamilies(catalogue).includes(back)) {
+            // Nothing to move back to: the family stays at the smaller storage (the pool is the
+            // lesser of the two) and an operator is told, once; nothing is scheduled or retried.
+            if (live.reissueStuckReason !== 'revert-unavailable') {
+                log.error({
+                    message: 'Unconfirmed upgrade can’t be reverted: its paid plan is not offered',
+                    billing: { group: groupId, product: live.productId, paid: tier.productId },
+                });
+                await billingRepository.setReissueGaveUp(
+                    live.id,
+                    new Date(Date.now()),
+                    'revert-unavailable',
+                );
+            }
+        } else if (!own || BigInt(own.quotaBytes) > tier.quotaBytes) {
+            log.warn({
+                message: 'Unconfirmed upgrade reverted at the period end',
+                billing: { group: groupId, product: live.productId, paid: tier.productId },
+            });
+            await billingRepository.setIntendedProduct(live.id, tier.productId, true);
+            live = await billingRepository.getLiveGroupSubscription(groupId);
+        }
+    } else if (
+        live?.reissueStuckReason === 'revert-unavailable' &&
+        paidTier(live).quotaBytes >= live.quotaBytes
+    ) {
+        // Paid after all, or moved by hand: no longer stuck.
+        await billingRepository.setReissueGaveUp(live.id, null);
+    }
     // The raise the stale rule cut back was paid after all: withdraw that cut, re-issue nothing.
     if (live?.intendedStale && live.paidUnits >= live.units) {
         log.info({
@@ -260,12 +422,17 @@ export async function reconcileGroup(groupId: string) {
         });
         await billingRepository.setIntendedUnits(live.id, null);
         if (live.pendingUnits === live.intendedUnits) {
-            const cleared = await polar().subscriptions.update(live.id, { pending_update: null });
-            await applyChanged(groupId, cleared, true);
+            const subscription = await polar().subscriptions.get(live.id);
+            await setPending(groupId, subscription, {
+                units: null,
+                product: live.intendedProductId,
+            });
         }
         return;
     }
-    if (live && stale.includes(live.id) && live.paidUnits < live.units) {
+    // A first checkout never paid has no places to go back to (and a cut to none is no cut):
+    // Polar's own retries decide whether it starts at all.
+    if (live && stale.includes(live.id) && live.paidUnits < live.units && live.paidUnits > 0) {
         log.warn({
             message: 'Unconfirmed raise cut back to the places paid for',
             billing: { group: groupId, units: live.units, paid: live.paidUnits },
@@ -274,9 +441,12 @@ export async function reconcileGroup(groupId: string) {
         if (live.intendedUnits === null || live.intendedUnits > live.paidUnits)
             await billingRepository.setIntendedUnits(live.id, live.paidUnits, true);
     }
-    if (live && (live.intendedUnits !== null || stale.includes(live.id)))
+    if (
+        live &&
+        (live.intendedUnits !== null || live.intendedProductId !== null || stale.includes(live.id))
+    )
         try {
-            await reissueCut(groupId);
+            await reissueCut(groupId, { fromReconcile: true });
         } catch (error) {
             log.warn({
                 message: 'Recorded cut not re-issued by reconcile',
@@ -317,19 +487,29 @@ async function revokeWithoutPayer(
  * set by the processes that can send jobs, the web app and the worker. Without
  * one the recorded cut still waits for the daily reconcile.
  */
-let cutRetryQueue: ((groupId: string) => Promise<unknown>) | undefined;
-export function setCutRetryQueue(queue: ((groupId: string) => Promise<unknown>) | undefined) {
+type RetryQueue = (groupId: string, startAfterSeconds?: number) => Promise<unknown>;
+let cutRetryQueue: RetryQueue | undefined;
+export function setCutRetryQueue(queue: RetryQueue | undefined) {
     cutRetryQueue = queue;
 }
 
-async function queueCutRetry(groupId: string) {
+/* A retry now (with the job's backoff), or not before `startAfterSeconds`. */
+async function queueCutRetry(groupId: string, startAfterSeconds?: number) {
     if (!cutRetryQueue) {
         log.warn({ message: 'No queue for cut retries', billing: { group: groupId } });
         return;
     }
+    // One pending retry per family: claimed on its row until it is due (and the queue itself
+    // keeps one per family, stately with the group as its key).
+    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    const due = Date.now() + Math.max(startAfterSeconds ?? 0, RETRY_CLAIM_SECONDS) * 1000;
+    if (live && !(await billingRepository.claimReissueRetry(live.id, new Date(due)))) return;
     try {
-        await cutRetryQueue(groupId);
+        await cutRetryQueue(groupId, startAfterSeconds);
     } catch (error) {
+        // Not queued (the queue isn't made yet, the database is busy): the claim goes, so the
+        // next reconcile, the daily one at the latest, can queue it.
+        if (live) await billingRepository.releaseReissueRetry(live.id);
         log.warn({
             message: 'Cut retry could not be queued',
             billing: { group: groupId, failure: String((error as Error)?.name) },
@@ -338,11 +518,97 @@ async function queueCutRetry(groupId: string) {
 }
 
 /*
- * Schedules a cut to `target` places at the period's end and records it. An
- * admission can commit between the count `target` came from and the cut: the
- * seats this writes refuse any admission after it (the group row orders the
- * two), and the members counted after it catch one that landed before, so the
- * cut is moved up to them, or dropped if that is no cut at all.
+ * Polar's pending update holds a scheduled product change and a scheduled cut
+ * side by side (spike 8, T1, 2026-10-18): each `next_period` call overwrites
+ * only its own part, in either order, and one call carrying both is refused
+ * (422), so each part is its own call. An immediate raise drops only the
+ * pending cut; an immediate product change (an upgrade) drops the whole
+ * pending update.
+ */
+/*
+ * A reconcile does not ask Polar again within this long of the last time
+ * HushOS did: the deliveries a re-issue causes (subscription.updated,
+ * customer.state_changed) then find it done or leave it to the daily
+ * reconcile and the retry job, never re-issue it themselves.
+ */
+const REISSUE_GUARD_MS = 15 * 60 * 1000;
+
+/* How many times in a row the same request is sent before HushOS gives up and tells operators. */
+export const MAX_REISSUES = 5;
+
+/* An immediate retry (with the job's backoff) holds the family's one retry this long. */
+const RETRY_CLAIM_SECONDS = 60;
+
+/* What HushOS wants Polar's pending update to hold: a cut to `units` places, a move to `product`. */
+type Pending = { units: number | null; product: string | null };
+
+const pendingOf = (subscription: models.Subscription): Pending => ({
+    units: subscription.pending_update?.units ?? null,
+    product: subscription.pending_update?.product_id ?? null,
+});
+
+/* Whether Polar's pending update holds `want`, as setPending would ask for it. */
+function holds(subscription: models.Subscription, want: Pending) {
+    const units = subscription.units ?? 0;
+    const held = pendingOf(subscription);
+    return (
+        held.units === (want.units !== null && want.units < units ? want.units : null) &&
+        held.product ===
+            (want.product !== null && want.product !== subscription.product_id
+                ? want.product
+                : null)
+    );
+}
+
+/*
+ * Makes Polar's pending update hold exactly `want`, one call per part that
+ * differs, and nothing when it already does: every write sets an absolute
+ * part of the next period, so asking again is idempotent. Polar cannot drop
+ * one part alone, so a part held and no longer wanted clears it first.
+ * Returns the subscription as Polar last answered.
+ */
+async function setPending(groupId: string, subscription: models.Subscription, want: Pending) {
+    let current = subscription;
+    const units = current.units ?? 0;
+    const target: Pending = {
+        units: want.units !== null && want.units < units ? want.units : null,
+        product: want.product !== null && want.product !== current.product_id ? want.product : null,
+    };
+    const held = pendingOf(current);
+    if (held.units === target.units && held.product === target.product) return current;
+    // Neither part can be dropped alone: a part held and no longer wanted clears both first.
+    if (
+        (held.units !== null && target.units === null) ||
+        (held.product !== null && target.product === null)
+    )
+        current = await polar().subscriptions.update(current.id, { pending_update: null });
+    if (target.product !== null && pendingOf(current).product !== target.product)
+        current = await polar().subscriptions.update(current.id, {
+            product_id: target.product,
+            proration_behavior: 'next_period',
+        });
+    if (target.units !== null && pendingOf(current).units !== target.units)
+        current = await polar().subscriptions.update(current.id, {
+            units: target.units,
+            proration_behavior: 'next_period',
+        });
+    if (!(await applyChanged(groupId, current, false))) throw unresolvedPlan();
+    const after = pendingOf(current);
+    if (after.units !== target.units || after.product !== target.product)
+        log.warn({
+            message: 'Polar holds a different pending update than HushOS asked for',
+            billing: { group: groupId, wanted: target, held: after },
+        });
+    return current;
+}
+
+/*
+ * Schedules a cut to `target` places at the period's end and records it,
+ * beside any tier move HushOS means to have. An admission can commit between
+ * the count `target` came from and the cut: the seats this writes refuse any
+ * admission after it (the group row orders the two), and the members counted
+ * after it catch one that landed before, so the cut is moved up to them, or
+ * dropped if that is no cut at all.
  */
 async function scheduleCut(
     groupId: string,
@@ -351,22 +617,18 @@ async function scheduleCut(
     target: number,
     stale = false,
 ) {
-    let cut = await polar().subscriptions.update(subscriptionId, {
+    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    const product = live?.id === subscriptionId ? live.intendedProductId : null;
+    let cut = await setPending(groupId, await polar().subscriptions.get(subscriptionId), {
         units: target,
-        proration_behavior: 'next_period',
+        product,
     });
-    if (!(await applyChanged(groupId, cut, false))) throw unresolvedPlan();
     await billingRepository.setIntendedUnits(subscriptionId, target, stale);
     const used = await groupsRepository.seatsUsed(groupId);
-    if (used <= target) return;
-    cut = await polar().subscriptions.update(
-        subscriptionId,
-        used < units
-            ? { units: used, proration_behavior: 'next_period' }
-            : { pending_update: null },
-    );
-    if (!(await applyChanged(groupId, cut, false))) throw unresolvedPlan();
-    await billingRepository.setIntendedUnits(subscriptionId, used < units ? used : null, stale);
+    if (used > target) {
+        cut = await setPending(groupId, cut, { units: used < units ? used : null, product });
+        await billingRepository.setIntendedUnits(subscriptionId, used < units ? used : null, stale);
+    }
 }
 
 function unresolvedPlan() {
@@ -377,36 +639,159 @@ function unresolvedPlan() {
 }
 
 /*
- * Asks Polar again for the cut HushOS recorded, if Polar no longer has it.
- * Idempotent: a cut sets an absolute count for the next period, so asking
- * twice schedules the same thing. Never below the members admitted or the
- * plan's included count; once the count is no longer above it (the cut
- * applied at renewal), the record is cleared. Throws when Polar refuses or
- * cannot be reached, so the retry job is retried with backoff.
+ * Asks Polar again for the cut and the tier move HushOS recorded, if Polar no
+ * longer holds them, in one pass (setPending): idempotent, and nothing is sent
+ * when Polar already holds them. A cut never goes below the members admitted
+ * or the plan's included count; once the count is no longer above it (the cut
+ * applied at renewal), the record is cleared, as is a move once the plan is on
+ * that tier or the tier is withdrawn. Parts Polar holds that HushOS has no
+ * record of are left alone. `fromReconcile` does not send the same request
+ * again within REISSUE_GUARD_MS of the last (records are still tidied); it
+ * queues a retry for when the window ends, so a re-issue's own deliveries
+ * never repeat it and a needed one is never dropped. A stale revert whose
+ * upgrade was paid is withdrawn here, Polar first.
+ * Throws when Polar refuses or cannot be reached, so the retry job is retried
+ * with backoff.
  */
-export async function reissueCut(groupId: string) {
+export async function reissueCut(groupId: string, options: { fromReconcile?: boolean } = {}) {
     if (!billingEnabled()) return;
     const live = await billingRepository.getLiveGroupSubscription(groupId);
-    if (!live || live.intendedUnits === null) return;
+    if (!live || (live.intendedUnits === null && live.intendedProductId === null)) return;
     const subscription = await polar().subscriptions.get(live.id);
     const plan = await planOf(subscription.product_id);
     if (!plan) return;
+    let product = live.intendedProductId;
+    // The stale rule's revert, once the upgrade it was reverting is paid: withdrawn. Polar is
+    // written first and the record cleared only after, so a failed write is retried, not lost.
+    const withdraw =
+        product !== null &&
+        live.intendedProductStale &&
+        paidTier(live).quotaBytes >= live.quotaBytes;
+    if (withdraw) {
+        log.info({
+            message: 'Stale-upgrade revert withdrawn: the upgrade was paid',
+            billing: { group: groupId, product: live.productId },
+        });
+        product = null;
+    }
+    if (product !== null && subscription.product_id === product) {
+        await billingRepository.setIntendedProduct(live.id, null);
+        product = null;
+    }
+    if (product !== null) {
+        const target = (await getFamilyCatalogue()).find((candidate) => candidate.id === product);
+        if (!target || target.archived) {
+            log.warn({
+                message: 'Recorded tier move dropped: the plan is no longer offered',
+                billing: { group: groupId, product },
+            });
+            await billingRepository.setIntendedProduct(live.id, null);
+            product = null;
+        }
+    }
     const units = subscription.units ?? plan.includedMembers;
-    const target = Math.max(
-        live.intendedUnits,
-        plan.includedMembers,
-        await groupsRepository.seatsUsed(groupId),
-    );
-    if (target >= units) {
-        await billingRepository.setIntendedUnits(live.id, null);
+    let cut = live.intendedUnits;
+    if (cut !== null) {
+        const target = Math.max(
+            cut,
+            plan.includedMembers,
+            await groupsRepository.seatsUsed(groupId),
+        );
+        if (target >= units) {
+            await billingRepository.setIntendedUnits(live.id, null);
+            cut = null;
+        } else {
+            if (target !== cut)
+                await billingRepository.setIntendedUnits(live.id, target, live.intendedStale);
+            cut = target;
+        }
+    }
+    const held = pendingOf(subscription);
+    const want = {
+        units: cut ?? held.units,
+        // A withdrawn revert leaves only what it put there; anything else Polar holds stays.
+        product:
+            product ?? (withdraw && held.product === live.intendedProductId ? null : held.product),
+    };
+    const done = async () => {
+        if (withdraw) await billingRepository.setIntendedProduct(live.id, null);
+    };
+    if (want.units === held.units && want.product === held.product) {
+        // Polar holds it: the count of tries starts again.
+        if (live.reissueAttempts > 0 || live.reissuedState !== null)
+            await billingRepository.markReissued(live.id, null, 0);
+        if (live.reissueGaveUpAt) await billingRepository.setReissueGaveUp(live.id, null);
+        return done();
+    }
+    // Polar refuses changes to a plan set to end; resuming it brings them back here.
+    if (subscription.cancel_at_period_end) return;
+    // A reconcile soon after asking for exactly this (most likely that write's own delivery)
+    // writes nothing, and queues a retry for when the window ends; a different request goes.
+    const state = JSON.stringify(want);
+    const again = live.reissuedState === state;
+    // Polar answered 200 to this MAX_REISSUES times and kept none of it: stop, and put it in
+    // front of an operator (the management page), rather than ask again for ever.
+    if (again && live.reissueAttempts >= MAX_REISSUES) {
+        if (!live.reissueGaveUpAt) {
+            await billingRepository.setReissueGaveUp(live.id, new Date(Date.now()), 'not-kept');
+            log.error({
+                message: 'Family plan’s scheduled change given up: Polar would not keep it',
+                billing: { group: groupId, wanted: want, held, attempts: live.reissueAttempts },
+            });
+        }
         return;
     }
-    if (target !== live.intendedUnits)
-        await billingRepository.setIntendedUnits(live.id, target, live.intendedStale);
-    if (subscription.pending_update?.units === target) return;
-    // Polar refuses quantity changes on a plan set to end; resuming it brings the cut back here.
-    if (subscription.cancel_at_period_end) return;
-    await scheduleCut(groupId, subscription.id, units, target, live.intendedStale);
+    if (
+        options.fromReconcile &&
+        live.reissuedAt &&
+        again &&
+        Date.now() - live.reissuedAt.getTime() < REISSUE_GUARD_MS
+    ) {
+        const wait = REISSUE_GUARD_MS - (Date.now() - live.reissuedAt.getTime());
+        log.warn({
+            message: 'Pending update still differs right after the same re-issue; retried later',
+            billing: { group: groupId, wanted: want, held, retryInSeconds: Math.ceil(wait / 1000) },
+        });
+        await queueCutRetry(groupId, Math.ceil(wait / 1000));
+        return;
+    }
+    // Stamped first (the count as it was), so the deliveries this write causes find it and
+    // leave it. A failure (a throw, a 5xx, a timeout) counts for nothing: the job retries it.
+    const before = again ? live.reissueAttempts : 0;
+    await billingRepository.markReissued(live.id, state, before);
+    const after = await setPending(groupId, subscription, want);
+    // Answered 200: counted only if Polar still doesn't hold it.
+    await billingRepository.markReissued(live.id, state, holds(after, want) ? 0 : before + 1);
+    await done();
+    // An admission that landed while the cut was asked for moves it up (see scheduleCut).
+    if (cut === null) return;
+    const used = await groupsRepository.seatsUsed(groupId);
+    if (used <= cut) return;
+    await setPending(groupId, after, { units: used < units ? used : null, product: want.product });
+    await billingRepository.setIntendedUnits(
+        live.id,
+        used < units ? used : null,
+        live.intendedStale,
+    );
+}
+
+/*
+ * After a write that drops some of Polar's pending update (an upgrade drops
+ * all of it, a raise its cut), the recorded cut and move are asked for again,
+ * if missing. A failure is
+ * queued for the retry job and the daily reconcile, never thrown: the write
+ * before it stands.
+ */
+async function restorePending(groupId: string) {
+    try {
+        await reissueCut(groupId);
+    } catch (error) {
+        log.warn({
+            message: 'Recorded pending update not re-issued',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+        await queueCutRetry(groupId);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -675,6 +1060,10 @@ export type SeatResult =
     | { status: 'confirm'; url: string | null }
     /* Any other refused payment. */
     | { status: 'payment' }
+    /* Another place purchase or an upgrade is under way for this family. */
+    | { status: 'busy' }
+    /* Polar charged for the place, but billed it on a plan changed meanwhile: nobody let in. */
+    | { status: 'changed' }
     | { status: 'unavailable' };
 
 /* A refused raise, by what Polar said. */
@@ -714,34 +1103,123 @@ async function changePlaces(
     const plan = await planOf(subscription.product_id);
     if (!plan) return { status: 'no-plan' };
     const current = subscription.units ?? plan.includedMembers;
-    const cut = subscription.pending_update?.units ?? null;
     const cap = { status: 'cap' as const, max: plan.maxMembers, step: MAX_MEMBERS_PER_RAISE };
     if (target > plan.maxMembers) return cap;
     if (subscription.cancel_at_period_end) return { status: 'canceling' };
-    if (target <= current) {
-        // Polar holds places HushOS has not seen paid: a raise awaiting the bank. Re-read;
-        // they open only once no order waits, and asking Polar again would charge nothing.
-        if (target > live.paidUnits) {
-            await reconcileGroup(groupId);
-            const fresh = await billingRepository.getLiveGroupSubscription(groupId);
-            if (!fresh || fresh.paidUnits < target) return { status: 'confirm', url: null };
-        }
-        if (cut === null || cut >= target) return { status: 'ok' };
-        try {
-            const moved = await polar().subscriptions.update(
-                subscription.id,
-                target < current
-                    ? { units: target, proration_behavior: 'next_period' }
-                    : { pending_update: null },
-            );
-            await applyChanged(groupId, moved, false);
-            await billingRepository.setIntendedUnits(live.id, target < current ? target : null);
-            return { status: 'ok' };
-        } catch (error) {
-            return refusedRaise(error);
-        }
-    }
+    if (target <= current) return placesHeld(groupId, live, subscription, target);
     if (target - current > MAX_MEMBERS_PER_RAISE) return cap;
+    // One plan change at a time: a raise and an upgrade never run together for a family. The
+    // raise works from a read taken under the claim, never from the one above.
+    return withPlanChange(
+        live.id,
+        (): SeatResult => ({ status: 'busy' }),
+        async () => {
+            let held: models.Subscription;
+            try {
+                held = await polar().subscriptions.get(live.id);
+            } catch (error) {
+                log.warn({
+                    message: 'Group plan read failed',
+                    billing: { status: statusOf(error) },
+                });
+                return { status: 'unavailable' };
+            }
+            const heldPlan = await planOf(held.product_id);
+            if (!heldPlan) return { status: 'no-plan' };
+            const now = held.units ?? heldPlan.includedMembers;
+            if (held.cancel_at_period_end) return { status: 'canceling' };
+            if (target > heldPlan.maxMembers) return cap;
+            // A raise that landed meanwhile may already hold the place.
+            if (target <= now) return placesHeld(groupId, live, held, target);
+            if (target - now > MAX_MEMBERS_PER_RAISE) return cap;
+            return raisePlaces(groupId, live, held, target, held.pending_update?.units ?? null);
+        },
+    );
+}
+
+/*
+ * A place the plan already has: open once paid (a raise awaiting the bank opens
+ * nothing; asking Polar again would charge nothing), and a scheduled cut that
+ * would take it is moved up, free.
+ */
+async function placesHeld(
+    groupId: string,
+    live: { id: string; paidUnits: number },
+    subscription: models.Subscription,
+    target: number,
+): Promise<SeatResult> {
+    const plan = await planOf(subscription.product_id);
+    const current = subscription.units ?? plan?.includedMembers ?? 0;
+    const cut = subscription.pending_update?.units ?? null;
+    if (target > live.paidUnits) {
+        await reconcileGroup(groupId);
+        const fresh = await billingRepository.getLiveGroupSubscription(groupId);
+        if (!fresh || fresh.paidUnits < target) return { status: 'confirm', url: null };
+    }
+    if (cut === null || cut >= target) return { status: 'ok' };
+    try {
+        const intended = await billingRepository.getLiveGroupSubscription(groupId);
+        await setPending(groupId, subscription, {
+            units: target < current ? target : null,
+            product: intended?.id === live.id ? intended.intendedProductId : null,
+        });
+        await billingRepository.setIntendedUnits(live.id, target < current ? target : null);
+        return { status: 'ok' };
+    } catch (error) {
+        return refusedRaise(error);
+    }
+}
+
+/*
+ * The orders a raise made: change orders for the product Polar billed it on, at
+ * its count of places, since it was asked for. Unreadable, none (logged).
+ */
+async function raiseOrders(raised: models.Subscription, units: number, since: number) {
+    try {
+        const orders = (
+            await polar().orders.list({
+                subscription_id: raised.id,
+                product_id: raised.product_id,
+                sorting: ['-created_at'],
+                limit: 10,
+            })
+        ).items;
+        return orders
+            .filter(
+                (order) =>
+                    order.billing_reason === 'subscription_update' &&
+                    order.product_id === raised.product_id &&
+                    order.units === units &&
+                    Date.parse(order.created_at) >= since - 60_000,
+            )
+            .map((order) => order.id);
+    } catch (error) {
+        log.warn({
+            message: 'A raise’s orders could not be read to set them aside',
+            billing: { status: statusOf(error) },
+        });
+        return [];
+    }
+}
+
+/* The raise itself, holding the family's plan-change claim (changePlaces). */
+async function raisePlaces(
+    groupId: string,
+    live: { id: string; paidUnits: number },
+    subscription: models.Subscription,
+    target: number,
+    cut: number | null,
+): Promise<SeatResult> {
+    // No raise on top of an upgrade the bank hasn't confirmed: the two orders never interleave.
+    // Polar's product, just read, against the tier paid for: a row a failed write left behind
+    // can't open a place.
+    // The tier paid for is read from Polar's orders now, not taken from the row: a refund
+    // since the last reconcile can't leave a place open.
+    if (!(await applyChanged(groupId, subscription, false))) return { status: 'no-plan' };
+    const row = await billingRepository.getLiveGroupSubscription(groupId);
+    if (row && subscription.product_id !== paidTier(row).productId)
+        return { status: 'confirm', url: null };
+    const startedAt = Date.now();
     let raised: models.Subscription;
     try {
         raised = await polar().subscriptions.update(subscription.id, {
@@ -751,12 +1229,30 @@ async function changePlaces(
     } catch (error) {
         return refusedRaise(error);
     }
+    // Billed on another product than the one it was asked on (changed outside HushOS meanwhile):
+    // its places and its order are not credited, and the plan is read again from Polar.
+    if (raised.product_id !== subscription.product_id) {
+        log.error({
+            message: 'A raise was billed on another product than it was asked on; not credited',
+            billing: { group: groupId, asked: subscription.product_id, billed: raised.product_id },
+        });
+        await billingRepository.addUncreditedOrders(
+            live.id,
+            await raiseOrders(raised, target, startedAt),
+        );
+        await applyChanged(groupId, raised, false);
+        await reconcileGroup(groupId);
+        return { status: 'changed' };
+    }
     // The raise replaced any scheduled cut at Polar (spike E3): the payer asked for more places
     // now, so the cut is not put back, or they would pay for places they could not fill.
+    // A scheduled tier move survives it (T1); restorePending below only checks.
     if (cut !== null) await billingRepository.setIntendedUnits(live.id, null);
     // Paid only when Polar shows no order waiting; one that cannot be read is not paid yet.
     const paid = (await orderState(subscription.id)).unpaid === false;
     await applyChanged(groupId, raised, paid);
+    // Polar keeps a scheduled move through a raise; were it lost, it is asked for again.
+    await restorePending(groupId);
     return paid ? { status: 'ok' } : { status: 'confirm', url: null };
 }
 
@@ -832,6 +1328,311 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
     }
 }
 
+/* Said when Polar has charged for a place on a plan that changed meanwhile: never "try again". */
+const CHARGED_BUT_CHANGED =
+    'The charge went through but the plan changed at the same time. Refresh to see your places.';
+
+/* Said when a place purchase and an upgrade meet: one waits for the other. */
+const BUSY = 'Another change to this plan is in progress. Try again in a moment.';
+
+/* How long a plan change holds its claim: well past Polar's timeouts, short enough to lapse. */
+const CHANGE_CLAIM_MS = 2 * 60 * 1000;
+
+/*
+ * Runs `work` holding the family's one plan-change claim (place purchases and
+ * upgrades), or answers `busy` when another holds it. Released however `work` ends.
+ */
+async function withPlanChange<T>(subscriptionId: string, busy: () => T, work: () => Promise<T>) {
+    const claim = await billingRepository.claimPlanChange(subscriptionId, CHANGE_CLAIM_MS);
+    if (!claim) return busy();
+    try {
+        return await work();
+    } finally {
+        // Only this claim: one that ran out and was taken by another change stays theirs.
+        await billingRepository.releasePlanChange(subscriptionId, claim);
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Tiers                                                                      */
+/* ------------------------------------------------------------------------- */
+
+const tierName = (plan: { name: string }) =>
+    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+
+export type PlanChange = {
+    billing: GroupBillingSummary;
+    url: string | null;
+    confirmPayment?: true;
+    /* A bigger tier, now; a smaller one, at the period's end; or a scheduled move withdrawn. */
+    when: 'now' | 'renewal' | 'kept';
+};
+
+/*
+ * The payer moves the family to another tier billed the same way (monthly or
+ * yearly). Places carry over: a product change at Polar keeps `units`, and
+ * every tier includes the same members.
+ *
+ * - A bigger pool is an upgrade: the product changes now, and the difference
+ *   for the rest of the period is charged at once (`invoice`), as a personal
+ *   plan switch is. Only a member who holds `billing` may, and not while the
+ *   bank still has a charge to confirm. A 402 changes nothing; a bank that
+ *   wants confirmation sends the payer to the portal.
+ * - A smaller pool is a downgrade, scheduled for the period's end
+ *   (`next_period`), so nothing is credited to a wallet that cannot be paid
+ *   out and the family keeps what it paid for. It is refused while the family
+ *   folders hold more than the smaller pool. The payer may do it even after
+ *   leaving, as they may always pay for less. It is recorded, since a raise
+ *   deletes Polar's pending update, and asked for again after one.
+ * - The family's own tier withdraws a scheduled move.
+ *
+ * A plan set to end, or with a renewal the bank refused, is not changed.
+ */
+export async function changeGroupPlan(
+    user: BillingUser,
+    groupId: string,
+    productId: string,
+): Promise<PlanChange> {
+    requireFamilyBilling();
+    await requirePayer(groupId, user.id);
+    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    if (!live) throw new BillingError('This family has no plan.', 404);
+    const catalogue = await getFamilyCatalogue();
+    const target = catalogue.find((candidate) => candidate.id === productId);
+    if (!target || (!offeredFamilies(catalogue).includes(target) && target.id !== live.productId))
+        throw new BillingError('That plan is not available.', 404);
+    let subscription: models.Subscription;
+    try {
+        subscription = await polar().subscriptions.get(live.id);
+    } catch (error) {
+        throw unavailable(error);
+    }
+    const current = catalogue.find((candidate) => candidate.id === subscription.product_id);
+    // A plan HushOS cannot read is never changed blind.
+    if (!current) throw unresolvedPlan();
+    if (subscription.cancel_at_period_end)
+        throw new BillingError(
+            'This family plan is set to end. Resume it in the billing portal first.',
+            409,
+        );
+    if (subscription.status === 'past_due')
+        throw new BillingError(
+            'The last payment for this family’s plan didn’t go through. Update the card in the billing portal first.',
+            409,
+        );
+    const done = async (when: PlanChange['when']): Promise<PlanChange> => ({
+        billing: await getGroupBilling(user, groupId),
+        url: null,
+        when,
+    });
+
+    if (target.id === current.id) {
+        const pending = subscription.pending_update?.product_id ?? null;
+        if (pending === null && live.intendedProductId === null)
+            throw new BillingError('The family is already on that plan.', 409);
+        await billingRepository.setIntendedProduct(live.id, null);
+        if (pending !== null)
+            // Polar can't drop the move alone: the pending update is set again without it.
+            await asBillingError(() =>
+                setPending(groupId, subscription, {
+                    units: live.intendedUnits ?? pendingOf(subscription).units,
+                    product: null,
+                }),
+            );
+        return done('kept');
+    }
+    if (target.interval !== current.interval)
+        throw new BillingError(
+            current.interval === 'year'
+                ? 'Choose another yearly plan. A family plan can’t switch between monthly and yearly yet.'
+                : 'Choose another monthly plan. A family plan can’t switch between monthly and yearly yet.',
+            400,
+        );
+    const currency = subscription.currency;
+    if (!(currency in target.prices))
+        throw new BillingError('That plan is not priced in the family’s currency.', 400);
+    const units = subscription.units ?? current.includedMembers;
+    if (units < target.includedMembers)
+        throw new BillingError('That plan includes more places than the family has.', 400);
+    const bigger = BigInt(target.quotaBytes) > BigInt(current.quotaBytes);
+    if (!bigger && BigInt(target.quotaBytes) === BigInt(current.quotaBytes))
+        throw new BillingError('That plan has the same storage as the family’s.', 400);
+
+    if (bigger)
+        // One plan change at a time: an upgrade and a place purchase never run together.
+        return withPlanChange(
+            live.id,
+            (): never => {
+                throw new BillingError(BUSY, 409);
+            },
+            async (): Promise<PlanChange> => {
+                await familyOf(groupId, user.id, 'billing');
+                // Read again under the claim: the guard and the change work from this, never from
+                // a copy a place purchase finished after.
+                let held: models.Subscription;
+                try {
+                    held = await polar().subscriptions.get(live.id);
+                } catch (error) {
+                    throw unavailable(error);
+                }
+                if (
+                    held.product_id !== subscription.product_id ||
+                    held.cancel_at_period_end ||
+                    held.status === 'past_due'
+                )
+                    throw new BillingError(
+                        'This plan changed a moment ago. Look at it again before changing it.',
+                        409,
+                    );
+                // The tier paid for, read from Polar's orders now (a refund since the last reconcile).
+                if (!(await applyChanged(groupId, held, false))) throw unresolvedPlan();
+                const fresh = (await billingRepository.getLiveGroupSubscription(groupId)) ?? live;
+                // Nothing stacks on a charge the bank hasn't confirmed: places, or an upgrade.
+                if (
+                    fresh.paidUnits < fresh.units ||
+                    paidTier(fresh).quotaBytes < fresh.quotaBytes ||
+                    held.product_id !== paidTier(fresh).productId
+                )
+                    throw new BillingError(
+                        'Your bank hasn’t confirmed the last charge yet. Confirm it in Manage payment and invoices, then change the plan.',
+                        409,
+                    );
+                let changed: models.Subscription;
+                try {
+                    changed = await polar().subscriptions.update(held.id, {
+                        product_id: target.id,
+                        proration_behavior: 'invoice',
+                    });
+                } catch (error) {
+                    const refused = refusedRaise(error);
+                    if (refused.status === 'confirm') {
+                        // The bank wants the payer: whatever Polar now holds is written, never left stale.
+                        await writeAsPolarHolds(groupId, held.id);
+                        return {
+                            billing: await getGroupBilling(user, groupId),
+                            url: (await portalFor(groupId, user.id)).url,
+                            confirmPayment: true,
+                            when: 'now',
+                        };
+                    }
+                    // Declined: nothing changed at Polar (spike 8, T2: 0341).
+                    throw planChangeError(refused);
+                }
+                // The move replaces any scheduled one. Its tier counts once an order for it is paid:
+                // until then the family keeps the tier and pool it paid for.
+                await billingRepository.setIntendedProduct(live.id, null);
+                // The places are unchanged (their paid count stays); the tier from Polar's orders. Polar has
+                // changed the product: a write that fails here is put right from Polar at once.
+                let applied: boolean;
+                try {
+                    applied = await applyChanged(groupId, changed, false);
+                } catch (error) {
+                    log.warn({
+                        message: 'Upgrade not written after Polar took it; reconciling',
+                        billing: { group: groupId, failure: String((error as Error)?.name) },
+                    });
+                    await reconcileGroup(groupId);
+                    applied = (await billingRepository.getLiveGroupSubscription(groupId)) !== null;
+                }
+                if (!applied) throw unresolvedPlan();
+                const paid =
+                    (await billingRepository.getLiveGroupSubscription(groupId))?.paidProductId ===
+                    target.id;
+                log.info({
+                    message: 'Family plan upgraded',
+                    billing: { group: groupId, from: current.id, to: target.id, paid },
+                });
+                // Polar dropped the whole pending update with the change (T1): a recorded cut is asked
+                // for again; a scheduled downgrade is not, the upgrade replaced it (cleared above).
+                await restorePending(groupId);
+                // The charge waits for the bank (3-D Secure, an Indian e-mandate): its portal carries it.
+                if (!paid)
+                    return {
+                        billing: await getGroupBilling(user, groupId),
+                        url: (await portalFor(groupId, user.id)).url,
+                        confirmPayment: true,
+                        when: 'now',
+                    };
+                return done('now');
+            },
+        );
+
+    const used = await billingRepository.getGroupPoolUsage(groupId);
+    const room = BigInt(target.quotaBytes);
+    if (used > room)
+        throw new BillingError(
+            `The family folders hold ${spaceOf(used)}, more than ${tierName(target)}’s ${spaceOf(room)}. Free at least ${spaceOf(used - room, 'up')}, then change the plan.`,
+            409,
+        );
+    // The move and any recorded cut together, as Polar's one pending update must hold them.
+    await asBillingError(() =>
+        setPending(groupId, subscription, {
+            units: live.intendedUnits ?? pendingOf(subscription).units,
+            product: target.id,
+        }),
+    );
+    await billingRepository.setIntendedProduct(live.id, target.id);
+    log.info({
+        message: 'Family plan downgrade scheduled',
+        billing: { group: groupId, from: current.id, to: target.id },
+    });
+    return done('renewal');
+}
+
+/*
+ * Writes the subscription as Polar holds it now, after a call whose answer was
+ * an error but which may have changed it (a 402 that wants the bank). A
+ * failure is left to the next reconcile, and logged.
+ */
+async function writeAsPolarHolds(groupId: string, subscriptionId: string) {
+    try {
+        await applyChanged(groupId, await polar().subscriptions.get(subscriptionId), false);
+    } catch (error) {
+        log.warn({
+            message: 'Family plan not re-read after a refused change',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+    }
+}
+
+/* A Polar failure as the payer reads it; HushOS's own refusals pass through. */
+async function asBillingError<T>(run: () => Promise<T>) {
+    try {
+        return await run();
+    } catch (error) {
+        if (error instanceof BillingError) throw error;
+        throw unavailable(error);
+    }
+}
+
+/* The tier and pool a plan has paid for (null and 0 while nothing is): from its newest paid order. */
+function paidTier(live: { paidProductId: string | null; paidQuotaBytes: bigint | null }) {
+    return { productId: live.paidProductId, quotaBytes: live.paidQuotaBytes ?? 0n };
+}
+
+/* A refused upgrade, in words about the plan rather than places. */
+function planChangeError(result: SeatResult) {
+    switch (result.status) {
+        case 'declined':
+            return new BillingError(
+                'Your bank declined this charge. Nothing was charged and the plan didn’t change. Try another card in the billing portal, or ask your bank.',
+                402,
+            );
+        case 'payment':
+            return new BillingError(
+                'The payment did not go through, so the plan didn’t change. Try again later.',
+                402,
+            );
+        case 'canceling':
+            return new BillingError(
+                'This family plan is set to end. Resume it in the billing portal first.',
+                409,
+            );
+        default:
+            return new BillingError('Billing is temporarily unavailable. Please try again.', 503);
+    }
+}
+
 /* The sentence for a place that could not be had, on billing's own routes. */
 export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm' }>) {
     switch (result.status) {
@@ -845,6 +1646,10 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
                 'The payment did not go through, so no places were added. Try again later.',
                 402,
             );
+        case 'busy':
+            return new BillingError(BUSY, 409);
+        case 'changed':
+            return new BillingError(CHARGED_BUT_CHANGED, 409);
         case 'cap':
             return new BillingError(
                 `A family can have at most ${result.max} members, and one change can add at most ${result.step} places.`,
@@ -971,9 +1776,12 @@ export async function getGroupBilling(
     return {
         enabled: true,
         view,
+        // What a page may offer, and the family's own plan, so it is always priced.
         plans: families
-            .filter((candidate) => !candidate.archived)
-            .map(({ archived: _archived, ...rest }) => rest),
+            .filter(
+                (candidate) => offeredFamilies(families).includes(candidate) || candidate === plan,
+            )
+            .map(({ archived: _archived, createdAt: _createdAt, ...rest }) => rest),
         payer: customer?.payerUserId
             ? { userId: customer.payerUserId, you: customer.payerUserId === user.id }
             : null,
@@ -989,6 +1797,8 @@ export async function getGroupBilling(
                   units: live.units,
                   paidUnits: live.paidUnits,
                   pendingUnits: live.pendingUnits,
+                  pendingProductId: live.pendingProductId,
+                  paidProductId: paidTier(live).productId,
                   includedMembers: live.includedMembers,
                   quotaBytes: live.quotaBytes.toString(),
                   currentPeriodStart: live.currentPeriodStart.toISOString(),

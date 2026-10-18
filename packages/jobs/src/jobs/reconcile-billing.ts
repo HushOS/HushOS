@@ -51,7 +51,9 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
  * One family's recorded cut, asked of Polar again. A failure throws, so
  * pg-boss retries the job with backoff; a cut already in place is done.
  */
-export async function reissueGroupCut(job: Job<JobPayloads[typeof queues.billingReissueCut]>) {
+export async function reissueGroupCut(
+    job: Job<JobPayloads[typeof queues.billingReissueCut | typeof queues.billingReissuePending]>,
+) {
     const event = createLogger({ job: { id: job.id, queue: job.name } });
     try {
         await reissueCut(job.data.groupId);

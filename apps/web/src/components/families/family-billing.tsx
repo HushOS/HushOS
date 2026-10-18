@@ -1,5 +1,5 @@
 import type { FamilyPlan } from '@hushos/billing/api';
-import { FAMILY_MAX_MEMBERS } from '@hushos/billing/protocol';
+import { FAMILY_MAX_MEMBERS, spaceOf } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
@@ -26,6 +26,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from '@/components/ui/toast';
 import { localeHintQueryOptions } from '@/lib/billing';
 import { groupBillingApi } from '@/lib/billing-api';
@@ -43,6 +44,7 @@ import {
     livePrice,
     nextCharge,
     needsPlan,
+    pendingTier,
     planState,
     quoteAdd,
     seatNoteFor,
@@ -50,13 +52,17 @@ import {
     renewalAmount,
     TAX_LINE,
     TAX_ON_CHARGES,
+    tierMoves,
+    upgradeWaiting,
     type FamilyBilling,
     type FamilyBillingFull,
     type FamilyGlance,
+    type TierMove,
 } from '@/lib/family-billing';
 import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
+import { familyTierName as tierName } from '@/lib/plans';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -71,7 +77,6 @@ import { cue } from '@/lib/sounds';
 const per = { month: 'a month', year: 'a year' } as const;
 const intervalOf = (value: string) => (value === 'year' ? 'year' : 'month');
 const places = (n: number) => `${n} ${n === 1 ? 'place' : 'places'}`;
-const tierName = (plan: FamilyPlan) => plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
 
 /* A person the server names, for a sentence: their name with their address, or a fallback. */
 function personLine(members: readonly FamilyMember[] | undefined, userId: string | undefined) {
@@ -317,6 +322,19 @@ function PlanTop(props: Inner) {
                     </Alert>
                 </div>
             );
+        if (upgradeWaiting(live) && payerYou)
+            return (
+                <div className="px-5 sm:px-8" data-plan-notice="upgrade-waiting">
+                    <Alert variant="warning">
+                        <AlertDescription>
+                            Your bank hasn’t confirmed the charge for{' '}
+                            {tierName({ name: live.productName })} yet. It starts once it does:
+                            confirm it in Manage payment and invoices. Until then the family keeps
+                            the storage it has.
+                        </AlertDescription>
+                    </Alert>
+                </div>
+            );
         if (waiting > 0 && payerYou)
             return (
                 <div className="px-5 sm:px-8">
@@ -409,6 +427,9 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
         }
     }
 
+    // The recommended tier leads; with none marked, the middle one does. One blue button.
+    const lead = shown.find((plan) => plan.recommended) ?? shown[Math.floor(shown.length / 2)];
+
     return (
         <section
             id="choose-plan"
@@ -416,32 +437,30 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
             data-choose-plan
             className={cn('flex scroll-mt-4 flex-col gap-4', !renewing && 'px-5 sm:px-8')}
         >
-            <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-rule pb-3">
-                <div className="flex min-w-0 flex-col gap-0.5">
-                    <h2 id={`${groupId}-choose`} className="text-lg font-bold tracking-[-0.01em]">
-                        Choose a plan
-                    </h2>
-                    {!renewing && (
-                        <p className="max-w-[43em] text-sm text-muted-foreground">
-                            {family} needs a plan before you can invite anyone or make family
-                            folders. Until then, only you are in it.
-                        </p>
-                    )}
-                </div>
-                {intervals.size > 1 && (
-                    <Segmented
-                        label="Billed"
-                        options={[
-                            { value: 'month', label: 'Monthly' },
-                            { value: 'year', label: 'Yearly' },
-                        ]}
-                        value={period}
-                        onChange={setPeriod}
-                    />
+            <div className="flex min-w-0 flex-col gap-0.5 border-b border-rule pb-3">
+                <h2 id={`${groupId}-choose`} className="text-lg font-bold tracking-[-0.01em]">
+                    Choose a plan
+                </h2>
+                {!renewing && (
+                    <p className="max-w-[43em] text-sm text-muted-foreground">
+                        {family} needs a plan before you can invite anyone or make family folders.
+                        Until then, only you are in it.
+                    </p>
                 )}
             </div>
+            {intervals.size > 1 && (
+                <Segmented
+                    label="Billed"
+                    options={[
+                        { value: 'month', label: 'Monthly' },
+                        { value: 'year', label: 'Yearly · 2 months free' },
+                    ]}
+                    value={period}
+                    onChange={setPeriod}
+                />
+            )}
             {shown.length ? (
-                <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <ul className="grid gap-3 lg:grid-cols-3">
                     {shown.map((plan) => {
                         const price = familyPrice(plan, currency);
                         if (!price) return null;
@@ -457,10 +476,9 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
                                     {formatQuota(plan.quotaBytes)}
                                 </span>
                                 <span className="flex flex-col gap-1 text-sm text-muted-foreground">
-                                    <span className="font-semibold text-foreground">
+                                    <span className="font-semibold text-foreground tabular-nums">
                                         {formatMoney(price.base, price.currency)}{' '}
                                         {per[plan.interval]}
-                                        {plan.interval === 'year' ? ' · 2 months free' : ''}
                                     </span>
                                     <span>
                                         For up to {plan.includedMembers} members, sharing{' '}
@@ -472,6 +490,7 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
                                     </span>
                                 </span>
                                 <Button
+                                    variant={plan === lead ? 'default' : 'outline'}
                                     className="mt-auto w-full"
                                     disabled={busy !== null}
                                     onClick={() => void choose(plan)}
@@ -509,14 +528,16 @@ function PlanSection(props: Inner) {
     const actions = familyActions(summary, roles);
     const [adding, setAdding] = useState(false);
     const [removing, setRemoving] = useState(false);
+    const [changing, setChanging] = useState(false);
     const [cancelling, setCancelling] = useState(false);
-    const [busy, setBusy] = useState<'portal' | 'keep' | null>(null);
+    const [busy, setBusy] = useState<'portal' | 'keep' | 'tier' | null>(null);
     const [error, setError] = useState('');
     usePageRestored(() => setBusy(null));
     if (state.kind !== 'live') return null;
     const live = state.subscription;
     const ends = formatDay(live.currentPeriodEnd);
-    const name = `${live.productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '')} · ${formatQuota(live.quotaBytes)}`;
+    const name = `${tierName({ name: live.productName })} · ${formatQuota(live.quotaBytes)}`;
+    const moving = pendingTier(summary);
 
     const settle = (next: FamilyBilling) => {
         queryClient.setQueryData(key, next);
@@ -544,6 +565,25 @@ function PlanSection(props: Inner) {
             settle(result.billing);
             cue('success');
             toast.add({ type: 'success', title: `${family} keeps ${places(live.units)}` });
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function keepTier() {
+        setBusy('tier');
+        setError('');
+        try {
+            const result = await groupBillingApi.changePlan(groupId, live.productId);
+            settle(result.billing);
+            cue('success');
+            toast.add({
+                type: 'success',
+                title: `${family} keeps ${tierName({ name: live.productName })}`,
+            });
         } catch (cause) {
             cue('error');
             setError(authError(cause));
@@ -585,6 +625,12 @@ function PlanSection(props: Inner) {
                                 `renews ${ends}`
                             )}
                         </span>
+                        {moving && !state.ending && (
+                            <span className="text-sm" data-tier-move={moving.tier ?? moving.id}>
+                                Changes to {tierName(moving)} · {formatQuota(moving.quotaBytes)} on{' '}
+                                {ends}
+                            </span>
+                        )}
                     </div>
                     {actions.portal && (
                         <Button
@@ -622,8 +668,32 @@ function PlanSection(props: Inner) {
                     )}
                     {payerName && <Fact label="Paid by">{payerName}</Fact>}
                 </dl>
-                {(actions.addPlaces || actions.removePlaces || actions.keepPlaces) && (
+                {(actions.changePlan ||
+                    actions.keepTier ||
+                    actions.addPlaces ||
+                    actions.removePlaces ||
+                    actions.keepPlaces) && (
                     <div className="flex flex-wrap gap-2">
+                        {actions.changePlan && (
+                            <Button
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => setChanging(true)}
+                            >
+                                Change plan
+                            </Button>
+                        )}
+                        {actions.keepTier && (
+                            <Button
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => void keepTier()}
+                            >
+                                {busy === 'tier'
+                                    ? 'Keeping…'
+                                    : `Keep ${tierName({ name: live.productName })}`}
+                            </Button>
+                        )}
                         {actions.addPlaces && (
                             <Button
                                 variant="outline"
@@ -679,6 +749,14 @@ function PlanSection(props: Inner) {
                     {...props}
                     open={adding}
                     onOpenChange={setAdding}
+                    onDone={settle}
+                />
+            )}
+            {actions.changePlan && (
+                <ChangePlanDialog
+                    {...props}
+                    open={changing}
+                    onOpenChange={setChanging}
                     onDone={settle}
                 />
             )}
@@ -895,6 +973,207 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
                     ) : (
                         <Button disabled={busy} onClick={() => void add()}>
                             {busy ? 'Adding…' : `Add ${places(value)}`}
+                        </Button>
+                    )}
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+/*
+ * "Change plan": the other tiers billed the same way. A bigger one starts now
+ * and the difference for the rest of the period is charged at once; a smaller
+ * one starts at the renewal, only once the family folders fit in it, and
+ * refunds nothing. Places stay as they are.
+ */
+function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
+    const id = useId();
+    const moves = tierMoves(summary);
+    const live = summary.subscription;
+    const current = currentPlan(summary);
+    const [choice, setChoice] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [confirmUrl, setConfirmUrl] = useState<string | null>(null);
+    if (!live || !current || !moves.length) return null;
+    const ends = formatDay(live.currentPeriodEnd);
+    const interval = intervalOf(live.recurringInterval);
+    // First open: the next tier up, else the next one down.
+    const chosen =
+        moves.find((move) => move.plan.id === choice) ??
+        moves.find((move) => move.direction === 'up') ??
+        moves.at(-1)!;
+    const priceOf = (move: TierMove | null) => {
+        const amount = renewalAmount(summary, live.pendingUnits ?? live.units, move?.plan);
+        return amount ? `${formatMoney(amount.amount, amount.currency)} ${per[interval]}` : '';
+    };
+    const options = [...moves, null]
+        .map((move) => ({ move, plan: move?.plan ?? current }))
+        .sort((a, b) => Number(BigInt(a.plan.quotaBytes) - BigInt(b.plan.quotaBytes)));
+
+    async function change() {
+        setBusy(true);
+        setError('');
+        try {
+            const result = await groupBillingApi.changePlan(groupId, chosen.plan.id);
+            onDone(result.billing);
+            if (result.confirmPayment && result.url) {
+                setConfirmUrl(result.url);
+                return;
+            }
+            cue('success');
+            toast.add({
+                type: 'success',
+                title:
+                    result.when === 'renewal'
+                        ? `${family} moves to ${tierName(chosen.plan)} on ${ends}`
+                        : `${family} is on ${tierName(chosen.plan)}`,
+            });
+            onOpenChange(false);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    return (
+        <Dialog
+            open={open}
+            onOpenChange={(next) => {
+                if (busy) return;
+                onOpenChange(next);
+                if (!next) {
+                    setError('');
+                    setConfirmUrl(null);
+                    setChoice(null);
+                }
+            }}
+        >
+            <DialogContent className="sm:max-w-[480px]">
+                <DialogHeader>
+                    <DialogTitle>Change plan</DialogTitle>
+                    <DialogDescription>
+                        A bigger plan starts now. A smaller one starts when the plan renews on{' '}
+                        {ends}, and nothing is refunded. Places stay as they are.
+                    </DialogDescription>
+                </DialogHeader>
+                <RadioGroup
+                    value={chosen.plan.id}
+                    onValueChange={(value) => setChoice(String(value))}
+                    aria-label="Plan"
+                    className="flex-col items-stretch gap-1"
+                    disabled={busy || confirmUrl !== null}
+                >
+                    {options.map(({ move, plan }) => {
+                        const selected = move !== null && move === chosen;
+                        return (
+                            <label
+                                key={plan.id}
+                                htmlFor={`${id}-${plan.id}`}
+                                data-tier-option={plan.tier ?? plan.id}
+                                className={cn(
+                                    'flex items-start gap-3 rounded-md px-3 py-2.5',
+                                    move === null
+                                        ? 'cursor-default'
+                                        : selected
+                                          ? 'cursor-pointer bg-accent'
+                                          : 'cursor-pointer hover:bg-muted',
+                                )}
+                            >
+                                <RadioGroupItem
+                                    id={`${id}-${plan.id}`}
+                                    value={plan.id}
+                                    disabled={move === null}
+                                    className="mt-0.5"
+                                />
+                                <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+                                    <span className="text-sm font-semibold">
+                                        {tierName(plan)} · {formatQuota(plan.quotaBytes)}
+                                    </span>
+                                    <span className="text-[13px] text-muted-foreground tabular-nums">
+                                        {move === null ? 'Your plan' : priceOf(move)}
+                                    </span>
+                                </span>
+                            </label>
+                        );
+                    })}
+                </RadioGroup>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+                    {chosen.direction === 'up' ? (
+                        <>
+                            {chosen.now && (
+                                <Fact label="Charged now">
+                                    About {formatMoney(chosen.now.amount, chosen.now.currency)}
+                                </Fact>
+                            )}
+                            {chosen.renews && (
+                                <Fact label="Then">
+                                    {formatMoney(chosen.renews.amount, chosen.renews.currency)}{' '}
+                                    {per[interval]} from {ends}
+                                </Fact>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <Fact label="Until then">
+                                {tierName(current)} · {formatQuota(current.quotaBytes)}
+                            </Fact>
+                            {chosen.renews && (
+                                <Fact label={`From ${ends}`}>
+                                    {formatMoney(chosen.renews.amount, chosen.renews.currency)}{' '}
+                                    {per[interval]}
+                                </Fact>
+                            )}
+                        </>
+                    )}
+                </dl>
+                {chosen.over > 0n && summary.storage && (
+                    <Alert variant="warning" data-tier-over>
+                        <AlertDescription>
+                            The family folders hold {spaceOf(BigInt(summary.storage.usedBytes))},
+                            more than {tierName(chosen.plan)}’s{' '}
+                            {spaceOf(BigInt(chosen.plan.quotaBytes))}. Free at least{' '}
+                            {spaceOf(chosen.over, 'up')} before changing to it.
+                        </AlertDescription>
+                    </Alert>
+                )}
+                <p className="text-[13px] text-muted-foreground">
+                    {chosen.direction === 'up'
+                        ? `The difference for the rest of this period is charged to the family’s card now. ${TAX_ON_CHARGES}`
+                        : TAX_ON_CHARGES}
+                </p>
+                {confirmUrl && (
+                    <Alert variant="warning">
+                        <AlertDescription>
+                            Your bank wants you to confirm this payment. The plan changes once you
+                            do.
+                        </AlertDescription>
+                    </Alert>
+                )}
+                {error && (
+                    <p role="alert" className="text-sm text-destructive">
+                        {error}
+                    </p>
+                )}
+                <DialogFooter>
+                    <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+                        Cancel
+                    </Button>
+                    {confirmUrl ? (
+                        <Button onClick={() => window.location.assign(confirmUrl)}>
+                            Confirm with your bank
+                            <ArrowUpRightIcon />
+                        </Button>
+                    ) : (
+                        <Button disabled={busy || chosen.over > 0n} onClick={() => void change()}>
+                            {busy
+                                ? 'Changing…'
+                                : chosen.direction === 'up'
+                                  ? `Change to ${tierName(chosen.plan)}`
+                                  : `Change on ${ends}`}
                         </Button>
                     )}
                 </DialogFooter>

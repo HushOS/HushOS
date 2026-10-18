@@ -1,4 +1,4 @@
-import type { CancellationReason } from './protocol';
+import type { CancellationReason, FamilyTier } from './protocol';
 
 /*
  * What the billing pages need from the server. The web app implements it from
@@ -37,6 +37,10 @@ export type FamilyPlan = {
     name: string;
     description: string | null;
     interval: 'month' | 'year';
+    /* Family Plus, Pro or Max (`hushos_tier`); null for the single Family plan before the tiers. */
+    tier: FamilyTier | null;
+    /* The tier the pages lead with (`hushos_recommended`). */
+    recommended: boolean;
     /* Minor units by lowercase ISO code; every plan has the provider's default currency. */
     prices: Record<string, { base: number; perMember: number }>;
     includedMembers: number;
@@ -85,6 +89,14 @@ export type FamilyBillingDetail = {
         paidUnits: number;
         /* A cut to this many places at the period's end; it already blocks new admissions. */
         pendingUnits: number | null;
+        /* A smaller tier the family moves to at the period's end (a plan change at renewal). */
+        pendingProductId: string | null;
+        /*
+         * The tier paid for: the product of the newest paid order. Another than `productId`
+         * while an upgrade's charge waits for the bank (the family keeps this tier's pool, as
+         * `storage` shows), and null while nothing is paid.
+         */
+        paidProductId: string | null;
         includedMembers: number;
         quotaBytes: string;
         /* With the end, what a raise is prorated over: the web quotes it with `quoteUnitsChange`. */
@@ -253,6 +265,21 @@ export interface GroupBillingApi {
         groupId: string,
         units: number,
     ): Promise<{ billing: GroupBillingSummary; url: string | null; confirmPayment?: true }>;
+    /*
+     * Moves the family to another tier of the same billing period: a bigger
+     * one now, charged prorated; a smaller one at the period's end; its own
+     * tier withdraws a scheduled move. `url` is the portal when the bank wants
+     * the payer to confirm the charge.
+     */
+    changePlan(
+        groupId: string,
+        productId: string,
+    ): Promise<{
+        billing: GroupBillingSummary;
+        url: string | null;
+        confirmPayment?: true;
+        when: 'now' | 'renewal' | 'kept';
+    }>;
     portal(groupId: string): Promise<{ url: string }>;
     sync(groupId: string): Promise<GroupBillingSummary>;
 }

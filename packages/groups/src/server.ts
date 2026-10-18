@@ -1888,6 +1888,9 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
         confirm:
             'Your bank wants you to confirm the charge for another place. Confirm it in the billing portal, then let them in again.',
         payment: 'The payment for another place did not go through. Nobody was let in.',
+        busy: 'Another change to this plan is in progress. Try again in a moment.',
+        changed:
+            'The charge went through but the plan changed at the same time. Refresh to see your places.',
     };
     return new GroupError('seats', messages[result.status], 402, {
         reason: result.status,

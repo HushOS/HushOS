@@ -59,6 +59,36 @@ const products = [
             },
         ],
     },
+    {
+        id: '66666666-aaaa-4aaa-8aaa-666666666666',
+        name: 'Family Pro (monthly)',
+        description: null,
+        is_archived: false,
+        recurring_interval: 'month',
+        metadata: {
+            hushos_plan: 'family',
+            hushos_group_kind: 'family',
+            hushos_tier: 'pro',
+            quota_bytes: String(2 * 1024 ** 4),
+            included_members: '4',
+        },
+        prices: [
+            fixed('usd', 2000),
+            {
+                amount_type: 'unit_based',
+                price_currency: 'usd',
+                is_archived: false,
+                tiers: {
+                    type: 'graduated',
+                    tiers: [
+                        { bound: 4, unit_amount: '0' },
+                        { bound: null, unit_amount: '150' },
+                    ],
+                },
+                minimum_units: 4,
+            },
+        ],
+    },
 ];
 vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     const real = await importOriginal<typeof PolarSdk>();
@@ -94,12 +124,16 @@ test('a family’s plan is not served with families off', async () => {
     const user = { id: organizer.userId, name: 'Test', email: organizer.email };
     await expect(billing.getGroupBilling(user, groupId)).rejects.toMatchObject({ status: 404 });
     await expect(billing.syncGroup(user, groupId)).rejects.toMatchObject({ status: 404 });
+    await expect(
+        billing.changeGroupPlan(user, groupId, '66666666-aaaa-4aaa-8aaa-666666666666'),
+    ).rejects.toMatchObject({ status: 404 });
     expect(calls).toEqual([]);
 });
 
 test('the public catalogue lists no family plans with families off', async () => {
-    // The family product reads as one (readFamilyProduct), so only the gate keeps it out.
+    // The family products read as such (readFamilyProduct), so only the gate keeps them out.
     expect(billing.readFamilyProduct(products[1] as never)).not.toBeNull();
+    expect(billing.readFamilyProduct(products[2] as never)).toMatchObject({ tier: 'pro' });
     const catalogue = await billing.listCatalogue();
     expect(catalogue.enabled).toBe(true);
     expect(catalogue.plans.map((plan) => plan.name)).toEqual(['Plus (monthly)']);

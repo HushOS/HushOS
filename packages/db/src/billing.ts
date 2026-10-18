@@ -277,6 +277,16 @@ export type GroupSubscriptionSnapshot = {
      */
     paidUnits: number | null;
     pendingUnits: number | null;
+    /* The product a pending update moves the plan to at the period's end (a smaller tier). */
+    pendingProductId: string | null;
+    /*
+     * The tier paid for (the newest paid, unrefunded order's product and its pool), null
+     * while nothing is paid; absent when Polar's orders couldn't be read, which leaves the
+     * row's as it was (a new row then starts with nothing paid).
+     */
+    paidTier?: { productId: string; quotaBytes: bigint } | null;
+    /* Since when the product has been bigger than the tier paid for; null once it isn't. */
+    tierMismatchSince?: Date | null;
     includedMembers: number;
     /* The pool the plan gives the group; a family's is fixed. */
     quotaBytes: bigint;
@@ -431,7 +441,177 @@ export async function setIntendedUnits(
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* Live group subscriptions with a cut HushOS still means to have at Polar. */
+/*
+ * The smaller tier HushOS asked Polar to move the plan to at the period's
+ * end, or null once nothing is due (the move applied, or was withdrawn).
+ */
+export async function setIntendedProduct(
+    subscriptionId: string,
+    productId: string | null,
+    stale = false,
+) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            intendedProductId: productId,
+            intendedProductStale: productId !== null && stale,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/*
+ * Notes what HushOS just asked Polar for again, when, and how many times in a
+ * row (the reconcile guard and the give-up rule); `state` null once Polar holds
+ * what HushOS wants, which resets the count.
+ */
+export async function markReissued(
+    subscriptionId: string,
+    state: string | null,
+    attempts: number,
+    at = new Date(Date.now()),
+) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            reissuedAt: state === null ? null : at,
+            reissuedState: state,
+            reissueAttempts: attempts,
+            updatedAt: at,
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/*
+ * Claims the family's one queued retry until `until`: false when another is
+ * still pending (claimed by someone else and not yet due), so it is not queued twice.
+ */
+export async function claimReissueRetry(subscriptionId: string, until: Date) {
+    const now = new Date(Date.now());
+    const rows = await db
+        .update(groupBillingSubscriptions)
+        .set({ reissueRetryAt: until, updatedAt: now })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                sql`(${groupBillingSubscriptions.reissueRetryAt} is null or ${groupBillingSubscriptions.reissueRetryAt} <= ${now.toISOString()}::timestamptz)`,
+            ),
+        )
+        .returning({ id: groupBillingSubscriptions.id });
+    return rows.length === 1;
+}
+
+/*
+ * Marks (or, with null, clears) a family's plan change HushOS can't make, and why
+ * (`not-kept`, `revert-unavailable`): the operators' list on the management page.
+ */
+export async function setReissueGaveUp(
+    subscriptionId: string,
+    at: Date | null,
+    reason: 'not-kept' | 'revert-unavailable' | null = null,
+) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            reissueGaveUpAt: at,
+            reissueStuckReason: at === null ? null : reason,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/*
+ * Claims the family's one plan change (a place purchase or an upgrade) for
+ * `holdMs`, on the database's clock: the claim's expiry, the token its holder
+ * releases with, or null while another holds one that hasn't run out.
+ * Truncated to the millisecond so the token comes back exactly as stored.
+ */
+export async function claimPlanChange(subscriptionId: string, holdMs: number) {
+    const until = sql`date_trunc('milliseconds', now() + make_interval(secs => ${holdMs / 1000}))`;
+    const rows = await db
+        .update(groupBillingSubscriptions)
+        .set({ changeClaimUntil: until, updatedAt: sql`now()` })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                sql`(${groupBillingSubscriptions.changeClaimUntil} is null or ${groupBillingSubscriptions.changeClaimUntil} <= now())`,
+            ),
+        )
+        .returning({ until: groupBillingSubscriptions.changeClaimUntil });
+    return rows[0]?.until ?? null;
+}
+
+/* Lets go of the claim taken as `claim`, and no other: one taken since stays its holder's. */
+export async function releasePlanChange(subscriptionId: string, claim: Date) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ changeClaimUntil: null, updatedAt: sql`now()` })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                eq(groupBillingSubscriptions.changeClaimUntil, claim),
+            ),
+        );
+}
+
+/* Records orders that must never count as paying for a tier (added to those already kept). */
+export async function addUncreditedOrders(subscriptionId: string, orderIds: string[]) {
+    if (!orderIds.length) return;
+    await db.transaction(async (tx) => {
+        const [row] = await tx
+            .select({ ids: groupBillingSubscriptions.uncreditedOrderIds })
+            .from(groupBillingSubscriptions)
+            .where(eq(groupBillingSubscriptions.id, subscriptionId))
+            .for('update');
+        if (!row) return;
+        await tx
+            .update(groupBillingSubscriptions)
+            .set({
+                uncreditedOrderIds: [...new Set([...(row.ids ?? []), ...orderIds])],
+                updatedAt: new Date(),
+            })
+            .where(eq(groupBillingSubscriptions.id, subscriptionId));
+    });
+}
+
+/* Lets a claimed retry go (its job could not be queued), so the next attempt may queue one. */
+export async function releaseReissueRetry(subscriptionId: string) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ reissueRetryAt: null, updatedAt: new Date() })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Live family plans whose scheduled change HushOS gave up on: the operators' list. */
+export async function listGivenUpReissues() {
+    return db
+        .select({
+            groupId: groupBillingSubscriptions.groupId,
+            subscriptionId: groupBillingSubscriptions.id,
+            wanted: groupBillingSubscriptions.reissuedState,
+            reason: groupBillingSubscriptions.reissueStuckReason,
+            since: groupBillingSubscriptions.reissueGaveUpAt,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                isNull(groupBillingSubscriptions.endedAt),
+                isNotNull(groupBillingSubscriptions.reissueGaveUpAt),
+            ),
+        )
+        .orderBy(desc(groupBillingSubscriptions.reissueGaveUpAt));
+}
+
+/* One group subscription's row, live or not: what it had paid for before a change. */
+export async function getGroupSubscription(subscriptionId: string) {
+    const [row] = await db
+        .select()
+        .from(groupBillingSubscriptions)
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+    return row ?? null;
+}
+
+/* Live group subscriptions with a cut or a tier move HushOS still means to have at Polar. */
 export async function listIntendedCuts() {
     return db
         .select({
@@ -442,7 +622,7 @@ export async function listIntendedCuts() {
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                sql`${groupBillingSubscriptions.intendedUnits} is not null`,
+                sql`(${groupBillingSubscriptions.intendedUnits} is not null or ${groupBillingSubscriptions.intendedProductId} is not null)`,
             ),
         );
 }
@@ -503,6 +683,7 @@ export async function applyGroupState(input: {
                 currency: subscription.currency,
                 units: subscription.units,
                 pendingUnits: subscription.pendingUnits,
+                pendingProductId: subscription.pendingProductId,
                 includedMembers: subscription.includedMembers,
                 quotaBytes: subscription.quotaBytes,
                 currentPeriodStart: subscription.currentPeriodStart,
@@ -519,6 +700,9 @@ export async function applyGroupState(input: {
                     ...values,
                     // A subscription first seen with an order unpaid has paid for nothing yet.
                     paidUnits: paid === null ? 0 : Math.min(paid, subscription.units),
+                    paidProductId: subscription.paidTier?.productId ?? null,
+                    paidQuotaBytes: subscription.paidTier?.quotaBytes ?? 0n,
+                    tierMismatchSince: subscription.tierMismatchSince ?? null,
                 })
                 .onConflictDoUpdate({
                     target: groupBillingSubscriptions.id,
@@ -528,6 +712,16 @@ export async function applyGroupState(input: {
                             paid === null
                                 ? sql`least(${groupBillingSubscriptions.paidUnits}, ${subscription.units})`
                                 : Math.min(paid, subscription.units),
+                        // The tier paid for, as Polar's orders say it now; unreadable, as it was.
+                        ...(subscription.paidTier !== undefined
+                            ? {
+                                  paidProductId: subscription.paidTier?.productId ?? null,
+                                  paidQuotaBytes: subscription.paidTier?.quotaBytes ?? 0n,
+                              }
+                            : {}),
+                        ...(subscription.tierMismatchSince !== undefined
+                            ? { tierMismatchSince: subscription.tierMismatchSince }
+                            : {}),
                         updatedAt: now,
                     },
                 });
@@ -567,7 +761,13 @@ export async function applyGroupState(input: {
             .set({ seatLimit: plan ? seatLimitOf(plan) : null, updatedAt: now })
             .where(eq(groups.id, input.groupId));
         const pool = {
-            quotaBytes: plan ? plan.quotaBytes : 0n,
+            // The lesser of the tier paid for and the product's: an unpaid upgrade gives nothing,
+            // a smaller tier at a renewal counts at once.
+            quotaBytes: plan
+                ? (plan.paidQuotaBytes ?? 0n) < plan.quotaBytes
+                    ? (plan.paidQuotaBytes ?? 0n)
+                    : plan.quotaBytes
+                : 0n,
             expiresAt: plan ? new Date(plan.currentPeriodEnd.getTime() + input.graceMs) : null,
         };
         await tx

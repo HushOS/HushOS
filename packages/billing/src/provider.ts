@@ -6,12 +6,15 @@ import type { FamilyPlan, Plan } from './api';
 import {
     DEFAULT_CURRENCY,
     FAMILY_MAX_MEMBERS,
+    FAMILY_TIERS,
     GROUP_KIND_METADATA_KEY,
     INCLUDED_MEMBERS_METADATA_KEY,
     PLAN_METADATA_KEY,
     QUOTA_METADATA_KEY,
     QUOTA_PER_MEMBER_METADATA_KEY,
     RECOMMENDED_METADATA_KEY,
+    TIER_METADATA_KEY,
+    type FamilyTier,
 } from './protocol';
 
 /*
@@ -79,7 +82,8 @@ export function statusOf(error: unknown) {
 
 /* Every recurring product marked as a HushOS plan, archived ones included. */
 export type CatalogueProduct = Plan & { archived: boolean };
-export type FamilyCatalogueProduct = FamilyPlan & { archived: boolean };
+/* `createdAt` picks one of two products for the same tier and period; neither leaves the server. */
+export type FamilyCatalogueProduct = FamilyPlan & { archived: boolean; createdAt: string };
 type Catalogues = { plans: CatalogueProduct[]; families: FamilyCatalogueProduct[] };
 
 let catalogue: { at: number; value: Catalogues } | undefined;
@@ -93,6 +97,9 @@ function quotaOf(metadata: Record<string, unknown>) {
         return null;
     }
 }
+
+const recommendedOf = (metadata: Record<string, unknown>) =>
+    [true, 'true', 1, '1'].includes(metadata[RECOMMENDED_METADATA_KEY] as never);
 
 function readProduct(product: models.Product): CatalogueProduct | null {
     const metadata = product.metadata as Record<string, unknown>;
@@ -124,7 +131,7 @@ function readProduct(product: models.Product): CatalogueProduct | null {
         currency: DEFAULT_CURRENCY,
         prices,
         quotaBytes: quotaBytes.toString(),
-        recommended: [true, 'true', 1, '1'].includes(metadata[RECOMMENDED_METADATA_KEY] as never),
+        recommended: recommendedOf(metadata),
         archived: product.is_archived,
     };
 }
@@ -155,7 +162,9 @@ function integerMetadata(value: unknown) {
  * a structure, not their bounds (spike E2: a product with 5 included in EUR and
  * 6 in USD sold a smaller family in EUR), so a product whose currencies
  * disagree on the bound or the minimum, or whose bound is not the metadata's
- * count, is dropped whole.
+ * count, is dropped whole. `hushos_tier` names the tier (Family Plus, Pro or
+ * Max); one without it is the single Family plan from before the tiers, and
+ * one with any other value is dropped.
  */
 export function readFamilyProduct(product: models.Product): FamilyCatalogueProduct | null {
     const metadata = product.metadata as Record<string, unknown>;
@@ -172,6 +181,10 @@ export function readFamilyProduct(product: models.Product): FamilyCatalogueProdu
     const quotaBytes = quotaOf(metadata);
     if (quotaBytes === null) return drop('quota');
     if (metadata[QUOTA_PER_MEMBER_METADATA_KEY] !== undefined) return drop('quota-per-member');
+    const tierValue = metadata[TIER_METADATA_KEY];
+    if (tierValue !== undefined && !FAMILY_TIERS.includes(tierValue as FamilyTier))
+        return drop('tier');
+    const tier = (tierValue as FamilyTier | undefined) ?? null;
     const included = integerMetadata(metadata[INCLUDED_MEMBERS_METADATA_KEY]);
     if (included === null || included < 1 || included > FAMILY_MAX_MEMBERS)
         return drop('included-members');
@@ -210,11 +223,14 @@ export function readFamilyProduct(product: models.Product): FamilyCatalogueProdu
         name: product.name,
         description: product.description,
         interval,
+        tier,
+        recommended: recommendedOf(metadata),
         prices,
         includedMembers: included,
         maxMembers: FAMILY_MAX_MEMBERS,
         quotaBytes: quotaBytes.toString(),
         archived: product.is_archived,
+        createdAt: String(product.created_at ?? ''),
     };
 }
 
@@ -238,6 +254,21 @@ async function loadCatalogue(): Promise<Catalogues> {
             Number(BigInt(a.quotaBytes) - BigInt(b.quotaBytes)) ||
             a.interval.localeCompare(b.interval),
     );
+    const offered = offeredFamilies(families);
+    for (const family of families)
+        if (
+            family.tier !== null &&
+            !family.archived &&
+            !offered.includes(family) &&
+            offered.some(
+                (other) => other.tier === family.tier && other.interval === family.interval,
+            )
+        )
+            log.warn({
+                message:
+                    'Two family products for one tier and billing period: the newest is offered',
+                billing: { product: family.id, tier: family.tier, interval: family.interval },
+            });
     return { plans, families };
 }
 
@@ -267,4 +298,33 @@ export async function getCatalogue() {
 /* Family plans, archived ones included (an archived plan still has subscribers). */
 export async function getFamilyCatalogue() {
     return (await getCatalogues()).families;
+}
+
+/*
+ * The family plans a page offers: none archived; one product per tier and
+ * billing period, the newest by its creation when two share them (an operator
+ * made another; the older still serves its subscribers); and the single Family
+ * plan from before the tiers only for a billing period no tier is offered in,
+ * so it never shows beside them. Anyone on a plan not offered keeps it, read
+ * from the full catalogue. Catalogue order is kept.
+ */
+export function offeredFamilies<T extends FamilyCatalogueProduct>(families: readonly T[]) {
+    const live = families.filter((family) => !family.archived);
+    const newest = new Map<string, T>();
+    for (const family of live) {
+        if (family.tier === null) continue;
+        const key = `${family.tier}:${family.interval}`;
+        const seen = newest.get(key);
+        if (
+            !seen ||
+            family.createdAt > seen.createdAt ||
+            (family.createdAt === seen.createdAt && family.id > seen.id)
+        )
+            newest.set(key, family);
+    }
+    const tiered = new Set([...newest.values()].map((family) => family.interval));
+    const kept = new Set(newest.values());
+    return live.filter((family) =>
+        family.tier === null ? !tiered.has(family.interval) : kept.has(family),
+    );
 }

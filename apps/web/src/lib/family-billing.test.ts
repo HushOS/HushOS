@@ -3,6 +3,9 @@ import { describe, expect, test } from 'vitest';
 import {
     addRange,
     familyActions,
+    pendingTier,
+    renewalAmount,
+    tierMoves,
     familyCurrencies,
     needsPlan,
     nextCharge,
@@ -26,6 +29,8 @@ const plan: FamilyPlan = {
     name: 'Family (monthly)',
     description: null,
     interval: 'month',
+    tier: null,
+    recommended: false,
     prices: { usd: { base: 1500, perMember: 200 }, inr: { base: 59900, perMember: 7900 } },
     includedMembers: 6,
     maxMembers: 20,
@@ -71,6 +76,8 @@ function summary(
                   units,
                   paidUnits,
                   pendingUnits,
+                  pendingProductId: null,
+                  paidProductId: FAMILY,
                   includedMembers: 6,
                   quotaBytes: plan.quotaBytes,
                   currentPeriodStart: start.toISOString(),
@@ -163,6 +170,9 @@ describe('who gets which controls', () => {
     test('the payer adds, removes, manages payment and cancels', () => {
         expect(familyActions(summary({ units: 8, used: 3 }), organizer)).toEqual({
             choosePlan: false,
+            // The single plan has no other tier billed monthly to move to.
+            changePlan: false,
+            keepTier: false,
             addPlaces: true,
             removePlaces: true,
             keepPlaces: false,
@@ -185,6 +195,8 @@ describe('who gets which controls', () => {
     test('a plan set to end can only be resumed in the portal: no place changes, no second cancel', () => {
         expect(familyActions(summary({ units: 8, used: 3, ending: true }), organizer)).toEqual({
             choosePlan: false,
+            changePlan: false,
+            keepTier: false,
             addPlaces: false,
             removePlaces: false,
             keepPlaces: false,
@@ -301,5 +313,176 @@ describe('placesOf', () => {
         expect(placesOf({ used: 2, limit: 6 }, off)).toEqual({ used: 2, limit: 6 });
         expect(placesOf({ used: 2, limit: 6 }, undefined)).toEqual({ used: 2, limit: 6 });
         expect(placesOf(undefined, undefined)).toBeNull();
+    });
+});
+
+/* The three tiers as seed.ts makes them: four included, then 150 a member, monthly and yearly. */
+const GIB = 1024 ** 3;
+function tierPlan(
+    tier: 'plus' | 'pro' | 'max',
+    gib: number,
+    base: { usd: number; inr: number },
+    interval: 'month' | 'year',
+) {
+    const times = interval === 'year' ? 10 : 1;
+    const label = { plus: 'Plus', pro: 'Pro', max: 'Max' }[tier];
+    return {
+        id: `${tier}-${interval}`,
+        name: `Family ${label} (${interval === 'year' ? 'yearly' : 'monthly'})`,
+        description: null,
+        interval,
+        tier,
+        recommended: tier === 'pro',
+        prices: {
+            usd: { base: base.usd * times, perMember: 150 * times },
+            inr: { base: base.inr * times, perMember: 5900 * times },
+        },
+        includedMembers: 4,
+        maxMembers: 20,
+        quotaBytes: String(gib * GIB),
+    } satisfies FamilyPlan;
+}
+const tiers: FamilyPlan[] = [
+    tierPlan('plus', 800, { usd: 1000, inr: 39900 }, 'month'),
+    tierPlan('plus', 800, { usd: 1000, inr: 39900 }, 'year'),
+    tierPlan('pro', 2048, { usd: 2000, inr: 79900 }, 'month'),
+    tierPlan('pro', 2048, { usd: 2000, inr: 79900 }, 'year'),
+    tierPlan('max', 4096, { usd: 3000, inr: 139900 }, 'month'),
+    tierPlan('max', 4096, { usd: 3000, inr: 139900 }, 'year'),
+];
+
+/* A family on a tier, as the server summarises it. */
+function onTier(
+    productId: string,
+    overrides: Parameters<typeof summary>[0] & {
+        usedBytes?: bigint;
+        pendingProductId?: string | null;
+        paidProductId?: string;
+        currency?: string;
+    } = {},
+): FamilyBillingFull {
+    const base = summary({ ...overrides, units: overrides.units ?? 4 });
+    const on = tiers.find((candidate) => candidate.id === productId)!;
+    return {
+        ...base,
+        plans: tiers,
+        subscription: base.subscription && {
+            ...base.subscription,
+            productId,
+            productName: on.name,
+            recurringInterval: on.interval,
+            currency: overrides.currency ?? 'usd',
+            includedMembers: 4,
+            quotaBytes: on.quotaBytes,
+            pendingProductId: overrides.pendingProductId ?? null,
+            paidProductId: overrides.paidProductId ?? productId,
+        },
+        storage: { usedBytes: String(overrides.usedBytes ?? 0n), quotaBytes: on.quotaBytes },
+    };
+}
+
+describe('places with four included', () => {
+    test('the floor is four, the next charge counts places past four, and a raise past four is charged', () => {
+        expect(removeRange(onTier('pro-month', { units: 6, used: 2 }))).toEqual({ min: 4, max: 5 });
+        expect(removeRange(onTier('pro-month', { units: 4, used: 2 }))).toBeNull();
+        expect(renewalAmount(onTier('pro-month', { units: 6 }), 6)).toEqual({
+            amount: 2000 + 2 * 150,
+            currency: 'usd',
+        });
+        // Three to six: only the two past the four included are charged, the whole period left.
+        expect(quoteAdd(onTier('pro-month', { units: 3 }), 3, start)?.amount).toBe(300);
+        expect(quoteAdd(onTier('pro-month', { units: 4 }), 1, left(0.5))?.amount).toBe(75);
+        expect(addRange(onTier('pro-month', { units: 18 }))).toEqual({ min: 1, max: 2 });
+    });
+});
+
+describe('tierMoves', () => {
+    test('offers the other tiers billed the same way, smallest first, each up or down', () => {
+        const moves = tierMoves(onTier('pro-month', { units: 7 }), left(0.5));
+        expect(moves.map((move) => [move.plan.id, move.direction])).toEqual([
+            ['plus-month', 'down'],
+            ['max-month', 'up'],
+        ]);
+        // Up: half of the 10.00 difference now; then Max at seven places from the renewal.
+        expect(moves[1]).toMatchObject({
+            now: { amount: 500, currency: 'usd' },
+            renews: { amount: 3000 + 3 * 150, currency: 'usd' },
+            over: 0n,
+        });
+        // Down: nothing now, Plus at seven places from the renewal.
+        expect(moves[0]).toMatchObject({ now: null, renews: { amount: 1000 + 3 * 150 } });
+        // A yearly family moves between yearly tiers.
+        expect(tierMoves(onTier('max-year')).map((move) => [move.plan.id, move.direction])).toEqual(
+            [
+                ['plus-year', 'down'],
+                ['pro-year', 'down'],
+            ],
+        );
+    });
+
+    test('a smaller tier says how much more the family folders hold than its pool', () => {
+        const pool = BigInt(800 * GIB);
+        const over = (usedBytes: bigint) =>
+            tierMoves(onTier('max-month', { usedBytes })).find(
+                (move) => move.plan.id === 'plus-month',
+            )?.over;
+        expect(over(pool + 1n)).toBe(1n);
+        expect(over(pool)).toBe(0n);
+        expect(over(pool + BigInt(428 * GIB))).toBe(BigInt(428 * GIB));
+        // Family Pro's 2 TB takes it all.
+        expect(
+            tierMoves(onTier('max-month', { usedBytes: pool + 1n })).find(
+                (move) => move.plan.id === 'pro-month',
+            )?.over,
+        ).toBe(0n);
+    });
+
+    test('is quoted in the family’s currency and renews at a scheduled cut’s places', () => {
+        const inr = tierMoves(onTier('plus-month', { currency: 'inr' }), start);
+        expect(inr.map((move) => move.now)).toEqual([
+            { amount: 79900 - 39900, currency: 'inr' },
+            { amount: 139900 - 39900, currency: 'inr' },
+        ]);
+        const cut = tierMoves(onTier('pro-month', { units: 8, pendingUnits: 6 }));
+        expect(cut.find((move) => move.direction === 'up')?.renews?.amount).toBe(3000 + 2 * 150);
+    });
+
+    test('the next charge follows a scheduled move to a smaller tier', () => {
+        const moving = onTier('max-month', { units: 6, pendingProductId: 'plus-month' });
+        expect(pendingTier(moving)?.id).toBe('plus-month');
+        expect(nextCharge(moving)).toMatchObject({ amount: 1000 + 2 * 150, currency: 'usd' });
+        expect(nextCharge(onTier('max-month', { units: 6 }))?.amount).toBe(3000 + 2 * 150);
+    });
+
+    test('only the payer changes the plan, while it renews and its last payment went through', () => {
+        const organizer = ['billing', 'members'];
+        expect(familyActions(onTier('pro-month'), organizer)).toMatchObject({
+            changePlan: true,
+            keepTier: false,
+        });
+        expect(familyActions(onTier('pro-month', { you: false }), organizer).changePlan).toBe(
+            false,
+        );
+        expect(familyActions(onTier('pro-month', { ending: true }), organizer).changePlan).toBe(
+            false,
+        );
+        const overdue = onTier('pro-month');
+        overdue.subscription!.status = 'past_due';
+        expect(familyActions(overdue, organizer)).toMatchObject({
+            changePlan: false,
+            keepTier: false,
+        });
+        expect(
+            familyActions(onTier('pro-month', { pendingProductId: 'plus-month' }), organizer)
+                .keepTier,
+        ).toBe(true);
+        // Nothing stacks on a charge the bank hasn't confirmed: an upgrade, or places.
+        expect(
+            familyActions(onTier('max-month', { paidProductId: 'pro-month' }), organizer)
+                .changePlan,
+        ).toBe(false);
+        expect(
+            familyActions(onTier('pro-month', { units: 6, paidUnits: 5 }), organizer).changePlan,
+        ).toBe(false);
     });
 });

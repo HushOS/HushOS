@@ -18,8 +18,8 @@ vi.mock('pg-boss', () => ({
                 throw new Error('connection refused');
             }
         }
-        async send(name: string, data: unknown) {
-            starts.sent.push({ name, data });
+        async send(name: string, data: unknown, options?: unknown) {
+            starts.sent.push(options ? { name, data, options } : { name, data });
             return 'job_1';
         }
     },
@@ -44,5 +44,20 @@ test('a failed start is retried by the next send, and a good one is kept', async
     expect(starts.sent).toEqual([
         { name: 'billing.reissue-cut', data: { groupId: 'g' } },
         { name: 'billing.reissue-cut', data: { groupId: 'h' } },
+    ]);
+});
+
+test('a family’s retry goes to the stately queue keyed by the family, deferred when asked', async () => {
+    await enqueue(
+        queues.billingReissuePending,
+        { groupId: 'g' },
+        { startAfterSeconds: 600, singletonKey: 'g' },
+    );
+    expect(starts.sent).toEqual([
+        {
+            name: 'billing.reissue-pending',
+            data: { groupId: 'g' },
+            options: { startAfter: 600, singletonKey: 'g' },
+        },
     ]);
 });

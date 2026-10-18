@@ -18,7 +18,7 @@ import {
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
-import { adminRepository, authRepository, groupsRepository } from '@hushos/db';
+import { adminRepository, authRepository, billingRepository, groupsRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
     sendSecurityNotice,
@@ -1040,9 +1040,24 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const overview = await adminRepository.getOverview();
+    const [overview, stuck] = await Promise.all([
+        adminRepository.getOverview(),
+        billingRepository.listGivenUpReissues(),
+    ]);
     return {
         ...overview,
+        /*
+         * Family plans whose scheduled change (a cut or a tier move) HushOS gave up asking
+         * Polar for: Polar answered 200 and kept nothing, five times. Fixed in Polar's dashboard;
+         * the row goes once Polar holds the change. Ids only; no names.
+         */
+        stuckPlanChanges: stuck.map((row) => ({
+            groupId: row.groupId,
+            subscriptionId: row.subscriptionId,
+            wanted: row.wanted,
+            reason: row.reason,
+            since: row.since?.toISOString() ?? null,
+        })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },
         objects: {
             ...overview.objects,
