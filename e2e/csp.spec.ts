@@ -21,6 +21,7 @@ test('no page reports a Content Security Policy violation', async ({ page }) => 
     await expect(page.getByText(/valid email|email address/i).first()).toBeVisible();
     await page.goto('/pricing', { waitUntil: 'networkidle' });
     await page.goto('/blog', { waitUntil: 'networkidle' });
+    await page.goto('/roadmap', { waitUntil: 'networkidle' });
     const violations = await page.evaluate(
         () => (window as unknown as { cspViolations: string[] }).cspViolations,
     );

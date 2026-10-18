@@ -25,6 +25,7 @@ export type Identity =
     | 'security'
     | 'pricing'
     | 'teams'
+    | 'roadmap'
     | 'offer'
     | 'invite'
     | 'compare';

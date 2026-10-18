@@ -303,7 +303,12 @@ function FullFooter() {
     const columns: { title: string; items: FooterItem[] }[] = [
         {
             title: 'HushOS',
-            items: [{ label: 'Drive', to: '/' }, ...shown.map(({ to, label }) => ({ to, label }))],
+            // The roadmap is in the footer only: the header keeps to the pages people choose between.
+            items: [
+                { label: 'Drive', to: '/' },
+                ...shown.map(({ to, label }) => ({ to, label })),
+                { label: 'Roadmap', to: '/roadmap' },
+            ],
         },
         {
             title: 'Compare',
