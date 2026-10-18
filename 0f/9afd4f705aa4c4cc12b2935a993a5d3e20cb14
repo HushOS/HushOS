@@ -1,0 +1,56 @@
+packages/db/src/groups.one-family.test.ts
+  s_c56e31c87cddde::t_c71e9f4cd61c72 1-528,530,537-538
+  s_c56e31c87cddde::t_1445fc6fc4eacf 529,531-536,539-562
+DESIGN.md
+  s_c56e31c87cddde::t_222d4d10f0dd5b 428,432-433
+apps/web/src/components/families/create-family-dialog.tsx
+  s_c56e31c87cddde::t_6c445a8a9b0b29 1,15-16,25-26,45-48,53,93-96,115,136
+apps/web/src/lib/groups/copy.ts
+  s_c56e31c87cddde::t_bf25c281e177c8 38-62,138-146
+apps/web/src/routes/join/route.tsx
+  s_c56e31c87cddde::t_5312a9505bf784 9,42-44,247-250,262-279,299
+docs/self-hosting.md
+  s_c56e31c87cddde::t_794179c41cb5ee 658-680
+packages/db/drizzle/20261018222928_one_family/migration.sql
+  s_c56e31c87cddde::t_b5233dc450f1d9 1-38
+packages/db/drizzle/20261018222928_one_family/snapshot.json
+  s_c56e31c87cddde::t_ea4cad970d3dcb 1-12857
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_d5b96bbe0c2098 24-27
+packages/db/src/drive.rekeyed.test.ts
+  s_c56e31c87cddde::t_ad5e8de0102b94 814
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_ff606965d9687c 218,222,1780,1783
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_fc15c968028d31 50,80-83,316-317,373-375,502-542,1149-1150,1217-1234,1282,1402-1410,2218-2219,2280-2289,2295
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_6082d43546d7b5 14
+packages/db/src/schema/groups.ts
+  s_c56e31c87cddde::t_ab7a1418dd6dba 37-39,112-113,128-135,159-172
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_d8fbc14b4d50de 221,229,284
+packages/groups/src/protocol.ts
+  s_c56e31c87cddde::t_8111cd276c5d41 21-22
+packages/groups/src/server.billing.test.ts
+  s_c56e31c87cddde::t_ad02627af7a1b9 270-307
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_abe79a0baad424 781-874,1593,1596,1598
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_4e4414d785941e 106-127,812-813,1237-1240,1367-1372,1835-1836,1838,1857-1863,1888-1889,1958-1964
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f9afd4f705aa4c4cc12b2935a993a5d3e20cb14",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
