@@ -32,7 +32,7 @@ use crate::identity::{
 use crate::signatures::{sign_hybrid, succession_consent_statement, ConsentRole};
 
 const UPGRADED_ONLY: &str = "Only a link between two upgraded identities takes consent.";
-const NOT_OWN_IDENTITY: &str = "This identity does not open on this account.";
+pub(crate) const NOT_OWN_IDENTITY: &str = "This identity does not open on this account.";
 const NOT_CONSECUTIVE: &str = "These are not two identities this device opened one after the other.";
 const NOT_THIS_LINK: &str = "This link is not one this account made.";
 
@@ -48,7 +48,7 @@ pub struct ConsentDue {
 }
 
 /* The public keys of a version 2 envelope that has them all; none otherwise. */
-fn served_keys_of(envelope: &IdentityEnvelope) -> Option<ServedKeys> {
+pub(crate) fn served_keys_of(envelope: &IdentityEnvelope) -> Option<ServedKeys> {
     match (envelope.version, &envelope.ml_dsa, &envelope.kem) {
         (2, Some(ml_dsa), Some(kem)) => Some(ServedKeys {
             key_version: envelope.key_version,

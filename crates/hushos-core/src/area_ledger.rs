@@ -85,7 +85,7 @@ const OLDER_WORKSPACE_KEY: &str = "This folder was wrapped under an older worksp
 const OPEN_PARENT: &str = "Open the containing folder first.";
 const OLDER_FOLDER_KEY: &str = "This item was wrapped under an older folder key.";
 const OWN_WORKSPACE: &str = "This was refused: it claims to be a folder of your own.";
-const NO_CHAIN: &str = "Check the family’s member list first.";
+pub(crate) const NO_CHAIN: &str = "Check the family’s member list first.";
 const NOT_THE_FAMILYS: &str = "This folder does not belong to the family.";
 const NOT_LISTED: &str = "This folder is not on the family’s member list.";
 const ITEM_CHANGED: &str = "This item changed since it was opened. Refresh and retry.";
@@ -117,6 +117,17 @@ const OLDER_SETTINGS: &str =
     "The server sent older settings than this device has opened, so nothing was changed.";
 /// An acceptance before the app opened the account's settings.
 pub(crate) const OPEN_SETTINGS: &str = "Open your settings first.";
+
+/* A live area as a roster call grants it: its write version, the key held there, and its id seed. */
+pub(crate) type HeldArea = (u64, Zeroizing<Vec<u8>>, String);
+
+/* What a roster call is built from (AreaLedger::call_state). */
+pub(crate) struct CallState {
+    pub(crate) generation: u64,
+    pub(crate) chain: Option<Arc<AcceptedRosters>>,
+    pub(crate) seed: Option<Zeroizing<Vec<u8>>>,
+    pub(crate) areas: Vec<(String, Option<HeldArea>)>,
+}
 
 /* What an acceptance needs of the unlocked account. */
 pub(crate) struct ServedAccount {
@@ -309,12 +320,20 @@ struct State {
     floors: HashMap<String, Arc<AcceptedRosters>>,
     /* Joining (join.rs): the hidden positions issued per code, the family's wrong pair, the joins records used. */
     joins: crate::join::JoinBook,
+    /*
+     * Group key seeds this device opened (roster_calls.rs, open_group_key), by (family, key
+     * version): only the committed chain's current key is kept, and a commit that moves the
+     * family to a later key drops the earlier ones, as the worker's `seeds`.
+     */
+    seeds: HashMap<(String, u64), Zeroizing<Vec<u8>>>,
 }
 
 /* The settings the app last opened for the account: their group pins, or none when no document opened. */
 struct Settings {
     user_id: String,
     pins: HashMap<String, GroupPin>,
+    /* The document's contact pins by user id: the only pins a roster call or join code reads (roster_calls.rs). */
+    contacts: HashMap<String, crate::group_trust::VerifiedPin>,
     opened: bool,
 }
 
@@ -575,6 +594,9 @@ impl State {
         if higher {
             self.floors.insert(group_id.clone(), Arc::clone(&chain));
         }
+        // Seeds of keys the family has replaced sign nothing any more.
+        let current = chain.group_key_version;
+        self.seeds.retain(|(group, version), _| *group != group_id || *version >= current);
         self.chains.insert(group_id, chain);
         Ok(())
     }
@@ -603,6 +625,7 @@ impl State {
         self.chains.remove(group_id);
         self.forked.remove(group_id);
         self.floors.remove(group_id);
+        self.seeds.retain(|(group, _), _| group != group_id);
         // A join that committed and then could not be kept may run again; the hidden positions stay.
         self.joins.forget(group_id);
     }
@@ -1298,12 +1321,31 @@ impl AreaLedger {
         Ok(())
     }
 
-    /// The group pins of the settings document the app just opened for `user_id`, or `None` when
-    /// the server served none; a version 1 document is [`AreaLedger::legacy_settings`]. Within one unlock,
-    /// settings that opened never give way to none: refused, and the pins held stay (decision D7;
-    /// the worker's `useSettings`). [`AreaLedger::accept_served`] takes its settings pin from here.
-    pub fn use_settings(&self, user_id: String, pins: Option<HashMap<String, GroupPin>>) -> CoreResult<()> {
+    /// The settings document the app just opened for `user_id`: its group pins and its contact pins
+    /// (`contacts`, by user id: the people this account checked words with, version 3), or `None`
+    /// pins and no contacts when the server served none; a version 1 document is
+    /// [`AreaLedger::legacy_settings`]. Within one unlock, settings that opened never give way to
+    /// none: refused, and the pins held stay (decision D7; the worker's `useSettings`).
+    /// [`AreaLedger::accept_served`] takes its settings pin from here; an admission, the admin's join
+    /// code and an admission's resend take the person's contact pin from here, never from the app.
+    pub fn use_settings(
+        &self,
+        user_id: String,
+        pins: Option<HashMap<String, GroupPin>>,
+        contacts: HashMap<String, crate::group_trust::VerifiedPin>,
+    ) -> CoreResult<()> {
         uuid(&user_id, "user id")?;
+        if pins.is_none() && !contacts.is_empty() {
+            return Err(refused("Contacts come only with a settings document."));
+        }
+        let mut filed = HashMap::new();
+        for (key, pin) in contacts {
+            let key = key.to_lowercase();
+            if uuid(&key, "user id").is_err() || !pin.user_id.eq_ignore_ascii_case(&key) {
+                return Err(refused("A contact pin is filed under another person."));
+            }
+            filed.insert(key, pin);
+        }
         let mut state = self.lock();
         let held = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(&user_id));
         if pins.is_none() && held.is_some_and(|held| held.opened) {
@@ -1313,6 +1355,7 @@ impl AreaLedger {
             user_id: user_id.to_lowercase(),
             opened: pins.is_some(),
             pins: pins.unwrap_or_default(),
+            contacts: filed,
         });
         Ok(())
     }
@@ -1922,6 +1965,14 @@ impl AreaLedger {
         Ok(settings.pins.get(group_id).cloned())
     }
 
+    /* The account's contact pin of `user_id`, from the settings it last opened; none without one. */
+    pub(crate) fn contact_pin(&self, user_id: &str) -> Option<crate::group_trust::VerifiedPin> {
+        let state = self.lock();
+        let (account, _) = state.account.as_ref()?;
+        let settings = state.settings.as_ref().filter(|held| held.user_id.eq_ignore_ascii_case(account))?;
+        settings.contacts.get(&user_id.to_lowercase()).cloned()
+    }
+
     /* The highest chain committed for the family in this session (accept_served's floor and mark). */
     pub(crate) fn floor(&self, group_id: &str) -> Option<Arc<AcceptedRosters>> {
         self.lock().floors.get(group_id).cloned()
@@ -1946,6 +1997,101 @@ impl AreaLedger {
         state.commit(chain)?;
         // The record is sealed under the key held now (a master-key rotation meanwhile included).
         Ok(store_key)
+    }
+
+    /*
+     * What a roster call is built from, read under one lock (roster_calls.rs):
+     * the session's generation, the family's committed chain, the seed of its
+     * current group key if this device opened it, and each live area on the
+     * chain (sorted by id) with the key this device holds at its write
+     * version and its id seed, when this family opened it here.
+     */
+    pub(crate) fn call_state(&self, group_id: &str) -> CallState {
+        let state = self.lock();
+        let chain = state.chains.get(group_id).cloned();
+        let seed = chain
+            .as_ref()
+            .and_then(|chain| state.seeds.get(&(group_id.to_string(), chain.group_key_version)).cloned());
+        let mut areas = vec![];
+        if let Some(chain) = &chain {
+            let mut ids: Vec<&String> = chain.area_keys.keys().collect();
+            ids.sort();
+            for workspace_id in ids {
+                // A retired area (a deleted family folder) is granted no more: it is no area now.
+                let Some(version) = area_write_version_of(chain, workspace_id) else { continue };
+                let opened = state.opened.get(group_id).and_then(|areas| areas.get(workspace_id));
+                let key = state.workspace_keys.get(workspace_id).and_then(|held| held.keys.get(&version));
+                let held = match (opened, key) {
+                    (Some(opened), Some(key)) => Some((version, key.clone(), opened.id_seed.clone())),
+                    _ => None,
+                };
+                areas.push((workspace_id.clone(), held));
+            }
+        }
+        CallState { generation: state.generation, chain, seed, areas }
+    }
+
+    /*
+     * Keeps a group key seed this device opened, under the session it was
+     * opened in, and only when it is the committed chain's current key:
+     * an earlier key signs nothing any more (the worker keeps none either).
+     */
+    pub(crate) fn hold_seed(
+        &self,
+        group_id: &str,
+        version: u64,
+        seed: Zeroizing<Vec<u8>>,
+        generation: u64,
+    ) -> CoreResult<()> {
+        let mut state = self.lock();
+        if state.generation != generation || state.account.is_none() {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        // The key the family's committed chain is under now, whichever roster that is (the worker's rule).
+        if state.chains.get(group_id).is_some_and(|chain| chain.group_key_version == version) {
+            state.seeds.insert((group_id.to_string(), version), seed);
+        }
+        Ok(())
+    }
+
+    /*
+     * A roster call's last step, under the lock: still the session it began
+     * in, and the family's committed chain still the one it was built on.
+     * Returns the device store key to seal its outbox entry under (the key
+     * held now, a master-key rotation meanwhile included), or none when the
+     * chain moved on (another acceptance committed while it was signed).
+     */
+    pub(crate) fn call_still_holds(
+        &self,
+        group_id: &str,
+        generation: u64,
+        chain_digest: &str,
+    ) -> CoreResult<Option<(String, Zeroizing<[u8; 32]>)>> {
+        let state = self.lock();
+        let (Some((user_id, _)), Some(store_key)) = (state.account.clone(), state.store_key.clone()) else {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        };
+        if state.generation != generation {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        if state.chains.get(group_id).is_none_or(|chain| chain.roster_digest != chain_digest) {
+            return Ok(None);
+        }
+        Ok(Some((user_id, store_key)))
+    }
+
+    /* The seeds held for a family, by key version: what open_group_key kept (tests only). */
+    #[cfg(test)]
+    pub(crate) fn held_seed_versions(&self, group_id: &str) -> Vec<u64> {
+        let mut versions: Vec<u64> = self
+            .lock()
+            .seeds
+            .keys()
+            .filter(|(group, _)| group == group_id)
+            .map(|(_, version)| *version)
+            .collect();
+        versions.sort();
+        versions
     }
 
     /* `NOT_THIS_ACCOUNT` unless the account and session an acceptance began in are still open (the worker's stillTheSession). */

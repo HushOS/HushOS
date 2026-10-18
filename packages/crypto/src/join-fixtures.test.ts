@@ -60,6 +60,7 @@ describe('join sessions the core ran', () => {
         ),
     );
 
+    // Twenty-two scenarios through the real worker: past 5 s when the package's other suites share the cores.
     it('give here, step by step, what they gave in the core, as the scenarios declare', async () => {
         const runs = doc.joinSessions.runs as Json[];
         expect(runs.map((run) => run.name)).toEqual(file.scenarios.map((s: Json) => s.name));
@@ -75,7 +76,7 @@ describe('join sessions the core ran', () => {
             }
         }
         expect(steps).toBeGreaterThanOrEqual(40);
-    });
+    }, 60_000);
 
     it('open here as the core sealed them: its joins record joins, and its kept escalation holds', async () => {
         const { joined, hidden } = await openCross(doc.joinPreviews, doc.joinSessions.cross);

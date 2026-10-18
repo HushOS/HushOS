@@ -73,13 +73,15 @@ const BAD_PIN: &str = "Invalid group pin.";
 /// ([`AreaLedger::accept_served`] seals and opens it), and so are a join's records (`joins`, the
 /// compared code, and `holds`, its escalation; [`crate::AreaLedger::join_check`]): an app that
 /// could seal a joins record could commit a family nobody compared.
+#[cfg(feature = "fixtures")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DeviceStore {
-    /// The roster calls the app still has to send (Core 5a).
+    /// The roster calls still to send: sealed and read only by the core since Core 5a
+    /// ([`crate::StagedCall`], [`AreaLedger::outbox_open`]).
     Outbox,
 }
 
+#[cfg(feature = "fixtures")]
 impl DeviceStore {
     fn name(self) -> &'static str {
         match self {
@@ -844,7 +846,7 @@ impl AreaLedger {
     /// let signing_seed = vec![5u8; 32];
     /// let ledger = AreaLedger::new();
     /// ledger.open_account(user.clone(), signing_public_key(signing_seed)?, vec![9u8; 32])?;
-    /// ledger.use_settings(user.clone(), Some(Default::default()))?;
+    /// ledger.use_settings(user.clone(), Some(Default::default()), Default::default())?;
     /// let me = OwnIdentities { user_id: user, identities: vec![] };
     /// let served = ServedChain {
     ///     after: 0,
@@ -885,27 +887,18 @@ impl AreaLedger {
         };
         self.accept_in_order(&reader, &served, &cache, settings_pin.as_ref(), &record_pin, record.is_some())
     }
+}
 
+/* The app's own device stores, for the shared fixtures and tests: the outbox is the core's since
+ * Core 5a (entries come only from the roster call builders, AreaLedger::outbox_open reads them). */
+#[cfg(feature = "fixtures")]
+impl AreaLedger {
     /// Seals one of the app's own family records (`value`, JSON text) in the
     /// device store `store`, for the account [`AreaLedger::open_account`]
     /// opened, under the key it derived: bound to the account, the family and
     /// the store.
-    ///
-    /// ```
-    /// use hushos_core::*;
-    /// # fn main() -> CoreResult<()> {
-    /// let (user, group) = ("00000001-abcd-4abc-8abc-abcdefabcdef".to_string(), "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".to_string());
-    /// let ledger = AreaLedger::new();
-    /// ledger.open_account(user.clone(), signing_public_key(vec![5u8; 32])?, vec![9u8; 32])?;
-    /// let sealed = ledger.group_device_record_seal(group.clone(), DeviceStore::Outbox, r#"{"calls":[]}"#.into())?;
-    /// assert_eq!(ledger.group_device_record_open(group.clone(), DeviceStore::Outbox, sealed.clone())?, r#"{"calls":[]}"#);
-    /// // Another store, or the same account after a master-key rotation: never readable.
-    /// assert!(ledger.group_device_record_open("0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b".into(), DeviceStore::Outbox, sealed.clone()).is_err());
-    /// ledger.open_account(user, signing_public_key(vec![5u8; 32])?, vec![8u8; 32])?;
-    /// assert!(ledger.group_device_record_open(group, DeviceStore::Outbox, sealed).is_err());
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// (The shared fixtures' device-store cases run it.)
+    #[doc(hidden)]
     pub fn group_device_record_seal(
         &self,
         group_id: String,
@@ -924,6 +917,7 @@ impl AreaLedger {
     /// another account, family or store, or damaged, and the app deletes it.
     /// Any other refusal (no account open, a malformed id) is an input error,
     /// and the record stays.
+    #[doc(hidden)]
     pub fn group_device_record_open(
         &self,
         group_id: String,
@@ -1228,7 +1222,11 @@ mod tests {
 
     fn settings(ledger: &AreaLedger, user_id: &str, pin: Option<GroupPin>) {
         ledger
-            .use_settings(user_id.into(), Some(pin.into_iter().map(|pin| (GROUP.to_string(), pin)).collect()))
+            .use_settings(
+                user_id.into(),
+                Some(pin.into_iter().map(|pin| (GROUP.to_string(), pin)).collect()),
+                Default::default(),
+            )
             .unwrap();
     }
 
@@ -1747,7 +1745,7 @@ mod tests {
         ledger.legacy_settings(f.p1.user_id.clone()).unwrap();
         assert_eq!(f.accept(&ledger, None, f.served(0, 3)).unwrap_err(), input(OPEN_SETTINGS_FOR_TESTS));
         // After "none", still none (acceptance runs, with no settings pin).
-        ledger.use_settings(f.p1.user_id.clone(), None).unwrap();
+        ledger.use_settings(f.p1.user_id.clone(), None, Default::default()).unwrap();
         ledger.legacy_settings(f.p1.user_id.clone()).unwrap();
         assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP), Ok(None));
         // After settings that opened: refused, and the pin held stays a mark.
@@ -1806,15 +1804,15 @@ mod tests {
         // Before any settings, nothing is accepted.
         assert_eq!(f.accept(&ledger, None, f.served(0, 3)).unwrap_err(), input(OPEN_SETTINGS_FOR_TESTS));
         // None after none is fine; none after settings that opened is refused, and the pin stays.
-        ledger.use_settings(f.p1.user_id.clone(), None).unwrap();
+        ledger.use_settings(f.p1.user_id.clone(), None, Default::default()).unwrap();
         settings(&ledger, &f.p1.user_id, Some(f.pin_at(3)));
-        assert!(ledger.use_settings(f.p1.user_id.clone(), None).is_err());
+        assert!(ledger.use_settings(f.p1.user_id.clone(), None, Default::default()).is_err());
         assert_eq!(ledger.settings_pin(&f.p1.user_id, GROUP).unwrap(), Some(f.pin_at(3)));
         // The pin is a mark: rosters 1 and 2 alone are a rollback.
         assert!(f.accept(&ledger, None, f.served(0, 2)).is_err());
         assert_eq!(version_of(&f.accept(&ledger, None, f.served(0, 3)).unwrap()), Some(3));
         // Another account's settings are no settings for this one.
-        ledger.use_settings(f.p2.user_id.clone(), Some(HashMap::new())).unwrap();
+        ledger.use_settings(f.p2.user_id.clone(), Some(HashMap::new()), Default::default()).unwrap();
         assert_eq!(f.accept(&ledger, None, f.served(0, 3)).unwrap_err(), input(OPEN_SETTINGS_FOR_TESTS));
     }
 

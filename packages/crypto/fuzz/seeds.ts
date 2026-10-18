@@ -7,6 +7,8 @@ import {
     core,
     coreJoin,
     coreLedger,
+    coreRosterCalls,
+    rosterCallSessions,
     groups,
     joinCheckCases,
     joinSessionScenarios,
@@ -411,6 +413,111 @@ export function documents(target: Target): Uint8Array[] {
                             });
                         }),
                 ),
+                // Outbox entries as both twins keep them: sent, held for each reason, landed, superseded, lost.
+                ...(() => {
+                    const d = coreRosterCalls();
+                    const admit = d.calls.find((k: Json) => k.name === 'admit-member').expected
+                        .route;
+                    const member = d.calls.find((k: Json) => k.name === 'grant-members').expected
+                        .route;
+                    const entry = (over: Json) => ({
+                        v: 1,
+                        id: 'b7a1c1d2-0000-4000-8000-000000000001',
+                        groupId: d.family.groupId,
+                        route: admit,
+                        body: '{"expectedRevision":7}',
+                        previousRosterDigest: 'head',
+                        rosterDigest: 'own',
+                        stagedEnvelope: '',
+                        state: 'ready',
+                        attempts: 0,
+                        joinCode: null,
+                        admits: { userId: admit.userId, fingerprint: 'print' },
+                        ...over,
+                    });
+                    const pin = { userId: admit.userId, fingerprint: 'print' };
+                    return [
+                        json({ kind: 'outbox_entry', entry: entry({}), pin }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({ body: { expectedRevision: 7 } }),
+                            pin,
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({}),
+                            pin: { ...pin, fingerprint: 'other' },
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({}),
+                            pin: null,
+                            id: 'b7a1c1d2-0000-4000-8000-000000000002',
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({ state: 'awaiting-check' }),
+                            pin,
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({ route: member, state: 'committed' }),
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({ route: member }),
+                            head: ['head'],
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({ route: member }),
+                            head: ['x', 'own'],
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({ route: member }),
+                            head: ['moved'],
+                        }),
+                        json({
+                            kind: 'outbox_entry',
+                            entry: entry({
+                                route: {
+                                    kind: 'rotation',
+                                    workspaceId: d.family.areas[0].workspaceId,
+                                },
+                            }),
+                        }),
+                        json({ kind: 'outbox_entry', entry: entry({ v: 2 }), pin }),
+                    ];
+                })(),
+                // The admin's join code over the roster-call family: each person, other keys, none, a roster left out, junk.
+                ...[
+                    { who: 2, keys: 2, rosters: [0, 1, 2, 3, 4, 5, 6] },
+                    { who: 3, keys: 3, rosters: [0, 1, 2, 3, 4, 5, 6, 7] },
+                    { who: 2, keys: 3, rosters: [0, 1, 2, 3, 4, 5, 6] },
+                    { who: 2, keys: null, rosters: [0, 1, 2, 3, 4, 5, 6] },
+                    { who: 6, keys: 4, rosters: [0, 1, 2, 3, 4, 5, 6] },
+                    { who: 2, keys: 2, rosters: [0, 2, 3, 4, 5, 6] },
+                ].map((k) => json({ kind: 'member_join_code', ...k })),
+                // The shared session scenarios, cut to the kind's 12 steps.
+                ...rosterCallSessions().scenarios.map((k: Json) =>
+                    json({ kind: 'roster_call_session', steps: k.steps.slice(0, 12) }),
+                ),
+                // Every roster call both twins' fixtures make, and an admission with a planted key.
+                ...coreRosterCalls().calls.map((k: Json) =>
+                    json({ kind: 'roster_call', op: k.op }),
+                ),
+                json({
+                    kind: 'roster_call',
+                    op: {
+                        kind: 'admit',
+                        who: 4,
+                        roles: [],
+                        served: {
+                            kemPublicKey: coreRosterCalls().calls[0].body.roster.signature.ed25519,
+                        },
+                    },
+                }),
                 // A chain committed first (the floor), and a server serving short of it or of the record.
                 ...coreLedger()
                     .deviceRecords.cases.filter(

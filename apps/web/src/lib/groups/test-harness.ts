@@ -250,6 +250,18 @@ export function harness(
             joinCode: { rosterVersion: server.head + 1, code: Array(12).fill('word') },
             needsCheck: [],
             replaced: [],
+            // As the worker does: an admission over the contact pin in the settings it opened.
+            admits:
+                input.op.kind === 'admit'
+                    ? {
+                          userId: input.op.userId,
+                          fingerprint: (
+                              settingsDoc.doc.contacts as Record<string, { fingerprint: string }>
+                          )[input.op.userId]!.fingerprint,
+                      }
+                    : null,
+            previousRosterDigest: 'head',
+            rosterDigest: 'staged',
         }),
         groupCreate: () => ({
             outboxId: 'create-1',

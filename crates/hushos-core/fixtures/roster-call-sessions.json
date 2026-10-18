@@ -1,0 +1,307 @@
+{
+    "description": "A manager's device over time (Core 5a): each scenario's steps through both twins' session interpreters (crates/hushos-core/tests/common/roster_calls.rs session_run, packages/crypto/src/roster-calls-testkit.ts sessionRun) must give exactly `expected`. Hand-written; the fuzz kind roster_call_session draws steps in the same vocabulary.",
+    "scenarios": [
+        {
+            "name": "a-kept-call-across-a-lock-a-relaunch-and-another-manager",
+            "steps": [
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "grant",
+                        "who": 2
+                    }
+                },
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "grant",
+                        "who": 2
+                    }
+                },
+                {
+                    "op": "openKey"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "grant",
+                        "who": 2
+                    }
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "none"
+                },
+                {
+                    "op": "lock"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "grant",
+                        "who": 2
+                    }
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "relaunch"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "openKey"
+                },
+                {
+                    "op": "openArea"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "admit",
+                        "who": 4
+                    }
+                },
+                {
+                    "op": "commitOther"
+                },
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "send",
+                    "entry": 1,
+                    "answer": "land"
+                }
+            ],
+            "expected": [
+                "first:sync",
+                "accepted:7",
+                "first:open-key",
+                "opened",
+                "staged:member",
+                "send:resend",
+                "locked",
+                "locked-refused",
+                "nothing",
+                "relaunched",
+                "send:landed",
+                "send:landed",
+                "accepted:8",
+                "landed",
+                "opened",
+                "opened",
+                "staged:admit",
+                "committed:9",
+                "accepted:9",
+                "superseded"
+            ]
+        },
+        {
+            "name": "a-take-that-lands-replaces-the-key",
+            "steps": [
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "openKey"
+                },
+                {
+                    "op": "openArea"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "take",
+                        "who": 3
+                    }
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "openKey"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "grant",
+                        "who": 2
+                    }
+                },
+                {
+                    "op": "commitOther"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "handover",
+                        "who": 2
+                    }
+                }
+            ],
+            "expected": [
+                "accepted:7",
+                "opened",
+                "opened",
+                "staged:member",
+                "send:landed",
+                "accepted:8",
+                "no-seal",
+                "first:open-key",
+                "skipped",
+                "first:open-key"
+            ]
+        },
+        {
+            "name": "two-devices-admissions-on-one-head",
+            "steps": [
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "openKey"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "admit",
+                        "who": 4
+                    }
+                },
+                {
+                    "op": "openArea"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "admit",
+                        "who": 4
+                    }
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "admit",
+                        "who": 5
+                    }
+                },
+                {
+                    "op": "send",
+                    "entry": 1,
+                    "answer": "land"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "none"
+                }
+            ],
+            "expected": [
+                "accepted:7",
+                "opened",
+                "first:open-folders",
+                "opened",
+                "staged:admit",
+                "staged:admit",
+                "send:landed",
+                "send:stale",
+                "accepted:8",
+                "superseded"
+            ]
+        },
+        {
+            "name": "the-same-change-built-twice-is-one-roster",
+            "steps": [
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "openKey"
+                },
+                {
+                    "op": "openArea"
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "admit",
+                        "who": 4
+                    }
+                },
+                {
+                    "op": "build",
+                    "call": {
+                        "kind": "admit",
+                        "who": 4
+                    }
+                },
+                {
+                    "op": "send",
+                    "entry": 1,
+                    "answer": "land"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "land"
+                },
+                {
+                    "op": "sync"
+                },
+                {
+                    "op": "send",
+                    "entry": 0,
+                    "answer": "none"
+                }
+            ],
+            "expected": [
+                "accepted:7",
+                "opened",
+                "opened",
+                "staged:admit",
+                "staged:admit",
+                "send:landed",
+                "send:landed",
+                "accepted:8",
+                "landed"
+            ]
+        }
+    ]
+}

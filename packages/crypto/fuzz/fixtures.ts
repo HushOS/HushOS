@@ -57,6 +57,11 @@ export const webLedger = () => read('crates/hushos-core/fixtures/web-area-ledger
 export const coreJoin = () => read('packages/crypto/src/__fixtures__/core-join.json');
 /* crates/hushos-core/fixtures/web-join.json: the same as this twin ran them. */
 export const webJoin = () => read('crates/hushos-core/fixtures/web-join.json');
+export const coreRosterCalls = () =>
+    read('packages/crypto/src/__fixtures__/core-roster-calls.json');
+export const webRosterCalls = () => read('crates/hushos-core/fixtures/web-roster-calls.json');
+export const rosterCallSessions = () =>
+    read('crates/hushos-core/fixtures/roster-call-sessions.json');
 /* crates/hushos-core/fixtures/join-check-cases.json: the typed-words cases both twins run. */
 export const joinCheckCases = () => read('crates/hushos-core/fixtures/join-check-cases.json');
 export const joinSessionScenarios = () =>

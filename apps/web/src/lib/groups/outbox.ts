@@ -1,9 +1,11 @@
-import type {
-    CreateGroupBody,
-    CryptoResults,
-    GroupStageOp,
-    GroupWriter,
-    RosterCallBody,
+import {
+    outboxStep,
+    readOutboxEntry,
+    type CreateGroupBody,
+    type CryptoResults,
+    type GroupStageOp,
+    type GroupWriter,
+    type RosterCallBody,
 } from '@hushos/crypto';
 import { MAX_GRANTS_PER_CALL } from '@hushos/groups/protocol';
 import { GroupApiError, isNotMember, isRefusal, type ChainHead } from './api';
@@ -91,6 +93,9 @@ export type OutboxEntry = {
      * has this fingerprint. Absent on entries from before it was kept.
      */
     admits?: { userId: string; fingerprint: string };
+    /* The head the call was built on and its own roster, by digest (the core's outbox entry has them too). */
+    previousRosterDigest?: string;
+    rosterDigest?: string;
 };
 
 export type SendOutcome =
@@ -144,19 +149,9 @@ async function persist(ctx: GroupContext, entry: OutboxEntry) {
     });
 }
 
+/* An entry as the shared reader takes it (@hushos/crypto's readOutboxEntry, the core's outbox_open), kept under its own id. */
 function isEntry(value: unknown, id: string, groupId: string): value is OutboxEntry {
-    const entry = value as OutboxEntry | null;
-    return (
-        typeof entry === 'object' &&
-        entry !== null &&
-        entry.v === 1 &&
-        entry.id === id &&
-        entry.groupId === groupId &&
-        typeof entry.stagedEnvelope === 'string' &&
-        ['awaiting-check', 'ready', 'committed'].includes(entry.state) &&
-        typeof entry.body === 'object' &&
-        entry.body !== null
-    );
+    return readOutboxEntry(value, groupId, null) !== null && (value as OutboxEntry).id === id;
 }
 
 /*
@@ -467,16 +462,29 @@ async function sendLocked(
     entry: OutboxEntry,
     mode: SendMode = {},
 ): Promise<SendOutcome> {
-    if (entry.state === 'awaiting-check') return { status: 'awaiting-check' };
     // An admission goes only to the keys the admin's pin of the person holds now: resent after
     // their account changed and was checked again, it would grant the family's folders to the
     // old keys. Checked here, so a page open, a sync and "Let them in" all obey it.
-    if (entry.route.kind === 'admit') {
+    let pin: { userId: string; fingerprint: string } | null = null;
+    if (entry.route.kind === 'admit' && entry.state !== 'awaiting-check') {
         const { settings } = await ctx.settings.read();
-        const pin = settings.contacts?.[entry.route.userId];
-        if (!entry.admits || !pin || pin.fingerprint !== entry.admits.fingerprint)
-            return { status: 'other-keys' };
+        const contact = settings.contacts?.[entry.route.userId];
+        pin = contact ? { userId: entry.route.userId, fingerprint: contact.fingerprint } : null;
     }
+    const read = readOutboxEntry(entry, entry.groupId, pin);
+    // Not an entry the shared reader takes: never sent (fail closed), dropped and counted lost.
+    if (!read) {
+        await discard(ctx, entry);
+        return {
+            status: 'refused',
+            code: 'lost',
+            message: 'This saved change can’t be read on this device.',
+            data: null,
+        };
+    }
+    if (read.status === 'hold' && read.reason === 'awaiting-check')
+        return { status: 'awaiting-check' };
+    if (read.status === 'hold' && read.reason === 'other-keys') return { status: 'other-keys' };
     // Kept before anything leaves this device: a send that dies midway is resent, never re-signed.
     await persist(ctx, entry);
     if (entry.state === 'committed') return finishCreation(ctx, entry);
@@ -488,11 +496,12 @@ async function sendLocked(
             head = await send(ctx, entry);
         } catch (error) {
             if (!(error instanceof GroupApiError)) throw error;
-            if (isNotMember(error)) {
+            const step = outboxStep(error.status, error.code);
+            if (step === 'wiped') {
                 await wipeGroup(ctx, entry.groupId);
                 return { status: 'wiped' };
             }
-            if (!isRefusal(error)) {
+            if (step === 'resend' || !isRefusal(error)) {
                 // Unknown: the same bytes again, a few times now, then at the next open.
                 entry.attempts++;
                 await persist(ctx, entry);
@@ -536,11 +545,32 @@ async function refused(
         return { status: 'refused', code: error.code, message: error.message, data: error.data };
     };
     const tooMany = fixes >= MAX_FIXES;
+    const step = outboxStep(error.status, error.code);
+    if (step === 'send-grants') {
+        if (tooMany) return { status: 'pending', reason: error.message };
+        await fillGrants(ctx, groupId, error.data);
+        return null;
+    }
+    if (step === 'stale') {
+        await discard(ctx, entry);
+        await resync();
+        return { status: 'stale', data: error.data };
+    }
+    if (step === 'membership-moved') {
+        await discard(ctx, entry);
+        await resync();
+        return {
+            status: 'membership-moved',
+            code: error.code as 'members-changed' | 'left-due',
+            data: error.data,
+        };
+    }
+    if (step !== 'rebuild') {
+        const outcome = await final();
+        if (error.code === 'forbidden') await resync();
+        return outcome;
+    }
     switch (error.code) {
-        case 'grants-due':
-            if (tooMany) return { status: 'pending', reason: error.message };
-            await fillGrants(ctx, groupId, error.data);
-            return null;
         case 'rotating': {
             if (tooMany || !ctx.rotations) return { status: 'pending', reason: error.message };
             const data = error.data as {
@@ -588,23 +618,8 @@ async function refused(
                 ? null
                 : { status: 'pending', reason: error.message };
         }
-        case 'stale':
-            await discard(ctx, entry);
-            await resync();
-            return { status: 'stale', data: error.data };
-        case 'members-changed':
-        case 'left-due':
-            await discard(ctx, entry);
-            await resync();
-            return { status: 'membership-moved', code: error.code, data: error.data };
-        case 'forbidden': {
-            const outcome = await final();
-            await resync();
-            return outcome;
-        }
         default:
-            // held, seats, area-limit, group-limit, invalid, succession-due, unsupported,
-            // root-mid-rotation, too-large and the rest: final for these bytes.
+            // A rebuild step outboxStep names that this switch does not: final for these bytes.
             return final();
     }
 }
@@ -779,9 +794,10 @@ async function stageLocked(
         attempts: 0,
         joinCode: staged.joinCode,
         notices: cleared(checked.replaced),
-        ...(op.kind === 'admit'
-            ? { admits: { userId: op.userId, fingerprint: op.pin.fingerprint } }
-            : {}),
+        // The worker built an admission from the contact pin in the settings it opened.
+        ...(staged.admits ? { admits: staged.admits } : {}),
+        previousRosterDigest: staged.previousRosterDigest,
+        rosterDigest: staged.rosterDigest,
     };
     return {
         status: 'sent',
@@ -805,6 +821,8 @@ export function letIn(
     ctx: GroupContext,
     groupId: string,
     op: Extract<GroupStageOp, { kind: 'admit' }>,
+    /* The fingerprint of the admin's contact pin of them now, to tell a kept admission's keys. */
+    fingerprint: string,
 ): Promise<StageOutcome> {
     return ctx.lock(groupId, async () => {
         const kept = (await loadOutbox(ctx, groupId)).entries.filter(
@@ -817,7 +835,7 @@ export function letIn(
             }
             // Sealed to keys the admin no longer holds as checked: resending would grant the
             // family's folders to them. The admin drops it first, knowingly.
-            if (entry.admits?.fingerprint !== op.pin.fingerprint)
+            if (entry.admits?.fingerprint !== fingerprint)
                 return { status: 'kept-other-keys' as const, entry };
             return {
                 status: 'sent' as const,

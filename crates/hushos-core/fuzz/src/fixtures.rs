@@ -50,6 +50,12 @@ pub fn core_join() -> &'static Value {
     JOIN.get_or_init(|| read("packages/crypto/src/__fixtures__/core-join.json"))
 }
 
+/// `packages/crypto/src/__fixtures__/core-roster-calls.json`: the core's roster calls, join codes and outbox entries.
+pub fn core_roster_calls() -> &'static Value {
+    static CALLS: OnceLock<Value> = OnceLock::new();
+    CALLS.get_or_init(|| read("packages/crypto/src/__fixtures__/core-roster-calls.json"))
+}
+
 /// The four people of the group fixtures, derived from the shared seeds.
 pub fn people() -> &'static [Person] {
     static PEOPLE: OnceLock<Vec<Person>> = OnceLock::new();

@@ -673,6 +673,10 @@ pub fn pins(value: &Value) -> Option<Value> {
         "join_preview" => return join_preview_kind(value),
         "join_draws" => return join_draws_kind(value),
         "join_session" => return join_session_kind(value),
+        "outbox_entry" => return outbox_entry_kind(value),
+        "member_join_code" => return member_join_code_kind(value),
+        "roster_call" => return roster_call_kind(value),
+        "roster_call_session" => return roster_call_session_kind(value),
         _ => return None,
     })
 }
@@ -1398,4 +1402,194 @@ pub fn area_ledger(value: &Value) -> Option<Value> {
         }
     }
     Some(ok(json!({ "outcomes": run.outcomes })))
+}
+
+/*
+ * An outbox entry's JSON (`entry`, any value) read for the roster-call
+ * family, kept under `id` (none: any), with the admin's pin of an admission's
+ * person (`pin`: null or `{userId, fingerprint}`) and the committed head
+ * (`head`: null, or 1 to 8 rosters of the family's history and calls):
+ * sent, held and why, landed, superseded, or lost. Invariant: a sent body is
+ * the entry's exact text when it keeps text (what F7's resend sends), and
+ * reading the same entry again gives the very same bytes.
+ */
+fn outbox_entry_kind(value: &Value) -> Option<Value> {
+    use crate::roster_calls::{hold_name, route_json};
+    let entry = value.get("entry")?;
+    let pin = match value.get("pin") {
+        None | Some(Value::Null) => None,
+        Some(pin) => Some((text(pin, "userId")?, text(pin, "fingerprint")?)),
+    };
+    let id = shape::optional_text(value, "id")?;
+    let head: Option<Vec<String>> = match value.get("head") {
+        None | Some(Value::Null) => None,
+        Some(list) => {
+            Some(list.as_array()?.iter().map(|d| d.as_str().map(str::to_string)).collect::<Option<_>>()?)
+        }
+    };
+    let group_id = text(&fixtures::core_roster_calls()["family"], "groupId")?;
+    let read = |entry: &Value| {
+        hushos_core::outbox_entry_read(
+            entry,
+            &group_id,
+            id.as_deref(),
+            pin.as_ref().map(|(u, f)| (u.as_str(), f.as_str())),
+            head.as_deref(),
+        )
+    };
+    Some(ok(match read(entry) {
+        None => json!({ "status": "lost" }),
+        Some(OutboxCall::Hold { route, reason, .. }) => {
+            json!({ "status": "hold", "route": route_json(&route), "reason": hold_name(reason) })
+        }
+        Some(OutboxCall::Landed { route, .. }) => json!({ "status": "landed", "route": route_json(&route) }),
+        Some(OutboxCall::Superseded { route, .. }) => {
+            json!({ "status": "superseded", "route": route_json(&route) })
+        }
+        Some(OutboxCall::Send { route, body, .. }) => {
+            assert!(
+                serde_json::from_str::<Value>(&body).is_ok_and(|b| b.is_object()),
+                "a body that is no object"
+            );
+            if let Some(kept) = entry["body"].as_str() {
+                assert_eq!(body, kept, "a resend of other bytes than the ones kept");
+            }
+            match read(entry) {
+                Some(OutboxCall::Send { body: again, .. }) => {
+                    assert_eq!(body, again, "a resend of other bytes")
+                }
+                other => panic!("read again as {other:?}"),
+            }
+            json!({ "status": "send", "route": route_json(&route) })
+        }
+    }))
+}
+
+/*
+ * The admin's join code over the core's roster-call family: person `who`
+ * (1 to 5, or 6 for someone never in it), with a contact pin of them filed
+ * holding person `keys`'s keys (1 to 5, or null for none), over the served
+ * `rosters` (indices 0 to 6 into the family's history, 7 for a junk roster, at
+ * most 16). Invariant: a code is the one of a roster on the chain, and only
+ * for the keys pinned.
+ */
+fn member_join_code_kind(value: &Value) -> Option<Value> {
+    use crate::roster_calls::{committed_ledger, join_code_with, junk_roster};
+    let doc = fixtures::core_roster_calls();
+    let who = number(value, "who").filter(|n| (1..=6).contains(n))? as usize;
+    let keys = match value.get("keys") {
+        None | Some(Value::Null) => None,
+        Some(keys) => Some(shape::unsigned(keys).filter(|n| (1..=5).contains(n))? as usize),
+    };
+    let picks = value.get("rosters")?.as_array()?;
+    if picks.len() > 16 {
+        return None;
+    }
+    let history: Vec<SignedGroupStatement> =
+        doc["family"]["rosters"].as_array()?.iter().map(crate::groups::signed_of).collect();
+    let rosters = picks
+        .iter()
+        .map(|pick| match shape::unsigned(pick)? {
+            7 => Some(junk_roster()),
+            i if i < 7 => Some(history[i as usize].clone()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let filed = match (who, keys) {
+        (who @ 1..=5, Some(keys)) => vec![(who, keys)],
+        _ => vec![],
+    };
+    let ledger = committed_ledger(doc, filed, None);
+    let outcome = join_code_with(&ledger, doc, who, rosters);
+    if outcome["status"] == "code" {
+        let version = outcome["rosterVersion"].as_u64().unwrap();
+        assert!((1..=7).contains(&version), "a code past the head");
+        assert_eq!(keys, Some(who), "a code for keys someone else pinned");
+    }
+    Some(match outcome["status"].as_str() {
+        Some("refused") => refused(),
+        _ => ok(outcome),
+    })
+}
+
+/*
+ * One roster call by person 1 of the core's roster-call family: `op` as the
+ * shared fixtures write it (`kind` admit, grant, take, handover or stepDown;
+ * `who` 1 to 5; `roles` among members, billing and guardian; an admission's
+ * `served` identity with any of its fields replaced). The verdict is the body
+ * as every member reads it, or a refusal. Invariant: a body that was built is
+ * the next roster on the chain and every seal and grant in it opens to its
+ * holder (the verdict asserts it).
+ */
+fn roster_call_kind(value: &Value) -> Option<Value> {
+    use crate::roster_calls::{family_json, run, verdict};
+    let op = value.get("op")?.as_object()?;
+    let kind = op.get("kind")?.as_str()?;
+    if !["admit", "grant", "take", "handover", "stepDown"].contains(&kind) {
+        return None;
+    }
+    let person = |key: &str| op.get(key).and_then(shape::unsigned).filter(|n| (1..=5).contains(n));
+    let mut clean = serde_json::Map::new();
+    clean.insert("kind".into(), json!(kind));
+    if kind != "stepDown" {
+        clean.insert("who".into(), json!(person("who")?));
+    }
+    if kind == "admit" {
+        let roles = op.get("roles")?.as_array()?;
+        if roles.len() > 3
+            || !roles
+                .iter()
+                .all(|r| r.as_str().is_some_and(|r| ["members", "billing", "guardian"].contains(&r)))
+        {
+            return None;
+        }
+        clean.insert("roles".into(), json!(roles));
+        if let Some(served) = op.get("served").filter(|s| !s.is_null()) {
+            let served = served.as_object()?;
+            for (key, field) in served {
+                let fits = match key.as_str() {
+                    "keyVersion" => shape::unsigned(field).is_some(),
+                    "encryptionPublicKey"
+                    | "signingPublicKey"
+                    | "mlDsaPublicKey"
+                    | "kemPublicKey"
+                    | "keysSignature" => field.is_string(),
+                    _ => false,
+                };
+                if !fits {
+                    return None;
+                }
+            }
+            clean.insert("served".into(), json!(served));
+        }
+    }
+    let op = Value::Object(clean);
+    Some(match run(&op) {
+        Err(_) => refused(),
+        Ok(call) => {
+            let body: Value = serde_json::from_str(&call.body).unwrap();
+            let doc = json!({ "family": family_json() });
+            let route = crate::roster_calls::route_json(&call.route);
+            ok(verdict(&doc, &route, &body))
+        }
+    })
+}
+
+/*
+ * A manager's device over time: up to 12 steps (sync, open the key or the
+ * folders, build a call, lock, unlock, relaunch, another manager's roster,
+ * send a kept entry with the server's answer), each as the shared session
+ * scenarios write it. The verdict is every step's outcome. Invariants (the
+ * interpreter asserts them): a sent body is the kept one, byte for byte; a
+ * built call's expectedRevision is the head it was built on; nothing is built
+ * while locked; a Hold carries no body (its type has none).
+ */
+fn roster_call_session_kind(value: &Value) -> Option<Value> {
+    use crate::roster_calls::{session_run, session_step};
+    let steps = value.get("steps")?.as_array()?;
+    if steps.len() > 12 {
+        return None;
+    }
+    let steps = steps.iter().map(session_step).collect::<Option<Vec<_>>>()?;
+    Some(ok(Value::Array(session_run(&steps))))
 }
