@@ -8,7 +8,7 @@ on:
     pull_request:
         paths:
             - packages/crypto/**
-            - crates/hushos-core/**
+            - crates/**
             - .github/workflows/fuzz.yml
     schedule:
         # Nightly, at an hour nothing else runs.

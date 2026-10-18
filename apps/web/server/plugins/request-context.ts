@@ -1,6 +1,8 @@
 import { initLogger, loggingOptions, redactAuthenticationEvent } from '@hushos/logging';
 import { definePlugin } from 'nitro';
 
+const oneRequestPerConnection = process.env.CI === 'true';
+
 export default definePlugin((nitroApp) => {
     let privacyConfigured = false;
     nitroApp.hooks.hook('request', (event) => {
@@ -25,5 +27,9 @@ export default definePlugin((nitroApp) => {
         const release = process.env.HUSHOS_RELEASE_SHA;
         if (release && /^[a-f0-9]{40}$/.test(release))
             response.headers.set('x-hushos-release', release);
+        // CI runs the browser suite against this build with nothing in front of it: one
+        // request per connection there, as the dev server does in CI (vite.config.ts), so
+        // WebKit never sends a POST on a connection the server is closing.
+        if (oneRequestPerConnection) response.headers.set('connection', 'close');
     });
 });
