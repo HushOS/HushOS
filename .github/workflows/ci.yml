@@ -270,18 +270,15 @@ jobs:
                       scratchpad/e2e-server.log
                   retention-days: 7
 
-    # Families on, the self-hosting default, in one job: each block of families.spec.ts is serial
-    # and makes its own people, so the blocks run side by side on the two workers. The longest
-    # block (removal, about three minutes) sets the time, so a second shard would gain nothing. The switch is written
-    # out rather than left to the default, so a change of default cannot quietly turn this
-    # job into a second run of the off path.
-    # Still on the dev server, not the production build: leaving a page while it restores the
-    # saved unlock wipes the saved unlock (reproduced on both servers, 50 ms into a load on
-    # the build, 400 ms on dev), and "removing someone" leaves /app/drive inside that window
-    # only on the faster build. Move this job to the build once that product bug is fixed.
+    # Families on, the self-hosting default, in one job against the production build, as the
+    # other browser jobs: each block of families.spec.ts is serial and makes its own people, so
+    # the blocks run side by side on the two workers. The longest block (removal, about two
+    # minutes) sets the time, so a second shard would gain nothing. The switch is written out
+    # rather than left to the default, so a change of default cannot quietly turn this job into
+    # a second run of the off path.
     e2e-families:
         name: Browser tests (families)
-        needs: changes
+        needs: [changes, build]
         if: needs.changes.outputs.browser == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
@@ -291,6 +288,11 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
+            - uses: actions/download-artifact@v4
+              with:
+                  name: web-output
+            - name: Unpack the server output
+              run: tar -xf web-output.tar -C apps/web
             - name: Local infrastructure (Postgres, Mailpit, Garage) and environment, families on
               run: |
                   bun run setup
@@ -308,32 +310,23 @@ jobs:
                   key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
             - name: Install Chromium for Playwright
               run: bunx playwright install --with-deps chromium
-            # Started here rather than by Playwright: on this runner Vite now and then never
-            # listens and prints nothing, and Playwright's single 180 s wait fails the job. A
-            # server that has not answered in two minutes is killed and started again.
-            - name: Start the dev server, again if it never listens
+            - name: Start the production server and the jobs worker
               run: |
                   mkdir -p scratchpad
-                  for attempt in 1 2 3; do
-                      setsid bash -c 'exec bun run dev >> scratchpad/e2e-server.log 2>&1' &
-                      pid=$!
-                      for i in $(seq 1 40); do
-                          if curl -sf -o /dev/null http://localhost:5173; then echo "listening on attempt $attempt"; exit 0; fi
-                          sleep 3
-                      done
-                      echo "attempt $attempt: no answer in 120 s, starting again"
-                      kill -- -"$pid" 2>/dev/null || true
-                      pkill -f 'vite --strictPort' || true
-                      sleep 3
+                  setsid bash -c 'exec bun run start >> scratchpad/e2e-server.log 2>&1' &
+                  for i in $(seq 1 30); do
+                      if curl -sf -o /dev/null http://localhost:5173/api/ready; then echo "ready after $((i * 2)) s"; exit 0; fi
+                      sleep 2
                   done
-                  echo "the dev server never listened"
+                  echo "the server never answered"
+                  tail -n 60 scratchpad/e2e-server.log
                   exit 1
               env:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             # GROUPS_ENABLED reaches the spec from .env too: with it on, a server that says
             # families are off fails the run instead of skipping it.
-            - name: Run the families suite against the dev server
+            - name: Run the families suite against the production build
               run: bun run e2e -- --project=chromium e2e/families.spec.ts
             - name: Show the end of the server log
               if: failure()
