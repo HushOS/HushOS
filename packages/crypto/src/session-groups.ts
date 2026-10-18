@@ -3006,6 +3006,9 @@ export function createGroupSession(host: GroupHost) {
             const member = rosterEntry(after, userId)!;
             for (const workspaceId of Object.keys(chain.areaKeys).sort()) {
                 if (secrets.areaKeys.has(workspaceId)) continue;
+                // A deleted family folder (design 2.10) is granted to nobody: before this, an
+                // admission into a family that had deleted one asked for its key and was refused.
+                if (chain.retiredAreas.includes(workspaceId)) continue;
                 const area = currentArea(chain, workspaceId);
                 grants.push(
                     await grantTo(

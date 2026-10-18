@@ -1594,21 +1594,24 @@ test.describe.serial('deleting a family folder', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let ida: Person;
     let leo: Person;
+    let mia: Person;
+    let groupPath: string;
     const family = 'Berg family';
 
     test.beforeAll(async ({ browser }) => {
         test.setTimeout(300_000);
         ida = await person(browser, 'Ida Berg');
         leo = await person(browser, 'Leo Berg');
+        mia = await person(browser, 'Mia Berg');
     });
     test.afterAll(async () => {
-        for (const who of [ida, leo]) await who?.page.context().close();
+        for (const who of [ida, leo, mia]) await who?.page.context().close();
     });
 
     test('a manager deletes a folder: it is gone for everyone, and a later removal does not rotate it', async () => {
         test.setTimeout(600_000);
         await createFamily(ida, family);
-        const groupPath = new URL(ida.page.url()).pathname;
+        groupPath = new URL(ida.page.url()).pathname;
         await invite(ida, leo.email);
         await accept(leo, family);
         const dialog = await checkWords(ida, leo);
@@ -1703,6 +1706,35 @@ test.describe.serial('deleting a family folder', () => {
         await expect(ida.page.locator(`[data-member="${leo.email}"]`)).toHaveCount(0, {
             timeout: 60_000,
         });
+    });
+
+    test('let someone in after a folder was deleted', async () => {
+        test.setTimeout(600_000);
+        await openFamilyPage(ida, groupPath, family);
+        await invite(ida, mia.email);
+        await accept(mia, family);
+        const dialog = await checkWords(ida, mia);
+        // The admission grants the one live folder: the deleted one's key is asked for by nobody.
+        const admission = ida.page.waitForRequest(
+            (request) =>
+                request.method() === 'POST' &&
+                /\/api\/groups\/[0-9a-f-]+\/members\/[0-9a-f-]+\/admit$/.test(
+                    new URL(request.url()).pathname,
+                ),
+            { timeout: 120_000 },
+        );
+        const code = await letIn(dialog, 'Mia', family);
+        const body = (await admission).postDataJSON() as { grants?: { workspaceId: string }[] };
+        expect(body.grants).toHaveLength(1);
+        await typeHidden(mia, await newcomerCode(mia, code), code);
+        // Exactly the family's page: "Join Berg family" is the join screen still.
+        await expect(
+            mia.page.getByRole('heading', { level: 1, name: family, exact: true }),
+        ).toBeVisible({ timeout: 90_000 });
+        await dialog.getByRole('button', { name: 'Done' }).click();
+        // Mia opens the family's live folder, and the deleted one is listed for nobody.
+        await openFamilyFolder(mia, family, 'Family');
+        await upload(mia, 'list.txt', 'Milk\n');
     });
 });
 
