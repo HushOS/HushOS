@@ -1,6 +1,7 @@
 import { cn } from 'cn';
 import { Brand } from '@/components/brand';
 import { Spinner } from '@/components/motion';
+import { PersonAvatar } from '@/components/person-avatar';
 import { formatDay, useCatalogueState } from '@/lib/drive';
 import { Progress, ProgressValue } from '@/components/ui/progress';
 import {
@@ -40,6 +41,7 @@ import {
     UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
+import { familyBillingQueryOptions } from '@/lib/family-billing';
 import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
 
 export type NavItem = {
@@ -142,7 +144,80 @@ function CatalogueStatus() {
     );
 }
 
-function StorageMeter() {
+/*
+ * The storage at the foot of the sidebar. Inside a family's folders it is the family's pool where
+ * the family's plan says it (a server that sells plans), and otherwise the person's own space,
+ * labelled My files, so it never reads as the family folder's usage. Nothing shows there until
+ * the family's plan has answered, so the meter doesn't change under the reader.
+ */
+function StorageMeter({ userId }: { userId: string }) {
+    const familyId = useLocation({
+        select: (location) => /^\/app\/s\/([0-9a-f-]{36})(?:\/|$)/.exec(location.pathname)?.[1],
+    });
+    const groups = useGroupsEnabled();
+    const inFamily = groups && familyId !== undefined;
+    const families = useQuery({ ...familiesQueryOptions(userId), enabled: inFamily });
+    const familyPlan = useQuery({
+        ...familyBillingQueryOptions(userId, familyId ?? ''),
+        enabled: inFamily,
+    });
+    if (!inFamily) return <OwnMeter label={null} />;
+    if (families.isPending || familyPlan.isPending) return null;
+    const family = families.data?.find((at) => at.id === familyId);
+    const pool = familyPlan.data?.enabled ? familyPlan.data.storage : null;
+    if (family && pool) return <PoolMeter family={family.name} pool={pool} />;
+    return <OwnMeter label="My files" />;
+}
+
+/* A family's pool, in its folders: an empty one (no plan, or it ended) has no room. */
+function PoolMeter({
+    family,
+    pool,
+}: {
+    family: string;
+    pool: { usedBytes: string; quotaBytes: string };
+}) {
+    const quota = BigInt(pool.quotaBytes);
+    const usedBytes = BigInt(pool.usedBytes);
+    const empty = quota === 0n;
+    const used = empty ? 1 : Math.min(1, Math.max(0, Number(usedBytes) / Number(quota)));
+    const nearlyFull = used >= 0.95;
+    const free = quota > usedBytes ? quota - usedBytes : 0n;
+    return (
+        <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
+            <span className="eyebrow truncate text-muted-foreground">{family}</span>
+            <Progress
+                value={Math.round(used * 100)}
+                aria-label={`${family}’s storage used`}
+                className={cn(
+                    'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
+                    nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',
+                )}
+            >
+                <ProgressValue className="ml-0 text-[13px] text-foreground tabular-nums">
+                    {() =>
+                        empty
+                            ? 'No room'
+                            : `${formatSpace(pool.usedBytes)} of ${formatQuota(pool.quotaBytes)} used`
+                    }
+                </ProgressValue>
+            </Progress>
+            <span
+                className={cn(
+                    'text-[13px] tabular-nums',
+                    nearlyFull ? 'text-destructive' : 'text-muted-foreground',
+                )}
+            >
+                {empty
+                    ? 'The family has no plan right now'
+                    : `${formatSpace(free.toString())} free`}
+            </span>
+        </div>
+    );
+}
+
+/* The person's own space; `label` names it where it could be read as something else's. */
+function OwnMeter({ label }: { label: string | null }) {
     const { data: storage } = useQuery(storageQueryOptions);
     const billing = useBillingEnabled();
     const { data: catalogue } = useQuery({ ...catalogueQueryOptions, enabled: billing });
@@ -165,6 +240,7 @@ function StorageMeter() {
           : `${formatSpace(storage.availableBytes)} free`;
     return (
         <div className="flex flex-col gap-2 px-2 group-data-[collapsible=icon]:hidden">
+            {label && <span className="eyebrow text-muted-foreground">{label}</span>}
             <Progress
                 value={Math.round(used * 100)}
                 aria-label="Storage used"
@@ -210,7 +286,7 @@ function StorageMeter() {
  * middle, and the label leaves the layout instead of being clipped beside it.
  */
 const collapsed =
-    'group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&>span]:hidden';
+    'group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&>span:last-child]:hidden';
 /* The active place is tinted, semibold and its icon heavier: never tint alone. */
 /* The quieter rows draw 16px icons in the 18px column (1px each side), so every label starts in one line. */
 const item =
@@ -284,7 +360,17 @@ function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) 
                             tooltip={family.name}
                             className={cn(item, collapsed)}
                         >
-                            <UsersIcon aria-hidden="true" />
+                            {/*
+                             * The family's avatar, as on the Families page, so two families' rows
+                             * tell apart; the Families row keeps the icon. Collapsed, it stays and
+                             * the label goes (the last span).
+                             */}
+                            <PersonAvatar
+                                name={family.name}
+                                seed={family.id}
+                                size={20}
+                                className="-mx-px"
+                            />
                             <span className="truncate">{family.name}</span>
                         </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -346,7 +432,7 @@ export function AppSidebar({
             </SidebarContent>
             <SidebarFooter className="gap-4 px-4 pt-2 pb-4 group-data-[collapsible=icon]:px-2">
                 <CatalogueStatus />
-                <StorageMeter />
+                <StorageMeter userId={user.id} />
             </SidebarFooter>
             <SidebarRail />
         </Sidebar>

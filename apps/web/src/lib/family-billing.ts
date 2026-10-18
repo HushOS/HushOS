@@ -70,6 +70,19 @@ export function planState(summary: FamilyBillingFull): PlanState {
 }
 
 /*
+ * A renewal the bank refused, and this person pays: then Manage payment and invoices is the
+ * family page's one blue button, and Invite someone steps back to outline.
+ */
+export function paymentNeedsYou(summary: FamilyBilling | undefined) {
+    return Boolean(
+        summary?.enabled &&
+        summary.view === 'manage' &&
+        summary.payer?.you &&
+        summary.subscription?.status === 'past_due',
+    );
+}
+
+/*
  * Whether inviting and new family folders wait for a plan: with billing on
  * and none live, nobody can be let in and the pool is empty. Unknown (still
  * loading, or unreadable) is not "no": the actions stay hidden until the

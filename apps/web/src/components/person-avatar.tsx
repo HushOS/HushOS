@@ -45,7 +45,8 @@ export function PersonAvatar({
                 toneOf(seed),
                 className,
             )}
-            style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}
+            // Never under 8px, so a small mark (the sidebar's 20px) still reads.
+            style={{ width: size, height: size, fontSize: Math.max(8, Math.round(size * 0.36)) }}
         >
             {initialsOf(name)}
         </span>

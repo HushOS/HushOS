@@ -245,7 +245,6 @@ export function UnverifiedMark({
                     ))}
                     {action && userId && (
                         <Button
-                            size="sm"
                             variant="outline"
                             className="mt-1 self-start"
                             disabled={busy}

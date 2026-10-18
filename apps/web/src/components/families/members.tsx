@@ -98,7 +98,7 @@ function Row({
     return (
         <li
             {...data}
-            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 sm:pr-5 sm:pl-8"
+            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-5 pl-5 sm:pr-8 sm:pl-8"
         >
             {mark ?? <PersonAvatar name={name} seed={seed} />}
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -313,62 +313,75 @@ export function MemberList({
                                 : undefined
                         }
                     >
-                        {manager && !self && (
-                            <DropdownMenu>
-                                <DropdownMenuTrigger
-                                    render={
-                                        <RowMenuButton
-                                            aria-label={`More for ${member.name}`}
-                                            disabled={busy}
-                                        />
-                                    }
-                                >
-                                    <EllipsisIcon className="size-5" aria-hidden="true" />
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-64">
-                                    <DropdownMenuGroup>
-                                        {roles.includes('members') ? (
-                                            <DropdownMenuItem
-                                                onClick={() =>
-                                                    setConfirming({ member, kind: 'stop' })
-                                                }
-                                            >
-                                                Stop them managing the family
-                                            </DropdownMenuItem>
-                                        ) : (
-                                            <DropdownMenuItem
-                                                onClick={() =>
-                                                    setConfirming({ member, kind: 'manage' })
-                                                }
-                                            >
-                                                Let them manage the family
-                                            </DropdownMenuItem>
-                                        )}
-                                        {iAmOrganizer && !roles.includes('billing') && (
-                                            <DropdownMenuItem
-                                                onClick={() =>
-                                                    setConfirming({ member, kind: 'organizer' })
-                                                }
-                                            >
-                                                Make them the organizer
-                                            </DropdownMenuItem>
-                                        )}
-                                        <DropdownMenuItem onClick={() => setShowingCode(member)}>
-                                            Show {who}’s join code
-                                        </DropdownMenuItem>
-                                    </DropdownMenuGroup>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuGroup>
-                                        <DropdownMenuItem
-                                            variant="destructive"
-                                            onClick={() => setRemoving(member)}
+                        {manager &&
+                            !self && (
+                                // A bare ⋯ sits where Drive's, People's and Shared's do: the row's
+                                // gutter is for bordered buttons, which a ghost button would sit inside.
+                                <span className="-mr-2 sm:-mr-3">
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger
+                                            render={
+                                                <RowMenuButton
+                                                    aria-label={`More for ${member.name}`}
+                                                    disabled={busy}
+                                                />
+                                            }
                                         >
-                                            Remove from family
-                                        </DropdownMenuItem>
-                                    </DropdownMenuGroup>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                        )}
+                                            <EllipsisIcon className="size-5" aria-hidden="true" />
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end" className="w-64">
+                                            <DropdownMenuGroup>
+                                                {roles.includes('members') ? (
+                                                    <DropdownMenuItem
+                                                        onClick={() =>
+                                                            setConfirming({ member, kind: 'stop' })
+                                                        }
+                                                    >
+                                                        Stop them managing the family
+                                                    </DropdownMenuItem>
+                                                ) : (
+                                                    <DropdownMenuItem
+                                                        onClick={() =>
+                                                            setConfirming({
+                                                                member,
+                                                                kind: 'manage',
+                                                            })
+                                                        }
+                                                    >
+                                                        Let them manage the family
+                                                    </DropdownMenuItem>
+                                                )}
+                                                {iAmOrganizer && !roles.includes('billing') && (
+                                                    <DropdownMenuItem
+                                                        onClick={() =>
+                                                            setConfirming({
+                                                                member,
+                                                                kind: 'organizer',
+                                                            })
+                                                        }
+                                                    >
+                                                        Make them the organizer
+                                                    </DropdownMenuItem>
+                                                )}
+                                                <DropdownMenuItem
+                                                    onClick={() => setShowingCode(member)}
+                                                >
+                                                    Show {who}’s join code
+                                                </DropdownMenuItem>
+                                            </DropdownMenuGroup>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuGroup>
+                                                <DropdownMenuItem
+                                                    variant="destructive"
+                                                    onClick={() => setRemoving(member)}
+                                                >
+                                                    Remove from family
+                                                </DropdownMenuItem>
+                                            </DropdownMenuGroup>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </span>
+                            )}
                     </Row>
                 );
             })}
@@ -527,6 +540,8 @@ export function InvitationList({
 }) {
     const queryClient = useQueryClient();
     const [busy, setBusy] = useState<string | null>(null);
+    // Asked once, as Not now and Remove from family are: an email can't be unsent, so no undo.
+    const [confirming, setConfirming] = useState<Invitation | null>(null);
     const inviter = (id: string | null) => {
         const member = id ? members.find((at) => at.userId === id) : undefined;
         return member ? `${member.name}${member.email ? ` (${member.email})` : ''}` : 'a manager';
@@ -576,14 +591,49 @@ export function InvitationList({
                     note={`Invited by ${inviter(invitation.invitedBy)}`}
                 >
                     <Button
-                        variant="ghost"
+                        variant="destructive-outline"
                         disabled={busy !== null}
-                        onClick={() => void cancel(invitation)}
+                        onClick={() => setConfirming(invitation)}
                     >
                         {busy === invitation.id ? 'Cancelling…' : 'Cancel invitation'}
                     </Button>
                 </Row>
             ))}
+            <AlertDialog
+                open={confirming !== null}
+                onOpenChange={(open) => !open && setConfirming(null)}
+            >
+                <AlertDialogContent>
+                    {confirming && (
+                        <>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                    {confirming.email
+                                        ? `Cancel the invitation to ${confirming.email}?`
+                                        : 'Cancel this invitation?'}
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    The link in their email stops working. You can invite them
+                                    again.
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>Keep invitation</AlertDialogCancel>
+                                <Button
+                                    variant="destructive"
+                                    onClick={() => {
+                                        const invitation = confirming;
+                                        setConfirming(null);
+                                        void cancel(invitation);
+                                    }}
+                                >
+                                    Cancel invitation
+                                </Button>
+                            </AlertDialogFooter>
+                        </>
+                    )}
+                </AlertDialogContent>
+            </AlertDialog>
         </Section>
     );
 }

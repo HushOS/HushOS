@@ -312,7 +312,7 @@ Everything is sentence case. Nothing in product UI is uppercase. Sizes and dates
 
 ## Layout
 
-- **Web app shell.** A collapsible sidebar on the ground (256px, 48px as icons, a 288px sheet on phones): Home, My files (with one row per family under it, on servers that offer families, opening the family's folders), Shared, Trash; then Tags, People you share with and Families; an Operator group for admins; the storage meter ("1.5 GB of 2 GB used", "512 MB free", a Plan and storage link) at the foot. The active place is tint, a semibold label and a heavier icon. The page is one surface panel, inset 10px from the window with `card` corners on a desk-sized screen and full-bleed on a phone, scrolling inside. Its 64px header holds the search box (opens the command palette, `/` or ⌘K) and the account avatar, which opens the account menu.
+- **Web app shell.** A collapsible sidebar on the ground (256px, 48px as icons, a 288px sheet on phones): Home, My files (with one row per family under it, on servers that offer families, opening the family's folders; each row marked with the family's initial on its avatar tone, as on the Families page), Shared, Trash; then Tags, People you share with and Families; an Operator group for admins; the storage meter ("1.5 GB of 2 GB used", "512 MB free", a Plan and storage link) at the foot; inside a family's folders it shows the family's pool under the family's name where its plan says it, an empty pool as No room ("The family has no plan right now"), and otherwise your own space under My files. The active place is tint, a semibold label and a heavier icon. The page is one surface panel, inset 10px from the window with `card` corners on a desk-sized screen and full-bleed on a phone, scrolling inside. Its 64px header holds the search box (opens the command palette, `/` or ⌘K) and the account avatar, which opens the account menu.
 - **Page header.** Title on the left, the page's few actions on the right. Gutters are 20px, 32px from the small breakpoint.
 - **Lists.** Rows of at least 56px (padded, so a row whose words wrap grows rather than touching its rules) with 36px marks and a rule hairline between them; no vertical lines. Columns: Name, Who can open, Changed, Size. On the web they follow the list's own width (the Info panel narrows it): the name keeps at least 320px, Size goes first, then Changed, and Who can open, the list's main signal, last; while the column a list is sorted by is hidden, the Name header says the order ("By size") and reverses it. A shared folder starts with an access banner that begins with "You": "You and anyone with the link can open everything in this folder." Rows then say who can open only when it differs; otherwise "Same as folder" on the web and nothing on the phones.
 - **Details.** A 320px panel beside the list on wide windows (Info), a dialog on narrow ones: who can open in a full sentence, the plain facts, tags, then two folds, Keep your own copy and Technical details.
@@ -423,7 +423,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Families
         - Create a family
         - Invite someone
-        - Cancel invitation
+        - Cancel invitation (asks once: "Cancel the invitation to sam@example.com?", "The link in their email stops working. You can invite them again.", Keep invitation, Cancel invitation)
         - Waiting to join
         - Let them in
         - Not now (asks once: "Turn Sam down?", Turn down)

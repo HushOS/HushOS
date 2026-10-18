@@ -33,8 +33,10 @@ export function InfoDialog({
                         nameFirst
                         heading={(name) => (
                             <DialogHeader>
-                                {/* Room on the right for the close button on the same row. */}
-                                <DialogTitle className="pr-10 wrap-anywhere">{name}</DialogTitle>
+                                {/* Info, then the name, as the panel beside the list reads; the close
+                                    button shares Info's row, so the name has the full width. */}
+                                <p className="text-sm font-semibold text-muted-foreground">Info</p>
+                                <DialogTitle className="wrap-anywhere">{name}</DialogTitle>
                                 <DialogDescription className="sr-only">
                                     About this {node.kind === 'folder' ? 'folder' : 'file'}.
                                 </DialogDescription>

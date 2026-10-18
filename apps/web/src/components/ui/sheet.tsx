@@ -61,10 +61,11 @@ function SheetContent({
                     <SheetPrimitive.Close
                         data-slot="sheet-close"
                         render={
+                            // 36px, 44px on touch, its centre where the 32px button's was.
                             <Button
                                 variant="ghost"
-                                className="absolute top-3 right-3"
-                                size="icon-sm"
+                                className="absolute top-2.5 right-2.5 pointer-coarse:top-1.5 pointer-coarse:right-1.5"
+                                size="icon"
                             />
                         }
                     >

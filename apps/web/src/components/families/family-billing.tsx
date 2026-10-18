@@ -46,6 +46,8 @@ import {
     needsPlan,
     pendingTier,
     planState,
+    paymentNeedsYou,
+    placesOf,
     quoteAdd,
     seatNoteFor,
     removeRange,
@@ -161,7 +163,7 @@ export function FamilyPlan({ place, ...props }: Props & { place: 'top' | 'bottom
         return place === 'top' ? (
             <GlanceTop family={props.family} summary={data} members={members} />
         ) : (
-            <GlanceSection summary={data} />
+            <GlanceSection summary={data} seats={placesOf(detail.data?.seats, data)} />
         );
     return place === 'top' ? (
         <PlanTop {...props} summary={data} members={members} />
@@ -203,7 +205,14 @@ function GlanceTop({
 }
 
 /* The plan's name, and the pool: all a member without `billing` is shown. */
-function GlanceSection({ summary }: { summary: FamilyGlance }) {
+function GlanceSection({
+    summary,
+    seats,
+}: {
+    summary: FamilyGlance;
+    /* The family's places, as its page header says them (placesOf): the same figure in both. */
+    seats: { used: number; limit: number } | null;
+}) {
     if (!summary.hasPlan || !summary.planName) return null;
     return (
         <Section title="Plan">
@@ -215,6 +224,11 @@ function GlanceSection({ summary }: { summary: FamilyGlance }) {
                         : ''}
                 </span>
                 <PoolLine storage={summary.storage} />
+                {seats && (
+                    <span className="text-muted-foreground tabular-nums" data-glance-places>
+                        {seats.used} of {seats.limit} places taken
+                    </span>
+                )}
             </div>
         </Section>
     );
@@ -228,6 +242,12 @@ type Inner = Props & { summary: FamilyBillingFull; members: readonly FamilyMembe
  * ten in ten minutes). Only a live plan is called paid.
  */
 const SYNC_TRIES = 8;
+/*
+ * Checkouts already announced in this tab: the effect below runs again when the component
+ * mounts again before the checkout id leaves the address (React's development double mount,
+ * or a remount while a refetch settles), and must not say "Payment received" twice.
+ */
+const announced = new Set<string>();
 function useCheckoutReturn({ userId, groupId, checkoutId, onCheckoutSeen, summary }: Inner) {
     const queryClient = useQueryClient();
     const key = familyBillingQueryOptions(userId, groupId).queryKey;
@@ -251,6 +271,9 @@ function useCheckoutReturn({ userId, groupId, checkoutId, onCheckoutSeen, summar
     }, [checkoutId, live, tries, groupId, queryClient]);
     useEffect(() => {
         if (checkoutId && live) {
+            onCheckoutSeen();
+            if (announced.has(checkoutId)) return;
+            announced.add(checkoutId);
             cue('success');
             toast.add({
                 type: 'success',
@@ -258,7 +281,6 @@ function useCheckoutReturn({ userId, groupId, checkoutId, onCheckoutSeen, summar
                 description: 'You can invite people now.',
             });
             void queryClient.invalidateQueries({ queryKey: key.slice(0, 4) });
-            onCheckoutSeen();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [checkoutId, live]);
@@ -633,8 +655,10 @@ function PlanSection(props: Inner) {
                         )}
                     </div>
                     {actions.portal && (
+                        // The page's one blue button only while a renewal failed and you pay;
+                        // otherwise Invite someone keeps it, and the notice above says the rest.
                         <Button
-                            variant={state.overdue || state.ending ? 'default' : 'outline'}
+                            variant={paymentNeedsYou(summary) ? 'default' : 'outline'}
                             disabled={busy !== null}
                             onClick={() => void portal()}
                         >
@@ -729,11 +753,12 @@ function PlanSection(props: Inner) {
                     </p>
                 )}
                 {actions.cancel && (
+                    // It opens a dangerous flow (asked once), so destructive-outline, as DESIGN.md says.
                     <Button
-                        variant="ghost"
+                        variant="destructive-outline"
                         disabled={busy !== null}
                         onClick={() => setCancelling(true)}
-                        className="-ml-3.5 self-start underline underline-offset-4 hover:text-destructive pointer-coarse:-ml-4"
+                        className="self-start"
                     >
                         Cancel plan
                     </Button>

@@ -80,7 +80,7 @@ function Families() {
                                             : '/app/families/$groupId'
                                     }
                                     params={{ groupId: family.id }}
-                                    className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-4 pl-5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-6 sm:pl-8"
+                                    className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-5 pl-5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-8 sm:pl-8"
                                 >
                                     <PersonAvatar name={family.name} seed={family.id} />
                                     <span className="flex min-w-0 flex-1 flex-col">

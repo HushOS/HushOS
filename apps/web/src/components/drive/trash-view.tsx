@@ -535,7 +535,7 @@ export function TrashView() {
                             </th>
                             <th
                                 scope="col"
-                                className={cn(TRASH_COLUMN.actionsWide, 'w-28 pr-3 sm:pr-5')}
+                                className={cn(TRASH_COLUMN.actionsWide, 'w-32 pr-3 sm:pr-5')}
                             >
                                 <span className="sr-only">Actions</span>
                             </th>
@@ -695,7 +695,6 @@ export function TrashView() {
                                                 >
                                                     <Button
                                                         variant="outline"
-                                                        size="sm"
                                                         disabled={working}
                                                         aria-label={
                                                             item.parentTrashed
@@ -718,7 +717,7 @@ export function TrashView() {
                                                     </Button>
                                                     <Button
                                                         variant="ghost"
-                                                        size="icon-sm"
+                                                        size="icon"
                                                         aria-label={`Delete “${item.node.name}” forever`}
                                                         title="Delete forever"
                                                         className="text-destructive hover:bg-destructive-soft hover:text-destructive"
@@ -836,17 +835,17 @@ export function TrashView() {
 
 /*
  * The Trash list's columns by its own width (see the list's comment): the name column keeps
- * at least 320px beside 112px of icon actions. Was in goes first (its words move under the
- * name, `whereLine`, and the mark spans both lines, `whereSpan`), then Size, then the action
- * labels (the actions widen to 224px, which "Restore to My files" and Delete forever need), then
- * Trashed.
+ * at least 320px beside 128px of icon actions (on touch, Restore 48px and Delete forever 44px).
+ * Was in goes first (its words move under the name, `whereLine`, and the mark spans both lines,
+ * `whereSpan`), then Size, then the action labels (the actions widen to 256px, which "Restore to
+ * My files" and Delete forever need on touch), then Trashed.
  */
 const TRASH_COLUMN = {
-    where: 'hidden @min-[63rem]/list:table-cell',
-    whereLine: '@min-[63rem]/list:hidden',
-    whereSpan: '@min-[63rem]/list:row-span-1',
-    trashed: 'hidden @min-[36rem]/list:table-cell',
-    size: 'hidden @min-[49rem]/list:table-cell',
-    actionsWide: '@min-[43rem]/list:w-56',
-    actionLabel: '@max-[43rem]/list:sr-only',
+    where: 'hidden @min-[66rem]/list:table-cell',
+    whereLine: '@min-[66rem]/list:hidden',
+    whereSpan: '@min-[66rem]/list:row-span-1',
+    trashed: 'hidden @min-[37rem]/list:table-cell',
+    size: 'hidden @min-[51rem]/list:table-cell',
+    actionsWide: '@min-[45rem]/list:w-64',
+    actionLabel: '@max-[45rem]/list:sr-only',
 } as const;

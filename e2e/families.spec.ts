@@ -324,6 +324,10 @@ test.describe.serial('two people', () => {
             .locator('[data-invitation="nobody-yet@hushos.local"]')
             .getByRole('button', { name: 'Cancel invitation' })
             .click();
+        // Asked once: the email can't be unsent.
+        const ask = maya.page.getByRole('alertdialog');
+        await expect(ask).toContainText('Cancel the invitation to nobody-yet@hushos.local?');
+        await ask.getByRole('button', { name: 'Cancel invitation' }).click();
         await expect(maya.page.locator('[data-invitation="nobody-yet@hushos.local"]')).toHaveCount(
             0,
         );
