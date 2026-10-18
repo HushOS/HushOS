@@ -316,7 +316,10 @@ describe('placesOf', () => {
     });
 });
 
-/* The three tiers as seed.ts makes them: four included, then 150 a member, monthly and yearly. */
+/*
+ * The three tiers as seed.ts makes them: four included, then 150 a member (ten months of
+ * it a year); the base at its own monthly and yearly price.
+ */
 const GIB = 1024 ** 3;
 function tierPlan(
     tier: 'plus' | 'pro' | 'max',
@@ -325,6 +328,11 @@ function tierPlan(
     interval: 'month' | 'year',
 ) {
     const times = interval === 'year' ? 10 : 1;
+    const yearly = {
+        plus: { usd: 9600, inr: 390000 },
+        pro: { usd: 19200, inr: 780000 },
+        max: { usd: 28800, inr: 1380000 },
+    }[tier];
     const label = { plus: 'Plus', pro: 'Pro', max: 'Max' }[tier];
     return {
         id: `${tier}-${interval}`,
@@ -334,8 +342,8 @@ function tierPlan(
         tier,
         recommended: tier === 'pro',
         prices: {
-            usd: { base: base.usd * times, perMember: 150 * times },
-            inr: { base: base.inr * times, perMember: 5900 * times },
+            usd: { base: interval === 'year' ? yearly.usd : base.usd, perMember: 150 * times },
+            inr: { base: interval === 'year' ? yearly.inr : base.inr, perMember: 5900 * times },
         },
         includedMembers: 4,
         maxMembers: 20,

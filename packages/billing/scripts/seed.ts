@@ -1,6 +1,5 @@
 import { createPolar, type models } from '@polar-sh/sdk/2026-10';
 import {
-    DEFAULT_CURRENCY,
     GROUP_KIND_METADATA_KEY,
     INCLUDED_MEMBERS_METADATA_KEY,
     PLAN_METADATA_KEY,
@@ -8,12 +7,21 @@ import {
     RECOMMENDED_METADATA_KEY,
     TIER_METADATA_KEY,
 } from '../src/protocol';
+import {
+    FAMILY_PER_MEMBER_YEAR_FACTOR,
+    familyIncluded,
+    familyPerMember,
+    familyTiers,
+    GIB,
+    seedPriceProblems,
+    tiers,
+} from '../src/seed-prices';
 
 /*
  * Creates the HushOS plan products in the Polar organisation the token belongs to.
  * Idempotent by product name: existing products are left alone unless `--update`
- * is passed, which makes this file the source of truth for prices, description,
- * and metadata. A changed price replaces the product's price in that currency for
+ * is passed, which makes this file and its price table (src/seed-prices.ts) the
+ * source of truth for prices, description, and metadata. A changed price replaces the product's price in that currency for
  * new checkouts and plan switches; existing subscribers keep the price they signed
  * up at. Polar shows a customer the price in their local currency when the product
  * has one, and falls back to the organisation's default currency otherwise.
@@ -27,36 +35,9 @@ const environment = process.env.POLAR_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'p
 if (!token) throw new Error('Set POLAR_ACCESS_TOKEN (needs products:read and products:write).');
 const update = process.argv.includes('--update');
 
-const GIB = 1_073_741_824n;
 type Currency = models.PresentmentCurrency;
-/* Monthly prices in minor units per currency; yearly is ten months. */
-type Amounts = Partial<Record<Currency, number>> & Record<typeof DEFAULT_CURRENCY, number>;
-const tiers: { name: string; quota: bigint; recommended: boolean; month: Amounts }[] = [
-    {
-        name: 'Plus',
-        quota: 200n * GIB,
-        recommended: false,
-        month: { usd: 500, eur: 500, gbp: 400, inr: 19900 },
-    },
-    {
-        name: 'Pro',
-        quota: 500n * GIB,
-        recommended: true,
-        month: { usd: 1000, eur: 1000, gbp: 800, inr: 39900 },
-    },
-    {
-        name: 'Max',
-        quota: 1024n * GIB,
-        recommended: false,
-        month: { usd: 1500, eur: 1500, gbp: 1200, inr: 69900 },
-    },
-];
-
-for (const tier of tiers)
-    if (!(DEFAULT_CURRENCY in tier.month))
-        throw new Error(
-            `${tier.name} has no ${DEFAULT_CURRENCY.toUpperCase()} price; Polar treats that as free.`,
-        );
+const problems = seedPriceProblems();
+if (problems.length) throw new Error(problems.join('\n'));
 
 const polar = createPolar({ accessToken: token, environment });
 const existing = new Map<string, models.Product>();
@@ -89,12 +70,7 @@ for (const tier of tiers) {
         tier.quota >= 1024n * GIB ? `${tier.quota / (1024n * GIB)} TB` : `${tier.quota / GIB} GB`;
     for (const interval of ['month', 'year'] as const) {
         const name = `${tier.name} (${interval === 'month' ? 'monthly' : 'yearly'})`;
-        const amounts = Object.fromEntries(
-            Object.entries(tier.month).map(([currency, amount]) => [
-                currency,
-                interval === 'month' ? amount : amount * 10,
-            ]),
-        ) as Amounts;
+        const amounts = tier[interval];
         const description = `${storage} of end-to-end encrypted storage.`;
         const metadata = {
             [PLAN_METADATA_KEY]: tier.name.toLowerCase(),
@@ -154,61 +130,23 @@ for (const tier of tiers) {
  * free up to the included members, then a per-member rate, with
  * `minimum_units` at the included count and the same bound in every currency
  * (the catalogue drops a product whose currencies disagree). `quota_bytes` is
- * the whole family's pool; `hushos_tier` names the tier.
- *
- * Prices (owner, 2026-10-18): Family Plus 800 GB, Pro 2 TB, Max 4 TB at 10, 20
- * and 30 USD a month, four members included, then 1.50 USD a member a month,
- * the same on every tier, up to 20 members (protocol.ts). EUR at parity, GBP at
- * 0.8; INR follows the personal plans' ratio (199/399/699 rupees against 5/10/15
- * dollars, about 40 to the dollar and nearer 47 at the top): 399, 799 and 1,399
- * rupees, so Plus costs what personal Pro does and Pro and Max twice personal Pro
- * and Max, and 59 rupees a member. A year is ten months in every currency
- * (confirmed by the owner on 2026-10-19).
+ * the whole family's pool; `hushos_tier` names the tier. The prices, and why
+ * they are what they are, are in src/seed-prices.ts.
  */
 const archiveLegacyFamily = process.argv.includes('--archive-legacy-family');
-const familyIncluded = 4;
-const familyPerMember = { usd: 150, eur: 150, gbp: 120, inr: 5900 } as Amounts;
-const familyTiers: {
-    tier: string;
-    name: string;
-    quota: bigint;
-    recommended: boolean;
-    base: Amounts;
-}[] = [
-    {
-        tier: 'plus',
-        name: 'Family Plus',
-        quota: 800n * GIB,
-        recommended: false,
-        base: { usd: 1000, eur: 1000, gbp: 800, inr: 39900 },
-    },
-    {
-        tier: 'pro',
-        name: 'Family Pro',
-        quota: 2048n * GIB,
-        recommended: true,
-        base: { usd: 2000, eur: 2000, gbp: 1600, inr: 79900 },
-    },
-    {
-        tier: 'max',
-        name: 'Family Max',
-        quota: 4096n * GIB,
-        recommended: false,
-        base: { usd: 3000, eur: 3000, gbp: 2400, inr: 139900 },
-    },
-];
 const unitLabel = { en: { '=1': 'member', other: 'members' } };
 
-function familyPrices(base: Amounts, interval: 'month' | 'year') {
-    const factor = interval === 'month' ? 1 : 10;
-    return Object.entries(base).flatMap(([currency, amount]) => {
-        const perMember = familyPerMember[currency as Currency];
+function familyPrices(tier: (typeof familyTiers)[number], interval: 'month' | 'year') {
+    // The base is the tier's price for the interval; a member past the included ones is ten months a year.
+    const factor = interval === 'month' ? 1 : FAMILY_PER_MEMBER_YEAR_FACTOR;
+    return Object.entries(tier[interval]).flatMap(([currency, amount]) => {
+        const perMember = familyPerMember[currency];
         if (perMember === undefined) throw new Error(`Family has no per-member ${currency} price.`);
         return [
             {
                 amount_type: 'fixed',
                 price_currency: currency as Currency,
-                price_amount: amount * factor,
+                price_amount: amount,
             } satisfies models.ProductPriceFixedCreate,
             {
                 amount_type: 'unit_based',
@@ -258,7 +196,7 @@ for (const tier of familyTiers) {
             [INCLUDED_MEMBERS_METADATA_KEY]: String(familyIncluded),
             [RECOMMENDED_METADATA_KEY]: tier.recommended ? 'true' : 'false',
         };
-        const creates = familyPrices(tier.base, interval);
+        const creates = familyPrices(tier, interval);
         const current = existing.get(name);
         if (!current) {
             const product = await polar.products.create({

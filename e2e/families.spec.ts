@@ -1270,9 +1270,11 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     const DAY = 24 * 60 * 60 * 1000;
     const family = 'Ekström family';
-    // The three tiers as seed.ts makes them: four included, then 1.50 a member; a year is ten months.
+    // The three tiers as seed.ts makes them: four included, then 1.50 a member (ten months of it
+    // a year); a year's base is a round total that splits into twelve, 96, 192 and 288.
     const tier = (key: string, label: string, gib: number, usd: number, interval: string) => {
         const times = interval === 'year' ? 10 : 1;
+        const base = interval === 'year' ? (usd / 1000) * 9600 : usd;
         return {
             id: `${key}-${interval}`,
             name: `Family ${label} (${interval === 'year' ? 'yearly' : 'monthly'})`,
@@ -1280,7 +1282,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             interval,
             tier: key,
             recommended: key === 'pro',
-            prices: { usd: { base: usd * times, perMember: 150 * times } },
+            prices: { usd: { base, perMember: 150 * times } },
             includedMembers: 4,
             maxMembers: 20,
             quotaBytes: String(gib * 1024 ** 3),
@@ -1394,7 +1396,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             'Then $1.50 a month for each member after that, up to 20.',
         );
         await choose.getByRole('button', { name: /^Yearly/ }).click();
-        await expect(cards.nth(1)).toContainText('$200 a year');
+        await expect(cards.nth(1)).toContainText('$192 a year');
         await expect(cards.nth(1)).toContainText(
             'Then $15 a year for each member after that, up to 20.',
         );
