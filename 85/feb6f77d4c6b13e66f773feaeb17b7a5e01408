@@ -1,0 +1,49 @@
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_c56e31c87cddde::t_8c7793dcadd7cf 173-178,247-283
+docs/groups-design.md
+  s_c56e31c87cddde::t_6932ebbeb1355f 356
+docs/self-hosting.md
+  s_c56e31c87cddde::t_ac2eff90651b75 545
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_8105e3ac8110e3 21,1043-1046,1049-1059
+packages/billing/src/api.ts
+  s_c56e31c87cddde::t_947a13511bd137 95-97,99
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_dd67c11a95ee39 92,107,155-160,163-175,177-185,188,195,203,205-206,209-212,215-236,243-244,249,258,298,321-326,358-359,361-364,472-474,512-524,685,694-695,697-703,720-723,725-726,1324,1327,1330,1332,1341,1344-1346,1413-1415
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_973670314afa26 194-205,511,767,1439-1443,1463-1474,1478-1494,2850,2875-2892,2900-2930,2951-2957,2969,2982,2988,3011,3058,3242-3250,3259,3264-3353,3355-3367,3369,3371,3373,3376-3388
+packages/db/drizzle/20261018013257_group_plan_tiers/migration.sql
+  s_c56e31c87cddde::t_dacfe23241c801 1-4,10,15-19
+packages/db/drizzle/20261018013257_group_plan_tiers/snapshot.json
+  s_c56e31c87cddde::t_6464ac1f38744b 4,5841,5854,5867,5873,5875,5877,5880,5886,5893,5899,5906
+packages/db/src/billing.groups.test.ts
+  s_c56e31c87cddde::t_626cd8c9c239c8 29-33,220,223,226-227,229,231,237,239,241-247,250,253-255,263,266,271-272,275-283,285-286,288,290,292-295
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_a91a586df67791 283-285,287-289,504-505,508-516,520-538,637-639,649-650,652-653,655-658,698-704
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_ee1a8ba40e0221 42
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_b8338874795873 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_bc11dc8a3e6eaa 161-165,169-174,182-185,190-191,193
+packages/groups/src/server.billing.test.ts
+  s_c56e31c87cddde::t_b3305eadf256eb 119-120,122-141
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_be04ba1f58e169 101-102,105,108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85feb6f77d4c6b13e66f773feaeb17b7a5e01408",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
