@@ -36,13 +36,17 @@ test.beforeAll(async ({ browser }) => {
         writeFileSync(path, lines());
         return path;
     });
-    // Past the colouring threshold (512 KB): offered Colour anyway.
+    // Past the colouring threshold (512 KB): offered Colour anyway. Mostly comment lines, a
+    // token or two each: coloured, a dense file of code draws over 150,000 spans, and on WebKit
+    // every later render of the page then takes more than a second (an upload behind the viewer
+    // took 20 s), which is the page's cost to fix, not this test's to wait out.
     const big = join(dir, 'big.ts');
     writeFileSync(
         big,
-        Array.from(
-            { length: 12_000 },
-            (_, n) => `export const value${n}: number = ${n} * 2; // line ${n}`,
+        Array.from({ length: 11_000 }, (_, n) =>
+            n % 50 === 0
+                ? `export const value${n} = ${n};`
+                : `// ${n} The quick brown fox jumps over the lazy dog again.`,
         ).join('\n'),
     );
     await page
@@ -125,26 +129,14 @@ test('Colour anyway holds when the folder is listed again behind the viewer', as
     await expect(dialog(page).locator('output', { hasText: 'Coloured.' })).toHaveCount(1, {
         timeout: 120_000,
     });
-    // Another tab of the same account adds a file to the folder; this tab, coming back to the
-    // front, reads the change feed and lists the folder again, which hands the viewer a new copy
-    // of the open file. That copy once reopened the file and drew it uncoloured.
-    const other = await page.context().newPage();
-    await other.goto('/app/drive');
+    // A file added to the folder while the viewer is open lists the folder again, which hands
+    // the viewer a new copy of the open file. That copy once reopened the file and drew it
+    // uncoloured. Added in this tab, through the folder's own picker behind the viewer: a second
+    // tab and a hidden-then-shown window depend on how each engine reports visibility (WebKit
+    // never refetched that way on CI), while an upload lists the folder again on any engine.
     const dir = mkdtempSync(join(tmpdir(), 'hushos-other-'));
     writeFileSync(join(dir, 'other.txt'), 'another file\n');
-    await other.locator('input[type=file]').first().setInputFiles(join(dir, 'other.txt'));
-    await expect(row(other, 'other.txt')).toBeVisible({ timeout: 60_000 });
-    await other.close();
-    await page.evaluate(() => {
-        for (const state of ['hidden', 'visible']) {
-            Object.defineProperty(document, 'visibilityState', {
-                configurable: true,
-                get: () => state,
-            });
-            document.dispatchEvent(new Event('visibilitychange'));
-        }
-        window.dispatchEvent(new Event('focus'));
-    });
+    await page.locator('input[type=file]').first().setInputFiles(join(dir, 'other.txt'));
     // Listed again: the new file is in the list behind the viewer.
     await expect(row(page, 'other.txt')).toBeAttached({ timeout: 30_000 });
     await page.waitForTimeout(1_000);

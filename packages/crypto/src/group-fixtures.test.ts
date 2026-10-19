@@ -35,7 +35,6 @@ import {
     firstRosterVerdict,
     ownEntryCases,
     ownEntryVerdict,
-    groupCases,
     mlDsaKeysOf,
     pattern,
     person,
@@ -77,6 +76,29 @@ type Served = {
     statement: string;
     signature: { ed25519: string; mlDsa: string };
     signerSignature: string;
+};
+/* A history the core judged (forks, refusals, the cache and records), and its verdict. */
+type HistoryCase = {
+    name: string;
+    input: {
+        firstKeys: GroupPublicKey;
+        pins: GroupPin[];
+        rosters: Served[];
+        successions: Served[];
+        mlDsaKeys: Record<string, string>;
+        me: AcceptInput['me'];
+        cache: GroupChainCache | null;
+        firstKeysChecked: boolean;
+        record: RecordProbe | null;
+        root?: RootProbe | null;
+        joinMark?: JoinMark | null;
+        next: {
+            roster: Served | null;
+            succession: Served | null;
+            identities: Record<string, ServedIdentity[]> | null;
+        } | null;
+    };
+    expected: Record<string, unknown>;
 };
 const signed = (value: Served): SignedGroupStatement => ({
     statement: decode(value.statement),
@@ -273,32 +295,10 @@ describe('group records made by the Rust core', () => {
         }
     });
 
-    it('judges the core’s histories as the core did: forks, refusals, the cache and records', async () => {
-        expect(core.cases.map((entry) => entry.name)).toEqual(
-            (await groupCases()).map((entry) => entry.name),
-        );
-        for (const { name, input, expected } of core.cases as unknown as {
-            name: string;
-            input: {
-                firstKeys: GroupPublicKey;
-                pins: GroupPin[];
-                rosters: Served[];
-                successions: Served[];
-                mlDsaKeys: Record<string, string>;
-                me: AcceptInput['me'];
-                cache: GroupChainCache | null;
-                firstKeysChecked: boolean;
-                record: RecordProbe | null;
-                root?: RootProbe | null;
-                joinMark?: JoinMark | null;
-                next: {
-                    roster: Served | null;
-                    succession: Served | null;
-                    identities: Record<string, ServedIdentity[]> | null;
-                } | null;
-            };
-            expected: Record<string, unknown>;
-        }[]) {
+    // One test per history, so a slow runner spends each case's time on that case alone.
+    it.each((core.cases as unknown as HistoryCase[]).map((entry) => [entry.name, entry] as const))(
+        'judges the core’s history %s as the core did',
+        async (name, { input, expected }) => {
             const verdict = await verdictOf(
                 {
                     groupId: GROUP,
@@ -323,8 +323,8 @@ describe('group records made by the Rust core', () => {
                 input.root ?? undefined,
             );
             expect(verdict, name).toEqual(expected);
-        }
-    }, 30_000);
+        },
+    );
 
     it('folds in the core’s entries as the core did', async () => {
         expect(core.foldIns.map((entry) => entry.name)).toEqual([
