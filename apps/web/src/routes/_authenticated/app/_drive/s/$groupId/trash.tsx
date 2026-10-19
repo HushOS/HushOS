@@ -1,7 +1,7 @@
 import type { TrashItem } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { RotateCcwIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import { RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
@@ -127,12 +127,7 @@ function FamilyTrash() {
             />
             {trash.isPending && <SkeletonRows rows={3} />}
             {trash.isError && (
-                <EmptyState
-                    icon={TriangleAlertIcon}
-                    tone="danger"
-                    title="The Trash couldn’t be opened"
-                    body={driveError(trash.error)}
-                >
+                <EmptyState title="The Trash couldn’t be opened" body={driveError(trash.error)}>
                     <Button variant="outline" onClick={() => void trash.refetch()}>
                         <RotateCcwIcon />
                         Try again
@@ -141,7 +136,6 @@ function FamilyTrash() {
             )}
             {trash.data?.length === 0 && (
                 <EmptyState
-                    icon={Trash2Icon}
                     title="Nothing in the Trash"
                     body="What anyone in the family moves to Trash shows up here."
                 />

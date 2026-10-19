@@ -666,10 +666,7 @@ function LinksSection({ node }: { node: DriveNode }) {
                 </p>
             )}
             {links.data && list.length === 0 && (
-                <div className="flex items-center gap-3 rounded-xl bg-muted p-4">
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-card text-muted-foreground">
-                        <Link2Icon className="size-[18px]" strokeWidth={2.2} aria-hidden="true" />
-                    </span>
+                <div className="rounded-xl bg-muted p-4">
                     <p className="text-sm text-muted-foreground">
                         No links. A link lets anyone who has it view “{node.name}”, with a password
                         or an end date if you like.

@@ -1,7 +1,6 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { LockKeyholeIcon } from 'lucide-react';
 import { useRouter } from '@tanstack/react-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -182,10 +181,7 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
         if (restoring || !attempted) return <Opening />;
         return (
             <Centered>
-                <span className="flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground">
-                    <LockKeyholeIcon className="size-5" aria-hidden="true" />
-                </span>
-                <h1 className="mt-5 text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
+                <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
                     HushOS is locked here
                 </h1>
                 <p className="mt-1.5 text-[15px] text-muted-foreground">

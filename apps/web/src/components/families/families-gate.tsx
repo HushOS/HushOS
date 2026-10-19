@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { TriangleAlertIcon, UsersIcon } from 'lucide-react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { Button } from '@/components/ui/button';
 import { capabilitiesQueryOptions } from '@/lib/families-shell';
@@ -16,8 +15,6 @@ export function FamiliesGate({ children }: { children: ReactNode }) {
     if (capabilities.isError)
         return (
             <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
                 title="This page couldn’t be opened"
                 body="Couldn’t reach HushOS. Check your connection, then retry."
             >
@@ -29,7 +26,6 @@ export function FamiliesGate({ children }: { children: ReactNode }) {
     if (capabilities.data?.groups !== true)
         return (
             <EmptyState
-                icon={UsersIcon}
                 title="Families aren’t available here"
                 body="This HushOS server doesn’t offer families."
             />

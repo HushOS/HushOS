@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
-import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
+import { RotateCcwIcon } from 'lucide-react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { FamilyPage } from '@/components/families/family-page';
@@ -33,12 +33,7 @@ function FamilyRoute() {
     if (families.isPending) return <SkeletonRows rows={3} />;
     if (families.isError)
         return (
-            <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
-                title="Your family couldn’t be opened"
-                body={errorCopy(families.error)}
-            >
+            <EmptyState title="Your family couldn’t be opened" body={errorCopy(families.error)}>
                 <Button variant="outline" onClick={() => void families.refetch()}>
                     <RotateCcwIcon />
                     Try again

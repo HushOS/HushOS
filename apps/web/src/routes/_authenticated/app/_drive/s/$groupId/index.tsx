@@ -74,7 +74,6 @@ function FamilySpacePage() {
             </PageHeader>
             {rows.length === 0 ? (
                 <EmptyState
-                    icon={FolderPlusIcon}
                     title="No family folders yet"
                     body={
                         canCreate

@@ -8,15 +8,7 @@ import {
 } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import {
-    PaletteIcon,
-    PencilIcon,
-    PlusIcon,
-    RotateCcwIcon,
-    TagIcon,
-    Trash2Icon,
-    TriangleAlertIcon,
-} from 'lucide-react';
+import { PaletteIcon, PencilIcon, PlusIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useId, useState } from 'react';
 import { RenameTagDialog } from '@/components/drive/tag-view';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
@@ -162,12 +154,7 @@ export function TagsView() {
             </form>
             {registry.isPending && <SkeletonRows rows={4} />}
             {registry.isError && (
-                <EmptyState
-                    icon={TriangleAlertIcon}
-                    tone="danger"
-                    title="Your tags couldn’t be opened"
-                    body={driveError(registry.error)}
-                >
+                <EmptyState title="Your tags couldn’t be opened" body={driveError(registry.error)}>
                     <Button variant="outline" onClick={() => void registry.refetch()}>
                         <RotateCcwIcon />
                         Try again
@@ -176,7 +163,6 @@ export function TagsView() {
             )}
             {registry.data && tags.length === 0 && (
                 <EmptyState
-                    icon={TagIcon}
                     title="No tags yet"
                     body="Make one above, or select items in a folder and press T."
                 />

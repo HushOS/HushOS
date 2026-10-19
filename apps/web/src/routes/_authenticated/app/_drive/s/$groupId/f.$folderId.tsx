@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
+import { RotateCcwIcon } from 'lucide-react';
 import { useMemo } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { FamilyAreaProvider, type FamilyArea } from '@/components/drive/family-area';
@@ -68,8 +68,6 @@ function FamilyFolderPage() {
     if (state && state.opened === null)
         return (
             <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
                 title="This folder couldn’t be opened"
                 body={`HushOS couldn’t check this folder’s keys on this device. ${state.error ?? ''}`.trim()}
             >
@@ -84,8 +82,6 @@ function FamilyFolderPage() {
     if (error || !state)
         return (
             <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
                 title="This folder couldn’t be opened"
                 body={
                     error

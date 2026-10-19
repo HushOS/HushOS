@@ -1,12 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-    ContactIcon,
     EllipsisIcon,
     RotateCcwIcon,
     SearchIcon,
     ShieldCheckIcon,
-    TriangleAlertIcon,
     UserPlusIcon,
     UserXIcon,
 } from 'lucide-react';
@@ -165,8 +163,6 @@ function People() {
             {settings.isPending && <SkeletonRows rows={3} />}
             {settings.isError && (
                 <EmptyState
-                    icon={TriangleAlertIcon}
-                    tone="danger"
                     title="This list couldn’t be opened"
                     body={settings.error instanceof Error ? settings.error.message : undefined}
                 >
@@ -201,15 +197,10 @@ function People() {
                 </div>
             ))}
             {settings.data && contacts.length === 0 && (
-                <div className="flex items-center gap-3 border-y border-rule px-5 py-4 sm:px-8">
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                        <ContactIcon className="size-4" aria-hidden="true" />
-                    </span>
-                    <span className="flex min-w-0 flex-col">
-                        <span className="text-[15px] font-medium">Nobody here yet</span>
-                        <span className="text-[13px] text-muted-foreground">
-                            Add someone by their email, or add them while you share.
-                        </span>
+                <div className="flex flex-col border-y border-rule px-5 py-4 sm:px-8">
+                    <span className="text-[15px] font-medium">Nobody here yet</span>
+                    <span className="text-[13px] text-muted-foreground">
+                        Add someone by their email, or add them while you share.
                     </span>
                 </div>
             )}

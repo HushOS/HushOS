@@ -15,7 +15,6 @@ import {
     RotateCcwIcon,
     TriangleAlertIcon,
     UserXIcon,
-    UsersIcon,
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -138,8 +137,6 @@ function Shared() {
 function Failed({ error, onRetry }: { error: unknown; onRetry: () => void }) {
     return (
         <EmptyState
-            icon={TriangleAlertIcon}
-            tone="danger"
             title="Couldn’t load what’s shared"
             body={`${driveError(error)} Check your connection and try again.`}
         >
@@ -208,7 +205,6 @@ function WithMe() {
     if (shares.data.length === 0)
         return (
             <EmptyState
-                icon={UsersIcon}
                 title="Nothing shared with you yet"
                 body="When someone shares a folder or file with you, it shows up here."
             />
@@ -471,7 +467,6 @@ function ByMe() {
     if (mine.data.shares.length === 0 && mine.data.links.length === 0)
         return (
             <EmptyState
-                icon={UsersIcon}
                 title="You haven’t shared anything yet"
                 body="Choose Share on any folder or file to let someone open it."
             />
