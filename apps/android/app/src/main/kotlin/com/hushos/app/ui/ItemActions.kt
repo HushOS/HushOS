@@ -697,10 +697,12 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
                 val on = stateOf(tag.id)
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).background(if (on == ToggleableState.On) alpine.tint else Color.Transparent)
-                        .clickable(role = Role.Checkbox) { choice = choice + (tag.id to (on != ToggleableState.On)) }.padding(horizontal = AlpineSpace.S4),
+                        .clickable(role = Role.Checkbox) { choice = choice + (tag.id to (on != ToggleableState.On)) }.padding(horizontal = AlpineSpace.S6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // The box is the control and the dot belongs to the name: a list's 16dp between them, 8dp from dot to name.
                     androidx.compose.material3.TriStateCheckbox(state = on, onClick = null)
+                    Spacer(Modifier.width(AlpineSpace.S4))
                     TagDot(tag.colour, 10.dp)
                     Text(tag.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S2))
                     Text("${state.tags.nodesWith(tag.id).size}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
