@@ -1,0 +1,25 @@
+apps/web/src/lib/move-across.ts
+  s_c56e31c87cddde::t_4d755cfcb0a120 182-183
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_254b2e979f2c0e 110
+packages/db/src/drive.moves.test.ts
+  s_c56e31c87cddde::t_408ffc4380c85a 462-468,472,475,478-485
+packages/db/test/accounts.ts
+  s_c56e31c87cddde::t_77e90209db3105 62-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ca6fcd15ded3841cb3eecbe1e77bc0cec8b2e8a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
