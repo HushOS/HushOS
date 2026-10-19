@@ -454,8 +454,12 @@ async function finishCreation(ctx: GroupContext, entry: OutboxEntry): Promise<Se
     return { status: 'landed', head: null, sync, notices: entry.notices ?? [] };
 }
 
-/* `inSync`: sent once from a sync, which accepts right after: no resends, no sync of its own. */
-type SendMode = { inSync?: boolean };
+/*
+ * `inSync`: sent once from a sync, which accepts right after: no resends, no sync of its own.
+ * `walking`: told when a `rotating` answer makes this call finish a folder's walk first (true)
+ * and when that walk is done (false), so a caller showing steps can say so.
+ */
+type SendMode = { inSync?: boolean; walking?: (running: boolean) => void };
 
 async function sendLocked(
     ctx: GroupContext,
@@ -588,7 +592,9 @@ async function refused(
             // The hold is placed again first. The walk keeps every writer's record re-keyed, so
             // nobody this call marks left has their records re-signed as this manager's own.
             await renewOrStop(ctx, entry);
+            mode.walking?.(true);
             await ctx.rotations.finish(groupId, data);
+            mode.walking?.(false);
             return (await rebuild(ctx, entry, [{ workspaceId: data.workspaceId, kinds: [] }]))
                 ? null
                 : { status: 'pending', reason: error.message };
@@ -752,7 +758,7 @@ export function stageChange(
     ctx: GroupContext,
     groupId: string,
     op: GroupStageOp,
-    options: { writers?: GroupWriter[] } = {},
+    options: { writers?: GroupWriter[]; walking?: SendMode['walking'] } = {},
 ): Promise<StageOutcome> {
     return ctx.lock(groupId, () => stageLocked(ctx, groupId, op, options));
 }
@@ -761,7 +767,7 @@ async function stageLocked(
     ctx: GroupContext,
     groupId: string,
     op: GroupStageOp,
-    options: { writers?: GroupWriter[] },
+    options: { writers?: GroupWriter[]; walking?: SendMode['walking'] },
 ): Promise<StageOutcome> {
     const sync = await syncLocked(ctx, groupId);
     if (sync.status !== 'accepted') return { status: 'not-synced', sync };
@@ -802,7 +808,7 @@ async function stageLocked(
     return {
         status: 'sent',
         entry,
-        outcome: await sendLocked(ctx, entry),
+        outcome: await sendLocked(ctx, entry, { walking: options.walking }),
         needsCheck: staged.needsCheck,
     };
 }

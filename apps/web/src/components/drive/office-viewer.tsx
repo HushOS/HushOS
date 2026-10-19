@@ -11,6 +11,7 @@ import { languageFor } from '@/lib/highlight';
 import { readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
 import {
     clipSheet,
+    firstRowIsHeader,
     OFFICE_LIMIT,
     sheetSource,
     slideOutline,
@@ -217,9 +218,9 @@ function SheetView({
             </div>
         );
     const { cells, width, moreRows, moreCols } = sheet.clipped;
-    // A delimited file's first row names its columns: a header, not data row 1. A workbook's
-    // rows are numbered from 1 as the spreadsheet itself numbers them.
-    const header = source !== null && cells.length > 0 ? cells[0]! : null;
+    // A delimited file's first row, when it names its columns, is a header, not data row 1
+    // (firstRowIsHeader). A workbook's rows are numbered from 1 as the spreadsheet numbers them.
+    const header = source !== null && firstRowIsHeader(cells, width) ? cells[0]! : null;
     const body = header ? cells.slice(1) : cells;
     const totalRows = body.length + moreRows;
     const count = (n: number) => n.toLocaleString('en-GB');
@@ -263,6 +264,7 @@ function SheetView({
                                         <th
                                             key={c}
                                             scope="col"
+                                            title={header[c] ?? ''}
                                             className="max-w-64 truncate border-r border-b border-rule bg-card px-3 py-1.5 text-left font-semibold whitespace-nowrap"
                                         >
                                             {header[c] ?? ''}

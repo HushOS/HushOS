@@ -92,6 +92,20 @@ export function sheetSource(
     return { type: 'string', data: new TextDecoder().decode(bytes) };
 }
 
+/*
+ * Whether a delimited file's first row names its columns. Nothing in a CSV says so, so it is
+ * guessed the cheap way: every cell filled, no name twice, and none of them a number (a row of
+ * data has its amounts and ids; a header has words). One row alone is data.
+ */
+export function firstRowIsHeader(cells: readonly (readonly string[])[], width: number) {
+    const first = cells[0];
+    if (!first || cells.length < 2 || width === 0) return false;
+    const names = Array.from({ length: width }, (_, c) => (first[c] ?? '').trim());
+    if (names.some((name) => name === '')) return false;
+    if (new Set(names.map((name) => name.toLowerCase())).size !== names.length) return false;
+    return !names.some((name) => /^[-+(]?[\d\s.,:/'-]*\d[\d\s.,:/'-]*\)?%?$/.test(name));
+}
+
 export const SHEET_ROWS = 500;
 export const SHEET_COLS = 50;
 

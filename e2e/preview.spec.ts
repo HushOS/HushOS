@@ -116,15 +116,25 @@ for (const name of ['gutter.ts', 'gutter.txt']) {
     });
 }
 
-test('Colour anyway holds when the window comes back, which refreshes the folder', async () => {
+test('Colour anyway holds when the folder is listed again behind the viewer', async () => {
+    // In My files, whose listing is what a change to the folder fetches again.
+    await page.goto('/app/drive');
     await row(page, 'big.ts').locator('button').first().dblclick(grip);
     const colour = dialog(page).getByRole('button', { name: 'Colour anyway' });
     await colour.click({ timeout: 60_000 });
     await expect(dialog(page).locator('output', { hasText: 'Coloured.' })).toHaveCount(1, {
         timeout: 120_000,
     });
-    // The tab hidden and shown again, as switching away and back does: the listing refetches and
-    // hands the viewer a new copy of the same file, which once reopened it uncoloured.
+    // Another tab of the same account adds a file to the folder; this tab, coming back to the
+    // front, reads the change feed and lists the folder again, which hands the viewer a new copy
+    // of the open file. That copy once reopened the file and drew it uncoloured.
+    const other = await page.context().newPage();
+    await other.goto('/app/drive');
+    const dir = mkdtempSync(join(tmpdir(), 'hushos-other-'));
+    writeFileSync(join(dir, 'other.txt'), 'another file\n');
+    await other.locator('input[type=file]').first().setInputFiles(join(dir, 'other.txt'));
+    await expect(row(other, 'other.txt')).toBeVisible({ timeout: 60_000 });
+    await other.close();
     await page.evaluate(() => {
         for (const state of ['hidden', 'visible']) {
             Object.defineProperty(document, 'visibilityState', {
@@ -135,7 +145,9 @@ test('Colour anyway holds when the window comes back, which refreshes the folder
         }
         window.dispatchEvent(new Event('focus'));
     });
-    await page.waitForTimeout(3_000);
+    // Listed again: the new file is in the list behind the viewer.
+    await expect(row(page, 'other.txt')).toBeAttached({ timeout: 30_000 });
+    await page.waitForTimeout(1_000);
     await expect(colour).toHaveCount(0);
     await expect(dialog(page).locator('.rt-source .line').first()).toBeVisible();
     await page.keyboard.press('Escape');

@@ -253,7 +253,12 @@ describe('a removal’s answers that say a folder moved: the same roster bytes, 
                 targetEpoch: 60,
             }),
         );
-        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'removed' });
+        const steps: string[] = [];
+        expect(
+            await removeMember(ctx, groupId, BOB, { onStep: (step) => steps.push(step) }),
+        ).toEqual({ status: 'removed' });
+        // The walk it finished is said, between the two goes of the removal.
+        expect(steps).toEqual(['hold', 'remove', 'finish', 'remove']);
         const calls = server.sent('remove');
         expect(calls).toHaveLength(2);
         expect(new Set(rostersOf(calls)).size).toBe(1);

@@ -215,7 +215,11 @@ export async function removeMember(
             ctx,
             groupId,
             { kind: 'remove', userId, rotations: await rotations.read(groupId, areas) },
-            { writers: await rotations.writers(groupId) },
+            {
+                writers: await rotations.writers(groupId),
+                // The server answered `rotating`: a walk that started meanwhile is finished first.
+                walking: (running) => options.onStep?.(running ? 'finish' : 'remove'),
+            },
         );
         if (staged.status === 'sent' && staged.outcome.status === 'membership-moved') {
             if (staged.outcome.code === 'left-due') {
