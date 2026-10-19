@@ -54,12 +54,34 @@ object TransferNotices {
             ended.none { it.upload } -> count(ended.size, "item", "items") + " kept on this phone"
             else -> count(ended.size, "transfer", "transfers") + " finished"
         }
+        // Every summary has a second line (a title alone showed as a tall, empty card on One UI): where the tap goes.
         val text = when {
             failed == 1 -> "Open HushOS to see it and try again."
             failed > 1 -> "Open HushOS to see which and try again."
-            else -> null
+            else -> when (target(ended)) {
+                Target.FOLDER -> if (ended.size == 1) "Tap to open the folder it’s in." else "Tap to open the folder they’re in."
+                Target.PHONE -> "Tap to see ${if (ended.size == 1) "it" else "them"} on this phone."
+                else -> "Tap to see ${if (ended.size == 1) "it" else "them"} in Files."
+            }
         }
-        return NoticeText(title, text, text, title, if (retry) listOf(RETRY_LABEL) else emptyList())
+        return NoticeText(title, text, text.takeIf { failed > 0 }, title, if (retry) listOf(RETRY_LABEL) else emptyList())
+    }
+
+    /*
+     * Where a summary's tap goes. A failure opens the transfers sheet, where its row waits with Retry. Finished rows
+     * leave the sheet moments after the queue empties, so a finished summary opens where the files are instead: the
+     * folder uploads went to, or On this phone, or Files when they went to several places.
+     */
+    enum class Target { TRANSFERS, FOLDER, PHONE, FILES }
+
+    fun target(ended: List<Outcome>): Target {
+        val folders = ended.map { it.folder }.distinct()
+        return when {
+            ended.any { it.reason != null } -> Target.TRANSFERS
+            ended.all { it.upload } && folders.size == 1 && folders[0] != null -> Target.FOLDER
+            ended.none { it.upload } -> Target.PHONE
+            else -> Target.FILES
+        }
     }
 
     private fun count(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
@@ -123,15 +145,11 @@ object TransferNotices {
         val retryable = FailedTransfers.of(context).all().filter { it.id in ended.map(Outcome::id) && canRetry(it) }.map { it.id }
         val words = words(ended, retry = retryable.isNotEmpty())
         val id = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
-        // A failure opens the transfers sheet, where its row waits with Retry. Finished rows leave
-        // the sheet moments after the queue empties, so a finished summary opens where the files
-        // are instead: the folder uploads went to, or On this phone.
-        val folders = ended.map { it.folder }.distinct()
-        val target = when {
-            failed -> TransferQueue.OPEN_TRANSFERS
-            ended.all { it.upload } && folders.size == 1 && folders[0] != null -> "$OPEN_FOLDER:${folders[0]}"
-            ended.none { it.upload } -> OPEN_PHONE
-            else -> OPEN_FILES
+        val target = when (target(ended)) {
+            Target.TRANSFERS -> TransferQueue.OPEN_TRANSFERS
+            Target.FOLDER -> "$OPEN_FOLDER:${ended[0].folder}"
+            Target.PHONE -> OPEN_PHONE
+            Target.FILES -> OPEN_FILES
         }
         val open = PendingIntent.getActivity(
             context, id,
@@ -142,7 +160,9 @@ object TransferNotices {
             .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
             .setContentTitle(words.title)
             .setContentText(words.text)
+            // A plain notification when it finished: no big style, no progress, nothing ongoing.
             .setStyle(words.bigText?.let { NotificationCompat.BigTextStyle().bigText(it) })
+            .setOngoing(false)
             .setContentIntent(open)
             .setAutoCancel(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)

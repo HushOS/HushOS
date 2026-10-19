@@ -167,7 +167,7 @@ object TransferQueue {
     fun ongoingText(keeping: Boolean, count: Int, fraction: Float): NoticeText {
         val n = count.coerceAtLeast(1)
         val title = if (keeping) "Keeping $n ${if (n == 1) "item" else "items"} on this phone" else "Uploading $n ${if (n == 1) "file" else "files"}"
-        val text = if (fraction > 0f) "${(fraction * 100).toInt()}%" else null
+        val text = if (fraction > 0f) "${(fraction * 100).toInt()}%" else "Starting"
         return NoticeText(title, text, null, title)
     }
 

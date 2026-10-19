@@ -40,12 +40,46 @@ class TransferNamesTest {
         assertEquals("1 item kept on this phone", TransferNotices.words(cases[3]).title)
     }
 
+    /*
+     * A finished summary always has a second line: with a title alone, One UI drew a tall, empty card. The line says
+     * where the tap goes, and the tap goes there (one folder, On this phone, or Files when they went to several places).
+     */
+    @Test
+    fun aFinishedSummaryHasASecondLineThatMatchesWhereTheTapGoes() {
+        val one = listOf(TransferNotices.Outcome("1", names[0], upload = true, folder = "f1"))
+        val twoInOne = one + TransferNotices.Outcome("2", names[1], upload = true, folder = "f1")
+        val twoPlaces = one + TransferNotices.Outcome("2", names[1], upload = true, folder = "f2")
+        val kept = listOf(TransferNotices.Outcome("3", names[2], upload = false))
+        val mixed = one + kept
+        val expected = listOf(
+            one to (TransferNotices.Target.FOLDER to "Tap to open the folder it’s in."),
+            twoInOne to (TransferNotices.Target.FOLDER to "Tap to open the folder they’re in."),
+            twoPlaces to (TransferNotices.Target.FILES to "Tap to see them in Files."),
+            kept to (TransferNotices.Target.PHONE to "Tap to see it on this phone."),
+            mixed to (TransferNotices.Target.FILES to "Tap to see them in Files."),
+        )
+        for ((ended, want) in expected) {
+            val words = TransferNotices.words(ended)
+            assertEquals(want.first, TransferNotices.target(ended))
+            assertEquals(want.second, words.text)
+            // No big style on a finished one: the line is the whole notification.
+            assertEquals(null, words.bigText)
+            assertNamesNothing(words)
+        }
+        // A failure among them goes to the transfers sheet and says so.
+        val failed = twoInOne + TransferNotices.Outcome("4", names[0], upload = true, reason = "Couldn’t reach HushOS.", folder = "f1")
+        assertEquals(TransferNotices.Target.TRANSFERS, TransferNotices.target(failed))
+        assertEquals("Open HushOS to see it and try again.", TransferNotices.words(failed).text)
+    }
+
     @Test
     fun theOngoingNotificationCountsTransfersAndNamesNone() {
         for (keeping in listOf(false, true)) for (count in listOf(0, 1, 3)) assertNamesNothing(TransferQueue.ongoingText(keeping, count, 0.4f))
         assertEquals("Uploading 3 files", TransferQueue.ongoingText(false, 3, 0f).title)
         assertEquals("Keeping 1 item on this phone", TransferQueue.ongoingText(true, 0, 0f).title)
         assertEquals("40%", TransferQueue.ongoingText(false, 1, 0.4f).text)
+        // Before the first part lands it still has a second line, not a bare title.
+        assertEquals("Starting", TransferQueue.ongoingText(false, 1, 0f).text)
     }
 
     @Test
