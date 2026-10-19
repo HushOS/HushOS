@@ -584,16 +584,20 @@ type BaseRequests = {
      * Downloads. Open unwraps a version's content key under the file's node key
      * (opened by listing its folder); each chunk is fetched by range from the
      * presigned URL and decrypted here, and the plaintext goes back to the caller,
-     * which is the only place a file can be written or shown.
+     * which is the only place a file can be written or shown. Each reader names
+     * itself (`reader`, an id it chose), so readers of the same object open, read
+     * and close only their own key: a preview reopened for the same file closes
+     * its old reader while the new one is still opening.
      */
     driveDownloadOpen: {
+        reader: string;
         workspaceId: string;
         nodeId: string;
         version: DriveVersionEnvelope;
         contentNonce: string;
     };
-    driveDownloadChunk: { objectId: string; url: string; index: number };
-    driveDownloadClose: { objectId: string };
+    driveDownloadChunk: { reader: string; url: string; index: number };
+    driveDownloadClose: { reader: string };
     /*
      * The raw keys of one node, for the person who owns them: the node key and,
      * for a file version, its content key and nonce. Nothing is cached or
@@ -1151,6 +1155,8 @@ export function createCryptoSession() {
     const uploads = new Map<string, Upload>();
     type Download = {
         workspaceId: string;
+        /* The object the reader opened, which every chunk's decryption is bound to. */
+        objectId: string;
         suite: number;
         contentKey: Uint8Array<ArrayBuffer>;
         contentNonce: Uint8Array<ArrayBuffer>;
@@ -1160,14 +1166,15 @@ export function createCryptoSession() {
         chunkCount: number;
         controllers: Map<number, AbortController>;
     };
+    /* By reader, never by object: two readers of one object hold a key each. */
     const downloads = new Map<string, Download>();
 
-    function closeDownload(objectId: string) {
-        const download = downloads.get(objectId);
+    function closeDownload(reader: string) {
+        const download = downloads.get(reader);
         if (!download) return false;
         for (const controller of download.controllers.values()) controller.abort();
         download.contentKey.fill(0);
-        downloads.delete(objectId);
+        downloads.delete(reader);
         return true;
     }
 
@@ -1226,7 +1233,7 @@ export function createCryptoSession() {
         groups.forget();
         ledger.clear();
         for (const objectId of uploads.keys()) forgetUpload(objectId);
-        for (const objectId of downloads.keys()) closeDownload(objectId);
+        for (const reader of downloads.keys()) closeDownload(reader);
         for (const sourceId of sources.keys()) releaseSource(sourceId);
     }
     /*
@@ -2970,18 +2977,22 @@ export function createCryptoSession() {
             case 'driveUploadForget':
                 return { forgotten: forgetUpload(message.input.objectId) };
             case 'driveDownloadOpen': {
-                const { workspaceId, nodeId, version } = message.input;
+                const { reader, workspaceId, nodeId, version } = message.input;
+                if (typeof reader !== 'string' || !reader)
+                    throw new CryptoError('A download needs a reader.');
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
-                closeDownload(version.objectId);
+                // This reader's own earlier key only: another reader of the object keeps its own.
+                closeDownload(reader);
                 const opened = await openVersionUnder(node.key, workspaceId, nodeId, version);
                 const length = contentLength(
                     opened.suite,
                     opened.plaintextSize,
                     opened.thumbnailBytes,
                 );
-                downloads.set(version.objectId, {
+                downloads.set(reader, {
                     workspaceId,
+                    objectId: version.objectId,
                     suite: opened.suite,
                     contentKey: opened.contentKey,
                     contentNonce: decode(message.input.contentNonce, 16) as Uint8Array<ArrayBuffer>,
@@ -2999,10 +3010,11 @@ export function createCryptoSession() {
                 };
             }
             case 'driveDownloadChunk': {
-                const { objectId, url, index } = message.input;
-                const download = downloads.get(objectId);
+                const { reader, url, index } = message.input;
+                const download = downloads.get(reader);
                 if (!download)
                     throw new CryptoError('This download is no longer open. Start it again.');
+                const { objectId } = download;
                 const range = chunkRange(
                     download.suite,
                     download.plaintextSize,
@@ -3096,7 +3108,7 @@ export function createCryptoSession() {
                 }
             }
             case 'driveDownloadClose':
-                return { closed: closeDownload(message.input.objectId) };
+                return { closed: closeDownload(message.input.reader) };
             case 'driveExportKeys': {
                 const { workspaceId, nodeId, version } = message.input;
                 const node = nodeKey(workspaceId, nodeId);

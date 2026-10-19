@@ -126,7 +126,7 @@ type Internal = {
     /* The status to return to on resume. */
     resumeTo: 'preparing' | 'downloading';
     sink: DownloadSink | null;
-    /* Object ids opened in the worker for this download; closed on the way out. */
+    /* Readers opened in the worker for this download; closed on the way out. */
     open: Set<string>;
     /* Download URLs minted in one request for every file of a zip, by version id. */
     urls: Map<string, { url: string; expiresAt: number }>;
@@ -282,6 +282,9 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         /* The chunks that hold the file; the rest of `total` is padding. */
         const fileChunks = chunkCount(plaintextSize);
         const objectId = version.objectId;
+        // This source's own name in the worker: another reader of the same object (the
+        // preview reopened for it, a download beside it) opens and closes a key of its own.
+        const reader = crypto.randomUUID();
         // A zip minted URLs for all its files up front; a single file mints its own.
         const minted = track?.urls.get(version.id);
         let url = minted?.url ?? '';
@@ -313,6 +316,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             opened ??= (async () => {
                 await options.ensureOpen(node);
                 const opened = await rpc('driveDownloadOpen', {
+                    reader,
                     workspaceId: node.workspaceId,
                     nodeId: node.id,
                     version: versionEnvelopeOf(version!),
@@ -320,7 +324,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 });
                 if (opened.plaintextSize !== plaintextSize || opened.chunkCount !== total)
                     throw new Error(`“${node.name}” changed while it was being opened.`);
-                track?.open.add(objectId);
+                track?.open.add(reader);
                 void freshUrl().catch(() => {});
             })();
             return opened;
@@ -335,7 +339,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 try {
                     result = await rpc(
                         'driveDownloadChunk',
-                        { objectId, url: await freshUrl(), index },
+                        { reader, url: await freshUrl(), index },
                         {
                             idleTimeoutMs: 120_000,
                             onProgress: (raw) => {
@@ -377,8 +381,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         async function close() {
             closed = true;
             if (!opened) return;
-            await rpc('driveDownloadClose', { objectId }).catch(() => {});
-            track?.open.delete(objectId);
+            await rpc('driveDownloadClose', { reader }).catch(() => {});
+            track?.open.delete(reader);
         }
         return { plaintextSize, total, fileChunks, open, fetchChunk, close };
     }
@@ -694,8 +698,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                         loaded: d.item.size ?? loadedOf(d),
                     });
             } catch (error) {
-                for (const objectId of d.open)
-                    await rpc('driveDownloadClose', { objectId }).catch(() => {});
+                for (const reader of d.open)
+                    await rpc('driveDownloadClose', { reader }).catch(() => {});
                 d.open.clear();
                 if (d.cancelled) {
                     set(d, { status: 'cancelled', finishedAt: now() });
@@ -722,8 +726,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         d.generation++;
         d.gate?.release();
         d.gate = null;
-        for (const objectId of d.open)
-            await rpc('driveDownloadClose', { objectId }).catch(() => {});
+        for (const reader of d.open) await rpc('driveDownloadClose', { reader }).catch(() => {});
         d.open.clear();
         await d.sink?.abort(new Error('Cancelled.')).catch(() => {});
         set(d, { status: 'cancelled', finishedAt: now() });
