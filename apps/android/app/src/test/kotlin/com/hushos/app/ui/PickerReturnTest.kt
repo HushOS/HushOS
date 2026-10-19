@@ -6,54 +6,58 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /*
- * The picker's sign-in screen goes back to the picker once the account is open on this phone, wherever it was opened,
- * and never while the account's recovery words wait to be confirmed as saved. Each case is a journey the person can
- * take, with the picker's screen asking again as it resumes.
+ * The picker's sign-in screen goes back to the picker once the account is open on this phone, wherever it was opened.
+ * After a recovery on this phone it waits until the new words are confirmed; nothing else holds it. Each case is a
+ * journey the person can take, with the picker's screen asking again as it resumes.
  */
 class PickerReturnTest {
-    private fun resumes(signedIn: Boolean, server: Boolean?, localUnsaved: Boolean = false) =
-        PickerReturn.ready(if (signedIn) Gate.SIGNED_IN else Gate.SIGNED_OUT, recovery = null, words = PickerReturn.words(server), localUnsaved = localUnsaved)
+    private fun resumes(signedIn: Boolean, server: Boolean?, recoveredHere: Boolean = false) =
+        PickerReturn.ready(if (signedIn) Gate.SIGNED_IN else Gate.SIGNED_OUT, recovery = null, words = PickerReturn.words(server), localUnsaved = recoveredHere)
 
-    /* The first dead end: a sign-in done in the app's own screen never let the picker's screen go back. */
+    private fun held(server: Boolean?, recoveredHere: Boolean) = PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(server), recoveredHere)
+
+    /* A sign-in done in the app's own screen never let the picker's screen go back. */
     @Test
     fun aSignInInTheAppReturnsOnTheNextResume() {
         assertFalse(resumes(signedIn = false, server = null))
         assertTrue(resumes(signedIn = true, server = false))
     }
 
-    /* A recovery finished in the app: back only once its words are confirmed, and the server says when. */
+    /* This phone's recovery: back only once the server has its words confirmed. */
     @Test
-    fun aRecoveryReturnsOnlyOnceTheServerHasTheWordsConfirmed() {
-        assertFalse(resumes(signedIn = true, server = true, localUnsaved = true))
-        assertTrue(PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(true), localUnsaved = true))
-        assertTrue(resumes(signedIn = true, server = false, localUnsaved = false))
+    fun aRecoveryHereReturnsOnlyOnceItsWordsAreConfirmed() {
+        assertFalse(resumes(signedIn = true, server = true, recoveredHere = true))
+        assertTrue(held(server = true, recoveredHere = true))
+        assertTrue(resumes(signedIn = true, server = false, recoveredHere = true))
     }
 
-    /* The app stopped while the new words were on screen: the in-memory flag is gone, the server's answer is not. */
+    /* The app stopped with the words on screen: the marker is on disk, so the hold is still there. */
     @Test
-    fun wordsLeftUnconfirmedWhenTheAppWasStoppedStillHold() {
-        assertFalse(resumes(signedIn = true, server = true, localUnsaved = false))
-        assertTrue(PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(true), localUnsaved = false))
+    fun aRecoveryInterruptedByTheAppStoppingStillHolds() {
+        assertFalse(resumes(signedIn = true, server = true, recoveredHere = true))
     }
 
-    /* A recovery cancelled after it began left the flag set with nothing to show: the server's "saved" wins. */
+    /* A server error or no network is not an answer: it never releases this phone's recovery. */
     @Test
-    fun aStaleFlagWithNothingToSaveDoesNotHold() {
-        assertTrue(resumes(signedIn = true, server = false, localUnsaved = true))
-        assertFalse(PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(false), localUnsaved = true))
+    fun noAnswerKeepsHoldingARecoveryHere() {
+        assertFalse(resumes(signedIn = true, server = null, recoveredHere = true))
+        assertTrue(held(server = null, recoveredHere = true))
     }
 
-    /* The server can't be asked: only then does a recovery in this process decide. */
+    /*
+     * A new account, or one whose keys were replaced, has its words unconfirmed too; it didn't recover here, so the
+     * picker isn't the place to stop it.
+     */
     @Test
-    fun withoutTheServerTheLocalFlagDecides() {
-        assertFalse(resumes(signedIn = true, server = null, localUnsaved = true))
-        assertTrue(resumes(signedIn = true, server = null, localUnsaved = false))
+    fun anAccountThatNeverConfirmedButDidNotRecoverHereIsNotHeld() {
+        assertTrue(resumes(signedIn = true, server = true, recoveredHere = false))
+        assertFalse(held(server = true, recoveredHere = false))
     }
 
     @Test
-    fun nothingReturnsWhileCheckingOrDuringItsOwnRecovery() {
-        assertFalse(PickerReturn.ready(Gate.SIGNED_IN, null, Words.CHECKING, localUnsaved = false))
-        assertFalse(PickerReturn.holding(Gate.SIGNED_IN, Words.CHECKING, localUnsaved = false))
+    fun nothingReturnsWhileCheckingARecoveryOrDuringItsOwnRecovery() {
+        assertFalse(PickerReturn.ready(Gate.SIGNED_IN, null, Words.CHECKING, localUnsaved = true))
+        assertFalse(PickerReturn.holding(Gate.SIGNED_IN, Words.CHECKING, localUnsaved = true))
         assertFalse(PickerReturn.ready(Gate.CHECKING, null, Words.SAVED, localUnsaved = false))
         for (step in DriveViewModel.RecoveryStep.entries) assertFalse("left during $step", PickerReturn.ready(Gate.SIGNED_IN, step, Words.SAVED, localUnsaved = false))
     }

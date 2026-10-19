@@ -27,22 +27,24 @@ val LocalRecoverInApp = compositionLocalOf<(() -> Unit)?> { null }
 
 /*
  * When sign-in started from a file picker goes back to it: once the account is open on this phone, whether it was
- * opened here or in the app's own screen (a sign-in there, or a recovery, which always runs there), and only once the
- * account's recovery words are confirmed as saved.
+ * opened here or in the app's own screen (a sign-in there, or a recovery, which always runs there), and, after a
+ * recovery on this phone, only once its new words are confirmed as saved.
  *
- * `words` is the server's answer (DriveViewModel.recoveryWordsUnsaved), asked on every resume: a reset clears its
- * confirmation and the word check sets it, so it holds even if the app was stopped while the words were on screen.
- * Only when the server can't be asked does the in-memory flag a recovery in this process set (RecoveryWords) decide.
+ * Only this phone's own recovery holds (`localUnsaved`, RecoveryWords: kept in a file, so it outlives the app being
+ * stopped with the words on screen). An account that never confirmed its kit for another reason (a new account, keys
+ * replaced) goes straight back: the picker is for picking a file, not a place to be stopped for a reminder. While the
+ * marker is set, the server's answer (`words`, asked on every resume) decides: confirmed releases the picker and
+ * clears the marker; waiting, or no answer, holds, with Open HushOS leading to the words and their check.
  */
 object PickerReturn {
     enum class Words { CHECKING, UNSAVED, SAVED, UNKNOWN }
 
     fun ready(gate: Gate, recovery: DriveViewModel.RecoveryStep?, words: Words, localUnsaved: Boolean): Boolean =
-        gate == Gate.SIGNED_IN && recovery == null && (words == Words.SAVED || (words == Words.UNKNOWN && !localUnsaved))
+        gate == Gate.SIGNED_IN && recovery == null && (!localUnsaved || words == Words.SAVED)
 
-    /* "Save your recovery words" rather than the app: signed in, and words wait to be confirmed. */
+    /* "Save your recovery words" rather than the app: signed in after this phone's recovery, its words not confirmed. */
     fun holding(gate: Gate, words: Words, localUnsaved: Boolean): Boolean =
-        gate == Gate.SIGNED_IN && (words == Words.UNSAVED || (words == Words.UNKNOWN && localUnsaved))
+        gate == Gate.SIGNED_IN && localUnsaved && (words == Words.UNSAVED || words == Words.UNKNOWN)
 
     fun words(unsaved: Boolean?): Words = when (unsaved) {
         true -> Words.UNSAVED

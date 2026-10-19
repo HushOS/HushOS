@@ -27,6 +27,9 @@ data class SessionUser(val id: String, val name: String, val email: String, val 
 /* `status` is the HTTP status when the server refused, 0 otherwise: 409 on settings means another device saved first. */
 open class AuthFailure(message: String, val status: Int = 0) : Exception(message)
 
+/* The account has no recovery words to show (no recovery key on the server): a definite answer, unlike a failure. */
+class NoRecoveryKey : AuthFailure("This account has no recovery key.")
+
 /* An account call that couldn't reach the server: offline, told apart by its type (Problems.offline), never by its words. */
 class AuthUnreachable : AuthFailure(Auth.UNREACHABLE)
 
@@ -484,7 +487,7 @@ object Auth {
 
     /* The recovery key envelope the server keeps. */
     fun recoveryKey(context: Context): com.hushos.core.RecoveryEnvelope =
-        recoveryEnvelope(call(context, "/api/auth/recovery-key").optJSONObject("recovery") ?: throw AuthFailure("This account has no recovery key."))
+        recoveryEnvelope(call(context, "/api/auth/recovery-key").optJSONObject("recovery") ?: throw NoRecoveryKey())
 
     /*
      * Rotates the master key, as the web's "Rotate keys" does: a fresh account
@@ -557,7 +560,7 @@ object Auth {
 
     /* The recovery key as the server keeps it (for the kit file) and whether its phrase was confirmed as saved. */
     fun recoveryBackup(context: Context): Pair<JSONObject, Boolean> = call(context, "/api/auth/recovery-key").let {
-        (it.optJSONObject("recovery") ?: throw AuthFailure("This account has no recovery key.")) to it.optBoolean("confirmed")
+        (it.optJSONObject("recovery") ?: throw NoRecoveryKey()) to it.optBoolean("confirmed")
     }
 
     /* Marks the phrase as saved, as the web does after its check; the server refuses an older phrase's version. */

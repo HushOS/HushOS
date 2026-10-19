@@ -1221,19 +1221,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * it, the word check sets it), so it survives the app being stopped: true or false, false too when there are no
      * words to show, and null when the server couldn't be asked.
      */
-    suspend fun recoveryWordsUnsaved(): Boolean? = withContext(Dispatchers.IO) {
-        try {
-            !Auth.recoveryBackup(context).second
-        } catch (error: com.hushos.app.data.AuthUnreachable) {
-            null
-        } catch (error: NotAuthenticated) {
-            null
-        } catch (error: com.hushos.app.data.AuthFailure) {
-            false
-        } catch (error: Exception) {
-            null
-        }
-    }
+    suspend fun recoveryWordsUnsaved(): Boolean? =
+        com.hushos.app.data.RecoveryWords.answer(withContext(Dispatchers.IO) { runCatching { Auth.recoveryBackup(context).second } })
 
     /* The phrase, the recovery key for the kit file, and whether the phrase was confirmed as saved. */
     data class RecoveryKit(val phrase: String, val recovery: org.json.JSONObject, val confirmed: Boolean)
