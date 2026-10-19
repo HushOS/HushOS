@@ -78,7 +78,14 @@ export function createSealedStash(options: {
     }
     async function wipe() {
         generation++;
-        const root = await options.root();
+        let root: StashRoot;
+        try {
+            root = await options.root();
+        } catch {
+            // No usable private file system (WebKit under automation, a private window): nothing
+            // could have been stashed, so there is nothing to wipe. Not a failure.
+            return;
+        }
         for (const name of [DIRECTORY, REVISION])
             await root.removeEntry(name, { recursive: true }).catch((error: unknown) => {
                 if (!notFound(error)) throw error;

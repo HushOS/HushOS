@@ -8,8 +8,14 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  * out goes on regardless, as before.
  */
 
-const stores = vi.hoisted(() => ({ transfers: vi.fn(), mirror: vi.fn(), groups: vi.fn() }));
+const stores = vi.hoisted(() => ({
+    transfers: vi.fn(),
+    stash: vi.fn(),
+    mirror: vi.fn(),
+    groups: vi.fn(),
+}));
 vi.mock('@/lib/transfers', () => ({ transfers: { forgetAll: stores.transfers } }));
+vi.mock('@/lib/stash', () => ({ forgetStash: stores.stash }));
 vi.mock('@/lib/drive', () => ({ driveClient: { forgetMirror: stores.mirror } }));
 vi.mock('@/lib/groups/store', () => ({ deleteGroupDevice: stores.groups }));
 vi.mock('@/lib/auth-client', () => ({ authClient: { logout: vi.fn() } }));
@@ -19,6 +25,7 @@ const { clearDevice, forgetDevice } = await import('./sign-out');
 
 beforeEach(() => {
     stores.transfers.mockResolvedValue(undefined);
+    stores.stash.mockResolvedValue(undefined);
     stores.mirror.mockResolvedValue(undefined);
     stores.groups.mockResolvedValue(undefined);
 });
@@ -27,12 +34,14 @@ describe('clearing a removed browser', () => {
     test('resolves only once every store cleared', async () => {
         await expect(clearDevice()).resolves.toBeUndefined();
         expect(stores.transfers).toHaveBeenCalledOnce();
+        expect(stores.stash).toHaveBeenCalledOnce();
         expect(stores.mirror).toHaveBeenCalledOnce();
         expect(stores.groups).toHaveBeenCalledOnce();
     });
 
     test.each([
-        ['the stashed uploads', 'transfers'],
+        ['the uploads and their journal', 'transfers'],
+        ['the sealed stash', 'stash'],
         ['the mirror', 'mirror'],
         ['the families and their folders’ mirrors', 'groups'],
     ] as const)(
@@ -47,4 +56,23 @@ describe('clearing a removed browser', () => {
             expect(logged).toHaveBeenCalled();
         },
     );
+
+    test('clears every other store when one fails, then says it failed', async () => {
+        stores.stash.mockRejectedValue(new Error('The stash could not be deleted.'));
+        let mirrorCleared = false;
+        stores.mirror.mockImplementation(
+            () =>
+                new Promise((resolve) =>
+                    setTimeout(() => {
+                        mirrorCleared = true;
+                        resolve(undefined);
+                    }, 20),
+                ),
+        );
+        await expect(clearDevice()).rejects.toThrow('could not be deleted');
+        // Reported only after the slower stores finished, not as soon as the first one failed.
+        expect(mirrorCleared).toBe(true);
+        expect(stores.transfers).toHaveBeenCalledOnce();
+        expect(stores.groups).toHaveBeenCalledOnce();
+    });
 });

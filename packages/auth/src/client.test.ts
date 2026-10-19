@@ -430,12 +430,15 @@ describe('a device the server says was removed', () => {
         expect([seen.keys, seen.app, seen.forgotten]).toEqual([1, 1, 1]);
     });
 
-    test('a wipe cut short is not acknowledged, so the next check tries again', async () => {
+    test('an app wipe that fails still clears the device key and identity, and is tried again', async () => {
         const { auth, seen } = removedClient(['removed'], { appFails: true });
         await auth.session();
+        // The saved unlock, the device key and the identity go whatever the app's copies did.
+        expect(JSON.parse(items.get('hushos-device-unlock')!).state.device).toBeNull();
+        expect(seen.keys).toBe(1);
+        expect(seen.identity).toBeNull();
+        // Not acknowledged, so the next check tries the app's copies again.
         expect(seen.forgotten).toBe(0);
-        // The keys come after the app's copies: nothing past the failure was touched.
-        expect(seen.keys).toBe(0);
         await auth.session();
         expect(seen.app).toBe(2);
     });

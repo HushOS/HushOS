@@ -288,11 +288,20 @@ export function createAuthClient(
                     device: null,
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });
-                await onRemoved?.();
+                // The app's copies are cleared first, but a failure there never keeps this
+                // device's own key and identity: they go regardless, and the failure is thrown
+                // after, so the removal is not acknowledged and the next check tries again.
+                let appFailure: unknown;
+                try {
+                    await onRemoved?.();
+                } catch (error) {
+                    appFailure = error ?? new Error('The app’s copies were not cleared.');
+                }
                 await stillRemoved();
                 await deviceKeys.clear();
                 await stillRemoved();
                 await identities?.clear();
+                if (appFailure) throw appFailure;
                 await stillRemoved();
                 await api.forgetSession();
             }),

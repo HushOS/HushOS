@@ -214,6 +214,21 @@ describe('the sealed upload stash', () => {
         await expect(stash.forget()).rejects.toThrow('Busy');
     });
 
+    it('has nothing to wipe where the browser has no usable private file system', async () => {
+        // WebKit under automation and private windows reject getDirectory outright.
+        const unavailable = new DOMException('transient', 'UnknownError');
+        const sealer = await worker();
+        const stash = createSealedStash({
+            root: () => Promise.reject(unavailable),
+            account: () => 'user-1',
+            lockRevision: () => 1,
+            seal: sealer.seal,
+            open: sealer.open,
+        });
+        await expect(stash.forget()).resolves.toBeUndefined();
+        expect(await stash.put(canary)).toBeNull();
+    });
+
     it('removes the plaintext an unsealed stash left behind, and only that', async () => {
         const fs = privateFileSystem();
         const { stash } = setup(fs, await worker());
