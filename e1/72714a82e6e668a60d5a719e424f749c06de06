@@ -1,0 +1,27 @@
+apps/web/.oxlintrc.json
+  s_c56e31c87cddde::t_e4d37ee2a58f9a 4-28
+apps/web/src/lib/auth-view.ts
+  s_c56e31c87cddde::t_5043ebcd373135 30-34
+apps/web/src/lib/sign-out.test.ts
+  s_c56e31c87cddde::t_f4bfbb9cb84230 1,3,19-30,33-38,40,42,44-45,52-55,104-183
+apps/web/src/lib/sign-out.ts
+  s_c56e31c87cddde::t_43ebe9a9e62ef1 83-86,94-107
+apps/web/src/routes/s/$token.tsx
+  s_c56e31c87cddde::t_b50b03a1f9f345 23,747,819
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e172714a82e6e668a60d5a719e424f749c06de06",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
