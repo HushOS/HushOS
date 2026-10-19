@@ -25,6 +25,8 @@ import {
  * button. Dark mode swaps to the dark desk. Everything is inline-safe for
  * mail clients.
  */
+/* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
+const hidden = { display: 'none', msoHide: 'all' };
 const sans = 'Geist, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
 const label = {
     margin: 0,
@@ -40,6 +42,7 @@ export default function GroupInvitation({
     groupName = 'The Lovelaces',
     joinUrl = 'http://localhost:5173/join#invite=token',
     logoUrl = '/static/hushos-logo-square.png',
+    marker = 'preview',
 }: {
     inviterName?: string;
     inviterEmail?: string;
@@ -47,6 +50,8 @@ export default function GroupInvitation({
     joinUrl?: string;
     /** The logo: the brand square as one image, the same in both colour schemes. */
     logoUrl?: string;
+    /** Different in every message; see the end of the body. */
+    marker?: string;
 }) {
     const facts: [string, string][] = [
         ['From', inviterName],
@@ -150,7 +155,7 @@ export default function GroupInvitation({
                             </Column>
                         </Row>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '28px 28px 8px' }}>
+                    <Section className="email-pad" style={{ padding: '28px 28px 24px' }}>
                         <Heading
                             className="email-heading"
                             style={{
@@ -169,7 +174,7 @@ export default function GroupInvitation({
                             style={{
                                 fontSize: '15px',
                                 lineHeight: '24px',
-                                margin: '0 0 20px',
+                                margin: 0,
                                 color: '#5a6380',
                             }}
                         >
@@ -182,7 +187,26 @@ export default function GroupInvitation({
                             and you’re let in. Nothing in the family is shared with you before that.
                         </Text>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '0 28px 20px' }}>
+                    <Section className="email-pad" style={{ padding: '0 28px 24px' }}>
+                        <Button
+                            className="email-button"
+                            href={joinUrl}
+                            style={{
+                                display: 'inline-block',
+                                backgroundColor: '#2c428e',
+                                color: '#ffffff',
+                                padding: '13px 22px',
+                                borderRadius: '10px',
+                                fontSize: '15px',
+                                lineHeight: '20px',
+                                fontWeight: 700,
+                                textDecoration: 'none',
+                            }}
+                        >
+                            See the invitation
+                        </Button>
+                    </Section>
+                    <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
                         <table
                             role="presentation"
                             cellPadding={0}
@@ -198,7 +222,7 @@ export default function GroupInvitation({
                                             style={{
                                                 width: '44%',
                                                 padding: '9px 0',
-                                                borderBottom: '1px solid #e2e5ee',
+                                                borderTop: '1px solid #e2e5ee',
                                             }}
                                         >
                                             <Text className="email-muted" style={label}>
@@ -209,7 +233,7 @@ export default function GroupInvitation({
                                             className="email-cell"
                                             style={{
                                                 padding: '9px 0',
-                                                borderBottom: '1px solid #e2e5ee',
+                                                borderTop: '1px solid #e2e5ee',
                                                 textAlign: 'right',
                                             }}
                                         >
@@ -233,25 +257,6 @@ export default function GroupInvitation({
                                 ))}
                             </tbody>
                         </table>
-                    </Section>
-                    <Section className="email-pad" style={{ padding: '4px 28px 28px' }}>
-                        <Button
-                            className="email-button"
-                            href={joinUrl}
-                            style={{
-                                display: 'inline-block',
-                                backgroundColor: '#2c428e',
-                                color: '#ffffff',
-                                padding: '13px 22px',
-                                borderRadius: '10px',
-                                fontSize: '15px',
-                                lineHeight: '20px',
-                                fontWeight: 700,
-                                textDecoration: 'none',
-                            }}
-                        >
-                            See the invitation
-                        </Button>
                     </Section>
                     <Section
                         className="email-pad email-cell"
@@ -280,6 +285,13 @@ export default function GroupInvitation({
                         </Text>
                     </Section>
                 </Container>
+                {/*
+                 * Different in every message, and last: Gmail folds the end of a message
+                 * behind "•••" when it matches an earlier one in the thread.
+                 */}
+                <span data-marker="" style={hidden}>
+                    {marker}
+                </span>
             </Body>
         </Html>
     );

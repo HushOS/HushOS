@@ -30,6 +30,8 @@ export type SecurityNoticeKind =
     | 'devices-removed'
     | 'password-attempts';
 
+/* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
+const hidden = { display: 'none', msoHide: 'all' };
 const sans = 'Geist, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
 const label = {
     margin: 0,
@@ -85,12 +87,15 @@ export default function SecurityNotice({
     count = '2',
     accountUrl = 'http://localhost:5173/app/account#devices',
     logoUrl = '/static/hushos-logo-square.png',
+    marker = 'preview',
 }: {
     kind?: SecurityNoticeKind;
     when?: string;
     count?: string;
     accountUrl?: string;
     logoUrl?: string;
+    /** Different in every message; see the end of the body. */
+    marker?: string;
 }) {
     const text = copy[kind];
     const fill = (value: string) => value.replace('{{when}}', when).replace('{{count}}', count);
@@ -103,22 +108,22 @@ export default function SecurityNotice({
                     :root { color-scheme: light dark; supported-color-schemes: light dark; }
                     html { background-color: #f3f4f8; }
                     @media (prefers-color-scheme: dark) {
-                        html { background-color: #0e111a !important; }
-                        .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                        .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                        .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
-                        .email-cell { border-color: #262b3a !important; }
-                        .email-heading, .email-value { color: #e4e8f4 !important; }
-                        .email-muted { color: #9aa3be !important; }
+                        html { background-color: #0f1013 !important; }
+                        .email-body { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                        .email-body > table > tbody > tr > td { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                        .email-card { background-color: #17181c !important; border-color: #2a2c33 !important; }
+                        .email-cell { border-color: #2a2c33 !important; }
+                        .email-heading, .email-value { color: #ecedf1 !important; }
+                        .email-muted { color: #9a9ea9 !important; }
                         .email-link { color: #aab8f4 !important; }
                         .email-button { background-color: #aab8f4 !important; color: #121833 !important; }
                     }
-                    [data-ogsc] .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                    [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                    [data-ogsc] .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
-                    [data-ogsc] .email-cell { border-color: #262b3a !important; }
-                    [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #e4e8f4 !important; }
-                    [data-ogsc] .email-muted { color: #9aa3be !important; }
+                    [data-ogsc] .email-body { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                    [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                    [data-ogsc] .email-card { background-color: #17181c !important; border-color: #2a2c33 !important; }
+                    [data-ogsc] .email-cell { border-color: #2a2c33 !important; }
+                    [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #ecedf1 !important; }
+                    [data-ogsc] .email-muted { color: #9a9ea9 !important; }
                     [data-ogsc] .email-link { color: #aab8f4 !important; }
                     [data-ogsc] .email-button { background-color: #aab8f4 !important; color: #121833 !important; }
                     @media (max-width: 480px) {
@@ -188,7 +193,7 @@ export default function SecurityNotice({
                             </Column>
                         </Row>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '28px 28px 8px' }}>
+                    <Section className="email-pad" style={{ padding: '28px 28px 24px' }}>
                         <Heading
                             className="email-heading"
                             style={{
@@ -207,14 +212,33 @@ export default function SecurityNotice({
                             style={{
                                 fontSize: '15px',
                                 lineHeight: '24px',
-                                margin: '0 0 20px',
+                                margin: 0,
                                 color: '#5a6380',
                             }}
                         >
                             {text.body}
                         </Text>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '0 28px 20px' }}>
+                    <Section className="email-pad" style={{ padding: '0 28px 24px' }}>
+                        <Button
+                            className="email-button"
+                            href={accountUrl}
+                            style={{
+                                display: 'inline-block',
+                                backgroundColor: '#2c428e',
+                                color: '#ffffff',
+                                padding: '13px 22px',
+                                borderRadius: '10px',
+                                fontSize: '15px',
+                                lineHeight: '20px',
+                                fontWeight: 700,
+                                textDecoration: 'none',
+                            }}
+                        >
+                            Review your devices
+                        </Button>
+                    </Section>
+                    <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
                         <table
                             role="presentation"
                             cellPadding={0}
@@ -230,7 +254,7 @@ export default function SecurityNotice({
                                             style={{
                                                 width: '44%',
                                                 padding: '9px 0',
-                                                borderBottom: '1px solid #e2e5ee',
+                                                borderTop: '1px solid #e2e5ee',
                                             }}
                                         >
                                             <Text className="email-muted" style={label}>
@@ -241,7 +265,7 @@ export default function SecurityNotice({
                                             className="email-cell"
                                             style={{
                                                 padding: '9px 0',
-                                                borderBottom: '1px solid #e2e5ee',
+                                                borderTop: '1px solid #e2e5ee',
                                                 textAlign: 'right',
                                             }}
                                         >
@@ -262,25 +286,6 @@ export default function SecurityNotice({
                                 ))}
                             </tbody>
                         </table>
-                    </Section>
-                    <Section className="email-pad" style={{ padding: '4px 28px 28px' }}>
-                        <Button
-                            className="email-button"
-                            href={accountUrl}
-                            style={{
-                                display: 'inline-block',
-                                backgroundColor: '#2c428e',
-                                color: '#ffffff',
-                                padding: '13px 22px',
-                                borderRadius: '10px',
-                                fontSize: '15px',
-                                lineHeight: '20px',
-                                fontWeight: 700,
-                                textDecoration: 'none',
-                            }}
-                        >
-                            Review your devices
-                        </Button>
                     </Section>
                     <Section
                         className="email-pad email-cell"
@@ -306,6 +311,13 @@ export default function SecurityNotice({
                         </Text>
                     </Section>
                 </Container>
+                {/*
+                 * Different in every message, and last: Gmail folds the end of a message
+                 * behind "•••" when it matches an earlier one in the thread.
+                 */}
+                <span data-marker="" style={hidden}>
+                    {marker}
+                </span>
             </Body>
         </Html>
     );

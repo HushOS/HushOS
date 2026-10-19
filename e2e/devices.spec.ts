@@ -9,9 +9,15 @@ import { landedOnHome, mailSubjects, newPage, PASSWORD, registerAccount } from '
  * device it happens on, and Remove all other devices leaves only the one asking.
  */
 
-const NEW_SIGN_IN = 'New sign-in to your account · HushOS';
-const REMOVED = 'A device was removed from your account · HushOS';
-const ALL_REMOVED = 'Devices were removed from your account · HushOS';
+/*
+ * Each notice's subject carries when it happened, so Gmail gives each its own
+ * thread: the wording, the time ("19 Oct 2026 at 19:08 UTC"; the date's words
+ * are the runtime's), then the name.
+ */
+const notice = (words: string) => new RegExp(`^${words} · .*\\b\\d{2}:\\d{2} UTC · HushOS$`);
+const NEW_SIGN_IN = notice('New sign-in to your account');
+const REMOVED = notice('A device was removed from your account');
+const ALL_REMOVED = notice('Devices were removed from your account');
 
 const devices = (page: Page) => page.getByRole('list', { name: 'Your devices' });
 const rows = (page: Page) => devices(page).locator('[data-device-id]');
@@ -38,8 +44,8 @@ async function signIn(page: Page, email: string, password = PASSWORD) {
     await landedOnHome(page);
 }
 
-async function count(email: string, subject: string) {
-    return (await mailSubjects(email)).filter((value) => value === subject).length;
+async function count(email: string, subject: RegExp) {
+    return (await mailSubjects(email)).filter((value) => subject.test(value)).length;
 }
 
 test('two browsers on one account list, rename and remove each other', async ({ browser }) => {

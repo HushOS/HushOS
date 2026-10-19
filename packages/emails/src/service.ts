@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
@@ -105,8 +106,8 @@ function escapeHtml(value: string) {
 
 /*
  * The templates were rendered at build time (scripts/render.tsx). Filling them is
- * two substitutions: the URL is escaped for the HTML variant because it sits in
- * an href and in visible text, and left as is for the plain-text variant.
+ * substitution: values are escaped for the HTML variant because they sit in
+ * hrefs and visible text, and left as they are for the plain-text variant.
  */
 function fillTemplate(template: string, values: Record<string, string>, html: boolean) {
     let output = template;
@@ -115,84 +116,121 @@ function fillTemplate(template: string, values: Record<string, string>, html: bo
     return output;
 }
 
+/*
+ * One message from a rendered template. Every message ends with a hidden marker
+ * of its own: Gmail folds the end of a message behind "•••" when it matches an
+ * earlier one in the same thread, and in two notices that end was the button.
+ */
+function compose(
+    to: string,
+    subject: string,
+    template: { html: string; text: string },
+    values: Record<string, string>,
+): EmailMessage {
+    const filled = { ...values, marker: randomUUID() };
+    return {
+        to,
+        subject,
+        html: fillTemplate(template.html, filled, true),
+        text: fillTemplate(template.text, filled, false),
+    };
+}
+
+async function deliver(message: EmailMessage) {
+    adapter ??= createEmailAdapter();
+    await adapter.send(message);
+}
+
+const logoUrl = (base: string) => new URL('/email/hushos-logo-square.png', base).href;
+
+export function composeVerificationEmail(
+    to: string,
+    verificationUrl: string,
+    purpose: 'register' | 'recover' = 'register',
+) {
+    return compose(
+        to,
+        purpose === 'recover' ? 'Recover your account · HushOS' : 'Verify your email · HushOS',
+        verifyEmail[purpose],
+        { verificationUrl, logoUrl: logoUrl(verificationUrl) },
+    );
+}
+
 export async function sendVerificationEmail(
     to: string,
     verificationUrl: string,
     purpose: 'register' | 'recover' = 'register',
 ) {
-    adapter ??= createEmailAdapter();
-    const values = {
-        verificationUrl,
-        logoUrl: new URL('/email/hushos-logo-square.png', verificationUrl).href,
-    };
-    const template = verifyEmail[purpose];
-    await adapter.send({
-        to,
-        subject:
-            purpose === 'recover' ? 'Recover your account · HushOS' : 'Verify your email · HushOS',
-        html: fillTemplate(template.html, values, true),
-        text: fillTemplate(template.text, values, false),
-    });
+    await deliver(composeVerificationEmail(to, verificationUrl, purpose));
 }
 
+type ShareInput = {
+    granterName: string;
+    granterEmail: string;
+    role: 'viewer' | 'editor';
+    sharedUrl: string;
+};
+
 /* Someone shared something with the recipient: who, what role, where to open it. Never the item's name. */
-export async function sendShareEmail(
-    to: string,
-    input: {
-        granterName: string;
-        granterEmail: string;
-        role: 'viewer' | 'editor';
-        sharedUrl: string;
-    },
-) {
-    adapter ??= createEmailAdapter();
-    const values = {
-        granterName: input.granterName,
-        granterEmail: input.granterEmail,
-        sharedUrl: input.sharedUrl,
-        logoUrl: new URL('/email/hushos-logo-square.png', input.sharedUrl).href,
-    };
-    const template = shareNotice[input.role];
-    await adapter.send({
+export function composeShareEmail(to: string, input: ShareInput) {
+    return compose(
         to,
-        subject: `${input.granterName} shared something with you · HushOS`,
-        html: fillTemplate(template.html, values, true),
-        text: fillTemplate(template.text, values, false),
-    });
+        `${input.granterName} shared something with you · HushOS`,
+        shareNotice[input.role],
+        {
+            granterName: input.granterName,
+            granterEmail: input.granterEmail,
+            sharedUrl: input.sharedUrl,
+            logoUrl: logoUrl(input.sharedUrl),
+        },
+    );
+}
+
+export async function sendShareEmail(to: string, input: ShareInput) {
+    await deliver(composeShareEmail(to, input));
 }
 
 export type SecurityNoticeKind = keyof typeof securityNotice;
-const securitySubjects: Record<SecurityNoticeKind, string> = {
-    'new-device': 'New sign-in to your account · HushOS',
-    'device-removed': 'A device was removed from your account · HushOS',
-    'devices-removed': 'Devices were removed from your account · HushOS',
-    'password-attempts': 'Someone kept trying to confirm your password · HushOS',
+
+/*
+ * Each subject carries when it happened, so two notices are two conversations:
+ * Gmail threads mail from one sender by subject, and in a thread it hides what
+ * a message shares with the one before.
+ */
+const securitySubjects: Record<SecurityNoticeKind, (when: string) => string> = {
+    'new-device': (when) => `New sign-in to your account · ${when} · HushOS`,
+    'device-removed': (when) => `A device was removed from your account · ${when} · HushOS`,
+    'devices-removed': (when) => `Devices were removed from your account · ${when} · HushOS`,
+    'password-attempts': (when) =>
+        `Someone kept trying to confirm your password · ${when} · HushOS`,
 };
+
+type SecurityInput = { kind: SecurityNoticeKind; when: string; count?: number; accountUrl: string };
 
 /*
  * A security notice about the account's devices: when it happened (written by
  * the caller, in UTC), how many devices for a removal of all others, and a link
  * to the device list. It carries nothing the device said about itself.
  */
-export async function sendSecurityNotice(
-    to: string,
-    input: { kind: SecurityNoticeKind; when: string; count?: number; accountUrl: string },
-) {
-    adapter ??= createEmailAdapter();
-    const values = {
+export function composeSecurityNotice(to: string, input: SecurityInput) {
+    return compose(to, securitySubjects[input.kind](input.when), securityNotice[input.kind], {
         when: input.when,
         count: String(input.count ?? 1),
         accountUrl: input.accountUrl,
-        logoUrl: new URL('/email/hushos-logo-square.png', input.accountUrl).href,
-    };
-    const template = securityNotice[input.kind];
-    await adapter.send({
-        to,
-        subject: securitySubjects[input.kind],
-        html: fillTemplate(template.html, values, true),
-        text: fillTemplate(template.text, values, false),
+        logoUrl: logoUrl(input.accountUrl),
     });
 }
+
+export async function sendSecurityNotice(to: string, input: SecurityInput) {
+    await deliver(composeSecurityNotice(to, input));
+}
+
+type InvitationInput = {
+    inviterName: string;
+    inviterEmail: string;
+    groupName: string;
+    joinUrl: string;
+};
 
 /*
  * An invitation into a family: who sent it, the family's name, and the
@@ -200,22 +238,21 @@ export async function sendSecurityNotice(
  * text: escaped like every value, and never in the subject, which leads with
  * the inviter.
  */
-export async function sendGroupInvitation(
-    to: string,
-    input: { inviterName: string; inviterEmail: string; groupName: string; joinUrl: string },
-) {
-    adapter ??= createEmailAdapter();
-    const values = {
-        inviterName: input.inviterName,
-        inviterEmail: input.inviterEmail,
-        groupName: input.groupName,
-        joinUrl: input.joinUrl,
-        logoUrl: new URL('/email/hushos-logo-square.png', input.joinUrl).href,
-    };
-    await adapter.send({
+export function composeGroupInvitation(to: string, input: InvitationInput) {
+    return compose(
         to,
-        subject: `${input.inviterName} invited you to join a family · HushOS`,
-        html: fillTemplate(groupInvitation.html, values, true),
-        text: fillTemplate(groupInvitation.text, values, false),
-    });
+        `${input.inviterName} invited you to join a family · HushOS`,
+        groupInvitation,
+        {
+            inviterName: input.inviterName,
+            inviterEmail: input.inviterEmail,
+            groupName: input.groupName,
+            joinUrl: input.joinUrl,
+            logoUrl: logoUrl(input.joinUrl),
+        },
+    );
+}
+
+export async function sendGroupInvitation(to: string, input: InvitationInput) {
+    await deliver(composeGroupInvitation(to, input));
 }
