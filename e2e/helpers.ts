@@ -127,19 +127,15 @@ export async function openFolder(page: Page, name: string) {
 
 /*
  * Drags `source` onto `target` in Drive the way a person does: it lets go only once the card
- * beside the pointer says where the drop lands (`says`, "Move to “photos”" by default; "Drop
- * on a folder" to check a place that takes nothing), then waits for the drag to end. Not
+ * beside the pointer says what the drop will do (`says`: "Move to “photos”", "Copy to “photos”",
+ * or "Drop on a folder" to check a place that takes nothing), then waits for the drag to end.
+ * The target is named, so a card naming a row passed on the way cannot let go early. Not
  * Playwright's dragTo, which lets go within milliseconds of arriving: WebKit hands a drag the
  * dragleave that a cancelled drag never sent, pragmatic-drag-and-drop's Safari counter takes
  * it for the pointer leaving the window and forgets the target, and only the next dragover
  * finds it again. A held pointer gets one; a drop that comes first lands on nothing.
  */
-export async function dragOnto(
-    page: Page,
-    source: Locator,
-    target: Locator,
-    says: string | RegExp = /^(Move|Copy) to “/,
-) {
+export async function dragOnto(page: Page, source: Locator, target: Locator, says: string) {
     await source.hover();
     await page.mouse.down();
     const box = (await target.boundingBox())!;

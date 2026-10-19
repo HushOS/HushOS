@@ -84,7 +84,12 @@ test('a sealed copy of a file and of a folder carries the records and the cipher
     expect(JSON.stringify(file.manifest)).not.toMatch(/"key":/);
 
     // The folder: itself first, then what is in it. Move the note in to give it a child.
-    await dragOnto(page, row(page, 'notes.md').locator('button').first(), row(page, 'Project'));
+    await dragOnto(
+        page,
+        row(page, 'notes.md').locator('button').first(),
+        row(page, 'Project'),
+        'Move to “Project”',
+    );
     await expect(row(page, 'notes.md')).toHaveCount(0, { timeout: 30_000 });
     const folder = await sealedCopyOf(page, 'Project');
     expect(folder.manifest.nodes.map((node) => node.kind)).toEqual(['folder', 'file']);

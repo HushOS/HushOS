@@ -70,16 +70,23 @@ test('what the owner adds shows no mark', async () => {
 });
 
 test('when the people she trusts can’t load, every row says Couldn’t check, and Try again clears it', async () => {
-    // The settings with her pins fail to load: nothing may be shown as clean.
-    // Failing until the test says so, not until unrouted: the app retries the load by
-    // itself, and a retry that lands before Try again would clear the mark first.
-    let failing = true;
+    // The settings with her pins fail to load: nothing may be shown as clean. They load
+    // only in the moment after Try again is pressed, never on the app's own tries: it tries
+    // again by itself (about once a second after a failure, and in bursts as the page
+    // changes), and a try of its own that loaded would clear the mark whatever Try again did.
+    let pressedAt: number | null = null;
+    const asked: number[] = [];
+    let served = 0;
     const refuse = (url: URL) => url.pathname === '/api/auth/settings';
-    await maya.route(refuse, (route) =>
-        failing && route.request().method() === 'GET'
-            ? route.fulfill({ status: 500, json: { message: 'Something went wrong.' } })
-            : route.continue(),
-    );
+    await maya.route(refuse, (route) => {
+        if (route.request().method() !== 'GET') return route.continue();
+        asked.push(Date.now());
+        if (pressedAt !== null && Date.now() - pressedAt <= 1_000) {
+            served++;
+            return route.continue();
+        }
+        return route.fulfill({ status: 500, json: { message: 'Something went wrong.' } });
+    });
     await maya.reload();
     await expect(row(maya, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await expect(mark(maya, 'notes.md')).toHaveAttribute('data-integrity', 'unchecked', {
@@ -103,12 +110,15 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     await mark(maya, 'notes.md').click();
     const again = details.getByRole('button', { name: 'Try again' });
     await expect(again).toBeVisible();
-    // The load is let through by the press itself, not before it: on its own the app tries
-    // again about once a second, and a load let through while the click was still on its way
-    // cleared the mark and took the button with it. The page tells the test of the press
-    // before the app hears of it, so the load the press starts is the first to pass.
+    // Pressed once the app has stopped trying by itself, so the load that follows within
+    // the second is the press's own. The page tells the test of the press before the app
+    // hears of it: a load let through earlier, while the click was still on its way, once
+    // cleared the mark and took the button with it.
+    await expect
+        .poll(() => Date.now() - (asked.at(-1) ?? 0), { timeout: 30_000 })
+        .toBeGreaterThan(1_500);
     await maya.exposeFunction('pressedTryAgain', () => {
-        failing = false;
+        pressedAt = Date.now();
     });
     await again.evaluate((button) =>
         window.addEventListener(
@@ -122,6 +132,7 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     );
     await again.click();
     await expect(mark(maya, 'notes.md')).toHaveCount(0, { timeout: 60_000 });
+    expect(served).toBeGreaterThan(0);
     await expect(info.locator('[data-integrity]')).toHaveCount(0);
     await maya.keyboard.press('i');
     await maya.unroute(refuse);

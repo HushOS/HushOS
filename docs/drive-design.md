@@ -908,6 +908,7 @@ The Drive page is a folder view with breadcrumbs, an upload button and drop targ
 - Uploads run in the crypto worker from a `File` handle streamed in 8 MiB reads; the main thread only forwards progress.
 - A closed tab leaves the journal behind, and the next visit offers to resume or discard.
 - All names, sizes and dates render from decrypted metadata; the server's timestamps fill in where metadata has none.
+- Known issue, Safari: a drop made right after a cancelled drag can land on nothing. WebKit never sends the cancelled drag's last `dragleave`, then hands it to the next drag, and pragmatic-drag-and-drop's Safari enter/leave counter takes it for the pointer leaving the window and forgets the target. The next `dragover` finds the target again, and a held pointer fires one every few hundred milliseconds, so only a drop made within moments of arriving misses. That reproduces under automation (`e2e/helpers.ts` `dragOnto` waits for the drag card instead); it has not been seen by hand. The count lives inside the library, so the app cannot clear it on `dragend`. The fix belongs upstream.
 
 ## What the prototype taught
 
