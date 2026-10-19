@@ -47,7 +47,7 @@ object TransferQueue {
 
     /* Whether a failure's words are the out-of-room refusal (the server's own sentence too). */
     fun isNoRoom(message: String?): Boolean =
-        message != null && (message == NO_ROOM || message.contains("Not enough storage", ignoreCase = true) || message.contains("quota", ignoreCase = true))
+        message != null && (message == NO_ROOM || message == Problems.ROOM || message.contains("Not enough storage", ignoreCase = true) || message.contains("quota", ignoreCase = true))
 
     /* A failure's reason in words that say what to do: the transfers sheet's and the notification's. */
     fun reasonWords(message: String?): String {
@@ -222,7 +222,8 @@ private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data
     else -> failed(when {
         error is NotAuthenticated -> "Sign in again to finish this."
         error is ApiError && error.status == 402 -> TransferQueue.NO_ROOM
-        else -> error.message ?: "The transfer failed."
+        // Words for the transfers sheet; the exception's own text goes to the log.
+        else -> Problems.say(error.also { android.util.Log.w("HushOS", "transfer failed", it) }, "The transfer failed.")
     }, inputs)
 }
 
@@ -249,7 +250,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result {
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
         if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
-        runCatching { setForeground(getForegroundInfo()) }
+        // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
+        attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
         return withContext(Dispatchers.IO) {
             try {
@@ -270,6 +272,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
                 Result.success()
             } catch (error: Exception) {
+                // Stopped by WorkManager (constraints lost, cancelled): it reschedules or drops the job itself.
+                error.rethrowIfCancelled()
                 // A failure keeps the copy: the panel can retry from it, and removes it when the row goes.
                 outcome(error, inputData)
             }
@@ -283,7 +287,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f, keeping = true)
 
     override suspend fun doWork(): Result {
-        runCatching { setForeground(getForegroundInfo()) }
+        // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
+        attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.")
         return withContext(Dispatchers.IO) {
             try {
@@ -315,6 +320,7 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
                 Result.success()
             } catch (error: Exception) {
+                error.rethrowIfCancelled()
                 outcome(error)
             }
         }

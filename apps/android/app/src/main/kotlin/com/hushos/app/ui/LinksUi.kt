@@ -258,7 +258,7 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
                                         model.notify("“${current.name}” shared with ${picked.name.ifEmpty { picked.email }}")
                                         chosen = null; role = "viewer"; load(); model.refreshAccess()
                                     }
-                                    .onFailure { error = it.message ?: "Couldn’t share. Check your connection and try again." }
+                                    .onFailure { error = com.hushos.app.data.Problems.say(it, "Couldn’t share. Check your connection and try again.") }
                                 pending = null
                             }
                         }) { Text(if (pending == "share") "Sharing…" else "Share") }
@@ -385,7 +385,7 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
                         scope.launch {
                             model.share(item, pin, role).onSuccess {
                                 model.notify("$first ${if (role == "editor") "can edit" else "can view"} “${item.name}” now"); changed()
-                            }.onFailure { model.notify("Couldn’t change what they can do. ${it.message ?: "Check your connection and try again."}") }
+                            }.onFailure { model.notify("Couldn’t change what they can do. ${com.hushos.app.data.Problems.say(it, "Check your connection and try again.")}") }
                             busy = false
                         }
                     }.padding(horizontal = AlpineSpace.S4),
@@ -654,7 +654,7 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
     var error by remember { mutableStateOf<String?>(null) }
     var mismatch by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
-    LaunchedEffect(email) { model.lookup(email).onSuccess { found = it }.onFailure { error = it.message ?: "Check the address and try again." } }
+    LaunchedEffect(email) { model.lookup(email).onSuccess { found = it }.onFailure { error = com.hushos.app.data.Problems.say(it, "Check the address and try again.") } }
     Sheet(onDismissRequest = dismiss, full = true) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S6),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
@@ -991,7 +991,7 @@ fun ReportSheet(item: Opened, team: String, dismiss: () -> Unit, from: String? =
                 Button(enabled = !pending && category != null && reason.isNotBlank(), onClick = {
                     pending = true; error = null
                     scope.launch {
-                        runCatching { submit(category!!, reason.trim(), email.trim().ifEmpty { null }) }
+                        com.hushos.app.data.attempt { submit(category!!, reason.trim(), email.trim().ifEmpty { null }) }
                             .onSuccess { if (it == null) error = "Couldn’t send the report. Check your connection and try again." else result = it }
                             .onFailure { error = "Couldn’t send the report. Check your connection and try again." }
                         pending = false
@@ -1050,7 +1050,7 @@ internal class LinkSession(val url: String, private val origin: String, private 
         if (looking || root != null || needsPassword || trouble != null) return
         looking = true
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { v.needsPassword() } }
+            com.hushos.app.data.attempt { withContext(Dispatchers.IO) { v.needsPassword() } }
                 .onSuccess { if (it) needsPassword = true else unlock() }.onFailure { trouble = troubleOf(it) }
             looking = false
         }
@@ -1060,7 +1060,7 @@ internal class LinkSession(val url: String, private val origin: String, private 
     fun unlock() {
         val v = vault.getOrNull() ?: return
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { v.open(if (needsPassword) password else null) } }
+            com.hushos.app.data.attempt { withContext(Dispatchers.IO) { v.open(if (needsPassword) password else null) } }
                 .onSuccess { root = it; needsPassword = false; wrong = false; trouble = null; if (it.isFolder) list(it) }
                 .onFailure { if (needsPassword && it !is com.hushos.app.data.Unreachable && it !is com.hushos.app.data.Refused) wrong = true else trouble = troubleOf(it) }
         }
@@ -1070,7 +1070,7 @@ internal class LinkSession(val url: String, private val origin: String, private 
         val v = vault.getOrNull() ?: return
         if (children.containsKey(folder.id) || !listing.add(folder.id)) return
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { v.children(folder.id) } }
+            com.hushos.app.data.attempt { withContext(Dispatchers.IO) { v.children(folder.id) } }
                 .onSuccess { children = children + (folder.id to it) }.onFailure { trouble = troubleOf(it) }
             listing.remove(folder.id)
         }
@@ -1118,7 +1118,7 @@ internal fun LinkBrowser(model: DriveViewModel, state: DriveState, session: Link
             val file = linkFile(context, item)
             if (!file.exists()) {
                 opening = item.id to 0f
-                val ok = runCatching { withContext(Dispatchers.IO) { v.download(item, file) { f -> opening = item.id to f } } }.isSuccess
+                val ok = com.hushos.app.data.attempt { withContext(Dispatchers.IO) { v.download(item, file) { f -> opening = item.id to f } } }.isSuccess
                 opening = null
                 if (!ok) { model.notify("Couldn’t open “${item.name}”. Check your connection and try again."); return@launch }
             }
@@ -1138,7 +1138,7 @@ internal fun LinkBrowser(model: DriveViewModel, state: DriveState, session: Link
                         menu = false
                         scope.launch {
                             val file = linkFile(context, shown)
-                            val ok = file.exists() || runCatching { withContext(Dispatchers.IO) { vault.getOrThrow().download(shown, file) } }.isSuccess
+                            val ok = file.exists() || com.hushos.app.data.attempt { withContext(Dispatchers.IO) { vault.getOrThrow().download(shown, file) } }.isSuccess
                             if (!ok) { model.notify("Couldn’t prepare “${shown.name}”. Check your connection and try again."); return@launch }
                             val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file)
                             context.startActivity(shareChooser(context, Intent(Intent.ACTION_SEND).setType(mimeOf(shown) ?: "*/*").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), shown.name))
