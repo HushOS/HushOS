@@ -435,6 +435,6 @@ Milestone 1 is built. Where it differs from sections 1 and 8, this section is wh
 
 **Retention.** A device with no key and no session goes after a day (nothing can lead back to it). A keyed device with no session and unseen for 90 days is revoked. Revoked rows, with the names they carried, are deleted 90 days after.
 
-**Names.** Browsers say "Firefox on Linux", iPhones "iPhone" or "iPad", Android "Android phone" or "Android tablet"; any device can be renamed from any other. Names are 1 to 40 letters, marks, numbers, spaces and `'’()._·-`, so no control or bidi characters.
+**Names.** Browsers say "Firefox on Linux"; iPhones and iPads give their model ("iPhone 16 Pro"), or "iPhone" or "iPad" for one the app doesn't know; Android gives maker and model ("Pixel 9", "Samsung SM-S931B"), or "Android phone" or "Android tablet" when those are empty. The phone's own name, which often holds the owner's, is never read; any device can be renamed from any other. Names are 1 to 40 letters, marks, numbers, spaces and `'’()._·-`, so no control or bidi characters.
 
 **Notices.** The email part of section 5's device notices: a new sign-in that came in with the password alone (not enrolment, not a device coming back), a removal, and a removal of all others. They never carry the device's name (which the device chose), its address or its browser, and at most ten an hour go to one account; past that they are dropped and the action still happens.

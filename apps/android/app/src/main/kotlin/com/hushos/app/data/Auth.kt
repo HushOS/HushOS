@@ -234,9 +234,11 @@ object Auth {
         return JSONObject().put("id", identity.deviceId).put("signature", signature)
     }
 
-    /* "Android phone" or "Android tablet": the kind of device, never its model. The person can rename it. */
-    fun deviceName(context: Context): String =
-        if (context.resources.configuration.smallestScreenWidthDp >= 600) "Android tablet" else "Android phone"
+    /* Whether this device is a tablet, by its smallest screen width, as the device list words it. */
+    fun isTablet(context: Context): Boolean = context.resources.configuration.smallestScreenWidthDp >= 600
+
+    /* The name a new device record gets: maker and model ("Pixel 9", "Samsung SM-S931B"), see DeviceName. The person can rename it. */
+    fun deviceName(context: Context): String = DeviceName.of(android.os.Build.MANUFACTURER, android.os.Build.MODEL, isTablet(context))
 
     /* Registers the session's device with a new key when it has not described itself yet, and keeps the key. */
     fun registerDevice(context: Context, device: SessionDevice, userId: String, email: String) {

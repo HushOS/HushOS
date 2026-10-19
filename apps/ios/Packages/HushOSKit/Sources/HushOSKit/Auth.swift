@@ -183,13 +183,14 @@ public enum Auth {
         return ["id": identity.deviceId, "signature": signature]
     }
 
-    /* "iPhone" or "iPad": the kind of device, never the name its owner gave it. */
+    /* The model's name ("iPhone 16 Pro", see DeviceModel), never the name its owner gave it. */
     static func deviceName() async -> String {
         #if canImport(UIKit)
-        return await MainActor.run { UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone" }
+        let pad = await MainActor.run { UIDevice.current.userInterfaceIdiom == .pad }
         #else
-        return "iPhone"
+        let pad = false
         #endif
+        return DeviceModel.name(identifier: DeviceModel.identifier(), pad: pad)
     }
 
     /* Registers the session's device with a new key when it has not described itself yet, and keeps the key. */

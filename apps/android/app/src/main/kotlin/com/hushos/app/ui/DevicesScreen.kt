@@ -62,7 +62,7 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
                 devices == null -> CircularProgressIndicator(Modifier.padding(AlpineSpace.S6).align(Alignment.CenterHorizontally))
                 else -> {
                     current?.let {
-                        Subheader(if (Auth.deviceName(androidx.compose.ui.platform.LocalContext.current) == "Android tablet") "This tablet" else "This phone")
+                        Subheader(if (Auth.isTablet(androidx.compose.ui.platform.LocalContext.current)) "This tablet" else "This phone")
                         DeviceRow(it, onRename = { renaming = it }, onRemove = null)
                     }
                     Subheader("Other devices")

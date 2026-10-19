@@ -118,7 +118,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         title = { Text(if (state.removed) "Removed from your account" else "You’ve been signed out") },
         text = {
             Text(
-                if (state.removed) "This ${if (com.hushos.app.data.Auth.deviceName(LocalContext.current) == "Android tablet") "tablet" else "phone"} was removed from your account. Sign in again to use it."
+                if (state.removed) "This ${if (com.hushos.app.data.Auth.isTablet(LocalContext.current)) "tablet" else "phone"} was removed from your account. Sign in again to use it."
                 else "Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.",
             )
         },
