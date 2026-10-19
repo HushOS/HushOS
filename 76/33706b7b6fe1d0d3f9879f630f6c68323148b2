@@ -1,0 +1,36 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DeviceModel.swift
+  s_c56e31c87cddde::t_fed569d0096e92 1-116
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceName.kt
+  s_c56e31c87cddde::t_f7407e898fd833 1-46
+apps/android/app/src/test/kotlin/com/hushos/app/data/DeviceNameTest.kt
+  s_c56e31c87cddde::t_1b8c051ee297d3 1-59
+  s_c56e31c87cddde::t_155ad486ab7589 60-61
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DeviceModelTests.swift
+  s_c56e31c87cddde::t_69a3a76b25fc79 1-65
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_c56e31c87cddde::t_6a5b8e23b54708 237-241
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_c56e31c87cddde::t_21bf9d432976b8 65
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c56e31c87cddde::t_d49d0e7c27bcaa 121
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_c56e31c87cddde::t_79802d9ba441a9 186,189,191,193
+docs/release/privacy-answers.md
+  s_c56e31c87cddde::t_eb679094e2d8bc 3,9-30,38-53,66,125-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7633706b7b6fe1d0d3f9879f630f6c68323148b2",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
