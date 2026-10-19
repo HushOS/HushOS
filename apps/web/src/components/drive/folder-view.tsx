@@ -1504,6 +1504,7 @@ function DragCard({
     return (
         <div
             aria-hidden="true"
+            data-drag-card
             className="pointer-events-none fixed z-[60] flex max-w-80 items-center gap-3 rounded-xl border border-edge bg-popover py-2 pr-4 pl-2 shadow-xl"
             style={{ left: x + 14, top: y + 10 }}
         >

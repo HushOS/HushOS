@@ -125,6 +125,40 @@ export async function openFolder(page: Page, name: string) {
     ).toHaveText(name);
 }
 
+/*
+ * Drags `source` onto `target` in Drive the way a person does: it lets go only once the card
+ * beside the pointer says where the drop lands (`says`, "Move to “photos”" by default; "Drop
+ * on a folder" to check a place that takes nothing), then waits for the drag to end. Not
+ * Playwright's dragTo, which lets go within milliseconds of arriving: WebKit hands a drag the
+ * dragleave that a cancelled drag never sent, pragmatic-drag-and-drop's Safari counter takes
+ * it for the pointer leaving the window and forgets the target, and only the next dragover
+ * finds it again. A held pointer gets one; a drop that comes first lands on nothing.
+ */
+export async function dragOnto(
+    page: Page,
+    source: Locator,
+    target: Locator,
+    says: string | RegExp = /^(Move|Copy) to “/,
+) {
+    await source.hover();
+    await page.mouse.down();
+    const box = (await target.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y, { steps: 4 });
+    const card = page.locator('[data-drag-card]');
+    // Each small move over the target is a dragover, which finds the target again if a
+    // stray dragleave dropped it.
+    let nudge = 0;
+    await expect(async () => {
+        nudge = 1 - nudge;
+        await page.mouse.move(x + nudge, y);
+        await expect(card.getByText(says)).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await page.mouse.up();
+    await expect(card).toHaveCount(0);
+}
+
 /* Opens the New folder dialog from the folder's Add menu. */
 export async function newFolder(page: Page) {
     await page.getByRole('button', { name: 'Add', exact: true }).click();

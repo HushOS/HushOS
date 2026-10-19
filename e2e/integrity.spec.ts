@@ -99,11 +99,27 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     const details = maya.locator('[data-integrity-details]');
     await expect(details).toContainText('HushOS couldn’t check who wrote this. Try again later.');
     // Once they load again, a retry checks again and her own file is clean. The details
-    // stay open on a click, so Try again is in reach before the load is let through.
+    // stay open on a click, so Try again is in reach while the load still fails.
     await mark(maya, 'notes.md').click();
     const again = details.getByRole('button', { name: 'Try again' });
     await expect(again).toBeVisible();
-    failing = false;
+    // The load is let through by the press itself, not before it: on its own the app tries
+    // again about once a second, and a load let through while the click was still on its way
+    // cleared the mark and took the button with it. The page tells the test of the press
+    // before the app hears of it, so the load the press starts is the first to pass.
+    await maya.exposeFunction('pressedTryAgain', () => {
+        failing = false;
+    });
+    await again.evaluate((button) =>
+        window.addEventListener(
+            'click',
+            (event) => {
+                if (button.contains(event.target as Node))
+                    (window as unknown as { pressedTryAgain: () => void }).pressedTryAgain();
+            },
+            { capture: true },
+        ),
+    );
     await again.click();
     await expect(mark(maya, 'notes.md')).toHaveCount(0, { timeout: 60_000 });
     await expect(info.locator('[data-integrity]')).toHaveCount(0);

@@ -54,8 +54,18 @@ test.beforeAll(async ({ browser }) => {
     folderUrl = owner.url();
 });
 
+/*
+ * Signed out with the app closed. Cleared under an open app page, the cookie's loss is seen
+ * by the page itself (its session check sends it to sign-in), and that navigation can cut
+ * across the next goto, which WebKit reports as an interrupted navigation.
+ */
+async function signOutClosed(page: Page) {
+    await page.goto('about:blank');
+    await page.context().clearCookies();
+}
+
 test('a signed-out app page sends its address to sign-in, and signing in returns to it', async () => {
-    await owner.context().clearCookies();
+    await signOutClosed(owner);
     await owner.goto(folderUrl, { waitUntil: 'networkidle' });
     await expect(owner).toHaveURL(/\/login\?redirect=%2Fapp%2Fdrive%2Ff%2F/);
     await signIn(owner, ownerEmail);
@@ -64,7 +74,7 @@ test('a signed-out app page sends its address to sign-in, and signing in returns
 });
 
 test('Sign in on the home page lands in the app, not back on the home page', async () => {
-    await owner.context().clearCookies();
+    await signOutClosed(owner);
     await owner.goto('/', { waitUntil: 'networkidle' });
     await owner.getByRole('banner').getByRole('link', { name: 'Sign in', exact: true }).click();
     await expect(owner).toHaveURL(/\/login$/);
@@ -86,7 +96,7 @@ test('an existing account signs in from a shared link and comes back to it, key 
     test.setTimeout(300_000);
     const visitor = await (await newContext(browser)).newPage();
     const { email } = await registerAccount(visitor, 'Visitor');
-    await visitor.context().clearCookies();
+    await signOutClosed(visitor);
     await visitor.goto(linkUrl, { waitUntil: 'networkidle' });
     await visitor.getByRole('link', { name: 'Sign in to save a copy' }).click();
     await expect(visitor).toHaveURL(/\/login$/);
