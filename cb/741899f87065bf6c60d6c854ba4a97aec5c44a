@@ -1,0 +1,45 @@
+apps/web/src/lib/save-copy.ts
+  s_c56e31c87cddde::t_8c7403eeda8065 6,8,48,51-56,61-65
+apps/web/src/lib/stash.test.ts
+  s_c56e31c87cddde::t_c4725054d1a04c 3,119-130,149,168,188,242
+apps/web/src/lib/stash.ts
+  s_c56e31c87cddde::t_228ea7ab7b8028 2,130-136,139-140
+apps/web/src/lib/thumbnails.ts
+  s_c56e31c87cddde::t_55c85a8cf59bec 258-282
+docs/drive-design.md
+  s_c56e31c87cddde::t_212b0571421ac9 26
+docs/file-tools-design.md
+  s_c56e31c87cddde::t_bff7cdd63e00e5 116,464,535
+packages/auth/src/crypto-transport.test.ts
+  s_c56e31c87cddde::t_9ee6e53fa6b1af 36-62
+packages/auth/src/crypto-transport.ts
+  s_c56e31c87cddde::t_5090605f7a3752 10-11,111
+packages/crypto/src/index.ts
+  s_c56e31c87cddde::t_69e15459c8d50e 28
+packages/crypto/src/session.source.test.ts
+  s_c56e31c87cddde::t_4a2f4bfc5e062f 1-111
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_2a4952b7c92d7b 504,571-578,617-618,818-819,1186-1201,1206-1219,1230,3117-3125
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_0f8572c7a57679 65-66
+packages/drive/src/transfers.test.ts
+  s_c56e31c87cddde::t_d91ef44fac9f4c 15,123-145,149,153-166,204,209,417-419,1743-1820
+packages/drive/src/transfers.ts
+  s_c56e31c87cddde::t_13e56ae2100883 4,97-120,122,155,235-238,256-257,584-587,655-686,689,728,883-898,1022,1134,1455-1459,1463-1464,1770,1789,1824
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cb741899f87065bf6c60d6c854ba4a97aec5c44a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
