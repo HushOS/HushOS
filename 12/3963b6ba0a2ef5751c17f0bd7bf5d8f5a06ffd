@@ -1,0 +1,25 @@
+apps/web/src/lib/stash.test.ts
+  s_c56e31c87cddde::t_737e5163ab7457 104-110,112-115,120-124,231,233-234,236-264
+apps/web/src/lib/stash.ts
+  s_c56e31c87cddde::t_4b275e2d2be26e 57-62,90-94,97-98,102,112-113,192-211,213
+packages/auth/src/client.test.ts
+  s_c56e31c87cddde::t_5d1549821b0ef7 362,406,447-453
+packages/auth/src/client.ts
+  s_c56e31c87cddde::t_340f3464eaf110 294,299-301,307-310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "123963b6ba0a2ef5751c17f0bd7bf5d8f5a06ffd",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
