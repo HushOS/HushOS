@@ -37,6 +37,7 @@
         "android:run": "bun run android:build && apps/android/scripts/run-emulator.sh",
         "android:release": "cd apps/android && JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@21} ./gradlew :app:assembleRelease -q && ls -la app/build/outputs/apk/release/app-release.apk",
         "android:bundle": "apps/android/scripts/bundle-release.sh",
+        "android:release-apk": "apps/android/scripts/release-apk.sh",
         "android:device": "bun run android:release && adb install -r apps/android/app/build/outputs/apk/release/app-release.apk",
         "ios:archive": "apps/ios/scripts/archive.sh",
         "ios:device": "bun run ios:project && apps/ios/scripts/run-device.sh",

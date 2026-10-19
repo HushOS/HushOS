@@ -3,8 +3,9 @@ name: Release
 # release-please (release-please-config.json, .release-please-manifest.json) on every push to
 # main: it keeps one release pull request open that bumps the version everywhere and updates
 # CHANGELOG.md from the Conventional Commit subjects since the last release. Merging that pull
-# request creates the tag vX.Y.Z and the GitHub release, and the images job below copies that
-# commit's sha-<commit> images to X.Y.Z, X.Y and X. See CONTRIBUTING.md (Releasing).
+# request creates the tag vX.Y.Z and the GitHub release, the images job below copies that
+# commit's sha-<commit> images to X.Y.Z, X.Y and X, and the notes job then lists them, by
+# digest, in the release's notes. See CONTRIBUTING.md (Releasing).
 on:
     push:
         branches: [main]
@@ -14,7 +15,8 @@ on:
         workflows: [CI]
         types: [completed]
         branches: [main]
-    # Copies the version tags again for a release that exists, if the images job failed.
+    # Copies the version tags again for a release that exists, if the images job failed, and
+    # rewrites its Server images section.
     workflow_dispatch:
         inputs:
             tag:
@@ -90,6 +92,10 @@ jobs:
             needs.release-please.outputs.release_created == 'true')
         runs-on: ubuntu-latest
         timeout-minutes: 10
+        # Every leg resolves the same release, so whichever leg's outputs win, they agree.
+        outputs:
+            skip: ${{ steps.release.outputs.skip }}
+            tag: ${{ steps.release.outputs.tag }}
         permissions:
             actions: read
             contents: read
@@ -172,6 +178,7 @@ jobs:
                   fi
                   {
                       echo "skip=false"
+                      echo "tag=$TAG"
                       echo "sha=$sha"
                       echo "version=$version"
                       echo "image=ghcr.io/${GITHUB_REPOSITORY,,}-${IMAGE_SUFFIX}"
@@ -225,3 +232,27 @@ jobs:
                       [[ "$copied" == "$digest" ]] || { echo "::error::$IMAGE:$tag is $copied, not $digest"; exit 1; }
                       echo "$IMAGE:$tag -> $digest"
                   done
+
+    # Once all three images have their version tags, the release's notes get a "Server images"
+    # section below release-please's changelog: each image at X.Y.Z as a docker pull line pinned
+    # by the digest X.Y.Z names, and the upgrade steps. It is replaced, never repeated, on every
+    # run that copies the tags (a CI re-run, a run by hand). Skipped with the tags: a release
+    # whose CI has not passed, or whose package.json disagrees, gets no section either.
+    notes:
+        name: Server images in the release notes
+        needs: images
+        if: ${{ !cancelled() && needs.images.result == 'success' && needs.images.outputs.skip == 'false' }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  sparse-checkout: scripts
+                  persist-credentials: false
+            - name: Write the Server images section
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ needs.images.outputs.tag }}
+              run: scripts/release-images-notes.sh "$TAG"
