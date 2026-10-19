@@ -1,0 +1,25 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_c56e31c87cddde::t_5eab0bfe1874af 193-197
+apps/android/app/src/main/kotlin/com/hushos/app/data/SessionGuard.kt
+  s_c56e31c87cddde::t_2bf76f9225f641 1-29
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_e8a805598cb6f0 216,223-228,230,402,434,436-445,447
+apps/android/app/src/test/kotlin/com/hushos/app/data/SessionGuardTest.kt
+  s_c56e31c87cddde::t_224b2e7c57e362 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5d4586f061a2701d446e2ef344abf97994e9723f",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
