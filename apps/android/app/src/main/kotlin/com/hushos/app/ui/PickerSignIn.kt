@@ -46,6 +46,10 @@ object PickerReturn {
     fun holding(gate: Gate, words: Words, localUnsaved: Boolean): Boolean =
         gate == Gate.SIGNED_IN && localUnsaved && (words == Words.UNSAVED || words == Words.UNKNOWN)
 
+    /* This phone's recovery waits for the words of the account signed in now (`signedInAs`), and only that account's. */
+    fun recoveredHere(waitingFor: String?, signedInAs: String?): Boolean =
+        waitingFor != null && signedInAs != null && waitingFor.equals(signedInAs, ignoreCase = true)
+
     fun words(unsaved: Boolean?): Words = when (unsaved) {
         true -> Words.UNSAVED
         false -> Words.SAVED
@@ -62,7 +66,11 @@ object PickerReturn {
 @Composable
 fun PickerSignIn(model: DriveViewModel, recoverInApp: () -> Unit, showWords: () -> Unit, done: () -> Unit) {
     val state by model.state.collectAsStateWithLifecycle()
-    val localUnsaved by com.hushos.app.data.RecoveryWords.unsaved.collectAsStateWithLifecycle()
+    val waitingFor by com.hushos.app.data.RecoveryWords.waitingFor.collectAsStateWithLifecycle()
+    val signedInAs = state.user?.id?.takeIf { state.gate == Gate.SIGNED_IN }
+    // Only the account signed in now: a marker left for anyone else holds nobody, and is cleared.
+    val localUnsaved = PickerReturn.recoveredHere(waitingFor, signedInAs)
+    LaunchedEffect(signedInAs, waitingFor) { if (signedInAs != null) com.hushos.app.data.RecoveryWords.waitingFor(signedInAs) }
     var words by remember { mutableStateOf(PickerReturn.Words.CHECKING) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(state.gate) {

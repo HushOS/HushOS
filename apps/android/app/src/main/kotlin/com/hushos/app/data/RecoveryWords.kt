@@ -12,26 +12,47 @@ import kotlinx.coroutines.flow.StateFlow
  * stopped while the words are on screen; not an account file (AccountStore leaves it), since a recovery into another
  * account than the one on the phone wipes those as it signs in.
  *
- * Only this phone's own recovery holds the picker: an account that simply never confirmed its kit (a new one, or one
- * whose keys were replaced) is not stopped at the picker for it.
+ * Only this phone's own recovery holds the picker, and only for the account it recovered: the marker holds that
+ * account's user id, and anyone else signed in finds it cleared. Sign-out, account removal and another account signing
+ * in clear it too (AccountStore). An account that simply never confirmed its kit isn't stopped at the picker for it.
  */
 object RecoveryWords {
     private var marker: RecoveryMarker? = null
-    private val waiting = MutableStateFlow(false)
-    val unsaved: StateFlow<Boolean> = waiting
+    private val waiting = MutableStateFlow<String?>(null)
+    /* The user id whose recovery here waits for its words to be confirmed, or null. */
+    val waitingFor: StateFlow<String?> = waiting
 
     /* At start-up: picks up a recovery the app was stopped in the middle of. */
-    fun load(context: Context) {
-        val found = RecoveryMarker(File(context.filesDir, RecoveryMarker.FILE))
+    fun load(context: Context) = use(RecoveryMarker(File(context.filesDir, RecoveryMarker.FILE)))
+
+    /* The marker's file (load does this; a test passes its own). */
+    fun use(found: RecoveryMarker) {
         marker = found
-        waiting.value = found.get()
+        waiting.value = found.owner()
     }
 
-    /* A recovery is about to store a session whose new words haven't been seen yet. */
-    fun begun() { marker?.set(true); waiting.value = true }
+    /* `userId`'s recovery is about to store a session whose new words haven't been seen yet. */
+    fun begun(userId: String) { marker?.set(userId); waiting.value = userId }
 
     /* The words were shown and confirmed, or the recovery failed or was left, or the server has nothing waiting. */
-    fun settled() { marker?.set(false); waiting.value = false }
+    fun settled() { marker?.clear(); waiting.value = null }
+
+    /*
+     * Whether `userId` (the account signed in now) has a recovery here waiting for its words. A marker left for another
+     * account is cleared: it holds nobody else.
+     */
+    fun waitingFor(userId: String?): Boolean {
+        val owner = waiting.value ?: return false
+        if (userId != null && owner.equals(userId, ignoreCase = true)) return true
+        settled()
+        return false
+    }
+
+    /* Another account is about to own the phone's data (or nobody, on sign-out): a marker for someone else goes. */
+    fun keepOnlyFor(userId: String?) {
+        val owner = waiting.value ?: return
+        if (userId == null || !owner.equals(userId, ignoreCase = true)) settled()
+    }
 
     /*
      * The server's answer to "are this account's words confirmed?" (recoveryBackup): true when they wait, false when
@@ -44,12 +65,16 @@ object RecoveryWords {
     )
 }
 
-/* The marker's file: present while a recovery on this phone waits for its words to be confirmed. */
+/* The marker's file: present, holding the recovered account's user id, while its new words wait to be confirmed. */
 class RecoveryMarker(private val file: File) {
-    fun get(): Boolean = file.exists()
+    fun owner(): String? = runCatching { file.takeIf { it.exists() }?.readText()?.trim()?.ifEmpty { null } }.getOrNull()
 
-    fun set(waiting: Boolean) {
-        if (waiting) runCatching { file.parentFile?.mkdirs(); file.writeText("") } else file.delete()
+    fun set(userId: String) {
+        runCatching { file.parentFile?.mkdirs(); file.writeText(userId) }
+    }
+
+    fun clear() {
+        file.delete()
     }
 
     companion object {

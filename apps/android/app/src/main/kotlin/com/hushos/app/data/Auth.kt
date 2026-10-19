@@ -175,7 +175,10 @@ object Auth {
     }
 
     /* Resets the password with the phrase; returns the new phrase to save. The caller signs in with the new password. */
-    fun recover(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): String {
+    /* The account a recovery opened, and its new phrase. */
+    data class Recovered(val userId: String, val phrase: String)
+
+    fun recover(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): Recovered {
         val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
         val registration = opaqueStartRegistration(password)
         val challenge = post(origin, "/api/auth/recover/start", JSONObject().put("registrationRequest", registration.request), cookie).body
@@ -208,7 +211,7 @@ object Auth {
             android.util.Log.w("HushOS", "recovery finish failed", error)
             throw AuthFailure(resetUnfinished(error))
         }
-        return next.phrase
+        return Recovered(userId, next.phrase)
     }
 
     /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */

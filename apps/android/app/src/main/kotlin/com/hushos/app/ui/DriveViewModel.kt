@@ -923,14 +923,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val flow = recovery ?: return
         val enrollment = flow.enrollment ?: return
         recovery = flow.copy(pending = true, error = null)
-        // Before any session is stored: a picker's sign-in screen waits for the new words to be confirmed.
-        com.hushos.app.data.RecoveryWords.begun()
         viewModelScope.launch {
           try {
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val phrase = Auth.recover(origin, enrollment, words.joinToString(" "), password)
+                    val recovered = Auth.recover(origin, enrollment, words.joinToString(" "), password)
+                    // Before the session is stored: a picker's sign-in screen waits for this account's new words.
+                    com.hushos.app.data.RecoveryWords.begun(recovered.userId)
+                    val phrase = recovered.phrase
                     val user = try {
                         Auth.signIn(context, origin, enrollment.email, password)
                     } catch (error: Exception) {

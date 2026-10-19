@@ -54,6 +54,15 @@ class PickerReturnTest {
         assertFalse(held(server = true, recoveredHere = false))
     }
 
+    /* A recovery here was Alice's; Bob signs in from the picker: he isn't held for her words. */
+    @Test
+    fun anotherAccountSigningInIsNotHeldForThatRecovery() {
+        assertTrue(PickerReturn.recoveredHere(waitingFor = "alice", signedInAs = "alice"))
+        assertFalse(PickerReturn.recoveredHere(waitingFor = "alice", signedInAs = "bob"))
+        assertFalse(PickerReturn.recoveredHere(waitingFor = "alice", signedInAs = null))
+        assertTrue(resumes(signedIn = true, server = true, recoveredHere = PickerReturn.recoveredHere("alice", "bob")))
+    }
+
     @Test
     fun nothingReturnsWhileCheckingARecoveryOrDuringItsOwnRecovery() {
         assertFalse(PickerReturn.ready(Gate.SIGNED_IN, null, Words.CHECKING, localUnsaved = true))
