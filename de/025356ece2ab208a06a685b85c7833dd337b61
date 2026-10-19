@@ -1,0 +1,37 @@
+scripts/release-images-notes.sh
+  s_c56e31c87cddde::t_9bb9a47ccfbc1b 1-41
+apps/android/scripts/release-apk.sh
+  s_c56e31c87cddde::t_02f3291ab69705 1-133
+  s_c56e31c87cddde::t_ee510ef7ae3b6d 134-138
+scripts/release-notes-section.sh
+  s_c56e31c87cddde::t_f534190c4623a5 1-66
+  s_c56e31c87cddde::t_dae8948d81f8bc 67-70
+.github/workflows/release.yml
+  s_c56e31c87cddde::t_972551149c7544 6-8,18-19,95-98,181,235-258
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_148c68ced1ff65 134-135
+docs/release/README.md
+  s_c56e31c87cddde::t_9a3753cb6b9e3f 5-18
+docs/release/google.md
+  s_c56e31c87cddde::t_7945275644c0fd 182
+docs/self-hosting.md
+  s_c56e31c87cddde::t_58e8cc2add4a43 260
+package.json
+  s_c56e31c87cddde::t_a86d63ab78aae5 40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "de025356ece2ab208a06a685b85c7833dd337b61",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
