@@ -80,14 +80,17 @@ export function StorageFullDialog() {
         summary.data?.subscription && !summary.data.subscription.endedAt
             ? summary.data.subscription
             : null;
-    // The smallest plan with more room than this one: what "Get more room" leads to.
-    const bigger = billing
-        ? catalogue.data?.plans
-              .filter(
-                  (plan) => BigInt(plan.quotaBytes) > (current ? BigInt(current.quotaBytes) : 0n),
-              )
-              .sort((a, b) => (BigInt(a.quotaBytes) < BigInt(b.quotaBytes) ? -1 : 1))[0]
-        : undefined;
+    // The smallest plan with more room than this one: what "Get more room" leads to. None while
+    // the person's files draw from a family's pool: a plan of their own wouldn't add to it.
+    const bigger =
+        billing && !storage.data?.pool
+            ? catalogue.data?.plans
+                  .filter(
+                      (plan) =>
+                          BigInt(plan.quotaBytes) > (current ? BigInt(current.quotaBytes) : 0n),
+                  )
+                  .sort((a, b) => (BigInt(a.quotaBytes) < BigInt(b.quotaBytes) ? -1 : 1))[0]
+            : undefined;
     const canUpgrade = Boolean(bigger);
     const navigate = useNavigate();
     const again =

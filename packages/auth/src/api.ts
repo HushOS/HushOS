@@ -50,6 +50,11 @@ export type StorageAllowance = {
     usedBytes: string;
     reservedBytes: string;
     availableBytes: string;
+    /*
+     * The family whose pool these figures are, while the account's files draw from it
+     * (docs/families-shared-pool.md 3.1); null on the account's own allowance.
+     */
+    pool: { groupId: string; name: string } | null;
 };
 
 export type ContactIdentity = {

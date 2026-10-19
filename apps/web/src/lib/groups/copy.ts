@@ -144,6 +144,9 @@ export function refusalCopy(
                 ? createInFamilyCopy(yours.name)
                 : 'You’re in a family already. Leave it before you create another.';
         }
+        case 'pool-full':
+            // No figure: managers learn only that the newcomer's files are more than what's free.
+            return 'Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in.';
         case 'organizer':
             return ORGANIZER_FIRST;
         // The payer of a live plan can't leave or be removed until it is cancelled, under Billing

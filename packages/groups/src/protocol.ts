@@ -20,6 +20,8 @@ export type GroupErrorCode =
     | 'no-plan'
     /* One family per account: the caller, or the person being let in, is in another family. */
     | 'in-family'
+    /* The person being let in has more of their own files than the family's pool has free. */
+    | 'pool-full'
     | 'last-holder'
     | 'unsupported'
     | 'forbidden'

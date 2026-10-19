@@ -46,15 +46,16 @@ A person's personal workspace is **pooled** when all of these hold:
 
 - `BILLING_PROVIDER=polar` (with `none`, nothing is pooled; section 8);
 - they have an `active` membership in a family (`group_kind = 'family'`);
-- that family's `group_storage` row has a live plan: `expires_at` is set and in the future.
+- that family's `group_storage` row has a live plan: `expires_at` is set and in the future;
+- they have no personal plan still in force: no `storage_entitlements` row from billing (`source = 'polar'`) that is unrevoked, started and unexpired. Owner decision 2 (below) keeps a personal subscriber's files on their own plan until it ends, period end plus the grace days; only then do they draw from the pool. Built this way in step 3; the bullets below that say otherwise predate the decision.
 
 `expires_at` is the plan's period end plus `BILLING_GRACE_DAYS` (3 by default), and it is null for a family that never had a plan (`createGroup` writes `quota_bytes = 0`, `expires_at = null`). So:
 
-- **An organizer who created a family but hasn't paid yet** keeps their own allowance, a paid personal plan included. Their files join the pool when the family's plan goes live, and only then is their personal plan set to cancel.
+- **An organizer who created a family but hasn't paid yet** keeps their own allowance, a paid personal plan included. Their files join the pool when the family's plan is live and their personal plan has ended (decision 2); step 4 sets that plan to cancel when the family's plan goes live.
 - **When a family plan ends** (cancelled, or a renewal never paid, past the grace days), every member's own files go back to their own allowance at the same moment, with no job to run: the rule is computed on every check. The family folders read an empty pool, as today.
 - **Family folders always read the pool**, as today: a family without a live plan stores nothing in them.
 
-Nothing else adds to the pool while a person is pooled: not Free's 2 GB ("no stacking of free allowances", groups-design 3.5), not referral bonuses, not an operator's grant, not a personal plan still running out its period. Those rows stay in `storage_entitlements` and count again the moment the person is no longer pooled.
+Nothing else adds to the pool while a person is pooled: not Free's 2 GB ("no stacking of free allowances", groups-design 3.5), not referral bonuses, not an operator's grant. A personal plan still running out its period doesn't stack either: while it is in force the person is not pooled at all (decision 2). Those rows stay in `storage_entitlements` and count again the moment the person is no longer pooled.
 
 ### 3.2 Joining
 
@@ -62,7 +63,7 @@ Nothing else adds to the pool while a person is pooled: not Free's 2 GB ("no sta
 - **Opening an invitation while in a family** (route 14) succeeds and returns `inFamily: { name }`, so the join page can say: "You're in Lindqvist family. To join Ortega family, leave yours first, from Account → Family. This invitation stays open until 26 October." The invitation email says nothing about it: the server would be telling the inviter, through the email's wording, that the invitee is in a family.
 - **Accepting while in a family** is refused, 409 `in-family`, with the same words. This goes further than the default ("can't be let in"): an accepted membership would sit in the other family's pending list, and its managers would learn that the person is in some family. Refusing at accept leaks nothing and costs the invitee one step, since they must leave first anyway.
 - **Letting someone in who has since joined or created another family** is refused at admit, 409 `in-family`, before any place is bought: "They've joined another family since they accepted. They can join yours once they leave it." It does not name the other family.
-- **The newcomer's own files must fit.** Admission refuses, 409 `pool-full`, when the newcomer's own used and reserved bytes are more than the pool's free space: admitting them would stop every member's uploads at once. The manager reads: "Their files don't fit in the family's free space. Free up space or move to a bigger plan, then let them in." It gives no figure, so a manager doesn't learn the newcomer's usage beyond "more than what's free". The newcomer's join page says beforehand that their files will count against the family's storage, with their own figure.
+- **The newcomer's own files must fit.** Admission refuses, 409 `pool-full`, when the newcomer's own used and reserved bytes are more than the pool's free space (counted even while a personal plan keeps them unpooled, since their files join when it ends; only when the family's plan is live, since without one nobody is pooled): admitting them would stop every member's uploads at once. The manager reads: "Their files don't fit in the family's free space. Free up space or move to a bigger plan, then let them in." It gives no figure, so a manager doesn't learn the newcomer's usage beyond "more than what's free". The newcomer's join page says beforehand that their files will count against the family's storage, with their own figure.
 - **Admission order:** the `in-family` and `pool-full` checks run before `ensureGroupSeat` charges for a place, and again inside the admitting transaction under the locks in 3.6. A race lost between the first check and the transaction (the newcomer was admitted elsewhere, or the pool filled) leaves a paid place and nobody admitted. The place is not lost: it is open for the next person, and the payer can schedule fewer places for the renewal. It is logged; it cannot be avoided without holding a Polar charge inside a database transaction.
 - **The first purchase by an organizer whose own files exceed the tier** is refused, as a downgrade is (groups-design 3.5): "Your files take 950 GB, more than Family Plus's 800 GB. Choose a bigger plan or free at least 150 GB."
 
@@ -97,15 +98,17 @@ The pool's usage now includes members' own files, so every place that compares u
 
 The pool row is the one lock that every check against the pool takes, whichever workspace the bytes land in:
 
-1. Resolve the pool: an area's own group, or, for a personal workspace, its owner's active family membership with a live plan.
+1. Resolve the pool: an area's own group, or, for a personal workspace, its owner's active family membership, live plan or not (as built: a plan going live is billing's write under the pool lock, so the check must hold that lock to see it; whether the plan is live, and whether a personal plan is still in force, is decided under it).
 2. Lock `group_storage` for that group (`FOR UPDATE`).
 3. For a personal workspace, read the membership again. Admit, leave, removal, dissolution and billing's pool write all take the same lock (below), so under it the membership is settled. If it changed between 1 and 3, start over (at most twice; then answer 503 and let the client retry).
-4. Lock the target `workspace_storage` row.
+4. Lock the target `workspace_storage` row. For a personal workspace whose owner was in no family at step 1, read the membership again here (as built): no pool lock was taken, so an admission is what could move them, and it locks the newcomer's `workspace_storage` row while it checks `pool-full`. A change starts over as in 3.
 5. Sum the pool's used and reserved bytes (3.7) and compare.
 
 Two members uploading into their own My files at once queue on the pool row, and only one of two uploads that each fit alone but not together gets the reservation. That is what `freeBytes` already does for two family folders, extended to personal workspaces.
 
 **Lock order, everywhere:** the `groups` row, then `workspaces` rows (the change-sequence and area locks), then `group_storage`, then `workspace_storage`. Membership changes in `packages/db/src/groups.ts` take `group_storage` after `lockGroup` and `lockAreas`, and never lock a personal workspace's row after it. Releases and purges only lower `used_bytes` or `reserved_bytes`. They don't take the pool lock: lowering can't overspend, and taking it would add a second lock order.
+
+Account deletion departs every family without the pool lock (as built): it deletes the person's own workspace in the same transaction, which would lock a personal workspace's row after the pool. Nothing is mis-charged without it, since an upload racing the deletion is deleted with the workspace.
 
 ### 3.7 The pool's usage
 
@@ -393,3 +396,23 @@ All open questions are answered as recommended:
 9. The migration stops on any account in two families rather than picking one.
 10. The one-family rule applies on self-hosted servers without billing.
 11. When families return, the rewritten announcement is published (the old one is in drafts), rather than a correction.
+
+## 13. What step 3 built (19 October 2026)
+
+`feat(db): pool a family member's own files with the family folders`, with families still off on hushos.com.
+
+- **`packages/db/src/pool.ts`** holds the one implementation: `poolUsage` (3.7), `storageFigures` (what any workspace may take, with the 3.6 locks or read once for display), `admissionFits` (`pool-full`), `lockPool` and `settlingPool` (start over on `PoolMovedError`, at most twice, then the route's 503). `freeBytes` (upload begin and copy), `getStorage`, `getStorageAllowance` (`/api/auth/storage`, now with `pool: { groupId, name } | null`), the family billing summary and the downgrade guard all read it; `getGroupPoolUsage`'s own query is gone (`getPoolUsage` delegates).
+- **Membership changes take the pool lock** after the group's row and its areas: admit and remove in `appendChain`, `leaveGroup` (dissolution included). Account deletion doesn't (3.6, last paragraph).
+- **`pool-full`** (409, in `GroupErrorCode`): route 17 asks before the chain checks and again right before `ensureGroupSeat`; `appendChain` asks under the locks, with the newcomer's storage row locked, so an upload of theirs in flight is counted.
+- **Decision 2 as built:** a member with a personal plan in force is not pooled and not in the pool's usage until it ends (3.1). The section 10 test "Not pooled without a live plan" is written to that reading: with the family's plan live the organizer stays on Pro until Pro ends, then draws from the pool.
+- **The downgrade guard now counts members' own files**, since it reads the same usage, and its message became 3.5's ("Your family stores 850 GB…"). Its test ("Downgrade counts own files") came with this step rather than step 4.
+- **Web, minimal:** the sidebar meter names the family and offers no personal plan while the server's figures are the pool's, and the storage-full dialog drops "Get more room" then; `pool-full` has its copy (6.2). The full meter of 7.1 is step 6.
+- **Tests** (`drive.pool.test.ts`, `drive.pool-none.test.ts`, `server.billing.test.ts` in `packages/groups`, the downgrade test in `packages/billing`): section 10's pool usage, races and `pool-full` cases on real Postgres, the races on separate connections ordered by row locks held from a third, each break-checked.
+
+Residuals, not fixed here:
+
+- **A personal plan's entitlement changes without the pool lock.** `applyCustomerState` and revocations write `storage_entitlements` without it, and a plan's end is a time, not a write. An upload in flight at that moment can be checked against the pool while its bytes land on the plan, or the reverse: one upload's worth, once per plan change.
+- **The pool can be overfilled by events nobody can refuse:** a member's personal plan ending (their files join at that moment), a family plan going live over its members' usage (the first-purchase guard is step 4), a move-back (3.5). Uploads then pause for everyone; nothing is deleted.
+- **Operators' account list** (`packages/db/src/admin.ts`, `quotaOf`) still shows each account's own allowance, not the pool it draws from.
+- **Not in this step:** `GET /api/billing`'s `family`, the leave answer's `ownBytes` and `allowanceBytes`, rounded per-member usage, the first-purchase guard (step 4); the 7.1 meter (step 6).
+- **Live verification of a pooled member** needs a family plan written by billing, which only a Polar sandbox checkout can make; the verify-hushos run (`20261019-110254-7416`, `launch --groups`) used `BILLING_PROVIDER=none`: a family made, a member let in and leaving through the new pool lock, and `/api/auth/storage` answering the member's own figures with `pool: null` before and after an upload and after leaving (section 8's no-pooling path). The pooled path is proven by the database tests only.

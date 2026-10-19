@@ -2592,14 +2592,14 @@ describe('family tiers', () => {
         });
     });
 
-    test('a downgrade is refused while the family folders hold more than the smaller pool, and says how much to free', async () => {
+    test('a downgrade is refused while the family stores more than the smaller pool, and says how much to free', async () => {
         const { payer, groupId, areaIds } = await familyOnPlan({ product: PRO_FAMILY });
         // 1.2 TB in the folders: Family Plus has 800 GB, so 428.8 GB must go first.
         await setTestUsedBytes(areaIds[0]!, (12n * 1024n * GIB) / 10n);
         await expect(billing.changeGroupPlan(payer, groupId, PLUS)).rejects.toMatchObject({
             status: 409,
             message:
-                'The family folders hold 1.2 TB, more than Family Plus’s 800 GB. Free at least 428.8 GB, then change the plan.',
+                'Your family stores 1.2 TB, more than Family Plus’s 800 GB. Free at least 428.8 GB, then change the plan.',
         });
         // One byte over: refused, and the amount to free rounds up, never to nothing.
         await setTestUsedBytes(areaIds[0]!, PLUS_POOL + 1n);
@@ -2611,6 +2611,24 @@ describe('family tiers', () => {
         expect((await live(groupId))?.intendedProductId).toBeNull();
         // Exactly the smaller pool fits.
         await setTestUsedBytes(areaIds[0]!, PLUS_POOL);
+        expect((await billing.changeGroupPlan(payer, groupId, PLUS)).when).toBe('renewal');
+    });
+
+    test('a downgrade counts members’ own files with the family folders', async () => {
+        const { payer, groupId, areaIds, others } = await familyOnPlan({
+            product: PRO_FAMILY,
+            members: 1,
+        });
+        // 100 GB in the folders and 750 GB of one member's own: 850 GB against Plus's 800 GB.
+        await setTestUsedBytes(areaIds[0]!, 100n * GIB);
+        await setTestUsedBytes(others[0]!.workspaceId, 750n * GIB);
+        await expect(billing.changeGroupPlan(payer, groupId, PLUS)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'Your family stores 850 GB, more than Family Plus’s 800 GB. Free at least 50 GB, then change the plan.',
+        });
+        expect(updates()).toEqual([]);
+        await setTestUsedBytes(others[0]!.workspaceId, 700n * GIB);
         expect((await billing.changeGroupPlan(payer, groupId, PLUS)).when).toBe('renewal');
     });
 

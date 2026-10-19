@@ -270,8 +270,9 @@ export function nextCharge(summary: FamilyBillingFull) {
  * A bigger pool is `up`: charged now, about `now` (Polar rounds its two lines
  * on their own), then `renews` each period from the renewal. A smaller one is
  * `down`: `renews` from the renewal, nothing now and nothing refunded, and only
- * once the family folders fit: `over` is how much more they hold than its
- * pool (0 when they fit), which the server refuses too.
+ * once the family fits: `over` is how much more it stores (the family folders
+ * and every pooled member's own files) than its pool (0 when it fits), which
+ * the server refuses too.
  */
 export type TierMove = {
     plan: FamilyPlan;
