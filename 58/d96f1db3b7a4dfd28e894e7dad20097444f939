@@ -1,0 +1,51 @@
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_0a42e359b55477 39-41
+apps/ios/App/AccountView.swift
+  s_c56e31c87cddde::t_6c9cff8aa5ba3d 910-911,913-915
+apps/ios/App/AppModel.swift
+  s_c56e31c87cddde::t_6976973d60cdd2 123,155,169-172,175-178,180-189,198-200,211,243,307
+apps/ios/App/DriveStore.swift
+  s_c56e31c87cddde::t_206d760b93305e 264-265,1582
+apps/ios/FilesUI/FileProviderUIController.swift
+  s_c56e31c87cddde::t_1b3907972e66c5 14-25,27-28,38-39,41,46,51-52
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_c56e31c87cddde::t_546ea47ed0f2e3 65-67
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_c56e31c87cddde::t_62658a60804851 65-68
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ErrorWords.swift
+  s_c56e31c87cddde::t_64156f7a88d86c 26-33,36-38
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Keychain.swift
+  s_c56e31c87cddde::t_38a6ecf91dd5d8 88-93,97-105
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_c56e31c87cddde::t_dbdebb8d11c361 217
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionChange.swift
+  s_c56e31c87cddde::t_13e5092ab6857a 1-33
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/StagedSave.swift
+  s_c56e31c87cddde::t_397d60cc0aa230 1-33
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c56e31c87cddde::t_a6105e08bbafb3 138
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ErrorWordsTests.swift
+  s_c56e31c87cddde::t_59b6baa59ef363 58,61-109,160-167
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionChangeTests.swift
+  s_c56e31c87cddde::t_421d4a84c79b75 1-45
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/StagedSaveTests.swift
+  s_c56e31c87cddde::t_841f160aef8f6e 1-54
+apps/ios/Share/SaveModel.swift
+  s_c56e31c87cddde::t_253c27b4460ddc 210,218-229,232,234-235,238-239,261-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58d96f1db3b7a4dfd28e894e7dad20097444f939",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
