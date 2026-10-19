@@ -1,0 +1,21 @@
+apps/android/AGENTS.md
+  s_c56e31c87cddde::t_db1bad73892729 3
+docs/release/store-listing.md
+  s_c56e31c87cddde::t_45bc3eb2a2929d 110,122,149,157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "06ffd36a7a2434816887a758971a349ad5bf144c",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
