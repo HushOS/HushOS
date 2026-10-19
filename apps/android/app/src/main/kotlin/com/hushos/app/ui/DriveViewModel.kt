@@ -195,6 +195,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // Started without a network: say so at once rather than after the first request fails.
         if (connectivity.activeNetwork == null) _state.update { it.copy(unreachable = true) }
         runCatching { connectivity.registerDefaultNetworkCallback(network) }.onFailure { android.util.Log.w("HushOS", "network callback", it) }
+        checkSession()
+    }
+
+    /*
+     * Back in front while signed out: a sign-in from a file picker (PickerSignInActivity, its own view model) may have
+     * opened the account meanwhile, and this screen would still offer sign-in. A session on the phone is checked again.
+     */
+    fun resumed() {
+        if (state.value.gate != Gate.SIGNED_OUT || state.value.signedOutNotice) return
+        viewModelScope.launch {
+            if (withContext(Dispatchers.IO) { Shared.session(context) } != null && state.value.gate == Gate.SIGNED_OUT) checkSession()
+        }
+    }
+
+    private fun checkSession() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
             val check = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context) } }
@@ -227,8 +242,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /* The Files app asks again: its root says signed in or out, and lists this account's drive. */
-    private fun filesAppChanged() = context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
+    /* The Files app and pickers ask again: the root says signed in or out, and its listing is this account's drive. */
+    private fun filesAppChanged() {
+        val authority = "${context.packageName}.documents"
+        context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri(authority), null)
+        context.contentResolver.notifyChange(android.provider.DocumentsContract.buildChildDocumentsUri(authority, "root"), null)
+    }
 
     private fun signedIn(user: SessionUser) {
         showingOwnWords = false

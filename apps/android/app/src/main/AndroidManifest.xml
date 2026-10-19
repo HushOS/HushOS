@@ -111,6 +111,17 @@
             </intent-filter>
         </activity>
 
+        <!--
+            Sign-in from a file picker: started for a result inside the picker's task by the provider's sign-in
+            affordance, it finishes once the account is open so the picker comes back. Not in Recents.
+        -->
+        <activity
+            android:name=".PickerSignInActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.HushOS"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- HushOS in the system file picker and Files: every access goes through this provider. -->
         <provider
             android:name="com.hushos.app.files.HushOSDocumentsProvider"
