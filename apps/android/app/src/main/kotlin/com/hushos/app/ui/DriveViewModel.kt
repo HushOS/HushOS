@@ -42,6 +42,7 @@ import com.hushos.app.data.VersionListView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.async
@@ -873,7 +874,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun closeOwnWords() { showingOwnWords = false }
 
     fun startRecovery() { recovery = RecoveryFlow(RecoveryStep.EMAIL) }
-    fun leaveRecovery() { recovery = null }
+
+    /* Sent from a file picker's sign-in screen: recovery starts once the gate says signed out (not over one under way). */
+    fun recoverWhenSignedOut() = viewModelScope.launch {
+        val gate = state.first { it.gate != Gate.CHECKING }.gate
+        if (gate == Gate.SIGNED_OUT && recovery == null) startRecovery()
+    }
+    fun leaveRecovery() {
+        recovery = null
+        com.hushos.app.data.RecoveryWords.settled()
+    }
     fun clearRecoveryError() { recovery = recovery?.takeIf { it.error != null }?.copy(error = null) ?: recovery }
     fun recoveryBack() {
         if (recovery?.pending == true) return
@@ -916,6 +926,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val flow = recovery ?: return
         val enrollment = flow.enrollment ?: return
         recovery = flow.copy(pending = true, error = null)
+        // Before any session is stored: a picker's sign-in screen waits for the new words to be confirmed.
+        com.hushos.app.data.RecoveryWords.begun()
         viewModelScope.launch {
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
@@ -934,7 +946,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     recovery = RecoveryFlow(RecoveryStep.NEW_PHRASE, email = enrollment.email, newPhrase = phrase)
                     signedIn(user)
                 },
-                { recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER)) },
+                {
+                    com.hushos.app.data.RecoveryWords.settled()
+                    recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
+                },
             )
         }
     }

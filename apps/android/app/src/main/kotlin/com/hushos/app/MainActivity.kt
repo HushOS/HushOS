@@ -13,6 +13,11 @@ import com.hushos.app.ui.HushOSTheme
 private const val SHORTCUT = "com.hushos.app.shortcut."
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        /* "Finish recovery in the HushOS app" from a file picker's sign-in screen: recovery starts here, signed out. */
+        const val RECOVER = "com.hushos.app.RECOVER"
+    }
+
     private val model: DriveViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +55,7 @@ class MainActivity : ComponentActivity() {
         when (intent?.action) {
             LinkHandoff.OPEN -> { LinkHandoff.take()?.let(model::openLink); return }
             com.hushos.app.data.TransferQueue.OPEN_TRANSFERS -> { model.openRequest("transfers"); return }
+            RECOVER -> { model.recoverWhenSignedOut(); return }
             com.hushos.app.data.TransferNotices.OPEN_PHONE -> { model.openRequest("phone"); return }
             com.hushos.app.data.TransferNotices.OPEN_FILES -> { model.openRequest("files::"); return }
         }
