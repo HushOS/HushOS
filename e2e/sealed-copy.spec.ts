@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { unzipSync } from 'fflate';
-import { newFolder, newPage, registerAccount, sampleFiles } from './helpers';
+import { dragOnto, newFolder, newPage, registerAccount, sampleFiles } from './helpers';
 
 /*
  * A sealed copy is the item as the service holds it: the manifest names every
@@ -84,7 +84,7 @@ test('a sealed copy of a file and of a folder carries the records and the cipher
     expect(JSON.stringify(file.manifest)).not.toMatch(/"key":/);
 
     // The folder: itself first, then what is in it. Move the note in to give it a child.
-    await row(page, 'notes.md').locator('button').first().dragTo(row(page, 'Project'));
+    await dragOnto(page, row(page, 'notes.md').locator('button').first(), row(page, 'Project'));
     await expect(row(page, 'notes.md')).toHaveCount(0, { timeout: 30_000 });
     const folder = await sealedCopyOf(page, 'Project');
     expect(folder.manifest.nodes.map((node) => node.kind)).toEqual(['folder', 'file']);
