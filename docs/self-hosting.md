@@ -144,7 +144,7 @@ The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), 
 
 ### Deploy webhook
 
-The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after `latest` moves to the commit, then verifies `/api/ready` reports it (or a later commit). Point the platform at the `latest` tags. Deploys run one at a time, and a commit that is no longer the head of `main`, or older than the release `/api/ready` reports, is skipped rather than deployed, so a late or re-run job never rolls production back. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. For Coolify, a single deploy webhook can target both web and worker by listing their resource UUIDs separated by a comma in its `uuid` query parameter. Keep hosting configuration and credentials in your platform and GitHub settings.
+The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after `latest` moves to the commit, then verifies `/api/ready` reports it (or a later commit). Point the platform at the `latest` tags. Deploys run one at a time, and a commit that `latest` has moved past (a later commit's run then deploys), or that is older than the release `/api/ready` reports, is skipped rather than deployed, so a late or re-run job never rolls production back. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. For Coolify, a single deploy webhook can target both web and worker by listing their resource UUIDs separated by a comma in its `uuid` query parameter. Keep hosting configuration and credentials in your platform and GitHub settings.
 
 ### Running the published images
 

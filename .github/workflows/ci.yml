@@ -29,8 +29,13 @@ jobs:
     # passes). Anything unlisted, or a diff that cannot be read, runs everything. A push to main
     # always runs everything: its diff is only against the previous push, so a docs-only commit
     # after a failed or cancelled one would otherwise deploy code no suite passed.
+    # A pull request event can arrive after the merge: release-please labels its release pull
+    # request once the release exists. That run would test main's commit again, so this job,
+    # check and build skip on a closed pull request, everything after them skips with them, and
+    # `CI ok` passes.
     changes:
         name: Changed paths
+        if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
         runs-on: ubuntu-latest
         outputs:
             browser: ${{ steps.paths.outputs.browser }}
@@ -101,6 +106,7 @@ jobs:
 
     check:
         name: Check, migrate, and test
+        if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
         runs-on: ubuntu-latest
         services:
             postgres:
@@ -157,6 +163,7 @@ jobs:
     # of the one above, so the browser jobs wait for a minute of build, not four of unit tests.
     build:
         name: Build
+        if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v7
@@ -457,12 +464,16 @@ jobs:
                   retention-days: 7
 
     # WebKit does not hold up a deploy, so a failure on main must not go unseen: one open
-    # issue collects them, retitled to the latest commit, with a comment per failed run.
+    # issue collects them, retitled to the latest commit, with a comment per failed run. Main
+    # runs overlap, so reports go one at a time; two at once would each open an issue.
     webkit-report:
         name: Report a WebKit failure on main
         needs: [build-macos, e2e-webkit]
         if: always() && (needs.build-macos.result == 'failure' || needs.e2e-webkit.result == 'failure') && github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
+        concurrency:
+            group: ${{ github.workflow }}-webkit-report
+            queue: max
         permissions:
             issues: write
         steps:
@@ -597,8 +608,13 @@ jobs:
               run: |
                   prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
                   # A registry error must not read as "no latest yet", or an old run would move it.
+                  # A latest without a revision label is not one to reason about: stop.
                   if config=$(docker buildx imagetools inspect "$prefix-web:latest" --format '{{json .Image}}' 2> "$RUNNER_TEMP/inspect"); then
                       current=$(jq -r 'if has("config") then . else .["linux/amd64"] end | .config.Labels["org.opencontainers.image.revision"] // empty' <<< "$config")
+                      if [[ -z "$current" ]]; then
+                          echo "::error title=latest not moved::$prefix-web:latest has no org.opencontainers.image.revision label."
+                          exit 1
+                      fi
                   elif grep -q ': not found' "$RUNNER_TEMP/inspect"; then
                       current=''
                   else
@@ -621,20 +637,29 @@ jobs:
                               ;;
                       esac
                   fi
+                  # All three or none: every digest first, then the moves back to back, then a check.
+                  declare -A digests
                   for image in migrate worker web; do
-                      digest=$(docker buildx imagetools inspect "$prefix-$image:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r .digest)
-                      docker buildx imagetools create --tag "$prefix-$image:latest" "$prefix-$image@$digest"
+                      digests[$image]=$(docker buildx imagetools inspect "$prefix-$image:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r '.digest // empty')
+                      [[ -n "${digests[$image]}" ]] || { echo "::error::$prefix-$image:sha-$GITHUB_SHA has no digest"; exit 1; }
+                  done
+                  for image in migrate worker web; do
+                      docker buildx imagetools create --tag "$prefix-$image:latest" "$prefix-$image@${digests[$image]}"
+                  done
+                  for image in migrate worker web; do
                       moved=$(docker buildx imagetools inspect "$prefix-$image:latest" --format '{{json .Manifest}}' | jq -r .digest)
-                      [[ "$moved" == "$digest" ]] || { echo "::error::$prefix-$image:latest is $moved, not $digest"; exit 1; }
-                      echo "$prefix-$image:latest -> $digest"
+                      [[ "$moved" == "${digests[$image]}" ]] || { echo "::error::$prefix-$image:latest is $moved, not ${digests[$image]}"; exit 1; }
+                      echo "$prefix-$image:latest -> $moved"
                   done
                   echo "current=true" >> "$GITHUB_OUTPUT"
 
     # Production pulls `latest`, so a deploy only redeploys what the job above moved. One at a
-    # time, in order, and only for main's head: a commit that main has moved past is skipped,
-    # not failed (the later commit's run deploys), and so is one older than the release
-    # production already runs. Both hold on a re-run of an old commit, which would otherwise
-    # roll production back.
+    # time, in order, and only while `latest` still names this commit: once a later commit's
+    # run has moved it, that run deploys, and this one is skipped, not failed. So is one older
+    # than the release production already runs. Not "only main's head": a head that then fails
+    # its suites would leave `latest` ahead of production with no deploy coming, for the next
+    # restart to ship unannounced. Both checks hold on a re-run of an old commit, which would
+    # otherwise roll production back.
     deploy:
         name: Deploy production
         needs: latest
@@ -646,19 +671,33 @@ jobs:
             queue: max
         permissions:
             contents: read
+            packages: read
         environment:
             name: production
             url: ${{ vars.DEPLOY_ORIGIN }}
         steps:
-            - name: Skip a commit main or production has moved past
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v4
+            - name: Log in to GHCR
+              uses: docker/login-action@v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Skip a commit latest or production has moved past
               id: gate
               env:
                   GH_TOKEN: ${{ github.token }}
                   DEPLOY_ORIGIN: ${{ vars.DEPLOY_ORIGIN }}
               run: |
-                  head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
-                  if [[ "$head" != "$GITHUB_SHA" ]]; then
-                      echo "::notice title=Deploy skipped::main is at $head, past $GITHUB_SHA; its run deploys."
+                  config=$(docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY,,}-web:latest" --format '{{json .Image}}')
+                  current=$(jq -r 'if has("config") then . else .["linux/amd64"] end | .config.Labels["org.opencontainers.image.revision"] // empty' <<< "$config")
+                  if [[ -z "$current" ]]; then
+                      echo "::error title=Deploy stopped::latest has no org.opencontainers.image.revision label."
+                      exit 1
+                  fi
+                  if [[ "$current" != "$GITHUB_SHA" ]]; then
+                      echo "::notice title=Deploy skipped::latest has moved on to $current; its run deploys."
                       echo "skip=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi

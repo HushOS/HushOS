@@ -73,10 +73,14 @@ jobs:
                   manifest-file: .release-please-manifest.json
 
     # The release's images are the ones main already built and published as sha-<commit>: this
-    # copies them, by digest, to X.Y.Z, X.Y and X. Nothing is rebuilt, and running it again
-    # writes the same tags. It runs when the release appears and again when CI for a release
-    # commit finishes, so whichever comes second finds both the tag and the images, however
-    # long CI took or however often it was re-run. Neither waits.
+    # copies them, by digest, to X.Y.Z, and to X.Y and X while it is the highest release in
+    # them, so tagging an old release again never moves 0.9 or 0 back. Nothing is rebuilt. It
+    # runs when the release appears and again when CI for a release commit finishes, and copies
+    # only once that CI run's `latest` job has passed (the Linux suites, not WebKit, as for
+    # `latest`): whichever comes second finds the tag, the images and the result, however long
+    # CI took or however often it was re-run. Neither waits. A re-run rebuilds sha-<commit>
+    # with a new digest, so an X.Y.Z that already names another digest is left alone, unless
+    # this workflow is run by hand.
     images:
         name: Version tags (${{ matrix.image }})
         needs: release-please
@@ -87,6 +91,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 10
         permissions:
+            actions: read
             contents: read
             packages: write
         strategy:
@@ -94,22 +99,24 @@ jobs:
             matrix:
                 image: [web, worker, migrate]
         steps:
-            - name: Release commit and version
+            - name: Release commit, version and tags
               id: release
               env:
                   GH_TOKEN: ${{ github.token }}
                   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || needs.release-please.outputs.tag_name }}
                   RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+                  RUN_ID: ${{ github.event.workflow_run.id }}
                   IMAGE_SUFFIX: ${{ matrix.image }}
               run: |
-                  # After CI: the release tag on the commit it ran for, if there is one (an
-                  # annotated tag's commit is the `^{}` line).
+                  # Every release tag and its commit (an annotated tag's commit is its `^{}` line).
+                  auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+                  git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+                      ls-remote --tags "https://github.com/$GITHUB_REPOSITORY.git" 'refs/tags/v*' \
+                      | awk '{ ref = $2; sub(/^refs\/tags\//, "", ref); sub(/\^\{\}$/, "", ref); if (ref ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) print $1, ref }' \
+                      > "$RUNNER_TEMP/tags"
+                  # After CI: the release tag on the commit it ran for, if there is one.
                   if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
-                      auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-                      TAG=$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
-                          ls-remote --tags "https://github.com/$GITHUB_REPOSITORY.git" 'refs/tags/v*' \
-                          | awk -v sha="$RUN_SHA" '$1 == sha { ref = $2; sub(/^refs\/tags\//, "", ref); sub(/\^\{\}$/, "", ref); print ref }' \
-                          | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -uV | tail -n 1)
+                      TAG=$(awk -v sha="$RUN_SHA" '$1 == sha { print $2 }' "$RUNNER_TEMP/tags" | sort -uV | tail -n 1)
                       if [[ -z "$TAG" ]]; then
                           echo "$RUN_SHA is not a release commit."
                           echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -120,6 +127,8 @@ jobs:
                       echo "::error::$TAG is not a release tag (vX.Y.Z)."
                       exit 1
                   fi
+                  major=${BASH_REMATCH[1]}
+                  minor=${BASH_REMATCH[2]}
                   version=${TAG#v}
                   sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)
                   # A release whose package.json names another version gets no version tags: the
@@ -130,11 +139,43 @@ jobs:
                       echo "skip=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
+                  # Only images the Linux suites passed: CI's `latest` job for this commit, from
+                  # the run that just finished, or the commit's newest push run. By hand, the
+                  # operator decides.
+                  if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+                      if [[ "$GITHUB_EVENT_NAME" != workflow_run ]]; then
+                          RUN_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&event=push&per_page=1" --jq '.workflow_runs[0].id // empty')
+                      fi
+                      result=''
+                      if [[ -n "$RUN_ID" ]]; then
+                          result=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" \
+                              --jq '[.jobs[] | select(.name == "Move latest to this commit")][0].conclusion // empty')
+                      fi
+                      if [[ "$result" != success ]]; then
+                          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+                              echo "::notice title=Version tags after CI::CI for $sha has not passed yet; this workflow copies the version tags when it does."
+                              echo "skip=true" >> "$GITHUB_OUTPUT"
+                              exit 0
+                          fi
+                          echo "::error title=No version tags::The Linux suites did not pass for $TAG ($sha, CI run $RUN_ID). Re-run that CI run; this workflow copies the version tags when it passes."
+                          exit 1
+                      fi
+                  fi
+                  # X.Y and X only while this is the highest release in them.
+                  names=$({ cut -d ' ' -f 2 "$RUNNER_TEMP/tags"; echo "$TAG"; } | sort -uV)
+                  tags=$version
+                  if [[ "$(grep -E "^v$major\.$minor\." <<< "$names" | tail -n 1)" == "$TAG" ]]; then
+                      tags+=" $major.$minor"
+                  fi
+                  if [[ "$(grep -E "^v$major\." <<< "$names" | tail -n 1)" == "$TAG" ]]; then
+                      tags+=" $major"
+                  fi
                   {
                       echo "skip=false"
                       echo "sha=$sha"
+                      echo "version=$version"
                       echo "image=ghcr.io/${GITHUB_REPOSITORY,,}-${IMAGE_SUFFIX}"
-                      echo "tags=$version ${BASH_REMATCH[1]}.${BASH_REMATCH[2]} ${BASH_REMATCH[1]}"
+                      echo "tags=$tags"
                   } >> "$GITHUB_OUTPUT"
             - name: Set up Docker Buildx
               if: steps.release.outputs.skip == 'false'
@@ -151,18 +192,30 @@ jobs:
               env:
                   IMAGE: ${{ steps.release.outputs.image }}
                   SHA: ${{ steps.release.outputs.sha }}
+                  VERSION: ${{ steps.release.outputs.version }}
                   TAGS: ${{ steps.release.outputs.tags }}
               run: |
                   source="$IMAGE:sha-$SHA"
                   digest=$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty' || true)
                   if [[ -z "$digest" ]]; then
-                      # CI is still building the release commit's images: its end runs this again.
-                      if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-                          echo "::notice title=Version tags after CI::$source is not published yet; this workflow copies the version tags when CI for $SHA finishes."
+                      echo "::error title=No image for the release::$source does not exist. Re-run CI for $SHA on main (its image job publishes sha-$SHA); this workflow copies the version tags when that run passes."
+                      exit 1
+                  fi
+                  # A registry error must not read as "no such tag yet".
+                  if existing=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' 2> "$RUNNER_TEMP/inspect"); then
+                      existing=$(jq -r '.digest // empty' <<< "$existing")
+                  elif grep -q ': not found' "$RUNNER_TEMP/inspect"; then
+                      existing=''
+                  else
+                      cat "$RUNNER_TEMP/inspect" >&2
+                      exit 1
+                  fi
+                  if [[ -n "$existing" && "$existing" != "$digest" ]]; then
+                      if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+                          echo "::notice title=Version tags left alone::$IMAGE:$VERSION is $existing, not $digest (sha-$SHA was rebuilt). Run this workflow by hand with v$VERSION to replace it."
                           exit 0
                       fi
-                      echo "::error title=No image for the release::$source does not exist. Re-run CI for $SHA on main (its image job publishes sha-$SHA); this workflow copies the version tags when that run finishes."
-                      exit 1
+                      echo "::warning title=Version tags replaced::$IMAGE:$VERSION was $existing; run by hand, so it now follows sha-$SHA ($digest)."
                   fi
                   args=()
                   for tag in $TAGS; do args+=(--tag "$IMAGE:$tag"); done
