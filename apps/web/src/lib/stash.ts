@@ -54,6 +54,12 @@ export function createSealedStash(options: {
     /* The worker's sealing and opening (driveStashSeal, driveStashOpen). */
     seal: (userId: string, name: string, bytes: Uint8Array) => Promise<Uint8Array[]>;
     open: (userId: string, name: string, stored: Blob) => Promise<Uint8Array[]>;
+    /*
+     * Whether this browser may have written a stash since its last wipe: set
+     * before a stash is written, cleared once a wipe succeeded. A wipe that
+     * can't reach the private file system is a failure only when it is set.
+     */
+    written: { set(): void; clear(): void; get(): boolean };
 }): SealedStash {
     // Moves on every wipe, so a write that began before one never lands after it.
     let generation = 0;
@@ -81,15 +87,19 @@ export function createSealedStash(options: {
         let root: StashRoot;
         try {
             root = await options.root();
-        } catch {
-            // No usable private file system (WebKit under automation, a private window): nothing
-            // could have been stashed, so there is nothing to wipe. Not a failure.
+        } catch (error) {
+            // No usable private file system (WebKit under automation, a private window). If no
+            // stash was ever written here there is nothing to wipe; if one was, files may be left
+            // that this could not reach, and the wipe must say so, so it is tried again.
+            if (options.written.get()) throw error;
             return;
         }
-        for (const name of [DIRECTORY, REVISION])
+        // The unsealed stash's folder too, should start-up not have got to it.
+        for (const name of [DIRECTORY, REVISION, PLAINTEXT_DIRECTORY])
             await root.removeEntry(name, { recursive: true }).catch((error: unknown) => {
                 if (!notFound(error)) throw error;
             });
+        options.written.clear();
     }
     const stash: SealedStash = {
         async put(bytes) {
@@ -99,6 +109,8 @@ export function createSealedStash(options: {
             try {
                 await stash.settle();
                 const started = generation;
+                // Marked before anything reaches the disk: a wipe that can't get there then fails.
+                options.written.set();
                 const parts = await options.seal(userId, name, bytes);
                 const handle = await (await directory()).getFileHandle(name, { create: true });
                 const writable = await handle.createWritable();
@@ -177,7 +189,28 @@ export function stashAvailable() {
     );
 }
 
+/* The written marker for this browser, in localStorage; unreadable counts as written. */
+const WRITTEN_KEY = 'hushos-stash-written';
+const writtenMarker = {
+    set: () => localStorage.setItem(WRITTEN_KEY, '1'),
+    clear: () => {
+        try {
+            localStorage.removeItem(WRITTEN_KEY);
+        } catch {
+            /* Kept, so a later wipe that can't reach the files still says so. */
+        }
+    },
+    get: () => {
+        try {
+            return localStorage.getItem(WRITTEN_KEY) !== null;
+        } catch {
+            return true;
+        }
+    },
+};
+
 export const uploadStash = createSealedStash({
+    written: writtenMarker,
     root: () => navigator.storage.getDirectory(),
     account: () => authClient.store.getState().unlockedUserId,
     lockRevision: () => authClient.store.getState().lockRevision,
