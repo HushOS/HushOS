@@ -43,6 +43,8 @@ beforeEach(resetDatabase);
 afterAll(closeDatabase);
 
 const DAY = 24 * 60 * 60 * 1000;
+const GIB = 1n << 30n;
+const MIB = 1n << 20n;
 const GRACE = 3 * DAY;
 
 type Root = { id: string; epoch: number };
@@ -149,39 +151,86 @@ async function family(input: {
  * An upload begin of `bytes` into `root` of `workspaceId` by `userId`, with its epoch drawn
  * now, so that the begin itself can be started later, at the same time as another.
  */
-async function prepareUpload(userId: string, workspaceId: string, root: Root, bytes: bigint) {
+async function prepareBegin(userId: string, workspaceId: string, root: Root, bytes: bigint) {
     const epoch = (await drive.allocateKeyEpochs(workspaceId, 1))!.from;
     const objectId = randomUUID();
-    return async () =>
-        (
-            await signed.beginUpload({
-                workspaceId,
-                userId,
-                node: {
-                    existing: false,
-                    id: randomUUID(),
-                    parentId: root.id,
-                    envelopes: {
-                        keyEpoch: epoch,
-                        parentKeyEpoch: root.epoch,
-                        keyEnvelope: randomBytes(72),
-                        metadataEnvelope: randomBytes(100),
-                    },
+    const nodeId = randomUUID();
+    const versionId = randomUUID();
+    const begin = async () =>
+        signed.beginUpload({
+            workspaceId,
+            userId,
+            node: {
+                existing: false,
+                id: nodeId,
+                parentId: root.id,
+                envelopes: {
+                    keyEpoch: epoch,
+                    parentKeyEpoch: root.epoch,
+                    keyEnvelope: randomBytes(72),
+                    metadataEnvelope: randomBytes(100),
                 },
-                version: { id: randomUUID(), contentKeyEnvelope: randomBytes(72) },
-                object: {
-                    id: objectId,
-                    objectKey: `ws/${workspaceId}/${objectId}`,
-                    contentSuite: 2,
-                    chunkSize: 8 * 1024 * 1024,
-                    chunkCount: 1,
-                    contentNonce: randomBytes(16),
-                    ciphertextSize: bytes,
+            },
+            version: { id: versionId, contentKeyEnvelope: randomBytes(72) },
+            object: {
+                id: objectId,
+                objectKey: `ws/${workspaceId}/${objectId}`,
+                contentSuite: 2,
+                chunkSize: 8 * 1024 * 1024,
+                chunkCount: 1,
+                contentNonce: randomBytes(16),
+                ciphertextSize: bytes,
+            },
+            multipartId: `mp-${objectId}`,
+            expiresAt: new Date(Date.now() + DAY),
+        });
+    return { begin, nodeId, versionId };
+}
+
+async function prepareUpload(userId: string, workspaceId: string, root: Root, bytes: bigint) {
+    const { begin } = await prepareBegin(userId, workspaceId, root, bytes);
+    return async () => (await begin()).status;
+}
+
+/* A finished upload of `bytes` into `who`'s top folder: a file whose current version is ready. */
+async function stored(who: Person, bytes: bigint) {
+    const { begin, nodeId, versionId } = await prepareBegin(
+        who.userId,
+        who.workspaceId,
+        who.root,
+        bytes,
+    );
+    const result = await begin();
+    if (result.status !== 'ok') throw new Error(`beginUpload ${result.status}`);
+    expect((await drive.startCompleting(who.workspaceId, result.uploadId)).status).toBe('ok');
+    expect((await drive.finishCompleting(who.workspaceId, result.uploadId, bytes)).status).toBe(
+        'published',
+    );
+    return { nodeId, versionId };
+}
+
+/* A copy of `source` into `who`'s top folder (no bytes move; the copy pays for the object). */
+async function copy(who: Person, source: { nodeId: string; versionId: string }) {
+    const epoch = (await drive.allocateKeyEpochs(who.workspaceId, 1))!.from;
+    return (
+        await signed.copyFile({
+            workspaceId: who.workspaceId,
+            userId: who.userId,
+            sourceNodeId: source.nodeId,
+            sourceVersionId: source.versionId,
+            node: {
+                id: randomUUID(),
+                parentId: who.root.id,
+                envelopes: {
+                    keyEpoch: epoch,
+                    parentKeyEpoch: who.root.epoch,
+                    keyEnvelope: randomBytes(72),
+                    metadataEnvelope: randomBytes(100),
                 },
-                multipartId: `mp-${objectId}`,
-                expiresAt: new Date(Date.now() + DAY),
-            })
-        ).status;
+            },
+            version: { id: randomUUID(), contentKeyEnvelope: randomBytes(84) },
+        })
+    ).status;
 }
 
 async function upload(who: Person, bytes: bigint) {
@@ -241,6 +290,19 @@ async function admission(groupId: string, admin: string, userId: string) {
         grants: [],
         seals: [],
         cache: { through: head!.rosterVersion + 1 },
+    };
+}
+
+/* The roster that removes `userId` (no roles), built on the group's head as stored. */
+async function removal(groupId: string, admin: string, userId: string) {
+    const call = await admission(groupId, admin, userId);
+    return {
+        ...call,
+        route: { kind: 'remove' as const, userId },
+        roster: {
+            ...call.roster,
+            changes: [{ userId, status: 'left', roles: [] }] as EntryChange[],
+        } as ParsedRoster,
     };
 }
 
@@ -331,12 +393,13 @@ describe('pool usage', () => {
             pool: { groupId },
         });
         expect(await drive.getStorage(areaIds[0]!)).toMatchObject({ used: 780n, reserved: 4n });
+        // The account's figures are the pool's, coarsened for a member (see 'what one member sees').
         expect(await auth.getStorageAllowance(sam.userId)).toEqual({
             workspaceId: sam.workspaceId,
             quotaBytes: '10000',
-            usedBytes: '780',
-            reservedBytes: '4',
-            availableBytes: String(10_000 - 784),
+            usedBytes: String(GIB),
+            reservedBytes: '0',
+            availableBytes: '0',
             pool: { groupId, name: 'The Family' },
         });
         expect((await billing.getPoolUsage(groupId)).used).toBe(780n);
@@ -433,7 +496,6 @@ describe('pool usage', () => {
             used: 300n,
             free: 700n,
         });
-        expect((await auth.getStorageAllowance(ana.userId))?.availableBytes).toBe('700');
         expect(await groups.leaveGroup(groupId, ana.userId)).toEqual({ status: 'left' });
         expect(await drive.getStorage(ana.workspaceId)).toMatchObject({
             allowance: 175n,
@@ -444,6 +506,80 @@ describe('pool usage', () => {
         // And the pool no longer counts anything of hers.
         await setBytes(ana.workspaceId, 60n);
         expect(await poolUsage(db, groupId)).toEqual({ used: 300n, reserved: 0n });
+    });
+});
+
+describe('what one member sees', () => {
+    test('one member’s storage figures can’t give away another’s bytes to better than 1 GB, nor their uploads', async () => {
+        const maya = await person();
+        const sam = await person();
+        const { groupId, areaIds } = await family({
+            organizer: maya,
+            members: [sam],
+            quota: 100n * GIB,
+        });
+        await setBytes(areaIds[0]!, 3n * GIB + 5n);
+        await setBytes(maya.workspaceId, 2n * GIB + 7n);
+        await setBytes(sam.workspaceId, 5n * GIB + 123n);
+        const before = await auth.getStorageAllowance(maya.userId);
+        expect(before).toEqual({
+            workspaceId: maya.workspaceId,
+            quotaBytes: String(100n * GIB),
+            usedBytes: String(11n * GIB),
+            reservedBytes: '0',
+            availableBytes: String(89n * GIB),
+            pool: { groupId, name: 'The Family' },
+        });
+        // Sam stores half a gigabyte more and starts a 300 MB upload: Maya's figures don't move.
+        await setBytes(sam.workspaceId, 5n * GIB + 500n * MIB + 12n, 300n * MIB);
+        expect(await auth.getStorageAllowance(maya.userId)).toEqual(before);
+        // A refusal names the free space the same way, to the whole GiB below.
+        const refused = await (
+            await prepareBegin(maya.userId, maya.workspaceId, maya.root, 200n * GIB)
+        ).begin();
+        expect(refused).toEqual({ status: 'over-quota', free: 89n * GIB });
+        // The server still checks to the byte: exactly what is free fits, one byte more doesn't.
+        const exact =
+            100n * GIB - (3n * GIB + 5n) - (2n * GIB + 7n) - (5n * GIB + 500n * MIB + 12n);
+        const free = exact - 300n * MIB;
+        expect(await upload(maya, free + 1n)).toBe('over-quota');
+        expect(await upload(maya, free)).toBe('ok');
+        expect(await auth.getStorageAllowance(maya.userId)).toMatchObject({
+            usedBytes: String(11n * GIB),
+            availableBytes: '0',
+            reservedBytes: '0',
+        });
+    });
+
+    test('the endpoint reads without the pool’s lock: a held pool doesn’t stall a member’s figures', async () => {
+        const maya = await person();
+        const sam = await person();
+        const { groupId } = await family({ organizer: maya, members: [sam], quota: 100n * GIB });
+        await holding(
+            'select group_id from group_storage where group_id = $1 for update',
+            [groupId],
+            async () => {
+                expect((await auth.getStorageAllowance(sam.userId))?.pool).toEqual({
+                    groupId,
+                    name: 'The Family',
+                });
+                return {};
+            },
+        );
+    });
+});
+
+describe('copies', () => {
+    test('a copy in a member’s own files spends the pool, not their own allowance', async () => {
+        const maya = await person();
+        const sam = await person(10_000n);
+        const { groupId } = await family({ organizer: maya, members: [sam], quota: 1000n });
+        const source = await stored(sam, 400n);
+        // 400 used, 600 free: one copy fits, the second (400 more against 200) doesn't, though
+        // Sam's own 10,000 would hold both.
+        expect(await copy(sam, source)).toBe('ok');
+        expect(await copy(sam, source)).toBe('over-quota');
+        expect(await poolUsage(db, groupId)).toEqual({ used: 800n, reserved: 0n });
     });
 });
 
@@ -554,6 +690,57 @@ describe('races', () => {
         expect(await uploading).toBe('over-quota');
         expect(await own(ana.workspaceId)).toEqual({ used: 0n, reserved: 0n });
         expect(await poolUsage(db, groupId)).toEqual({ used: 0n, reserved: 0n });
+    });
+
+    test('an upload that waited on a removal reads the membership again and lands on the removed member’s own allowance', async () => {
+        const organizer = await person();
+        const ana = await person(100n);
+        const { groupId } = await family({ organizer, members: [ana], quota: 1000n });
+        const begin = await prepareUpload(ana.userId, ana.workspaceId, ana.root, 500n);
+        const call = await removal(groupId, organizer.userId, ana.userId);
+        // Ana's membership row, held here, stops the removal after it took the pool's lock.
+        const { uploading, removing } = await holding(
+            'select user_id from group_memberships where group_id = $1 and user_id = $2 for update',
+            [groupId, ana.userId],
+            async (blocker) => {
+                const removing = groups.appendChain(call);
+                expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+                const uploading = begin();
+                expect(await lockWaiters(blocker, 2)).toBeGreaterThanOrEqual(2);
+                return { uploading, removing };
+            },
+        );
+        expect((await removing).status).toBe('ok');
+        expect(await stateIn(groupId, ana.userId)).toBe('removed');
+        expect(await uploading).toBe('over-quota');
+        expect(await own(ana.workspaceId)).toEqual({ used: 0n, reserved: 0n });
+    });
+
+    test('a group made before billing serialises its first plan against an upload into its folder', async () => {
+        const organizer = await person();
+        // No group_storage row: the folder keeps its own 10 GiB until a plan writes a pool.
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: organizer.userId,
+            areas: 1,
+        });
+        await holdArea(areaIds[0]!, organizer.userId);
+        const areaRoot = await rootOf(areaIds[0]!, organizer.userId);
+        const begin = await prepareUpload(organizer.userId, areaIds[0]!, areaRoot, 500n);
+        // The pool's lock, held here: the plan's write queues on it first, then the upload.
+        const { writing, uploading } = await holding(
+            'select pg_advisory_xact_lock($1::int, hashtext($2))',
+            [0x706f6f6c, groupId],
+            async (blocker) => {
+                const writing = apply(groupId, [plan(100n)]);
+                expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+                const uploading = begin();
+                expect(await lockWaiters(blocker, 2)).toBeGreaterThanOrEqual(2);
+                return { writing, uploading };
+            },
+        );
+        expect(await writing).toBe(true);
+        // Checked against the 100-byte pool the plan wrote, not the folder's old 10 GiB.
+        expect(await uploading).toBe('over-quota');
     });
 
     test('an admission counts the newcomer’s upload in flight: it waits for it, then refuses', async () => {

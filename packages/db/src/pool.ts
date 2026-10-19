@@ -35,16 +35,61 @@ type Conn = Tx | typeof db;
 /* The source billing writes a personal plan's entitlement under (applyCustomerState's provider). */
 export const PERSONAL_PLAN_SOURCE = 'polar';
 
-/* Whether the personal workspace `workspaceId` (a column or value) has a personal plan in force now. */
-function livePersonalPlan(workspaceId: SQL | string) {
-    return sql`exists (select 1 from ${storageEntitlements} where ${storageEntitlements.workspaceId} = ${workspaceId} and ${storageEntitlements.source} = ${PERSONAL_PLAN_SOURCE} and ${storageEntitlements.revokedAt} is null and ${storageEntitlements.startsAt} <= now() and (${storageEntitlements.expiresAt} is null or ${storageEntitlements.expiresAt} > now()))`;
+/*
+ * Every time rule here (a family plan's expiry, a personal plan's, a grant's)
+ * is judged at one instant, `at`, the app's clock read once the locks are
+ * held: never the database's `now()`, which is the transaction's start and so
+ * frozen from before it queued on the pool lock.
+ */
+const instant = (at: Date) => sql`${at.toISOString()}::timestamptz`;
+
+/* Whether the personal workspace `workspaceId` (a column or value) has a personal plan in force at `at`. */
+function livePersonalPlan(workspaceId: SQL | string, at: Date) {
+    return sql`exists (select 1 from ${storageEntitlements} where ${storageEntitlements.workspaceId} = ${workspaceId} and ${storageEntitlements.source} = ${PERSONAL_PLAN_SOURCE} and ${storageEntitlements.revokedAt} is null and ${storageEntitlements.startsAt} <= ${instant(at)} and (${storageEntitlements.expiresAt} is null or ${storageEntitlements.expiresAt} > ${instant(at)}))`;
 }
 
-async function hasLivePersonalPlan(tx: Conn, workspaceId: string) {
+async function hasLivePersonalPlan(tx: Conn, workspaceId: string, at: Date) {
     const result = await tx.execute<{ live: boolean }>(
-        sql`select ${livePersonalPlan(workspaceId)} as live`,
+        sql`select ${livePersonalPlan(workspaceId, at)} as live`,
     );
     return result.rows[0]?.live === true;
+}
+
+/*
+ * The pool lock (3.6): a transaction-scoped advisory lock keyed by the family,
+ * taken where the `group_storage` row is locked and in its place in the lock
+ * order. It exists whether or not the row does, so a group made before billing
+ * (no row yet) still serialises its first plan's write (applyGroupState)
+ * against uploads that read "no pool". A hash collision only serialises two
+ * pools more than needed.
+ */
+const POOL_LOCK_SPACE = 0x706f6f6c;
+export async function takePoolLock(tx: Tx, groupId: string) {
+    await tx.execute(
+        sql`select pg_advisory_xact_lock(${POOL_LOCK_SPACE}::int, hashtext(${groupId}))`,
+    );
+}
+
+export const GIB = 1n << 30n;
+
+/* Bytes rounded up to a whole GiB (an amount to free, a total shown). */
+export function wholeGibUp(bytes: bigint) {
+    return bytes <= 0n ? 0n : ((bytes + GIB - 1n) / GIB) * GIB;
+}
+
+/*
+ * A pool's figures as a member may see them (3.9, decision 6): what is used
+ * rounded up to a whole GiB, anything up to 1 GiB (nothing included) read as
+ * 1 GiB ("Under 1 GB"), and what is free rounded down, never a reserved
+ * figure. Exact totals would give away another member's usage, and the live
+ * reserved bytes the size and timing of their uploads. The server still
+ * checks every reservation against the exact figures.
+ */
+export function shownPoolUsed(bytes: bigint) {
+    return bytes <= GIB ? GIB : wholeGibUp(bytes);
+}
+export function shownPoolFree(bytes: bigint) {
+    return bytes <= 0n ? 0n : (bytes / GIB) * GIB;
 }
 
 /*
@@ -57,7 +102,7 @@ async function hasLivePersonalPlan(tx: Conn, workspaceId: string) {
  * left is not counted. Whether the plan is live doesn't matter here: a
  * family without one counts what would draw from it once it has one.
  */
-export async function poolUsage(tx: Conn, groupId: string) {
+export async function poolUsage(tx: Conn, groupId: string, at = new Date()) {
     const result = await tx.execute<{ used: string; reserved: string }>(sql`
         select coalesce(sum(s.used_bytes), 0)::text as used,
                coalesce(sum(s.reserved_bytes), 0)::text as reserved
@@ -71,7 +116,7 @@ export async function poolUsage(tx: Conn, groupId: string) {
             where m.group_id = ${groupId}
               and m.group_kind = 'family'
               and m.state = 'active'
-              and not ${livePersonalPlan(sql`p.workspace_id`)}
+              and not ${livePersonalPlan(sql`p.workspace_id`, at)}
         )
     `);
     const row = result.rows[0];
@@ -95,8 +140,8 @@ async function activeFamilyId(tx: Conn, userId: string) {
 }
 
 /* A plan is live from billing's write until its period end plus the grace days (3.1). */
-function planLive(pool: { expiresAt: Date | null }) {
-    return pool.expiresAt !== null && pool.expiresAt.getTime() > Date.now();
+function planLive(pool: { expiresAt: Date | null }, at: Date) {
+    return pool.expiresAt !== null && pool.expiresAt.getTime() > at.getTime();
 }
 
 async function readPool(tx: Conn, groupId: string, lock: boolean) {
@@ -104,7 +149,9 @@ async function readPool(tx: Conn, groupId: string, lock: boolean) {
         .select({ quotaBytes: groupStorage.quotaBytes, expiresAt: groupStorage.expiresAt })
         .from(groupStorage)
         .where(eq(groupStorage.groupId, groupId));
-    const [row] = lock ? await query.for('update') : await query;
+    if (!lock) return (await query)[0] ?? null;
+    await takePoolLock(tx as Tx, groupId);
+    const [row] = await query.for('update');
     return row ?? null;
 }
 
@@ -126,6 +173,7 @@ async function ownFigures(
     tx: Conn,
     workspaceId: string,
     own: { baseQuotaBytes: bigint; usedBytes: bigint; reservedBytes: bigint },
+    at: Date,
 ): Promise<StorageFigures> {
     const grants = await tx
         .select({ quotaBytes: storageEntitlements.quotaBytes })
@@ -134,8 +182,8 @@ async function ownFigures(
             and(
                 eq(storageEntitlements.workspaceId, workspaceId),
                 isNull(storageEntitlements.revokedAt),
-                sql`${storageEntitlements.startsAt} <= now()`,
-                sql`(${storageEntitlements.expiresAt} is null or ${storageEntitlements.expiresAt} > now())`,
+                sql`${storageEntitlements.startsAt} <= ${instant(at)}`,
+                sql`(${storageEntitlements.expiresAt} is null or ${storageEntitlements.expiresAt} > ${instant(at)})`,
             ),
         );
     const allowance = grants.reduce((sum, grant) => sum + grant.quotaBytes, own.baseQuotaBytes);
@@ -152,10 +200,11 @@ async function poolFigures(
     tx: Conn,
     groupId: string,
     pool: { quotaBytes: bigint; expiresAt: Date | null },
+    at: Date,
 ): Promise<StorageFigures> {
-    const { used, reserved } = await poolUsage(tx, groupId);
+    const { used, reserved } = await poolUsage(tx, groupId, at);
     // Past the plan's period and grace (or before any plan), the pool is empty.
-    const allowance = planLive(pool) ? pool.quotaBytes : 0n;
+    const allowance = planLive(pool, at) ? pool.quotaBytes : 0n;
     return { allowance, used, reserved, free: allowance - used - reserved, pool: { groupId } };
 }
 
@@ -206,14 +255,15 @@ export async function settlingPool<T>(work: () => Promise<T>): Promise<T> {
  * 1. resolve the pool: a family folder's own family, or for a personal
  *    workspace its owner's active family membership (live plan or not, so a
  *    plan going live, which billing writes under this lock, cannot slip past);
- * 2. lock the family's `group_storage` row;
+ * 2. take the family's pool lock (takePoolLock) and its `group_storage` row;
  * 3. for a personal workspace, read the membership again: every membership
  *    change takes the same lock, so under it the membership is settled, and a
  *    change since step 1 throws PoolMovedError;
  * 4. lock the workspace's `workspace_storage` row (for a personal workspace
  *    that is in no family, then read the membership again: an admission locks
  *    the newcomer's row, so one that landed meanwhile is seen here);
- * 5. sum the pool (poolUsage) or the workspace's own allowance.
+ * 5. read the clock once (every time rule below is judged then) and sum the
+ *    pool (poolUsage) or the workspace's own allowance.
  *
  * Without `lock`, the same figures read once, for display.
  */
@@ -235,8 +285,11 @@ export async function storageFigures(
         const pool = await readPool(tx, owner.groupId, lock);
         const own = await readOwn(tx, workspaceId, lock);
         if (!own) return null;
+        const at = new Date();
         // A group made before billing has no pool: its areas keep their own allowances.
-        return pool ? poolFigures(tx, owner.groupId, pool) : ownFigures(tx, workspaceId, own);
+        return pool
+            ? poolFigures(tx, owner.groupId, pool, at)
+            : ownFigures(tx, workspaceId, own, at);
     }
     if (billing && owner.userId) {
         const familyId = await activeFamilyId(tx, owner.userId);
@@ -246,17 +299,18 @@ export async function storageFigures(
                 throw new PoolMovedError();
             const own = await readOwn(tx, workspaceId, lock);
             if (!own) return null;
-            if (pool && planLive(pool) && !(await hasLivePersonalPlan(tx, workspaceId)))
-                return poolFigures(tx, familyId, pool);
-            return ownFigures(tx, workspaceId, own);
+            const at = new Date();
+            if (pool && planLive(pool, at) && !(await hasLivePersonalPlan(tx, workspaceId, at)))
+                return poolFigures(tx, familyId, pool, at);
+            return ownFigures(tx, workspaceId, own, at);
         }
         const own = await readOwn(tx, workspaceId, lock);
         if (!own) return null;
         if (lock && (await activeFamilyId(tx, owner.userId)) !== null) throw new PoolMovedError();
-        return ownFigures(tx, workspaceId, own);
+        return ownFigures(tx, workspaceId, own, new Date());
     }
     const own = await readOwn(tx, workspaceId, lock);
-    return own ? ownFigures(tx, workspaceId, own) : null;
+    return own ? ownFigures(tx, workspaceId, own, new Date()) : null;
 }
 
 /* The family a pool belongs to, by name, for the account's storage figures. */
@@ -284,7 +338,7 @@ export async function admissionFits(
 ) {
     if (billingEnv.BILLING_PROVIDER === 'none') return true;
     const pool = await readPool(tx, groupId, options.lock);
-    if (!pool || !planLive(pool)) return true;
+    if (!pool) return true;
     const [personal] = await tx
         .select({ workspaceId: personalWorkspaces.workspaceId })
         .from(personalWorkspaces)
@@ -292,7 +346,9 @@ export async function admissionFits(
     if (!personal) return true;
     const own = await readOwn(tx, personal.workspaceId, options.lock);
     if (!own) return true;
-    const { used, reserved } = await poolUsage(tx, groupId);
+    const at = new Date();
+    if (!planLive(pool, at)) return true;
+    const { used, reserved } = await poolUsage(tx, groupId, at);
     return own.usedBytes + own.reservedBytes <= pool.quotaBytes - used - reserved;
 }
 
@@ -302,6 +358,7 @@ export async function admissionFits(
  * pool either finishes before the change or reads the membership after it.
  */
 export async function lockPool(tx: Tx, groupId: string) {
+    await takePoolLock(tx, groupId);
     await tx
         .select({ groupId: groupStorage.groupId })
         .from(groupStorage)

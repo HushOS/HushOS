@@ -1561,9 +1561,11 @@ export async function changeGroupPlan(
     // Everything the pool holds: the family folders and every pooled member's own files.
     const { used } = await billingRepository.getPoolUsage(groupId);
     const room = BigInt(target.quotaBytes);
+    // Checked exactly, said in whole GiB rounded up: the payer manages the family, and managers
+    // see usage to the whole gigabyte (docs/families-shared-pool.md 3.9), never to the byte.
     if (used > room)
         throw new BillingError(
-            `Your family stores ${spaceOf(used)}, more than ${tierName(target)}’s ${spaceOf(room)}. Free at least ${spaceOf(used - room, 'up')}, then change the plan.`,
+            `Your family stores ${spaceOf(billingRepository.wholeGibUp(used))}, more than ${tierName(target)}’s ${spaceOf(room)}. Free at least ${spaceOf(billingRepository.wholeGibUp(used - room))}, then change the plan.`,
             409,
         );
     // The move and any recorded cut together, as Polar's one pending update must hold them.
@@ -1752,7 +1754,8 @@ export async function getGroupBilling(
     // files against the plan's quota, which is empty before a plan and past its period and grace.
     const storage = pool
         ? {
-              usedBytes: usage.used.toString(),
+              // Whole GiB, rounded up: exact, it would give away one member's usage to another.
+              usedBytes: billingRepository.shownPoolUsed(usage.used).toString(),
               quotaBytes:
                   pool.expiresAt !== null && pool.expiresAt.getTime() > Date.now()
                       ? pool.quotaBytes.toString()

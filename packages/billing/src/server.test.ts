@@ -2401,9 +2401,10 @@ describe('family summary', () => {
         await billing.reconcileGroup(groupId);
         // Lapsed: the pool row stays at zero, so the old per-folder allowance never comes back.
         expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
+        // Nothing stored reads as the "Under 1 GB" bucket: 1 GiB, never an exact figure.
         expect((await priced(billing.getGroupBilling(userOf(organizer), groupId))).storage).toEqual(
             {
-                usedBytes: '0',
+                usedBytes: GIB.toString(),
                 quotaBytes: '0',
             },
         );
@@ -2599,13 +2600,13 @@ describe('family tiers', () => {
         await expect(billing.changeGroupPlan(payer, groupId, PLUS)).rejects.toMatchObject({
             status: 409,
             message:
-                'Your family stores 1.2 TB, more than Family Plus’s 800 GB. Free at least 428.8 GB, then change the plan.',
+                'Your family stores 1.2 TB, more than Family Plus’s 800 GB. Free at least 429 GB, then change the plan.',
         });
-        // One byte over: refused, and the amount to free rounds up, never to nothing.
+        // One byte over: refused, and the amount to free rounds up to a whole GB, never to nothing.
         await setTestUsedBytes(areaIds[0]!, PLUS_POOL + 1n);
         await expect(billing.changeGroupPlan(payer, groupId, PLUS)).rejects.toMatchObject({
             status: 409,
-            message: expect.stringContaining('Free at least 0.01 MB'),
+            message: expect.stringContaining('Free at least 1 GB'),
         });
         expect(updates()).toEqual([]);
         expect((await live(groupId))?.intendedProductId).toBeNull();

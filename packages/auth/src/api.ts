@@ -52,7 +52,9 @@ export type StorageAllowance = {
     availableBytes: string;
     /*
      * The family whose pool these figures are, while the account's files draw from it
-     * (docs/families-shared-pool.md 3.1); null on the account's own allowance.
+     * (docs/families-shared-pool.md 3.1); null on the account's own allowance. While set, the
+     * figures are whole GiB (used rounded up, available down) and `reservedBytes` is "0", so
+     * they never give away another member's usage (3.9); uploads are still checked exactly.
      */
     pool: { groupId: string; name: string } | null;
 };

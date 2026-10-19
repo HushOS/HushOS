@@ -1,6 +1,8 @@
 import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
-import { poolUsage } from './pool';
+import { poolUsage, takePoolLock } from './pool';
+
+export { shownPoolUsed, wholeGibUp } from './pool';
 import {
     accountIntents,
     billingCustomers,
@@ -769,6 +771,9 @@ export async function applyGroupState(input: {
                 : 0n,
             expiresAt: plan ? new Date(plan.currentPeriodEnd.getTime() + input.graceMs) : null,
         };
+        // Under the pool lock, as every upload's check takes it, even for a group whose first
+        // plan this is (no row to lock yet).
+        await takePoolLock(tx, input.groupId);
         await tx
             .insert(groupStorage)
             .values({ groupId: input.groupId, ...pool })
