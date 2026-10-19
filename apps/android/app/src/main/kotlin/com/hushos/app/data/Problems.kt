@@ -35,8 +35,8 @@ object Problems {
         }
     }
 
-    /* No network, however the call said it: Auth's calls throw AuthFailure(UNREACHABLE) where the drive's throw Unreachable. */
-    fun offline(error: Throwable): Boolean = error is Unreachable || (error is AuthFailure && error.message == Auth.UNREACHABLE)
+    /* No network, by type: the drive's calls throw Unreachable, the account's AuthUnreachable. */
+    fun offline(error: Throwable): Boolean = error is Unreachable || error is AuthUnreachable
 
     /*
      * One sentence for a line under a field or a notice: the alert's sentence for what is known, and

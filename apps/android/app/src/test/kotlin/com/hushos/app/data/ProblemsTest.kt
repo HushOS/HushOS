@@ -15,12 +15,14 @@ class ProblemsTest {
         assertEquals(true, TransferQueue.isNoRoom(Problems.say(ApiError(413, "Payload too large"), "The transfer failed.")))
     }
 
-    /* Auth's calls say no network as AuthFailure(UNREACHABLE): that is offline (the line at the top), not "That didn't work". */
+    /* Auth's calls say no network as AuthUnreachable: that is offline (the line at the top), not "That didn't work". */
     @Test
     fun noNetworkIsOfflineHoweverTheCallSaysIt() {
         assertEquals("You’re offline", Problems.of(Unreachable()).title)
-        assertEquals("You’re offline", Problems.of(AuthFailure(Auth.UNREACHABLE)).title)
-        assertEquals(true, Problems.offline(AuthFailure(Auth.UNREACHABLE)))
+        assertEquals("You’re offline", Problems.of(AuthUnreachable()).title)
+        assertEquals(true, Problems.offline(AuthUnreachable()))
+        // By type, not by words: a refusal that happens to use the same sentence is not being offline.
+        assertEquals(false, Problems.offline(AuthFailure(Auth.UNREACHABLE)))
         // A refusal from the server is not being offline, and a local file error doesn't turn the offline line on.
         assertEquals(false, Problems.offline(AuthFailure("That password isn’t right. Check it and try again.")))
         assertEquals(false, Problems.offline(java.io.IOException("No space left on device")))
@@ -54,6 +56,18 @@ class ProblemsTest {
         }
         assertEquals("That didn’t work", Problems.of(IllegalStateException(raw)).title)
         assertEquals("Couldn’t share. Try again.", Problems.say(IllegalStateException(raw), "Couldn’t share. Try again."))
+    }
+
+    /* Recovery's failures were the core's text, or another failure's text with a sentence added: now fixed words only. */
+    @Test
+    fun recoverySaysFixedWordsWhateverTheCoreOrServerSaid() {
+        assertEquals(Auth.PHRASE_REFUSED, Auth.phraseRefused("CoreException.Invalid: The recovery phrase does not match this account"))
+        val odd = Auth.phraseRefused("CoreException.Invalid: envelope version 7 is not supported")
+        assertEquals(Auth.PHRASE_UNCHECKED, odd)
+        assertEquals(Auth.RESET_UNREACHABLE, Auth.resetUnfinished(AuthUnreachable()))
+        val server = Auth.resetUnfinished(AuthFailure("attempt token 9f2c expired"))
+        assertEquals(Auth.RESET_UNFINISHED, server)
+        assertFalse(server.contains("9f2c"))
     }
 
     @Test
