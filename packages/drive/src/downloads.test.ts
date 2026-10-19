@@ -105,11 +105,15 @@ function harness(options: {
     offline?: () => boolean;
     /* What a suite 3 version's envelope would say, by object id. */
     sealed?: Record<string, { plaintextSize: number; thumbnailBytes: number }>;
+    /* Opening a file's folder, which a test can hold. */
+    ensureOpen?: () => Promise<void>;
 }) {
     const calls: string[] = [];
     const attempts = new Map<string, number>();
     const pendingChunks = new Map<string, () => void>();
     const closed: string[] = [];
+    /* The worker's open keys, by reader, as it holds them: the object each reader opened. */
+    const readers = new Map<string, string>();
     let inFlight = 0;
     let peakInFlight = 0;
     let urlsIssued = 0;
@@ -122,7 +126,8 @@ function harness(options: {
         calls.push(operation);
         switch (operation) {
             case 'driveDownloadOpen': {
-                const { version } = input as CryptoRequests['driveDownloadOpen'];
+                const { reader, version } = input as CryptoRequests['driveDownloadOpen'];
+                readers.set(reader, version.objectId);
                 // Suite 1 keeps the size on the row; suite 3 seals it, and the test passes it in.
                 const sealed = options.sealed?.[version.objectId];
                 const plaintextSize = sealed?.plaintextSize ?? Number(version.plaintextSize);
@@ -137,8 +142,10 @@ function harness(options: {
                 } as CryptoResults[K];
             }
             case 'driveDownloadChunk': {
-                const { objectId, index, url } = input as CryptoRequests['driveDownloadChunk'];
+                const { reader, index, url } = input as CryptoRequests['driveDownloadChunk'];
                 expect(url).toMatch(/^https:\/\/store\//);
+                const objectId = readers.get(reader);
+                if (!objectId) throw new Error('This download is no longer open. Start it again.');
                 const key = `${objectId}:${index}`;
                 const attempt = (attempts.get(key) ?? 0) + 1;
                 attempts.set(key, attempt);
@@ -165,9 +172,13 @@ function harness(options: {
                     inFlight--;
                 }
             }
-            case 'driveDownloadClose':
-                closed.push((input as CryptoRequests['driveDownloadClose']).objectId);
-                return { closed: true } as CryptoResults[K];
+            case 'driveDownloadClose': {
+                const { reader } = input as CryptoRequests['driveDownloadClose'];
+                const objectId = readers.get(reader);
+                if (objectId) closed.push(objectId);
+                readers.delete(reader);
+                return { closed: objectId !== undefined } as CryptoResults[K];
+            }
             default:
                 throw new Error(`unexpected ${operation}`);
         }
@@ -239,7 +250,7 @@ function harness(options: {
                 children: options.folders?.[folderId] ?? [],
             };
         },
-        ensureOpen: async () => {},
+        ensureOpen: options.ensureOpen ?? (async () => {}),
         zip: options.zip ? zip : undefined,
         lookahead: options.lookahead,
         maxAttempts: 3,
@@ -251,6 +262,10 @@ function harness(options: {
         manager,
         calls,
         closed,
+        /* The keys the worker holds open now. */
+        get openKeys() {
+            return readers.size;
+        },
         listed,
         sinks,
         zipped,
@@ -479,6 +494,54 @@ describe('download manager', () => {
         await reader.close();
         expect(h.closed).toEqual(['o-r']);
         await expect(reader.read(0, 1)).rejects.toThrow(/closed/);
+    });
+
+    test('a reader closed after another of the same file opened leaves the other reading', async () => {
+        // The viewer reopening for the same file: the old reader is closed as the new one
+        // opens, and the worker must close the old one's key only.
+        const h = harness({});
+        const size = 2 * CHUNK;
+        const old = h.manager.openReader(file('r', size), 2);
+        const first = old.read(0, 1);
+        await settle(100);
+        await first;
+        const fresh = h.manager.openReader(file('r', size), 2);
+        const opening = fresh.read(0, 1);
+        await settle(100);
+        expect((await opening).byteLength).toBe(1);
+        // The old one's close reaches the worker after the new one opened.
+        await old.close();
+        const later = fresh.read(CHUNK, 1);
+        await settle(100);
+        expect((await later).byteLength).toBe(1);
+        expect(h.closed).toEqual(['o-r']);
+        await fresh.close();
+        expect(h.closed).toEqual(['o-r', 'o-r']);
+    });
+
+    test('a reader closed while its folder is still opening leaves no key in the worker', async () => {
+        let folderOpen: () => void = () => {};
+        const h = harness({
+            ensureOpen: () => new Promise<void>((resolve) => (folderOpen = resolve)),
+        });
+        const reader = h.manager.openReader(file('r', CHUNK), 2);
+        const read = expect(reader.read(0, 1)).rejects.toThrow();
+        const closing = reader.close();
+        folderOpen();
+        await closing;
+        await read;
+        await settle(100);
+        expect(h.openKeys).toBe(0);
+    });
+
+    test('a file that changed while it opened leaves no key in the worker', async () => {
+        // The worker reads another size from the version than the listing gave.
+        const h = harness({ sealed: { 'o-r': { plaintextSize: 10, thumbnailBytes: 0 } } });
+        const reader = h.manager.openReader(file('r', CHUNK), 2);
+        const read = expect(reader.read(0, 1)).rejects.toThrow(/changed while it was being opened/);
+        await settle(100);
+        await read;
+        expect(h.openKeys).toBe(0);
     });
 
     test('a padded file is fetched to the end of its object and written to the end of the file', async () => {

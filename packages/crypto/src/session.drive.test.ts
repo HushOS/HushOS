@@ -698,6 +698,7 @@ describe('the thumbnail trailer', () => {
         })) as { nodes: { content?: { plaintextSize: number; thumbnailBytes: number } }[] };
         expect(listed.nodes[0]!.content).toEqual({ plaintextSize: size, thumbnailBytes: 1234 });
         const download = await call('driveDownloadOpen', {
+            reader: 'preview',
             workspaceId: WS,
             nodeId: B,
             version: envelope,
@@ -948,6 +949,7 @@ describe('a suite 3 object end to end', () => {
             plaintextSize: null,
         };
         const opened = (await call('driveDownloadOpen', {
+            reader: 'preview',
             workspaceId: WS,
             nodeId: B,
             version,
@@ -968,7 +970,7 @@ describe('a suite 3 object end to end', () => {
         try {
             for (let index = 0; index < opened.chunkCount; index++) {
                 const chunk = (await call('driveDownloadChunk', {
-                    objectId: D,
+                    reader: 'preview',
                     url: 'https://store/object',
                     index,
                 })) as { ok: true; plaintext: Uint8Array };
@@ -982,6 +984,42 @@ describe('a suite 3 object end to end', () => {
         expect(Buffer.concat(received).equals(Buffer.from(content))).toBe(true);
         // The last range runs to the object's end, padding and trailer included.
         expect(ranges[1]).toBe(`bytes=${lastStart}-${prepared.ciphertextSize - 1}`);
+
+        // A second reader of the same object (the viewer reopened for it) holds a key of its
+        // own: the first one closing takes only its own, and the second reads on.
+        await call('driveDownloadOpen', {
+            reader: 'reopened',
+            workspaceId: WS,
+            nodeId: B,
+            version,
+            contentNonce: prepared.contentNonce,
+        });
+        expect(await call('driveDownloadClose', { reader: 'preview' })).toEqual({ closed: true });
+        vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+            const [start, end] = (init.headers as Record<string, string>)
+                .Range!.replace('bytes=', '')
+                .split('-')
+                .map(Number) as [number, number];
+            return new Response(object.slice(start, end + 1), { status: 206 });
+        });
+        try {
+            const again = (await call('driveDownloadChunk', {
+                reader: 'reopened',
+                url: 'https://store/object',
+                index: 0,
+            })) as { ok: true; plaintext: Uint8Array };
+            expect(Buffer.from(again.plaintext).equals(Buffer.from(received[0]!))).toBe(true);
+            await expect(
+                call('driveDownloadChunk', {
+                    reader: 'preview',
+                    url: 'https://store/object',
+                    index: 0,
+                }),
+            ).rejects.toThrow(/no longer open/);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(await call('driveDownloadClose', { reader: 'reopened' })).toEqual({ closed: true });
     });
 
     test('a suite 2 object written before padding still downloads', async () => {
@@ -1042,6 +1080,7 @@ describe('a suite 3 object end to end', () => {
         });
         expect(object).toHaveLength(text.length + 16);
         await call('driveDownloadOpen', {
+            reader: 'preview',
             workspaceId: WS,
             nodeId: B,
             version: {
@@ -1056,7 +1095,7 @@ describe('a suite 3 object end to end', () => {
         vi.stubGlobal('fetch', async () => new Response(object.slice(), { status: 206 }));
         try {
             const chunk = (await call('driveDownloadChunk', {
-                objectId: D,
+                reader: 'preview',
                 url: 'https://store/object',
                 index: 0,
             })) as { ok: true; plaintext: Uint8Array };
