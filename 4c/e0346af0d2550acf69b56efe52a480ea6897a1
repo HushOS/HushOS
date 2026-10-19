@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobEnd.kt
+  s_c56e31c87cddde::t_65429b0a12bd2c 8-12,15,24-26,32
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_c56e31c87cddde::t_02b8e328b37727 276-278,333-339
+apps/android/app/src/test/kotlin/com/hushos/app/data/JobEndTest.kt
+  s_c56e31c87cddde::t_c708cfc796006c 48-52,54,57-58,64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ce0346af0d2550acf69b56efe52a480ea6897a1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
