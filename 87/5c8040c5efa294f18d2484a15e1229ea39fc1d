@@ -1,0 +1,39 @@
+DESIGN.md
+  s_c56e31c87cddde::t_781b5c2355f60a 527
+packages/emails/scripts/render.tsx
+  s_c56e31c87cddde::t_319802b1a70724 9,13-22,26,37,42,57,68,73,93,110,117,122,139,148,157
+packages/emails/src/rendered/group-invitation.ts
+  s_c56e31c87cddde::t_97e292a677e147 3-4
+packages/emails/src/rendered/security-notice.ts
+  s_c56e31c87cddde::t_815c9e03cd703f 4-5,8-9,12-13,16-17
+packages/emails/src/rendered/share-notice.ts
+  s_c56e31c87cddde::t_3f7cc8eb8cd98d 4-5,8-9
+packages/emails/src/rendered/verify-email.ts
+  s_c56e31c87cddde::t_845602be21a73b 4-5,8-9
+packages/emails/src/service.ts
+  s_c56e31c87cddde::t_030aee292b7f1c 1,109-110,119-146,151,153-156,159,161-162,164-176,178-190,194-205,208-209,215-216,220,224-234,241-242,244-257
+packages/emails/src/templates/group-invitation.tsx
+  s_c56e31c87cddde::t_b8a714c0385c7a 28-29,45,53-54,158,177,190-209,225,236,288-294
+packages/emails/src/templates/security-notice.tsx
+  s_c56e31c87cddde::t_7e68ee3f4a6f5c 33-34,90,97-98,196,215,222-241,257,268,314-320
+packages/emails/src/templates/share-notice.tsx
+  s_c56e31c87cddde::t_52249d01bf59fd 26-27,43,51-52,155,174,182-201,217,228,275-281
+packages/emails/src/templates/verify-email.tsx
+  s_c56e31c87cddde::t_15f3e76cef1eee 24-25,38,45-46,154,175,184-203,219,230,298-304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "875c8040c5efa294f18d2484a15e1229ea39fc1d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
