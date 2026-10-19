@@ -43,9 +43,17 @@ vi.mock('@/lib/session', () => ({ forgetSession }));
 const loadPage = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/load-page', () => ({ loadPage }));
 
-const { clearDevice, forgetDevice, leaveApp, SIGN_OUT_TIMEOUT_MS } = await import('./sign-out');
+const { clearDevice, forgetDevice, leaveApp, NAVIGATE_TIMEOUT_MS, SIGN_OUT_TIMEOUT_MS } =
+    await import('./sign-out');
 const { useAuthView } = await import('./auth-view');
-const { afterSignOut, signOutSettled } = await import('./sign-in-gate');
+const {
+    afterSignOut,
+    markSignedOut,
+    signOutSettled,
+    SIGN_IN_WAIT_MS,
+    SIGNED_OUT_MEANWHILE,
+    UNFINISHED,
+} = await import('./sign-in-gate');
 
 beforeEach(() => {
     stores.transfers.mockResolvedValue(undefined);
@@ -296,6 +304,7 @@ describe('signing out of the app', () => {
             },
             register: async () => {},
             recover: async () => {},
+            logout: async () => {},
         });
         // The person signs straight back in from the sign-in page.
         const { router } = leaving(() => {
@@ -307,6 +316,101 @@ describe('signing out of the app', () => {
         await left;
         await signIn;
         expect(families).toBe('new account');
+    });
+
+    /* A client whose sign-ins say what they opened, behind the sign-out gate. */
+    function sessions() {
+        const opened: string[] = [];
+        const closed: string[] = [];
+        let finishLogin: (() => void) | undefined;
+        const client = afterSignOut({
+            login: async (who: string, slow = false) => {
+                if (slow) await new Promise<void>((resolve) => (finishLogin = resolve));
+                opened.push(who);
+            },
+            register: async () => {},
+            recover: async () => {},
+            logout: async () => {
+                closed.push(opened.at(-1) ?? '');
+            },
+        });
+        return { client, opened, closed, finishLogin: () => finishLogin?.() };
+    }
+
+    test('an unlock queued behind a stalled sign-out is refused once that sign-out lands', async () => {
+        vi.useFakeTimers();
+        try {
+            const { router, navigate } = leaving();
+            const answer = stalledLogout();
+            const first = expect(leaveApp(router)).rejects.toThrow('too long');
+            await vi.advanceTimersByTimeAsync(SIGN_OUT_TIMEOUT_MS);
+            await first;
+            // On the locked screen, the person unlocks while the logout is still out.
+            const { client, opened } = sessions();
+            const unlock = client.login('maya');
+            const refused = expect(unlock).rejects.toThrow(SIGNED_OUT_MEANWHILE);
+            answer();
+            await vi.advanceTimersByTimeAsync(0);
+            await refused;
+            expect(navigate).toHaveBeenCalledOnce();
+            // No session was opened behind the sign-in page.
+            expect(opened).toEqual([]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test('a sign-in that got its session as a sign-out landed signs out again', async () => {
+        const { client, opened, closed, finishLogin } = sessions();
+        const signIn = client.login('maya', true);
+        const refused = expect(signIn).rejects.toThrow(SIGNED_OUT_MEANWHILE);
+        await expect.poll(() => typeof finishLogin).toBe('function');
+        markSignedOut();
+        finishLogin();
+        await refused;
+        expect(opened).toEqual(['maya']);
+        expect(closed).toEqual(['maya']);
+    });
+
+    test('a sign-out that never finishes holds sign-in only so long, then lets it go', async () => {
+        vi.useFakeTimers();
+        try {
+            const { router } = leaving();
+            const answer = stalledLogout();
+            const left = expect(leaveApp(router)).rejects.toThrow('too long');
+            const { client, opened } = sessions();
+            const waiting = expect(client.login('maya')).rejects.toThrow(UNFINISHED);
+            await vi.advanceTimersByTimeAsync(SIGN_IN_WAIT_MS);
+            await left;
+            await waiting;
+            expect(opened).toEqual([]);
+            // Let go: the next sign-in does not wait on it again.
+            const next = client.login('maya');
+            await vi.advanceTimersByTimeAsync(0);
+            await next;
+            expect(opened).toEqual(['maya']);
+            // Clean up: the late answer finishes that sign-out.
+            answer();
+            await vi.advanceTimersByTimeAsync(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test('a sign-in page that never opens is loaded from the server instead', async () => {
+        vi.useFakeTimers();
+        try {
+            const { router, clear, draw } = leaving(() => new Promise(() => {}));
+            const left = leaveApp(router);
+            await vi.advanceTimersByTimeAsync(NAVIGATE_TIMEOUT_MS);
+            vi.spyOn(console, 'error').mockImplementation(() => {});
+            await left;
+            expect(loadPage).toHaveBeenCalledExactlyOnceWith('/login');
+            expect(clear).toHaveBeenCalledOnce();
+            expect(draw()).toBeNull();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     test('forgets every decrypted copy and the cache even when one part fails, and says so only in the log', async () => {

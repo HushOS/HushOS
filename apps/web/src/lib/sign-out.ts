@@ -3,7 +3,7 @@ import { authClient } from '@/lib/auth-client';
 import { holdAuthView } from '@/lib/auth-view';
 import { forgetReturn } from '@/lib/return-to';
 import { forgetSession } from '@/lib/session';
-import { holdSignIn } from '@/lib/sign-in-gate';
+import { holdSignIn, markSignedOut } from '@/lib/sign-in-gate';
 import { loadPage } from '@/lib/load-page';
 
 /*
@@ -57,6 +57,8 @@ export async function signOut() {
 
 /* Past this, a sign-out that has not finished is said to have failed, and can be tried again. */
 export const SIGN_OUT_TIMEOUT_MS = 15_000;
+/* Past this, the sign-in page is loaded from the server instead of opened in the app. */
+export const NAVIGATE_TIMEOUT_MS = 10_000;
 
 type Attempt = {
     work: Promise<void>;
@@ -82,7 +84,11 @@ function signOutOnce(router: ReturnType<typeof useRouter>) {
     // A sign-in waits until this sign-out, and the wipe after it, are done.
     holdSignIn(
         current.work.then(
-            () => finish(current),
+            () => {
+                // Signed out on the server: anything queued to sign in before now is stale.
+                markSignedOut();
+                return finish(current);
+            },
             () => {},
         ),
     );
@@ -102,7 +108,7 @@ export async function leaveApp(
     const release = holdAuthView({ dim });
     const current = signOutOnce(router);
     try {
-        await withTimeout(current.work, SIGN_OUT_TIMEOUT_MS);
+        await withTimeout(current.work, SIGN_OUT_TIMEOUT_MS, 'Signing out took too long.');
         await finish(current);
     } finally {
         release();
@@ -124,7 +130,11 @@ function finish(current: Attempt) {
         forgetSession(queryClient, false);
         let navigated = true;
         try {
-            await router.navigate({ to: '/login' });
+            await withTimeout(
+                router.navigate({ to: '/login' }),
+                NAVIGATE_TIMEOUT_MS,
+                'The sign-in page took too long to open.',
+            );
         } catch (error) {
             console.error('The sign-in page did not open; loading it instead.', error);
             navigated = false;
@@ -137,10 +147,10 @@ function finish(current: Attempt) {
     return current.finished;
 }
 
-function withTimeout<T>(work: Promise<T>, ms: number) {
+function withTimeout<T>(work: Promise<T>, ms: number, message: string) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stalled = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Signing out took too long.')), ms);
+        timer = setTimeout(() => reject(new Error(message)), ms);
     });
     return Promise.race([work, stalled]).finally(() => clearTimeout(timer));
 }
