@@ -44,6 +44,17 @@ struct SignInView: View {
                             .padding(.horizontal, Alpine.Space.s1)
                     }
 
+                    // Opened from a family invitation while signed out: it opens once signed in (the web's join page says the same).
+                    if model.invitationWaiting {
+                        Text("You’re invited to a family. Sign in with the email address the invitation was sent to.")
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
+                            .background(Alpine.tint, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .highContrastEdge(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .accessibilityAddTraits(.isStaticText)
+                    }
+
                     // Removed from the account on another device: say that, not "signed out".
                     if model.removedNotice {
                         Text(UIDevice.current.userInterfaceIdiom == .pad

@@ -164,7 +164,8 @@ public actor FamilySync: FamilyJudge {
     let api: GroupsAPI
     let records: FamilyRecords
     let now: @Sendable () -> Date
-    private var tails: [String: Task<FamilyState, Never>] = [:]
+    /* The last piece of work queued for each family: syncs and the join's steps run one at a time per family (the web's lock). */
+    private var tails: [String: Task<Void, Never>] = [:]
     /* Each family's members and their identities from the last sync (routes 3 and 6). */
     private var details: [String: GroupDetail] = [:]
     private var identities: [String: [String: MemberIdentity]] = [:]
@@ -176,6 +177,8 @@ public actor FamilySync: FamilyJudge {
     private var areasOf: [String: [String]] = [:]
     /* Every family folder this process learned of, to its family: never forgotten in a session (a wipe or fork keeps it a family folder). */
     private var groupsOf: [String: String] = [:]
+    /* Families whose kept join escalation went into this sync's ledger (FamilyJoin): once per ledger, before anything is shown. */
+    var restoredHolds: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
         self.vault = vault
@@ -188,8 +191,14 @@ public actor FamilySync: FamilyJudge {
     private static let registry = Registry()
     public static func shared(for vault: Vault) -> FamilySync { registry.sync(for: vault) }
 
-    /* Sign-out: the session's sync goes, and the ledger it held is wiped, so nothing keeps the family keys alive. */
-    public static func forget() { registry.forget() }
+    /*
+     * Sign-out (and deletion, and a removed device): the session's sync goes, the ledger it held is
+     * wiped, and the session's vault is let go, so nothing keeps the family keys alive.
+     */
+    public static func forget() {
+        registry.forget()
+        Vault.forgetCurrent()
+    }
 
     private final class Registry: @unchecked Sendable {
         private let lock = NSLock()
@@ -213,8 +222,8 @@ public actor FamilySync: FamilyJudge {
         }
     }
 
-    private var ledger: AreaLedger { vault.areaLedger }
-    private var userId: String { vault.session.userId }
+    var ledger: AreaLedger { vault.areaLedger }
+    var userId: String { vault.session.userId }
 
     /* Route 2: the families whose ids are ids (a server's other strings never reach a path or a file name). */
     public func list() async throws -> [GroupSummary] {
@@ -257,6 +266,17 @@ public actor FamilySync: FamilyJudge {
     /* Route 3 as the last sync read it: who is in the family, named by the server. */
     public func detail(_ groupId: String) -> GroupDetail? { details[groupId] }
 
+    /* Routes 14 and 15: the mailed invitation opened, then accepted (which lets nobody in; the join screen comes next). */
+    public func openInvitation(_ token: String) async throws -> Invitation { try await api.openInvitation(token) }
+    public func acceptInvitation(_ token: String) async throws -> String { try await api.acceptInvitation(token) }
+
+    /* Route 3 read now (it answers someone who accepted, too): who manages the family, for the join screen to name. */
+    public func members(_ groupId: String) async throws -> GroupDetail {
+        let detail = try await api.group(groupId)
+        details[groupId] = detail
+        return detail
+    }
+
     /* Every family folder this process knows of, to its family id. */
     public func familyAreas() -> [String: String] { groupsOf }
 
@@ -272,22 +292,36 @@ public actor FamilySync: FamilyJudge {
         summaries[summary.id] = summary
         // The vault asks this sync how family records are signed again (FamilyJudge).
         await vault.useFamilyJudge(self)
-        let previous = tails[summary.id]
-        let task = Task { () -> FamilyState in
-            _ = await previous?.value
-            return await self.run(summary)
-        }
-        tails[summary.id] = task
         running[summary.id, default: 0] += 1
         defer { running[summary.id, default: 1] -= 1 }
+        return await exclusive(summary.id) { await self.run(summary) }
+    }
+
+    /* `body` once every earlier piece of work on the family has finished, and before any queued after it. */
+    func exclusive<T: Sendable>(_ groupId: String, _ body: @escaping @Sendable () async -> T) async -> T {
+        let previous = tails[groupId]
+        let task = Task { () -> T in
+            _ = await previous?.value
+            return await body()
+        }
+        tails[groupId] = Task { _ = await task.value }
         return await task.value
     }
 
-    private func run(_ summary: GroupSummary) async -> FamilyState {
+    func exclusive<T: Sendable>(_ groupId: String, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
+        let result: Result<T, Error> = await exclusive(groupId) {
+            do { return .success(try await body()) } catch { return .failure(error) }
+        }
+        return try result.get()
+    }
+
+    /* One sync's work, run inside the family's turn (`exclusive`): a join step that syncs calls it from its own turn. */
+    func run(_ summary: GroupSummary) async -> FamilyState {
         let groupId = summary.id
         guard FamilyRecords.valid(groupId) else { return .failed("Please try again.") }
         // Accepted but not let in: the join flow's (iOS 3), never a sync's. Nothing of the family stays open meanwhile.
-        if summary.state == "accepted" {
+        // A record on this device means the join finished (a list read before it, still saying `accepted`): synced as a member.
+        if summary.state == "accepted" && records.read(userId: userId, groupId: groupId) == nil {
             await vault.forgetWorkspaces(knownAreas(groupId))
             return .waiting
         }
@@ -306,15 +340,7 @@ public actor FamilySync: FamilyJudge {
                     reset = true
                     continue
                 case .accepted(let chain, let pin):
-                    let areas = try await openAreas(groupId, chain: chain)
-                    switch try await settle(groupId, pin: pin, opened: areas.compactMap(\.pinArea)) {
-                    case .fork(let fork):
-                        await vault.forgetWorkspaces(knownAreas(groupId))
-                        return .fork(fork)
-                    case .settled(let latest):
-                        if let detail = try? await api.group(groupId) { details[groupId] = detail }
-                        return .accepted(view(groupId, chain: latest ?? chain, areas: areas.map(\.area), reset: reset))
-                    }
+                    return try await afterAcceptance(groupId, chain: chain, pin: pin, reset: reset)
                 }
             }
             throw FamilyFailure(message: "This device’s saved check of the family could not be opened.")
@@ -329,8 +355,25 @@ public actor FamilySync: FamilyJudge {
         }
     }
 
+    /*
+     * What follows a committed acceptance, a sync's or a join's (the web's afterAccept): every family
+     * folder opened from its grant, then the settings pin brought up to the acceptance with the
+     * folders just opened. A pin that names another history is the hard warning.
+     */
+    func afterAcceptance(_ groupId: String, chain: AcceptedRosters, pin: GroupPin, reset: Bool) async throws -> FamilyState {
+        let areas = try await openAreas(groupId, chain: chain)
+        switch try await settle(groupId, pin: pin, opened: areas.compactMap(\.pinArea)) {
+        case .fork(let fork):
+            await vault.forgetWorkspaces(knownAreas(groupId))
+            return .fork(fork)
+        case .settled(let latest):
+            if let detail = try? await api.group(groupId) { details[groupId] = detail }
+            return .accepted(view(groupId, chain: latest ?? chain, areas: areas.map(\.area), reset: reset))
+        }
+    }
+
     /* The family folders this process or the device record knows of. */
-    private func knownAreas(_ groupId: String) -> [String] {
+    func knownAreas(_ groupId: String) -> [String] {
         let known = groupsOf.filter { $0.value == groupId }.map(\.key)
         return Array(Set(known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])))
     }
@@ -770,7 +813,7 @@ public actor FamilySync: FamilyJudge {
 
     // MARK: Shapes
 
-    private func view(_ groupId: String, chain: AcceptedRosters, areas: [FamilyArea], reset: Bool) -> FamilyView {
+    func view(_ groupId: String, chain: AcceptedRosters, areas: [FamilyArea], reset: Bool) -> FamilyView {
         let roster = chain.roster()
         var owners: [String?: Int] = [:]
         for listing in ledger.foreignListings() where listing.groupId.lowercased() == groupId.lowercased() {

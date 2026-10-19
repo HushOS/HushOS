@@ -81,6 +81,48 @@ public struct FamilyRecords: Sendable {
         return try outcome.get()
     }
 
+    // MARK: Joining
+
+    /*
+     * Beside each family's record, two sealed strings only the core reads (the web keeps both in
+     * IndexedDB beside its chains, store.ts): the joins record (`joins`), kept only between "They
+     * match" and the end of the join, so a relaunch finishes it without asking again; and the
+     * join check's escalation (`holds`), which a wrong pair leaves and every check replaces, so a
+     * relaunch hides the same two words and keeps the alarm. Neither is a mark or a record: they
+     * are written last-wins, under the folder's lock like the record.
+     */
+    public enum Kept: String, Sendable {
+        case joins, holds
+    }
+
+    private func file(_ userId: String, _ groupId: String, _ kept: Kept) -> URL? {
+        guard Self.valid(userId.lowercased()), Self.valid(groupId) else { return nil }
+        return folder.appendingPathComponent("\(userId.lowercased())_\(groupId).\(kept.rawValue)")
+    }
+
+    public func read(_ kept: Kept, userId: String, groupId: String) -> String? {
+        guard let url = file(userId, groupId, kept), let data = try? Data(contentsOf: url) else { return nil }
+        return String(data: data, encoding: .utf8).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /* Throws when the lock or the write failed: a joins record that may not be on disk must not be followed by its acceptance. */
+    public func put(_ kept: Kept, userId: String, groupId: String, _ value: String) throws {
+        guard let url = file(userId, groupId, kept) else { throw RecordsError.busy }
+        Unbacked.folder(folder)
+        var outcome: Result<Void, Error> = .failure(RecordsError.busy)
+        FileLock.withLock(lockPath, activity: activity) {
+            outcome = Result { try Data(value.utf8).write(to: url, options: .atomic) }
+        }
+        try outcome.get()
+    }
+
+    public func delete(_ kept: Kept, userId: String, groupId: String) {
+        guard let url = file(userId, groupId, kept) else { return }
+        if !FileLock.withLock(lockPath, activity: activity, { try? FileManager.default.removeItem(at: url) }) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     public func delete(userId: String, groupId: String) {
         guard let url = file(userId, groupId) else { return }
         // A wipe goes through even when the lock can't be had: nothing it removes is a mark another write needs.

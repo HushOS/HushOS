@@ -93,6 +93,15 @@ final class DriveStore {
     var familyStates: [String: FamilyState] = [:]
     var familyDetails: [String: GroupDetail] = [:]
     var familySyncing: Set<String> = []
+    /* Join screens open per family (a count: two screens for one family never turn the gate off for each other). While any is open the screen owns the family, so a background check neither clears nor forgets it. */
+    var familyJoining: [String: Int] = [:]
+
+    func openJoin(_ groupId: String) { familyJoining[groupId, default: 0] += 1 }
+
+    func closeJoin(_ groupId: String) {
+        let left = (familyJoining[groupId] ?? 1) - 1
+        familyJoining[groupId] = left > 0 ? left : nil
+    }
     /* Every family folder this session learned of, to its family: only grows (FamilySync.familyAreas), so a family that fails a sync stays read only. */
     var familyAreaGroups: [String: String] = [:]
     var familyVerdicts: [NodeRef: (node: NodeView, verdict: FamilyVerdict)] = [:]

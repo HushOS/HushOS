@@ -19,6 +19,8 @@ struct MainView: View {
     @State private var makingRoom = false
     @State private var searchQuery = ""
     @State private var webOnly = false
+    /* A mailed family invitation opened from its link: the invitation, then joining, in a sheet. */
+    @State private var invitation: InvitationLink?
 
     /* The background queue's records and this session's transfers, as rows. */
     private func rows(_ store: DriveStore) -> [TransferRowModel] {
@@ -94,6 +96,7 @@ struct MainView: View {
                     BackgroundAccessSheet()
                 }
                 .sheet(isPresented: $makingRoom) { StorageFullSheet(rows: rows(store)).environment(store).environment(model) }
+                .sheet(item: $invitation) { link in InvitationSheet(link: link).environment(store).environment(model) }
                 .fileViewer(Binding(get: { store.deepFile }, set: { store.deepFile = $0 }), among: store.deepSiblings, store: store)
                 // Notices sit above the tab bar, and above the transfers bar while it shows.
                 .onChange(of: rows(store).isEmpty, initial: true) { _, empty in NoticeCenter.shared.bottom = empty ? 76 : 124 }
@@ -110,8 +113,8 @@ struct MainView: View {
                     case .files, .node: tab = .files
                     case .shared, .share, .incompleteShare: tab = .shared
                     case .trash: tab = .account
-                    // The reset link never routes here: AppModel.open sends it to the reset screen.
-                    case .recover, nil: break
+                    // The reset link never routes here: AppModel.open sends it to the reset screen; an invitation opens its sheet.
+                    case .recover, .join, .incompleteInvite, nil: break
                     }
                 }
                 // A tap on a transfers notification: the list for a failure, else where the files are.
@@ -181,6 +184,10 @@ struct MainView: View {
     /* A link, once signed in: the tab it belongs to, then the place inside it. */
     private func route(_ url: URL, store: DriveStore) async {
         switch AppLinks.parse(url, server: model.origin) {
+        case .success(.join(let token)):
+            invitation = InvitationLink(token: token)
+        case .success(.incompleteInvite):
+            invitation = InvitationLink(token: nil)
         case .success(let link):
             // The tab follows the route (below); the tab's view picks the rest up once it is on screen.
             store.route = link
