@@ -27,7 +27,8 @@ export async function forgetDevice() {
  */
 export async function clearDevice() {
     forgetReturn();
-    await Promise.all([
+    // Every part is tried whatever another does; the first failure is reported once all settled.
+    const results = await Promise.allSettled([
         import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
         // The sealed stash and the key for it, whatever the uploads left.
         import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
@@ -36,6 +37,8 @@ export async function clearDevice() {
         // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
         import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
     ]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
 }
 
 /* Signing out of this browser: whatever the device cleanup does, the session and device key go. */
