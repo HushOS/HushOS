@@ -449,39 +449,36 @@ describe('pool usage', () => {
         expect((await auth.getStorageAllowance(ana.userId))?.pool).toBeNull();
     });
 
-    test('a personal plan in force keeps its owner on it until it ends; then the pool, never both', async () => {
+    test('a personal plan doesn’t keep its owner out of the pool: pooled at once, and the plan adds nothing', async () => {
         const organizer = await person(100n);
-        const pro = await entitle(organizer.workspaceId, 'polar', 300n);
+        await entitle(organizer.workspaceId, 'polar', 3000n);
         const ana = await person();
         const { groupId } = await family({ organizer, members: [ana], quota: null });
         await setBytes(organizer.workspaceId, 50n);
         // No family plan: Free's base and Pro.
-        expect((await drive.getStorage(organizer.workspaceId))?.allowance).toBe(400n);
-        // The family plan goes live: the organizer stays on Pro to the end of what they paid
-        // for (owner decision 2), and their files are not the pool's.
+        expect((await drive.getStorage(organizer.workspaceId))?.allowance).toBe(3100n);
+        // The family plan goes live: their files draw from the pool at once (owner decision 2),
+        // and Pro's 3000, until billing ends it, adds nothing.
         await apply(groupId, [plan(1000n)]);
-        expect(await drive.getStorage(organizer.workspaceId)).toMatchObject({
-            allowance: 400n,
-            used: 50n,
-            pool: null,
-        });
-        expect(await poolUsage(db, groupId)).toEqual({ used: 0n, reserved: 0n });
-        expect(await upload(organizer, 351n)).toBe('over-quota');
-        // Pro ends: the pool, Pro and the base gone from the figures, their bytes in the pool's.
-        await db
-            .update(storageEntitlements)
-            .set({ revokedAt: new Date() })
-            .where(eq(storageEntitlements.id, pro));
         expect(await drive.getStorage(organizer.workspaceId)).toMatchObject({
             allowance: 1000n,
             used: 50n,
+            free: 950n,
             pool: { groupId },
         });
         expect(await poolUsage(db, groupId)).toEqual({ used: 50n, reserved: 0n });
-        expect(await upload(organizer, 351n)).toBe('ok');
-        // The family plan lapses too: their own base again.
+        expect((await auth.getStorageAllowance(organizer.userId))?.pool).toEqual({
+            groupId,
+            name: 'The Family',
+        });
+        expect(await upload(organizer, 951n)).toBe('over-quota');
+        expect(await upload(organizer, 950n)).toBe('ok');
+        // The family plan lapses: their own allowance again, with whatever it still holds.
         await apply(groupId, [lapsed(1000n)]);
-        expect((await drive.getStorage(organizer.workspaceId))?.allowance).toBe(100n);
+        expect(await drive.getStorage(organizer.workspaceId)).toMatchObject({
+            allowance: 3100n,
+            pool: null,
+        });
     });
 
     test('a pooled member’s referral bonus and operator grant add nothing, and count again once they leave', async () => {
@@ -549,6 +546,25 @@ describe('what one member sees', () => {
             availableBytes: '0',
             reservedBytes: '0',
         });
+    });
+
+    test('an empty pool reads 0 used; anything up to 1 GB reads as 1 GB', async () => {
+        const maya = await person();
+        const sam = await person();
+        await family({ organizer: maya, members: [sam], quota: 100n * GIB });
+        expect(await auth.getStorageAllowance(maya.userId)).toMatchObject({
+            usedBytes: '0',
+            availableBytes: String(100n * GIB),
+        });
+        await setBytes(sam.workspaceId, 1n);
+        expect(await auth.getStorageAllowance(maya.userId)).toMatchObject({
+            usedBytes: String(GIB),
+            availableBytes: String(99n * GIB),
+        });
+        await setBytes(sam.workspaceId, GIB);
+        expect((await auth.getStorageAllowance(maya.userId))?.usedBytes).toBe(String(GIB));
+        await setBytes(sam.workspaceId, GIB + 1n);
+        expect((await auth.getStorageAllowance(maya.userId))?.usedBytes).toBe(String(2n * GIB));
     });
 
     test('the endpoint reads without the pool’s lock: a held pool doesn’t stall a member’s figures', async () => {
@@ -865,6 +881,28 @@ describe('pool-full', () => {
         expect(await drive.getStorage(newcomer.workspaceId)).toMatchObject({
             allowance: 1000n,
             free: 0n,
+            pool: { groupId },
+        });
+    });
+
+    test('a newcomer who pays for a personal plan is counted at admission and pooled from the moment they’re in', async () => {
+        const organizer = await person();
+        const newcomer = await person(100n);
+        await entitle(newcomer.workspaceId, 'polar', 5000n);
+        const { groupId, areaIds } = await family({ organizer, quota: 1000n });
+        await setBytes(areaIds[0]!, 300n);
+        await setTestMember({ groupId, userId: newcomer.userId, state: 'accepted' });
+        const call = await admission(groupId, organizer.userId, newcomer.userId);
+        // 700 free; theirs 701, though their own plan would hold it.
+        await setBytes(newcomer.workspaceId, 701n);
+        expect(await groups.appendChain(call)).toEqual({ status: 'pool-full' });
+        await setBytes(newcomer.workspaceId, 400n);
+        expect((await groups.appendChain(call)).status).toBe('ok');
+        expect(await poolUsage(db, groupId)).toEqual({ used: 700n, reserved: 0n });
+        expect(await drive.getStorage(newcomer.workspaceId)).toMatchObject({
+            allowance: 1000n,
+            used: 700n,
+            free: 300n,
             pool: { groupId },
         });
     });

@@ -2401,10 +2401,9 @@ describe('family summary', () => {
         await billing.reconcileGroup(groupId);
         // Lapsed: the pool row stays at zero, so the old per-folder allowance never comes back.
         expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
-        // Nothing stored reads as the "Under 1 GB" bucket: 1 GiB, never an exact figure.
         expect((await priced(billing.getGroupBilling(userOf(organizer), groupId))).storage).toEqual(
             {
-                usedBytes: GIB.toString(),
+                usedBytes: '0',
                 quotaBytes: '0',
             },
         );

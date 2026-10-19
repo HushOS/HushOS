@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { billingEnv } from '@hushos/env/billing';
 import type { db } from './client';
 import type { Tx } from './drive';
@@ -21,39 +21,24 @@ import {
  * disagree.
  *
  * A personal workspace is pooled when billing is on, its owner is an active
- * member of a family, that family's plan is live (`expires_at` set and in the
- * future), and its owner has no personal plan still in force: a personal
- * subscriber who joins keeps their plan to the end of the period they paid
- * for, and their files stay on it until then (owner decision 2 of
- * 2026-10-19). Nothing else stacks on the pool while they are pooled: Free's
- * base, referral bonuses and operator grants stay in `storage_entitlements`
- * and count again once they aren't.
+ * member of a family, and that family's plan is live (`expires_at` set and in
+ * the future), whether or not they pay for a personal plan: a personal
+ * subscriber let in draws from the pool at once, and billing ends their plan
+ * with a prorated refund (owner decision 2, docs/families-shared-pool.md 5.1).
+ * Nothing stacks on the pool while they are pooled: Free's base, a personal
+ * plan not yet ended, referral bonuses and operator grants stay in
+ * `storage_entitlements` and count again once they aren't.
  */
 
 type Conn = Tx | typeof db;
 
-/* The source billing writes a personal plan's entitlement under (applyCustomerState's provider). */
-export const PERSONAL_PLAN_SOURCE = 'polar';
-
 /*
- * Every time rule here (a family plan's expiry, a personal plan's, a grant's)
+ * Every time rule here (a family plan's expiry, a grant's)
  * is judged at one instant, `at`, the app's clock read once the locks are
  * held: never the database's `now()`, which is the transaction's start and so
  * frozen from before it queued on the pool lock.
  */
 const instant = (at: Date) => sql`${at.toISOString()}::timestamptz`;
-
-/* Whether the personal workspace `workspaceId` (a column or value) has a personal plan in force at `at`. */
-function livePersonalPlan(workspaceId: SQL | string, at: Date) {
-    return sql`exists (select 1 from ${storageEntitlements} where ${storageEntitlements.workspaceId} = ${workspaceId} and ${storageEntitlements.source} = ${PERSONAL_PLAN_SOURCE} and ${storageEntitlements.revokedAt} is null and ${storageEntitlements.startsAt} <= ${instant(at)} and (${storageEntitlements.expiresAt} is null or ${storageEntitlements.expiresAt} > ${instant(at)}))`;
-}
-
-async function hasLivePersonalPlan(tx: Conn, workspaceId: string, at: Date) {
-    const result = await tx.execute<{ live: boolean }>(
-        sql`select ${livePersonalPlan(workspaceId, at)} as live`,
-    );
-    return result.rows[0]?.live === true;
-}
 
 /*
  * The pool lock (3.6): a transaction-scoped advisory lock keyed by the family,
@@ -79,14 +64,14 @@ export function wholeGibUp(bytes: bigint) {
 
 /*
  * A pool's figures as a member may see them (3.9, decision 6): what is used
- * rounded up to a whole GiB, anything up to 1 GiB (nothing included) read as
- * 1 GiB ("Under 1 GB"), and what is free rounded down, never a reserved
+ * rounded up to a whole GiB (so anything above nothing and up to 1 GiB reads as
+ * 1 GiB, "Under 1 GB"; nothing at all reads as 0), what is free rounded down, never a reserved
  * figure. Exact totals would give away another member's usage, and the live
  * reserved bytes the size and timing of their uploads. The server still
  * checks every reservation against the exact figures.
  */
 export function shownPoolUsed(bytes: bigint) {
-    return bytes <= GIB ? GIB : wholeGibUp(bytes);
+    return wholeGibUp(bytes);
 }
 export function shownPoolFree(bytes: bigint) {
     return bytes <= 0n ? 0n : (bytes / GIB) * GIB;
@@ -99,10 +84,11 @@ export function shownPoolFree(bytes: bigint) {
  * 3.7). The one implementation. Each workspace is counted once by id, never
  * through `workspace_keys` or `area_grants` (one row per member per folder),
  * and only active memberships bring a personal workspace in, so someone who
- * left is not counted. Whether the plan is live doesn't matter here: a
+ * left is not counted, while a member who pays for a personal plan is. Whether
+ * the plan is live doesn't matter here: a
  * family without one counts what would draw from it once it has one.
  */
-export async function poolUsage(tx: Conn, groupId: string, at = new Date()) {
+export async function poolUsage(tx: Conn, groupId: string) {
     const result = await tx.execute<{ used: string; reserved: string }>(sql`
         select coalesce(sum(s.used_bytes), 0)::text as used,
                coalesce(sum(s.reserved_bytes), 0)::text as reserved
@@ -116,7 +102,6 @@ export async function poolUsage(tx: Conn, groupId: string, at = new Date()) {
             where m.group_id = ${groupId}
               and m.group_kind = 'family'
               and m.state = 'active'
-              and not ${livePersonalPlan(sql`p.workspace_id`, at)}
         )
     `);
     const row = result.rows[0];
@@ -202,7 +187,7 @@ async function poolFigures(
     pool: { quotaBytes: bigint; expiresAt: Date | null },
     at: Date,
 ): Promise<StorageFigures> {
-    const { used, reserved } = await poolUsage(tx, groupId, at);
+    const { used, reserved } = await poolUsage(tx, groupId);
     // Past the plan's period and grace (or before any plan), the pool is empty.
     const allowance = planLive(pool, at) ? pool.quotaBytes : 0n;
     return { allowance, used, reserved, free: allowance - used - reserved, pool: { groupId } };
@@ -300,8 +285,7 @@ export async function storageFigures(
             const own = await readOwn(tx, workspaceId, lock);
             if (!own) return null;
             const at = new Date();
-            if (pool && planLive(pool, at) && !(await hasLivePersonalPlan(tx, workspaceId, at)))
-                return poolFigures(tx, familyId, pool, at);
+            if (pool && planLive(pool, at)) return poolFigures(tx, familyId, pool, at);
             return ownFigures(tx, workspaceId, own, at);
         }
         const own = await readOwn(tx, workspaceId, lock);
@@ -327,8 +311,8 @@ export async function poolName(tx: Conn, groupId: string) {
  * too, so an upload of theirs in flight is either counted here or, if it
  * starts later, finds them in the family (storageFigures, step 4). True when
  * nothing is pooled: billing off, or a family without a live plan, whose
- * admission pools nobody yet. A newcomer still on a personal plan is counted
- * all the same: their files join the pool when that plan ends.
+ * admission pools nobody yet. A newcomer who pays for a personal plan is
+ * counted like anyone else: they draw from the pool from the moment they're in.
  */
 export async function admissionFits(
     tx: Conn,
@@ -348,7 +332,7 @@ export async function admissionFits(
     if (!own) return true;
     const at = new Date();
     if (!planLive(pool, at)) return true;
-    const { used, reserved } = await poolUsage(tx, groupId, at);
+    const { used, reserved } = await poolUsage(tx, groupId);
     return own.usedBytes + own.reservedBytes <= pool.quotaBytes - used - reserved;
 }
 
