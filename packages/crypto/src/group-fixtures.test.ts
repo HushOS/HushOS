@@ -38,12 +38,10 @@ import {
     mlDsaKeysOf,
     pattern,
     person,
-    sealCases,
     chainCases,
     statementCases,
     statementVerdict,
     sealVerdict,
-    sealerCases,
     sealerVerdict,
     succeed,
     verdictOf,
@@ -344,33 +342,36 @@ describe('group records made by the Rust core', () => {
             expect(await foldInVerdict(entry), entry.name).toEqual(entry.expected);
     });
 
-    it('opens, or refuses, the core’s seal cases as the core did', async () => {
-        expect(core.sealCases.map((c) => c.name)).toEqual((await sealCases()).map((c) => c.name));
-        for (const c of core.sealCases as unknown as (Omit<SealCase, 'rosters' | 'envelope'> & {
-            rosters: Parameters<typeof signed>[0][];
-            envelope: string;
-        })[])
-            expect(
-                await sealVerdict({
-                    ...c,
-                    rosters: c.rosters.map(signed),
-                    envelope: decode(c.envelope),
-                }),
-                c.name,
-            ).toBe(c.expected);
-    }, 30_000);
+    // The case names are compared in group-case-names.test.ts; each case is judged here alone.
+    it.each(
+        (
+            core.sealCases as unknown as (Omit<SealCase, 'rosters' | 'envelope'> & {
+                rosters: Parameters<typeof signed>[0][];
+                envelope: string;
+            })[]
+        ).map((c) => [c.name, c] as const),
+    )('opens, or refuses, the core’s seal case %s as the core did', async (name, c) => {
+        expect(
+            await sealVerdict({
+                ...c,
+                rosters: c.rosters.map(signed),
+                envelope: decode(c.envelope),
+            }),
+            name,
+        ).toBe(c.expected);
+    });
 
-    it('seals, or refuses to seal, the core’s sealer cases as the core did', async () => {
-        expect(core.sealerCases.map((c) => c.name)).toEqual(
-            (await sealerCases()).map((c) => c.name),
+    it.each(
+        (
+            core.sealerCases as unknown as (Omit<SealerCase, 'rosters'> & {
+                rosters: Parameters<typeof signed>[0][];
+            })[]
+        ).map((c) => [c.name, c] as const),
+    )('seals, or refuses to seal, the core’s sealer case %s as the core did', async (name, c) => {
+        expect(await sealerVerdict({ ...c, rosters: c.rosters.map(signed) }), name).toBe(
+            c.expected,
         );
-        for (const c of core.sealerCases as unknown as (Omit<SealerCase, 'rosters'> & {
-            rosters: Parameters<typeof signed>[0][];
-        })[])
-            expect(await sealerVerdict({ ...c, rosters: c.rosters.map(signed) }), c.name).toBe(
-                c.expected,
-            );
-    }, 30_000);
+    });
 
     it('verifies, or refuses, the core’s personal-pin chains as the core did', async () => {
         expect(core.chainCases.map((c) => c.name)).toEqual((await chainCases()).map((c) => c.name));

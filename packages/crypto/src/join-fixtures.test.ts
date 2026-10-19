@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import core from './__fixtures__/core-join.json';
 import { decode, encode } from './keys';
 import {
     consentHolds,
+    family,
     openCross,
     runSession,
     stepSays,
-    previewDoc,
+    previewCases,
     previewSays,
     runCheck,
     runDue,
@@ -16,6 +17,7 @@ import {
     signSays,
     type CheckFile,
 } from './join-testkit';
+import type * as Pq from './pq';
 
 /*
  * The core's run of joining and consent (groups 1d, Core 4;
@@ -32,21 +34,35 @@ import {
 type Json = Record<string, any>;
 const doc = core as Json;
 
+// Every preview and session runs whole histories through the worker, verifying the same few
+// signatures again and again: each is verified once, for real (see pq-memo-testkit.ts).
+vi.mock('./pq', async (original) =>
+    (await import('./pq-memo-testkit')).verifyOnce(await original<typeof Pq>()),
+);
+
 describe('join previews the core ran', () => {
-    it('reach here what they reached there, as both twins declare them', async () => {
-        const ours = await previewDoc();
-        const theirs = doc.joinPreviews;
-        expect(theirs.cases.map((c: Json) => c.name)).toEqual(ours.cases.map((c: Json) => c.name));
-        let codes = 0;
-        for (const [index, c] of (theirs.cases as Json[]).entries()) {
-            expect(c.expected, `${c.name}: declared alike`).toEqual(ours.cases[index].expected);
-            const outcome = await runPreview(theirs, c);
-            expect(outcome, c.name).toEqual(c.outcome);
-            expect(previewSays(outcome, c.expected), c.name).toBe(true);
-            if (outcome.status === 'code') codes++;
-        }
-        expect(codes).toBeGreaterThanOrEqual(8);
+    const theirs = doc.joinPreviews;
+    // The people and histories every case runs over, signed once for the file.
+    beforeAll(() => family());
+
+    it('are the cases this twin declares, by name and by what each declares', async () => {
+        const ours = await previewCases();
+        expect(theirs.cases.map((c: Json) => c.name)).toEqual(ours.map((c) => c.name));
+        for (const [index, c] of (theirs.cases as Json[]).entries())
+            expect(c.expected, `${c.name}: declared alike`).toEqual(ours[index]!.expected);
+        expect(
+            theirs.cases.filter((c: Json) => c.outcome.status === 'code').length,
+        ).toBeGreaterThanOrEqual(8);
     });
+
+    it.each((theirs.cases as Json[]).map((c) => [c.name, c] as const))(
+        'reach here what %s reached there',
+        async (name, c) => {
+            const outcome = await runPreview(theirs, c);
+            expect(outcome, name).toEqual(c.outcome);
+            expect(previewSays(outcome, c.expected), name).toBe(true);
+        },
+    );
 });
 
 describe('join sessions the core ran', () => {

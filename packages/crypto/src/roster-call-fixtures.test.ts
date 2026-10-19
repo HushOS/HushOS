@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import type * as Pq from './pq';
 import { check, fixture, sessionRun, sessionStep } from './roster-calls-testkit';
 import { check as checkSettingsAreas, fixture as settingsAreas } from './settings-areas-testkit';
 
@@ -10,6 +11,12 @@ import { check as checkSettingsAreas, fixture as settingsAreas } from './setting
  * the worker to the same outcomes, and this twin's own document built and
  * read back as the core reads it.
  */
+
+// Whole histories run through the worker case after case verify the same few signatures
+// thousands of times: each is verified once, for real (see pq-memo-testkit.ts).
+vi.mock('./pq', async (original) =>
+    (await import('./pq-memo-testkit')).verifyOnce(await original<typeof Pq>()),
+);
 
 const core = JSON.parse(
     readFileSync(new URL('./__fixtures__/core-roster-calls.json', import.meta.url), 'utf8'),

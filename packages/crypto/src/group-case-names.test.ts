@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import core from './__fixtures__/core-groups.json';
-import { groupCases } from './group-testkit';
+import { groupCases, sealCases, sealerCases } from './group-testkit';
 import type * as Pq from './pq';
 
 /*
@@ -27,5 +27,17 @@ vi.mock('./pq', async (importOriginal) => {
 test('the core judged a history for every case the web knows, and no other', async () => {
     expect(core.cases.map((entry) => entry.name)).toEqual(
         (await groupCases()).map((entry) => entry.name),
+    );
+});
+
+test('the core judged a seal case for every one the web knows, and no other', async () => {
+    expect(core.sealCases.map((entry) => entry.name)).toEqual(
+        (await sealCases()).map((entry) => entry.name),
+    );
+});
+
+test('the core judged a sealer case for every one the web knows, and no other', async () => {
+    expect(core.sealerCases.map((entry) => entry.name)).toEqual(
+        (await sealerCases()).map((entry) => entry.name),
     );
 });

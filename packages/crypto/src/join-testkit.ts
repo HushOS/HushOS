@@ -354,6 +354,32 @@ async function recordThrough(doc: Json, through: number) {
     return result.record;
 }
 
+/*
+ * Every case's name and what it declares, as previewDoc gives them, without
+ * the histories and records it signs and seals for the core to run over: all
+ * a check of the core's run against this twin's cases reads.
+ */
+export async function previewCases(): Promise<Json[]> {
+    return (await specs()).map(caseJson);
+}
+
+function caseJson(spec: Spec): Json {
+    return {
+        name: spec.name,
+        settings: spec.settings ?? 'none',
+        record: spec.record ?? null,
+        held: spec.held ?? null,
+        served: {
+            history: spec.history,
+            after: spec.after ?? 0,
+            through: spec.through,
+            cut: spec.cut ?? null,
+        },
+        me: spec.me ?? null,
+        expected: spec.expected,
+    };
+}
+
 /* Every case and what it runs over, as this twin signed and sealed it. */
 export async function previewDoc(): Promise<Json> {
     const f = await family();
@@ -394,20 +420,7 @@ export async function previewDoc(): Promise<Json> {
             value,
         ),
     };
-    doc.cases = (await specs()).map((spec) => ({
-        name: spec.name,
-        settings: spec.settings ?? 'none',
-        record: spec.record ?? null,
-        held: spec.held ?? null,
-        served: {
-            history: spec.history,
-            after: spec.after ?? 0,
-            through: spec.through,
-            cut: spec.cut ?? null,
-        },
-        me: spec.me ?? null,
-        expected: spec.expected,
-    }));
+    doc.cases = (await specs()).map(caseJson);
     return doc;
 }
 
