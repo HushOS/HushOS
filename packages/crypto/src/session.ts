@@ -501,7 +501,7 @@ type BaseRequests = {
         signAs?: SignatureForm;
     };
     /* The plaintext digest of one chunk, to prove a re-read file is the one that was journaled. */
-    driveUploadDigest: { objectId: string; file: Blob; index: number };
+    driveUploadDigest: { objectId: string; file: UploadBytes; index: number };
     /*
      * Copy within a workspace: a new file node with a fresh key under the
      * destination, its metadata sealed, and the source version's content key
@@ -568,7 +568,14 @@ type BaseRequests = {
     /* The sizes sealed in versions of one open node, for a versions list. */
     driveOpenVersions: { workspaceId: string; nodeId: string; versions: DriveVersionEnvelope[] };
     /* Encrypts one chunk and keeps the ciphertext here until it is sent or dropped. */
-    driveUploadEncrypt: { objectId: string; file: Blob; index: number };
+    driveUploadEncrypt: { objectId: string; file: UploadBytes; index: number };
+    /*
+     * An in-memory upload's bytes (a saved copy), moved here once rather than
+     * read from a Blob: they stay in this worker under `sourceId` until
+     * released or the session resets, and `{ source }` names them in reads.
+     */
+    driveSourceAttach: { sourceId: string; parts: Uint8Array[] };
+    driveSourceRelease: { sourceId: string };
     /* PUTs a chunk encrypted earlier; progress is posted as it goes. */
     driveUploadSend: { objectId: string; index: number; url: string };
     driveUploadCancel: { objectId: string; index?: number };
@@ -607,6 +614,8 @@ type BaseRequests = {
     driveStashOpen: { userId: string; name: string; stored: Blob };
 };
 export type CryptoRequests = BaseRequests & GroupRequests;
+/* What an upload reads its plaintext from: a file the person chose, or bytes attached to the worker. */
+export type UploadBytes = Blob | { source: string };
 export type DriveNodeInput = {
     id: string;
     /* Signed with the metadata: a folder's name cannot be passed off as a file's. */
@@ -806,6 +815,8 @@ type BaseResults = {
     driveUploadReopen: { chunkCount: number; ciphertextSize: number };
     driveUploadDigest: { digest: string };
     driveUploadEncrypt: { digest: string; bytes: number };
+    driveSourceAttach: { size: number };
+    driveSourceRelease: { released: boolean };
     driveUploadSend: UploadPartResult;
     driveUploadCancel: { cancelled: number };
     driveUploadForget: { forgotten: boolean };
@@ -1172,13 +1183,40 @@ export function createCryptoSession() {
         return true;
     }
     /* Chunk `index` of the upload: the file's bytes, then zeros where suite 3 pads past its end. */
-    async function readChunk(upload: Upload, file: Blob, index: number) {
-        if (file.size !== upload.plaintextSize)
+    /* In-memory upload bytes by source id: moved in once, zeroed when released or on lock. */
+    const sources = new Map<string, Uint8Array[]>();
+    function releaseSource(sourceId: string) {
+        const parts = sources.get(sourceId);
+        for (const part of parts ?? []) part.fill(0);
+        return sources.delete(sourceId);
+    }
+    function sourceSize(parts: Uint8Array[]) {
+        return parts.reduce((total, part) => total + part.byteLength, 0);
+    }
+    async function readChunk(upload: Upload, file: UploadBytes, index: number) {
+        const parts = file instanceof Blob ? null : sources.get(file.source);
+        if (!(file instanceof Blob) && !parts)
+            throw new CryptoError('This upload’s bytes are no longer on this device.');
+        const size = parts ? sourceSize(parts) : (file as Blob).size;
+        if (size !== upload.plaintextSize)
             throw new CryptoError('The file changed since the upload started.');
         const start = index * CHUNK_SIZE;
         const chunk = new Uint8Array(chunkPlaintextLength(upload.contentLength, index));
         const end = Math.min(upload.plaintextSize, start + chunk.length);
-        if (end > start) chunk.set(new Uint8Array(await file.slice(start, end).arrayBuffer()));
+        if (end <= start) return chunk;
+        if (!parts) {
+            chunk.set(new Uint8Array(await (file as Blob).slice(start, end).arrayBuffer()));
+            return chunk;
+        }
+        // Copied out of the parts that cover [start, end), whatever their sizes.
+        let offset = 0;
+        for (const part of parts) {
+            const from = Math.max(start, offset);
+            const to = Math.min(end, offset + part.byteLength);
+            if (from < to) chunk.set(part.subarray(from - offset, to - offset), from - start);
+            offset += part.byteLength;
+            if (offset >= end) break;
+        }
         return chunk;
     }
     function forgetDriveKeys() {
@@ -1189,6 +1227,7 @@ export function createCryptoSession() {
         ledger.clear();
         for (const objectId of uploads.keys()) forgetUpload(objectId);
         for (const objectId of downloads.keys()) closeDownload(objectId);
+        for (const sourceId of sources.keys()) releaseSource(sourceId);
     }
     /*
      * A workspace document. A group area's documents open only under its write
@@ -3075,6 +3114,15 @@ export function createCryptoSession() {
                 }
                 return { nodeKey: encode(node.key), keyEpoch: node.epoch, content };
             }
+            case 'driveSourceAttach': {
+                const { sourceId, parts } = message.input;
+                if (!accountKey) throw new CryptoError('Unlock your account first.');
+                releaseSource(sourceId);
+                sources.set(sourceId, parts);
+                return { size: sourceSize(parts) };
+            }
+            case 'driveSourceRelease':
+                return { released: releaseSource(message.input.sourceId) };
             case 'driveStashSeal': {
                 const { userId, name, bytes } = message.input;
                 return { parts: await sealStash(await ownStashKey(userId), name, bytes) };

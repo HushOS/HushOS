@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { openStash, sealStash } from '@hushos/crypto/stash';
-import { StashGone } from '@hushos/drive/transfers';
+import { inMemory, StashGone, type UploadFile } from '@hushos/drive/transfers';
 
 // The real auth client starts a worker and opens device storage; these tests stand in for both.
 vi.mock('@/lib/auth-client', () => ({ authClient: { store: { getState: () => ({}) } } }));
@@ -101,13 +101,27 @@ function setup(
     fs: ReturnType<typeof privateFileSystem>,
     sealer: Awaited<ReturnType<typeof worker>>,
 ) {
-    const state = { account: 'user-1' as string | null, revision: 100 };
+    const state = {
+        account: 'user-1' as string | null,
+        revision: 100,
+        /* The private file system answering, or rejecting as WebKit's does. */
+        rootFails: false,
+        written: false,
+    };
     const stash = createSealedStash({
-        root: async () => fs.root,
+        root: async () => {
+            if (state.rootFails) throw new DOMException('transient', 'UnknownError');
+            return fs.root;
+        },
         account: () => state.account,
         lockRevision: () => state.revision,
         seal: sealer.seal,
         open: sealer.open,
+        written: {
+            set: () => void (state.written = true),
+            clear: () => void (state.written = false),
+            get: () => state.written,
+        },
     });
     return { stash, state };
 }
@@ -115,6 +129,18 @@ function setup(
 const canary = new TextEncoder().encode('PLAINTEXT-CANARY a copy of something shared');
 const described = { name: 'copy.txt', type: 'text/plain', size: canary.length, lastModified: 1 };
 const plain = new TextDecoder().decode(canary);
+
+/* An opened stash is bytes in memory, never a Blob: read back by decoding its parts. */
+function textOf(file: UploadFile) {
+    if (!inMemory(file)) throw new Error('expected bytes in memory, not a File');
+    const joined = new Uint8Array(file.size);
+    let at = 0;
+    for (const part of file.parts) {
+        joined.set(part, at);
+        at += part.byteLength;
+    }
+    return new TextDecoder().decode(joined);
+}
 
 function contains(haystack: Uint8Array, needle: Uint8Array) {
     outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
@@ -134,7 +160,7 @@ describe('the sealed upload stash', () => {
         expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
         const file = await stash.open(name!, described);
         expect(file.name).toBe('copy.txt');
-        expect(await file.text()).toBe(plain);
+        expect(textOf(file)).toBe(plain);
     });
 
     it('calls a stash another key sealed lost, and a missing one too', async () => {
@@ -153,7 +179,7 @@ describe('the sealed upload stash', () => {
         sealer.open.mockRejectedValueOnce(new Error('Your account was locked. Please try again.'));
         const refused = await stash.open(name!, described).catch((error: unknown) => error);
         expect(refused).not.toBeInstanceOf(StashGone);
-        expect(await (await stash.open(name!, described)).text()).toBe(plain);
+        expect(textOf(await stash.open(name!, described))).toBe(plain);
     });
 
     it('keeps nothing while the account is locked', async () => {
@@ -173,7 +199,7 @@ describe('the sealed upload stash', () => {
         state.account = null; // pagehide
         await stash.settle();
         state.account = 'user-1'; // unlocked again after the reload
-        expect(await (await stash.open(name!, described)).text()).toBe(plain);
+        expect(textOf(await stash.open(name!, described))).toBe(plain);
     });
 
     it('is deleted after an explicit lock, here or in another tab, before anything reads it', async () => {
@@ -214,6 +240,42 @@ describe('the sealed upload stash', () => {
         await expect(stash.forget()).rejects.toThrow('Busy');
     });
 
+    it('has nothing to wipe where no stash was ever written and the file system is unusable', async () => {
+        // WebKit under automation and private windows reject getDirectory outright.
+        const { stash, state } = setup(privateFileSystem(), await worker());
+        state.rootFails = true;
+        await expect(stash.forget()).resolves.toBeUndefined();
+    });
+
+    it('says so when a written stash can’t be reached to wipe, until a wipe gets through', async () => {
+        const fs = privateFileSystem();
+        const { stash, state } = setup(fs, await worker());
+        await stash.put(canary);
+        // A transient failure at the moment of the wipe: the files are still there.
+        state.rootFails = true;
+        await expect(stash.forget()).rejects.toThrow('transient');
+        expect(fs.stashes()).toHaveLength(1);
+        // Tried again once the file system answers: gone, and the marker with them.
+        state.rootFails = false;
+        await stash.forget();
+        expect(fs.disk()).toHaveLength(0);
+        state.rootFails = true;
+        await expect(stash.forget()).resolves.toBeUndefined();
+    });
+
+    it('wipes the unsealed stash’s folder too', async () => {
+        const fs = privateFileSystem();
+        const { stash } = setup(fs, await worker());
+        const old = await fs.root.getDirectoryHandle('upload-stash', { create: true });
+        const writable = await (
+            await old.getFileHandle('legacy', { create: true })
+        ).createWritable();
+        await writable.write(canary);
+        await writable.close();
+        await stash.forget();
+        expect(fs.directories.has('upload-stash')).toBe(false);
+    });
+
     it('removes the plaintext an unsealed stash left behind, and only that', async () => {
         const fs = privateFileSystem();
         const { stash } = setup(fs, await worker());
@@ -227,6 +289,6 @@ describe('the sealed upload stash', () => {
         await stash.dropPlaintext();
         expect(fs.directories.has('upload-stash')).toBe(false);
         expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
-        expect(await (await stash.open(kept!, described)).text()).toBe(plain);
+        expect(textOf(await stash.open(kept!, described))).toBe(plain);
     });
 });

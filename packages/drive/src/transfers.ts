@@ -1,6 +1,7 @@
 import type {
     CryptoResults,
     NodeMetadata,
+    UploadBytes,
     SignatureForm,
     UploadPartProgress,
     UploadPartResult,
@@ -93,8 +94,32 @@ export type TransfersState = {
     bytesPerSecond: number;
 };
 
+/*
+ * Bytes held in memory rather than a file on disk: a saved copy, or one
+ * reopened from its sealed stash. They are never wrapped in a Blob, since
+ * Chrome can page a large Blob to its profile directory, which would put the
+ * plaintext on disk. The first time the upload reads them they move to the
+ * crypto worker (transferred, not copied), and the parts here are detached.
+ */
+export type MemoryFile = {
+    kind: 'memory';
+    name: string;
+    size: number;
+    type: string;
+    lastModified: number;
+    /* The bytes, in any number of pieces; their lengths add up to `size`. */
+    parts: Uint8Array[];
+    /* A ready thumbnail (a copy keeps its source's): nothing renders one from memory. */
+    thumbnail?: Uint8Array | null;
+};
+export type UploadFile = File | MemoryFile;
+
+export function inMemory(file: UploadFile): file is MemoryFile {
+    return (file as MemoryFile).kind === 'memory';
+}
+
 export type EnqueueInput = {
-    file: File;
+    file: UploadFile;
     parent: DriveNode;
     /* Replace this file's content with a new version instead of creating a node. */
     replaces?: DriveNode;
@@ -127,7 +152,7 @@ export type UploadStash = {
      * StashGone when they are gone or won't open; any other rejection (a lock,
      * a busy disk) leaves the stash for a later try.
      */
-    open(name: string, file: JournalEntry['file']): Promise<File>;
+    open(name: string, file: JournalEntry['file']): Promise<UploadFile>;
     remove(name: string): Promise<void>;
     /* Drops every stash not named in `keep`, for stashes whose upload finished without cleanup. */
     sweep?(keep: Set<string>): Promise<void>;
@@ -207,7 +232,10 @@ export type TransferManagerOptions = {
 
 type Internal = {
     item: UploadItem;
-    file: File | null;
+    file: UploadFile | null;
+    /* An in-memory file's bytes, once moved to the worker: the id they are read by there. */
+    sourceId: string | null;
+    attaching: Promise<string> | null;
     handle: FileSystemFileHandle | null;
     parent: DriveNode | null;
     replaces: DriveNode | undefined;
@@ -225,8 +253,8 @@ type Internal = {
     /* The queued row, from enqueue until the upload is settled; the only row a waiting file has. */
     queued: QueuedEntry | null;
     stash: string | null;
-    /* The thumbnail render in flight, started with the upload. */
-    thumbnail: Promise<Blob | null> | null;
+    /* The thumbnail in flight (a render, or an in-memory file's own), started with the upload. */
+    thumbnail: Promise<Uint8Array | null> | null;
     /* Whether the worker currently holds this upload's content key. */
     prepared: boolean;
     /* Preparation is under way: a pause holds the file afterwards, a resume must not start it twice. */
@@ -394,6 +422,17 @@ function isLockError(error: unknown) {
     return error instanceof Error && /locked/i.test(error.message);
 }
 
+/* What the worker (or the engine) says when an in-memory upload's bytes are not there to read. */
+const SOURCE_GONE = 'This upload’s bytes are no longer on this device.';
+function isSourceGone(error: unknown) {
+    return error instanceof Error && error.message.includes('no longer on this device');
+}
+
+/* Whether an in-memory file's parts were moved away already (to a worker since lost). */
+function detached(file: MemoryFile) {
+    return file.parts.reduce((total, part) => total + part.byteLength, 0) !== file.size;
+}
+
 /* How long sign-out waits for the server to hear of each stopped upload before it forgets them anyway. */
 const FORGET_TIMEOUT_MS = 5_000;
 
@@ -553,6 +592,11 @@ export function createTransferManager(options: TransferManagerOptions) {
     function locked() {
         for (const u of uploads.values()) {
             u.prepared = false;
+            // The worker took an in-memory file's bytes with it. Ones it never had go too where a
+            // sealed stash can bring them back after unlock, so no copy sits decrypted through a lock.
+            // (Parts a lock cut off mid-move are found empty at the next read: see sourceGone.)
+            if (u.file && inMemory(u.file) && (u.sourceId || u.stash)) u.file = null;
+            u.sourceId = null;
             if (
                 u.item.status === 'uploading' ||
                 u.item.status === 'preparing' ||
@@ -620,8 +664,64 @@ export function createTransferManager(options: TransferManagerOptions) {
         await journal.remove(u.entry.id).catch(() => {});
         u.entry = null;
     }
+    /*
+     * What the worker reads an upload's bytes from: the person's File as it is,
+     * or an in-memory file's bytes, moved to the worker the first time they are
+     * read and named by a source id after that.
+     */
+    async function bytesFor(u: Internal, file: UploadFile): Promise<UploadBytes> {
+        if (!inMemory(file)) return file;
+        if (u.sourceId) return { source: u.sourceId };
+        u.attaching ??= (async () => {
+            // Moved once already (then the worker was lost): the bytes are not here to move.
+            if (detached(file)) throw new Error(SOURCE_GONE);
+            const sourceId = crypto.randomUUID();
+            const buffers = [...new Set(file.parts.map((part) => part.buffer))].filter(
+                (buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer,
+            );
+            await rpc('driveSourceAttach', { sourceId, parts: file.parts }, { transfer: buffers });
+            // Cancelled or removed while the bytes were on their way: nothing will release them
+            // later (journalForget saw no source), so they are released now.
+            if (uploads.get(u.item.id) !== u || u.item.status === 'cancelled') {
+                await rpc('driveSourceRelease', { sourceId }).catch(() => {});
+                throw new Error('This upload was stopped.');
+            }
+            // Set here, before `attaching` clears, so no read in between moves the parts again.
+            u.sourceId = sourceId;
+            return sourceId;
+        })().finally(() => {
+            u.attaching = null;
+        });
+        return { source: await u.attaching };
+    }
+    /*
+     * The worker no longer holds an upload's in-memory bytes: a lock ended it
+     * while the upload sat paused or failed, so nothing here noticed. What is
+     * left of them goes, and the copy reopens from its sealed stash, or, with
+     * none, is reported lost rather than failing at every retry.
+     */
+    async function sourceGone(u: Internal) {
+        u.generation++;
+        clearBackoff(u);
+        u.inFlight.clear();
+        u.prepared = false;
+        u.sourceId = null;
+        u.attaching = null;
+        if (u.file && inMemory(u.file)) u.file = null;
+        set(u, { status: 'paused', error: null });
+        if (u.stash) await resume(u.item.id);
+        else await lost(u);
+    }
+    /* The worker lets go of an in-memory file's bytes (and zeroes them). */
+    async function releaseSource(u: Internal) {
+        const sourceId = u.sourceId;
+        u.sourceId = null;
+        if (sourceId) await rpc('driveSourceRelease', { sourceId }).catch(() => {});
+        if (u.file && inMemory(u.file)) u.file = null;
+    }
     /* The upload is settled: every row goes, and the stash with it. */
     async function journalForget(u: Internal) {
+        await releaseSource(u);
         await journalRemove(u);
         if (journal && u.queued) {
             await journal.removeQueued(u.queued.id).catch(() => {});
@@ -660,7 +760,7 @@ export function createTransferManager(options: TransferManagerOptions) {
      * described. Only a stash that is gone counts as lost; a lock pauses the
      * upload as any lock does, and anything else keeps the stash for a retry.
      */
-    async function fromStash(u: Internal): Promise<File | 'lost' | 'locked' | 'later'> {
+    async function fromStash(u: Internal): Promise<UploadFile | 'lost' | 'locked' | 'later'> {
         const described = u.entry?.file ?? u.queued?.file;
         if (!u.stash || !options.stash || !described) return 'lost';
         try {
@@ -815,9 +915,22 @@ export function createTransferManager(options: TransferManagerOptions) {
             (replaces ? (options.refuseWrite?.(replaces) ?? null) : null)
         );
     }
-    async function prepareInner(u: Internal, generation: number, file: File, parent: DriveNode) {
-        if (options.thumbnail && !u.thumbnail)
-            u.thumbnail = options.thumbnail(file, u.item.mime).catch(() => null);
+    async function prepareInner(
+        u: Internal,
+        generation: number,
+        file: UploadFile,
+        parent: DriveNode,
+    ) {
+        // An in-memory file brings its thumbnail: rendering one would need its bytes in a Blob.
+        if (inMemory(file)) u.thumbnail ??= Promise.resolve(file.thumbnail ?? null);
+        else if (options.thumbnail && !u.thumbnail) {
+            const render = options.thumbnail;
+            u.thumbnail = render(file, u.item.mime)
+                .then(async (blob) =>
+                    blob?.size ? new Uint8Array(await blob.arrayBuffer()) : null,
+                )
+                .catch(() => null);
+        }
         const workspaceId = workspaceOf(u);
         await mintIds(u, workspaceId);
         if (u.generation !== generation) return;
@@ -941,10 +1054,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     versionId: u.versionId,
                     objectId: u.objectId,
                     plaintextSize: u.item.size,
-                    thumbnail:
-                        thumbnail && thumbnail.size
-                            ? new Uint8Array(await thumbnail.arrayBuffer())
-                            : null,
+                    thumbnail: thumbnail?.byteLength ? thumbnail : null,
                     signAs: u.signAs.version,
                 });
             } catch (error) {
@@ -1056,7 +1166,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         try {
             const encrypted = await rpc('driveUploadEncrypt', {
                 objectId: u.objectId,
-                file,
+                file: await bytesFor(u, file),
                 index,
             });
             // Sent before under this key and nonce with other bytes (the file changed under us):
@@ -1090,6 +1200,10 @@ export function createTransferManager(options: TransferManagerOptions) {
             if (u.generation !== generation) return;
             if (isLockError(error)) {
                 locked();
+                return;
+            }
+            if (isSourceGone(error)) {
+                await sourceGone(u);
                 return;
             }
             fail(u, error instanceof Error ? error.message : 'The upload failed.');
@@ -1377,10 +1491,16 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
     }
 
-    function makeInternal(item: UploadItem, file: File | null, parent: DriveNode | null): Internal {
+    function makeInternal(
+        item: UploadItem,
+        file: UploadFile | null,
+        parent: DriveNode | null,
+    ): Internal {
         return {
             item,
             file,
+            sourceId: null,
+            attaching: null,
             handle: null,
             parent,
             replaces: undefined,
@@ -1686,7 +1806,7 @@ export function createTransferManager(options: TransferManagerOptions) {
      * because encrypting different bytes under the same key and nonce as a part
      * the server holds is the one thing the cipher forbids.
      */
-    async function attachFile(id: string, file: File) {
+    async function attachFile(id: string, file: UploadFile) {
         const u = uploads.get(id);
         if (!u) return { ok: false as const, reason: 'unknown' as const };
         if (!u.entry) return attachQueued(u, file);
@@ -1705,7 +1825,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     if (!journaled.digest) continue;
                     const { digest } = await rpc('driveUploadDigest', {
                         objectId: u.objectId,
-                        file,
+                        file: await bytesFor(u, file),
                         index: Number(part) - 1,
                     });
                     if (digest !== journaled.digest) {
@@ -1727,6 +1847,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                 locked();
                 return { ok: false as const, reason: 'locked' as const };
             }
+            if (isSourceGone(error)) {
+                await sourceGone(u);
+                return { ok: false as const, reason: 'failed' as const };
+            }
             fail(u, error instanceof Error ? error.message : 'The upload could not resume.');
             return { ok: false as const, reason: 'failed' as const };
         }
@@ -1740,7 +1864,7 @@ export function createTransferManager(options: TransferManagerOptions) {
      * it needs its parent looked up and then starts like any queued upload. The
      * file must be the one that was queued; a stashed one is that by construction.
      */
-    async function attachQueued(u: Internal, file: File) {
+    async function attachQueued(u: Internal, file: UploadFile) {
         const queued = u.queued;
         if (!queued || u.item.status !== 'paused' || !options.openNodes)
             return { ok: false as const, reason: 'unknown' as const };
@@ -1781,8 +1905,16 @@ export function createTransferManager(options: TransferManagerOptions) {
     async function retry(id: string) {
         const u = uploads.get(id);
         if (!u || u.item.status !== 'failed') return;
-        // A lost copy has nothing to retry with; the list keeps its row until removed.
-        if (!u.file) return;
+        if (!u.file) {
+            // A lost copy has nothing to retry with; the list keeps its row until removed.
+            if (u.item.needsFile || u.item.origin !== 'copy') return;
+            // A copy whose bytes a lock took while it sat failed: back from its sealed stash, or
+            // reported lost when there is none, the way resume brings a paused one back.
+            u.attempts.clear();
+            set(u, { status: 'paused', error: null });
+            await resume(id);
+            return;
+        }
         u.attempts.clear();
         // What failed may have met a key change: the folder and the file are looked up again and
         // everything sealed afresh under the keys found, never sent again under the old ones, and
@@ -1829,8 +1961,12 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (!u) return;
         if (u.item.status !== 'done' && u.item.status !== 'cancelled' && u.item.status !== 'failed')
             return;
+        // A part still on its way finishes quietly instead of acting on a row that is gone.
+        u.generation++;
         uploads.delete(id);
         order.splice(order.indexOf(id), 1);
+        // A failed copy's bytes may still sit in the worker: they go with the row.
+        void releaseSource(u);
         emit();
     }
     function clearFinished() {

@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { ArrowRightIcon, PlusIcon } from 'lucide-react';
-import { DitherAvatar } from '@/components/dither-kit/avatar';
+import { DitherMark } from '@/components/dither-mark';
 import { SitePage } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { buttonVariants } from '@/components/ui/button';
@@ -133,10 +133,10 @@ function InvitePage() {
                                 className="flex flex-col items-center gap-4 border-b border-rule bg-muted px-6 pt-8 pb-6"
                             >
                                 <div className="flex items-center gap-3">
-                                    <DitherAvatar
+                                    <DitherMark
                                         name={landing.inviter}
                                         size={64}
-                                        className="overflow-hidden rounded-full"
+                                        className="rounded-full"
                                     />
                                     <PlusIcon className="size-5 text-muted-foreground" />
                                     <span className="invite-seat grid size-16 place-items-center rounded-full text-sm font-semibold">

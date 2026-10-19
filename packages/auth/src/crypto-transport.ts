@@ -7,6 +7,8 @@ export type RequestOptions = {
     onProgress?: (progress: unknown) => void;
     /* Lock the device if the worker is silent for this long. Progress resets it. */
     idleTimeoutMs?: number;
+    /* Buffers moved to the worker rather than copied: they are detached here once sent. */
+    transfer?: Transferable[];
 };
 
 export interface CryptoTransport {
@@ -106,7 +108,7 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
                 };
                 pending.set(id, task);
                 try {
-                    worker.postMessage({ id, operation, input });
+                    worker.postMessage({ id, operation, input }, options.transfer ?? []);
                 } catch {
                     lock();
                 }

@@ -62,6 +62,8 @@ import {
 export type RpcOptions = {
     onProgress?: (progress: unknown) => void;
     idleTimeoutMs?: number;
+    /* Buffers moved to the worker rather than copied (an in-memory upload's bytes). */
+    transfer?: Transferable[];
 };
 export type Rpc = <K extends keyof CryptoRequests>(
     operation: K,

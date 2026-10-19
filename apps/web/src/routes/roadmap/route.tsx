@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ArrowRightIcon } from 'lucide-react';
 import { Cover } from '@/components/cover';
-import { DitherAvatar } from '@/components/dither-kit/avatar';
+import { DitherMark } from '@/components/dither-mark';
 import { ReadingPage } from '@/components/legal-layout';
 import {
     sections,
@@ -178,7 +178,7 @@ function Item({ item, month }: { item: RoadmapItem; month: string | null }) {
                 </h3>
                 <p className="mt-1 flex items-center gap-2 text-[15px] text-muted-foreground">
                     {/* The area's own small dithered mark, the same everywhere it appears; gone in high contrast. */}
-                    <DitherAvatar name={item.area} size={14} className="dither-mark rounded-xs" />
+                    <DitherMark name={item.area} size={14} className="dither-mark rounded-xs" />
                     <span>
                         {item.area}
                         {item.status === 'shipped' && ` · ${item.month}`}
