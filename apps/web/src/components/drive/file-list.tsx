@@ -12,6 +12,7 @@ import {
     type RefObject,
 } from 'react';
 import type { DriveNode } from '@hushos/drive/client';
+import { useHoldFirstPaint } from '@/components/drive/first-paint';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Button } from '@/components/ui/button';
 
@@ -626,8 +627,12 @@ export function EmptyState({
     );
 }
 
-/* Placeholder rows while a list loads, shaped like the rows that will replace them. */
+/*
+ * Placeholder rows while a list loads, shaped like the rows that will replace them. While the
+ * drive is still opening, they hold its one line up instead of showing (first-paint.ts).
+ */
 export function SkeletonRows({ rows = 6 }: { rows?: number }) {
+    useHoldFirstPaint();
     return (
         <output aria-label="Loading" className="flex flex-col">
             {Array.from({ length: rows }, (_, index) => (

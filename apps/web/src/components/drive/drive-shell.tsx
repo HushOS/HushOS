@@ -1,9 +1,18 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
 import { useRouter } from '@tanstack/react-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { FirstPaintContext } from '@/components/drive/first-paint';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
@@ -177,31 +186,56 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
         }
     }
 
+    // The page is mounted under "Opening your files" as soon as the drive is open, and shown
+    // once its placeholders are gone (first-paint.ts): one step from the line to the list.
+    const ready = unlocked && opened.isSuccess;
+    const [painted, setPainted] = useState(false);
+    // Locked again: the next unlock opens in one step too.
+    if (!ready && painted) setPainted(false);
+    const holds = useRef(0);
+    const [settle] = useState(() => () => {
+        // After the commit that let a placeholder go: one that took its place holds on.
+        queueMicrotask(() => {
+            if (holds.current === 0) setPainted(true);
+        });
+    });
+    const [hold] = useState(() => () => {
+        holds.current++;
+        return () => {
+            holds.current--;
+            settle();
+        };
+    });
+    // After every render until the page shows: its placeholders have registered by now.
+    useLayoutEffect(() => {
+        if (ready && !painted) settle();
+    });
+    const opening = unlocked ? opened.isPending || (ready && !painted) : restoring || !attempted;
+
+    let body: ReactNode = null;
     if (!unlocked) {
-        if (restoring || !attempted) return <Opening />;
-        return (
-            <Centered>
-                <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
-                    HushOS is locked here
-                </h1>
-                <p className="mt-1.5 text-[15px] text-muted-foreground">
-                    Enter your password to open your files on this browser.
-                </p>
-                {signOutFailed && (
-                    <Alert variant="destructive" className="mt-5 text-left">
-                        <AlertDescription>
-                            Signing out didn’t finish. Check your connection and try again from your
-                            account menu.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                <UnlockDevice user={user} className="mt-5 w-full" />
-            </Centered>
-        );
-    }
-    if (opened.isPending) return <Opening />;
-    if (opened.isError)
-        return (
+        if (!opening)
+            body = (
+                <Centered>
+                    <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
+                        HushOS is locked here
+                    </h1>
+                    <p className="mt-1.5 text-[15px] text-muted-foreground">
+                        Enter your password to open your files on this browser.
+                    </p>
+                    {signOutFailed && (
+                        <Alert variant="destructive" className="mt-5 text-left">
+                            <AlertDescription>
+                                Signing out didn’t finish. Check your connection and try again from
+                                your account menu.
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                    <UnlockDevice user={user} className="mt-5 w-full" />
+                </Centered>
+            );
+    } else if (opened.isError)
+        body = (
             <Centered>
                 <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
                     Your files didn’t open
@@ -224,16 +258,27 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                 </div>
             </Centered>
         );
+    else if (opened.isSuccess)
+        body = (
+            <DriveContext.Provider
+                value={{
+                    userId: user.id,
+                    workspaceId: opened.data.workspaceId,
+                    rootId: opened.data.root.id,
+                }}
+            >
+                <FirstPaintContext.Provider value={painted ? null : hold}>
+                    {/* The same element hidden and shown, so the page is not mounted twice. */}
+                    <div className={painted ? 'contents' : 'hidden'}>{children}</div>
+                </FirstPaintContext.Provider>
+            </DriveContext.Provider>
+        );
+    // The line stays in one place in the tree from the restore to the list, so it is drawn once.
     return (
-        <DriveContext.Provider
-            value={{
-                userId: user.id,
-                workspaceId: opened.data.workspaceId,
-                rootId: opened.data.root.id,
-            }}
-        >
-            {children}
-        </DriveContext.Provider>
+        <>
+            {opening && <Opening />}
+            {body}
+        </>
     );
 }
 
