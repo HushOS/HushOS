@@ -422,6 +422,17 @@ function isLockError(error: unknown) {
     return error instanceof Error && /locked/i.test(error.message);
 }
 
+/* What the worker (or the engine) says when an in-memory upload's bytes are not there to read. */
+const SOURCE_GONE = 'This upload’s bytes are no longer on this device.';
+function isSourceGone(error: unknown) {
+    return error instanceof Error && error.message.includes('no longer on this device');
+}
+
+/* Whether an in-memory file's parts were moved away already (to a worker since lost). */
+function detached(file: MemoryFile) {
+    return file.parts.reduce((total, part) => total + part.byteLength, 0) !== file.size;
+}
+
 /* How long sign-out waits for the server to hear of each stopped upload before it forgets them anyway. */
 const FORGET_TIMEOUT_MS = 5_000;
 
@@ -583,6 +594,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.prepared = false;
             // The worker took an in-memory file's bytes with it. Ones it never had go too where a
             // sealed stash can bring them back after unlock, so no copy sits decrypted through a lock.
+            // (Parts a lock cut off mid-move are found empty at the next read: see sourceGone.)
             if (u.file && inMemory(u.file) && (u.sourceId || u.stash)) u.file = null;
             u.sourceId = null;
             if (
@@ -662,20 +674,37 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (u.sourceId) return { source: u.sourceId };
         u.attaching ??= (async () => {
             // Moved once already (then the worker was lost): the bytes are not here to move.
-            const held = file.parts.reduce((total, part) => total + part.byteLength, 0);
-            if (held !== file.size)
-                throw new Error('This upload’s bytes are no longer on this device.');
+            if (detached(file)) throw new Error(SOURCE_GONE);
             const sourceId = crypto.randomUUID();
             const buffers = [...new Set(file.parts.map((part) => part.buffer))].filter(
                 (buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer,
             );
             await rpc('driveSourceAttach', { sourceId, parts: file.parts }, { transfer: buffers });
+            // Set here, before `attaching` clears, so no read in between moves the parts again.
+            u.sourceId = sourceId;
             return sourceId;
         })().finally(() => {
             u.attaching = null;
         });
-        u.sourceId = await u.attaching;
-        return { source: u.sourceId };
+        return { source: await u.attaching };
+    }
+    /*
+     * The worker no longer holds an upload's in-memory bytes: a lock ended it
+     * while the upload sat paused or failed, so nothing here noticed. What is
+     * left of them goes, and the copy reopens from its sealed stash, or, with
+     * none, is reported lost rather than failing at every retry.
+     */
+    async function sourceGone(u: Internal) {
+        u.generation++;
+        clearBackoff(u);
+        u.inFlight.clear();
+        u.prepared = false;
+        u.sourceId = null;
+        u.attaching = null;
+        if (u.file && inMemory(u.file)) u.file = null;
+        set(u, { status: 'paused', error: null });
+        if (u.stash) await resume(u.item.id);
+        else await lost(u);
     }
     /* The worker lets go of an in-memory file's bytes (and zeroes them). */
     async function releaseSource(u: Internal) {
@@ -1165,6 +1194,10 @@ export function createTransferManager(options: TransferManagerOptions) {
             if (u.generation !== generation) return;
             if (isLockError(error)) {
                 locked();
+                return;
+            }
+            if (isSourceGone(error)) {
+                await sourceGone(u);
                 return;
             }
             fail(u, error instanceof Error ? error.message : 'The upload failed.');
@@ -1808,6 +1841,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                 locked();
                 return { ok: false as const, reason: 'locked' as const };
             }
+            if (isSourceGone(error)) {
+                await sourceGone(u);
+                return { ok: false as const, reason: 'failed' as const };
+            }
             fail(u, error instanceof Error ? error.message : 'The upload could not resume.');
             return { ok: false as const, reason: 'failed' as const };
         }
@@ -1912,6 +1949,8 @@ export function createTransferManager(options: TransferManagerOptions) {
             return;
         uploads.delete(id);
         order.splice(order.indexOf(id), 1);
+        // A failed copy's bytes may still sit in the worker: they go with the row.
+        void releaseSource(u);
         emit();
     }
     function clearFinished() {
