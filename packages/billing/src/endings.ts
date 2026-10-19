@@ -349,6 +349,98 @@ type OrderState = {
 };
 
 /*
+ * Polar's refusals that mean it won't refund this order at all (its source,
+ * `polar/refund/service.py`): refunds blocked on the order or the organisation, a
+ * disputed charge, no payment it can find. Neither Polar nor Stripe documents an age
+ * limit on card refunds, so no window is assumed: an order Polar refuses is set aside
+ * (`blocked`) and what it would have carried moves to the next order, or to operators.
+ */
+const REFUSED_FOR_GOOD = new Set([
+    'RefundsBlocked',
+    'RefundDisputedPayment',
+    'RefundUnknownPayment',
+]);
+
+/* An order as this run reads it at Polar (OrderState), its refunds listed first. */
+async function readOrder(
+    ending: billingRepository.PlanEnding,
+    order: models.Order,
+    row: billingRepository.PlanRefund | null,
+): Promise<OrderState & { readable: boolean }> {
+    const key = refundKey(ending, order.id);
+    const most = row?.status === 'blocked' ? 0 : paidOf(order);
+    if (most <= 0)
+        return {
+            order,
+            row,
+            listed: [],
+            ours: 0,
+            others: 0,
+            pending: false,
+            cap: 0,
+            readable: true,
+        };
+    let listed: models.Refund[] | null = null;
+    try {
+        listed = (await polar().refunds.list({ order_id: order.id, limit: 100 })).items;
+    } catch (error) {
+        log.warn({
+            message: 'An order’s refunds could not be listed',
+            billing: { user: ending.userId, order: order.id, status: statusOf(error) },
+        });
+    }
+    const asked = row?.firstAttemptedAt?.getTime() ?? null;
+    const mine = (refund: models.Refund) =>
+        refund.metadata?.[REFUND_METADATA_KEY] === key ||
+        (asked !== null && Date.parse(refund.created_at) >= asked - ATTEMPT_SLACK_MS);
+    const live = (listed ?? []).filter(isLive);
+    const ours = live.filter(mine).reduce((sum, refund) => sum + refund.amount, 0);
+    // Unreadable: Polar's own refunded total stands for everyone's.
+    const others = listed
+        ? live.filter((refund) => !mine(refund)).reduce((sum, r) => sum + r.amount, 0)
+        : order.refunded_amount;
+    return {
+        order,
+        row,
+        listed,
+        ours,
+        others,
+        pending: live.some((refund) => refund.status === 'pending'),
+        cap: Math.max(0, most - others),
+        readable: listed !== null,
+    };
+}
+
+/*
+ * The customer's orders from before the period that paid by card (what Polar will
+ * refund on them, `net_amount + applied_balance_amount`, is above zero), in the
+ * period's currency, newest first: where the balance that paid the period came from.
+ * An order already in another ending's refunds is left to it.
+ */
+async function earlierOrders(
+    ending: billingRepository.PlanEnding,
+    period: models.Order[],
+    currency: string,
+) {
+    const inPeriod = new Set(period.map((order) => order.id));
+    const page = await polar().orders.list({
+        external_customer_id: ending.userId,
+        sorting: ['-created_at'],
+        limit: 100,
+    });
+    const found: models.Order[] = [];
+    for (const order of page.items) {
+        if (inPeriod.has(order.id) || !order.paid || order.currency !== currency) continue;
+        if (paidOf(order) <= 0) continue;
+        if (Date.parse(order.created_at) >= ending.periodStart!.getTime()) continue;
+        const row = await billingRepository.getPlanRefund(order.id);
+        if (row && row.subscriptionId !== ending.subscriptionId) continue;
+        found.push(order);
+    }
+    return found.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+}
+
+/*
  * Every order of the period refunded, recomputed from Polar at every run.
  *
  * What is owed in all is the sum of every order's unused share, signed: a
@@ -357,18 +449,36 @@ type OrderState = {
  * amount less the others' live refunds on it. That total is then placed on the
  * orders, at most what Polar will refund on each (net amount less any balance that
  * paid it, less live refunds): each its own share first, then the difference (a
- * credit taken off, an unrefundable order's share added), newest order first. What Polar won't take (a share paid from a balance
- * whose credit isn't in this period) is logged and not refunded.
+ * credit taken off, an unrefundable order's share added), newest order first.
  *
- * Orders Polar can refund nothing on (free, 100%-off, paid from balance, a credit)
+ * What the period's orders can't carry was paid from the customer's balance, which
+ * came from an earlier card payment (a downgrade's proration credit, a top-up): it
+ * is refunded on the customer's earlier card-paid orders, newest first, each at most
+ * what Polar will refund on it. Balance not yet spent is never touched: Polar has no
+ * way to clear it, so paying it out by card would pay it twice. What no order can
+ * carry, or Polar refuses for good, is listed for operators.
+ *
+ * Orders Polar refunds nothing on (free, 100%-off, paid from balance, a credit)
  * are settled as `none` without listing their refunds. An order whose refunds, or
  * anyone's, are still pending stays open, so a refund that later fails or is
- * cancelled, HushOS's or anyone's, is owed again at the next run.
+ * cancelled, HushOS's or anyone's, is owed again at the next run. An order Polar
+ * refuses for good (REFUSED_FOR_GOOD) is set aside and the amounts placed again.
  */
 async function refundPeriod(
     ending: billingRepository.PlanEnding,
     hold: Hold,
 ): Promise<RefundOutcome> {
+    for (let pass = 0; pass < 4; pass++) {
+        const outcome = await refundPass(ending, hold);
+        if (outcome !== 'blocked') return outcome;
+    }
+    return 'failed';
+}
+
+async function refundPass(
+    ending: billingRepository.PlanEnding,
+    hold: Hold,
+): Promise<RefundOutcome | 'blocked'> {
     const orders = await periodOrders(ending);
     const rows = new Map(
         (await billingRepository.listPlanRefunds(ending.subscriptionId)).map((row) => [
@@ -390,51 +500,19 @@ async function refundPeriod(
     const states: OrderState[] = [];
     let readable = true;
     for (const order of orders) {
-        const key = refundKey(ending, order.id);
         const row = rows.get(order.id) ?? null;
-        const most = paidOf(order);
-        if (most <= 0) {
-            if (!row)
-                await billingRepository.notePlanRefund({
-                    orderId: order.id,
-                    subscriptionId: ending.subscriptionId,
-                    refundKey: key,
-                    amount: 0,
-                    currency: order.currency,
-                    status: 'none',
-                });
-            states.push({ order, row, listed: [], ours: 0, others: 0, pending: false, cap: 0 });
-            continue;
-        }
-        let listed: models.Refund[] | null = null;
-        try {
-            listed = (await polar().refunds.list({ order_id: order.id, limit: 100 })).items;
-        } catch (error) {
-            readable = false;
-            log.warn({
-                message: 'An order’s refunds could not be listed',
-                billing: { user: ending.userId, order: order.id, status: statusOf(error) },
+        if (paidOf(order) <= 0 && !row)
+            await billingRepository.notePlanRefund({
+                orderId: order.id,
+                subscriptionId: ending.subscriptionId,
+                refundKey: refundKey(ending, order.id),
+                amount: 0,
+                currency: order.currency,
+                status: 'none',
             });
-        }
-        const asked = row?.firstAttemptedAt?.getTime() ?? null;
-        const mine = (refund: models.Refund) =>
-            refund.metadata?.[REFUND_METADATA_KEY] === key ||
-            (asked !== null && Date.parse(refund.created_at) >= asked - ATTEMPT_SLACK_MS);
-        const live = (listed ?? []).filter(isLive);
-        const ours = live.filter(mine).reduce((sum, refund) => sum + refund.amount, 0);
-        // Unreadable: Polar's own refunded total stands for everyone's.
-        const others = listed
-            ? live.filter((refund) => !mine(refund)).reduce((sum, r) => sum + r.amount, 0)
-            : order.refunded_amount;
-        states.push({
-            order,
-            row,
-            listed,
-            ours,
-            others,
-            pending: live.some((refund) => refund.status === 'pending'),
-            cap: Math.max(0, most - others),
-        });
+        const state = await readOrder(ending, order, row);
+        readable &&= state.readable;
+        states.push(state);
     }
     // What is owed in all, every order's unused share signed (a credit counts against it).
     const shares = new Map(
@@ -463,10 +541,51 @@ async function refundPeriod(
         targets.set(state.order.id, next);
         left -= next - now;
     }
-    // Polar won't take it back on the period's orders: operators see it and decide.
+    // What the period couldn't carry was paid from balance: refunded on the customer's earlier
+    // card-paid orders, newest first. Read whenever some is left, or HushOS already placed some
+    // there (its rows for orders outside the period), so what it refunded there still counts.
+    const currency = states[0]?.order.currency ?? null;
+    const placedEarlier = [...rows.values()].some(
+        (row) => !orders.some((order) => order.id === row.orderId),
+    );
+    if (readable && currency && (left > 0 || placedEarlier)) {
+        let earlier: models.Order[] = [];
+        try {
+            earlier = await earlierOrders(ending, orders, currency);
+        } catch (error) {
+            readable = false;
+            log.warn({
+                message: 'A customer’s earlier orders could not be read for a refund',
+                billing: { user: ending.userId, status: statusOf(error) },
+            });
+        }
+        const read: OrderState[] = [];
+        for (const order of earlier) {
+            const row = rows.get(order.id) ?? null;
+            // Only those HushOS has refunded on before, and as many as it needs besides.
+            if (!row && left <= 0) continue;
+            const state = await readOrder(ending, order, row);
+            readable &&= state.readable;
+            read.push(state);
+            // What HushOS already has back on it counts first, whatever is left now.
+            const kept = Math.min(state.ours, state.cap);
+            targets.set(order.id, kept);
+            left -= kept;
+        }
+        for (const state of read) {
+            if (left <= 0) break;
+            const now = targets.get(state.order.id)!;
+            const more = Math.min(state.cap - now, left);
+            if (more <= 0) continue;
+            targets.set(state.order.id, now + more);
+            left -= more;
+        }
+        states.push(...read);
+    }
+    // What no order can carry, or Polar refuses for good: operators see it and decide.
     if (readable) {
-        const currency = states[0]?.order.currency ?? null;
-        if (left > 0)
+        const unrefundable = Math.max(0, left);
+        if (unrefundable > 0)
             log.warn({
                 message:
                     'Part of a personal plan’s unused days can’t be refunded: Polar won’t take it',
@@ -475,20 +594,20 @@ async function refundPeriod(
                     group: ending.groupId,
                     admittedAt: ending.admittedAt.toISOString(),
                     subscription: ending.subscriptionId,
-                    amount: left,
+                    amount: unrefundable,
                     currency,
                 },
             });
         await billingRepository.setPlanUnrefundable(
             ending.subscriptionId,
-            left > 0 ? left : null,
-            left > 0 ? currency : null,
+            unrefundable > 0 ? unrefundable : null,
+            unrefundable > 0 ? currency : null,
         );
     }
     let outcome: RefundOutcome = 'settled';
     for (const state of states) {
-        if (paidOf(state.order) <= 0) continue;
-        const target = targets.get(state.order.id)!;
+        if (state.cap <= 0 && !state.row?.firstAttemptedAt) continue;
+        const target = targets.get(state.order.id) ?? 0;
         if (!state.row)
             await billingRepository.notePlanRefund({
                 orderId: state.order.id,
@@ -497,14 +616,16 @@ async function refundPeriod(
                 amount: target,
                 currency: state.order.currency,
             });
-        else if (state.listed) await billingRepository.setPlanRefundAmount(state.order.id, target);
+        else if (state.listed && state.row.status !== 'blocked')
+            await billingRepository.setPlanRefundAmount(state.order.id, target);
         const row = (await billingRepository.getPlanRefund(state.order.id))!;
-        outcome = worse(
-            outcome,
-            readable
-                ? await refundOrder(ending, state, row, target, hold)
-                : await failRefund(ending, row, 'list', null),
-        );
+        if (row.status === 'blocked') continue;
+        const result = readable
+            ? await refundOrder(ending, state, row, target, hold)
+            : await failRefund(ending, row, 'list', null);
+        // Polar won't refund on this order at all: set aside, and the amounts placed again.
+        if (result === 'blocked') return 'blocked';
+        outcome = worse(outcome, result);
     }
     return outcome;
 }
@@ -553,7 +674,7 @@ async function refundOrder(
     row: billingRepository.PlanRefund,
     target: number,
     hold: Hold,
-): Promise<RefundOutcome> {
+): Promise<RefundOutcome | 'blocked'> {
     const key = row.refundKey;
     const listed = state.listed ?? [];
     // One HushOS counted as on its way has failed or been cancelled at Polar since: a failed
@@ -615,6 +736,15 @@ async function refundOrder(
         if (statusOf(error) === 403 && errorName(error) === 'RefundedAlready') {
             await billingRepository.settlePlanRefund(row.orderId, { status: 'none' });
             return 'settled';
+        }
+        // Polar won't refund on this order at all: the amount goes to another order, or operators.
+        if (REFUSED_FOR_GOOD.has(errorName(error) ?? '')) {
+            log.warn({
+                message: 'Polar refuses any refund on this order; its share moves on',
+                billing: { user: ending.userId, order: row.orderId, reason: errorName(error) },
+            });
+            await billingRepository.blockPlanRefund(row.orderId);
+            return 'blocked';
         }
         // No answer, or a 5xx: Polar may have made it, or make it late.
         const status = statusOf(error);

@@ -1123,6 +1123,14 @@ export async function settlePlanRefund(
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
+/* Polar refuses any refund on this order (refunds blocked, a dispute): set aside for good. */
+export async function blockPlanRefund(orderId: string) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ status: 'blocked', amount: 0, unsureUntil: null, updatedAt: new Date() })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
 /*
  * A try that failed (Polar refused, could not be reached, or its refund failed): one
  * more in a row. At `owedAfter` in a row it is listed under Refunds owed, from then

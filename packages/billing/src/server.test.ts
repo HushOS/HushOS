@@ -231,6 +231,12 @@ const polar = {
     refundLatencyMs: 0,
     /* Awaited once inside the next refunds listing: a run that stalls there. */
     onRefundList: null as (() => Promise<void>) | null,
+    /*
+     * Orders older than this many days are refused any refund (403 RefundsBlocked), as Polar
+     * refuses one whose refunds are blocked: how the fake stands for a refund window, which
+     * neither Polar nor Stripe documents for cards.
+     */
+    refundWindowDays: null as number | null,
     /* The status Polar gives a new refund. */
     refundStatus: 'succeeded' as 'pending' | 'succeeded' | 'failed',
     /* The refunds API can't be read (a token without `refunds:read`). */
@@ -554,19 +560,39 @@ const fakeClient = {
     orders: {
         async list(query: {
             subscription_id?: string;
+            external_customer_id?: string;
             status?: string;
             product_id?: string;
             created_after?: string;
         }) {
-            polar.calls.push(`orders.list:${query.subscription_id}`);
+            polar.calls.push(
+                `orders.list:${query.subscription_id ?? `customer:${query.external_customer_id}`}`,
+            );
             if (polar.ordersFail) throw new PolarClientError(403, { error: 'NotPermitted' });
+            // A customer's orders: every one of its subscriptions', ended ones included.
+            const ofCustomer = query.external_customer_id
+                ? new Set(
+                      [...polar.orders, ...polar.checkoutOrders]
+                          .map((order) => order.subscription_id)
+                          .filter((id) =>
+                              (
+                                  polar.customers.get(query.external_customer_id!)?.subscriptions ??
+                                  []
+                              )
+                                  .map((sub) => sub.id)
+                                  .includes(id),
+                          ),
+                  )
+                : null;
             return {
                 // Listed in no particular order: HushOS must sort.
                 items: [...polar.checkoutOrders, ...polar.orders]
                     .filter(
                         (order) =>
                             !order.hidden &&
-                            order.subscription_id === query.subscription_id &&
+                            (ofCustomer
+                                ? ofCustomer.has(order.subscription_id)
+                                : order.subscription_id === query.subscription_id) &&
                             (!query.status || order.status === query.status) &&
                             // `created_after` is taken loosely here: HushOS checks dates itself.
                             (!query.product_id || order.product_id === query.product_id),
@@ -793,6 +819,14 @@ const fakeClient = {
             }
             const order = polar.orders.find((candidate) => candidate.id === body.order_id);
             if (!order) throw notFound();
+            if (
+                polar.refundWindowDays !== null &&
+                Date.now() - Date.parse(order.created_at) > polar.refundWindowDays * DAY
+            )
+                throw new PolarClientError(403, {
+                    error: 'RefundsBlocked',
+                    detail: 'Refunds are blocked for this order.',
+                });
             const left =
                 (order.net_amount ?? 1000) +
                 Math.min(0, order.applied_balance_amount ?? 0) -
@@ -946,6 +980,7 @@ beforeEach(async () => {
     polar.lateRefund = null;
     polar.refundErrorsAfterStripe = false;
     polar.refundLatencyMs = 0;
+    polar.refundWindowDays = null;
     polar.onRefundList = null;
     polar.refundStatus = 'succeeded';
     polar.refundsUnreadable = false;
@@ -4215,6 +4250,109 @@ describe('a personal plan ends when its owner’s files join a family', () => {
                 amount: 300,
                 currency: 'usd',
             }),
+        ]);
+    });
+
+    test('what the balance paid is refunded on the earlier card order the balance came from', async () => {
+        // 800 of the 999 came from credit an earlier card order left; Polar takes 199 back on
+        // this order, and the other 300 of the unused half on that earlier one.
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 999,
+                    applied_balance_amount: -800,
+                },
+                {
+                    id: 'order_earlier',
+                    created_at: new Date(now - 45 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+                // Newer, but in another currency: never where this balance came from.
+                {
+                    id: 'order_in_euros',
+                    created_at: new Date(now - 20 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: 900,
+                    currency: 'eur',
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([
+            ['order_cycle', 199],
+            ['order_earlier', 300],
+        ]);
+        expect(polar.refunds[1]?.metadata.hushos_refund).toMatch(/:order_earlier$/);
+        expect(await billingRepository.listUnrefundable()).toEqual([]);
+    });
+
+    test('an earlier order Polar won’t refund on leaves the rest listed for operators', async () => {
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 999,
+                    applied_balance_amount: -800,
+                },
+                {
+                    id: 'order_earlier',
+                    created_at: new Date(now - 45 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+            ],
+        });
+        // Older than Polar will refund.
+        polar.refundWindowDays = 30;
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 199]]);
+        expect(await billingRepository.listUnrefundable()).toEqual([
+            expect.objectContaining({ subscriptionId: 'sub_personal', amount: 300 }),
+        ]);
+        // Set aside for good: no later run asks again.
+        await billing.endPersonalPlans(job);
+        expect(callsTo('refunds.create:order_earlier')).toHaveLength(1);
+    });
+
+    test('a refund on the earlier order is made once across a lost write, retries and a reconcile', async () => {
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 999,
+                    applied_balance_amount: -800,
+                },
+                {
+                    id: 'order_earlier',
+                    created_at: new Date(now - 45 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        // The worker died after Polar refunded, before anything was written here.
+        await rawSql(
+            "update personal_plan_refunds set status = 'requested', provider_refund_id = null, first_attempted_at = null, last_attempted_at = null",
+        );
+        await rawSql('update personal_plan_endings set outcome = null');
+        await billing.endPersonalPlans(job);
+        await billing.endPersonalPlans(job);
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        await runQueued(daily);
+        expect(callsTo('refunds.create')).toHaveLength(2);
+        expect(refundsMade()).toEqual([
+            ['order_cycle', 199],
+            ['order_earlier', 300],
         ]);
     });
 
