@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_c56e31c87cddde::t_ad7e89849308cf 17,19-20,66-67,69-72
+apps/android/app/src/main/kotlin/com/hushos/app/PickerSignInActivity.kt
+  s_c56e31c87cddde::t_463e5a46d041f6 19-20,38-40
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_c56e31c87cddde::t_ff554e76b8ca9b 120-126
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_8e2420d982c2d4 929,952-955,1219-1237
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c56e31c87cddde::t_b6e7f07d143d1c 169
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PickerSignIn.kt
+  s_c56e31c87cddde::t_0012ca80086b02 9,15-17,20-21,23,30-35,38-51,61,63-73,75-82,85-86
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_c56e31c87cddde::t_684066abca6290 135
+apps/android/app/src/test/kotlin/com/hushos/app/ui/PickerReturnTest.kt
+  s_c56e31c87cddde::t_bdeb0e042caac5 3,10-11,14-15,17-37,39,41-43,46,48-50,54-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "45862e61b51ac24e23f61acacfe2095f2e59614d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
