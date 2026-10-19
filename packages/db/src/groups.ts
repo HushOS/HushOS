@@ -12,6 +12,7 @@ import {
     type Tx,
 } from './drive';
 import { madeFor } from './ids';
+import { admissionFits, lockPool } from './pool';
 import { pgCode } from './readiness';
 import { unheldWorkspaceCondition } from './reports';
 import {
@@ -266,6 +267,11 @@ export type ChainResult =
           succession: StoredSuccession | null;
       }
     | { status: 'seats'; used: number; limit: number }
+    /*
+     * The newcomer's own files don't fit in the family's free space
+     * (docs/families-shared-pool.md 3.2): admitting them would stop every member's uploads.
+     */
+    | { status: 'pool-full' }
     /* Departures still to be marked left: no other roster lands first. */
     | { status: 'left-due'; userIds: string[] }
     /*
@@ -543,6 +549,20 @@ async function activeFamily(tx: Tx | typeof db, userId: string, except?: string)
         )
         .limit(1);
     return row ?? null;
+}
+
+/*
+ * Whether `userId`'s own files fit in the family's free space now (route 17's
+ * check before it charges for a place; appendChain asks again under the locks).
+ */
+export async function admissionFitsNow(groupId: string, userId: string) {
+    // Only someone waiting to join a family: anyone else gets the answer appendChain gives.
+    const [row] = await db
+        .select({ state: groupMemberships.state, kind: groupMemberships.groupKind })
+        .from(groupMemberships)
+        .where(and(eq(groupMemberships.groupId, groupId), eq(groupMemberships.userId, userId)));
+    if (row?.state !== 'accepted' || row.kind !== 'family') return true;
+    return admissionFits(db, groupId, userId, { lock: false });
 }
 
 /* The account's family (one at most), with its name: for route checks and the join page. */
@@ -1405,6 +1425,14 @@ export async function appendChain(input: {
                         (input.rotations?.length ?? 0) > 0)
                 )
                     await lockAreas(tx, groupId);
+                /*
+                 * An admission or removal changes whose own files draw from a family's pool:
+                 * its row is locked after the areas, as every check against the pool takes it
+                 * (docs/families-shared-pool.md 3.6), so an upload that resolved the pool either
+                 * lands before this or reads the membership after it.
+                 */
+                if (group.kind === 'family' && (route.kind === 'admit' || route.kind === 'remove'))
+                    await lockPool(tx, groupId);
 
                 // 2. A replay only when everything the call carries is what is stored.
                 const storedR = roster ? await storedRoster(tx, groupId, roster.version) : null;
@@ -1441,6 +1469,13 @@ export async function appendChain(input: {
                         (await activeFamily(tx, route.userId, groupId))
                     )
                         return refuse({ status: 'in-family' });
+                    // Their own files must fit in what the pool has free, counted under its lock.
+                    if (
+                        group.kind === 'family' &&
+                        target?.state === 'accepted' &&
+                        !(await admissionFits(tx, groupId, route.userId, { lock: true }))
+                    )
+                        return refuse({ status: 'pool-full' });
                     const [row] = await tx
                         .select({ used: count() })
                         .from(groupMemberships)
@@ -1982,8 +2017,11 @@ export async function leaveGroup(groupId: string, userId: string): Promise<Leave
     return answering<LeaveResult>(
         () =>
             db.transaction(async (tx): Promise<LeaveResult> => {
-                if (!(await lockGroup(tx, groupId))) return { status: 'not-member' };
+                const group = await lockGroup(tx, groupId);
+                if (!group) return { status: 'not-member' };
                 await lockAreas(tx, groupId);
+                // Leaving takes the member's own files out of the family's pool (3.6).
+                if (group.kind === 'family') await lockPool(tx, groupId);
                 return depart(tx, groupId, userId);
             }),
         async () => ({ status: 'unavailable' }),
@@ -2014,6 +2052,12 @@ export async function departAllForDeletion(
     for (const { groupId } of memberships) {
         if (!(await lockGroup(tx, groupId))) continue;
         await lockAreas(tx, groupId);
+        /*
+         * No pool lock (docs/families-shared-pool.md 3.6), unlike leaveGroup: the caller deletes
+         * the person's own workspace next, which would lock a personal workspace's row after the
+         * pool, against the order uploads take them. Nothing is mis-charged without it: an
+         * upload of theirs racing the deletion is deleted with the workspace.
+         */
         const result = await depart(tx, groupId, userId);
         if (
             result.status === 'organizer' ||

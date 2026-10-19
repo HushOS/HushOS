@@ -17,15 +17,10 @@ import {
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { departAllForDeletion } from './groups';
+import { poolName, shownPoolFree, shownPoolUsed, storageFigures } from './pool';
 import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
-import {
-    personalWorkspaces,
-    workspaceKeys,
-    workspaceStorage,
-    storageEntitlements,
-    workspaces,
-} from './schema';
+import { personalWorkspaces, workspaceKeys, workspaceStorage, workspaces } from './schema';
 import {
     deviceSessionStatement,
     keysStatement,
@@ -1037,43 +1032,40 @@ export async function resetAccountPassword(input: {
     });
 }
 
+/*
+ * The account's storage, as its meter and the phones show it: its own
+ * allowance, or while its files draw from a family's pool
+ * (docs/families-shared-pool.md 3.1) the pool's figures and the family, so a
+ * shipped phone shows the numbers uploads are checked against without
+ * updating. The same rule Drive's free-space check applies (pool.ts).
+ */
 export async function getStorageAllowance(userId: string) {
-    const [storage] = await db
-        .select({
-            workspaceId: workspaceStorage.workspaceId,
-            baseQuotaBytes: workspaceStorage.baseQuotaBytes,
-            usedBytes: workspaceStorage.usedBytes,
-            reservedBytes: workspaceStorage.reservedBytes,
-        })
+    const [personal] = await db
+        .select({ workspaceId: personalWorkspaces.workspaceId })
         .from(personalWorkspaces)
-        .innerJoin(
-            workspaceStorage,
-            eq(workspaceStorage.workspaceId, personalWorkspaces.workspaceId),
-        )
         .where(eq(personalWorkspaces.userId, userId));
-    if (!storage) return null;
-    const grants = await db
-        .select({ quotaBytes: storageEntitlements.quotaBytes })
-        .from(storageEntitlements)
-        .where(
-            and(
-                eq(storageEntitlements.workspaceId, storage.workspaceId),
-                isNull(storageEntitlements.revokedAt),
-                sql`${storageEntitlements.startsAt} <= now()`,
-                or(
-                    isNull(storageEntitlements.expiresAt),
-                    sql`${storageEntitlements.expiresAt} > now()`,
-                ),
-            ),
-        );
-    const quota = grants.reduce((sum, grant) => sum + grant.quotaBytes, storage.baseQuotaBytes);
-    const remaining = quota - storage.usedBytes - storage.reservedBytes;
+    if (!personal) return null;
+    const figures = await storageFigures(db, personal.workspaceId, { lock: false });
+    if (!figures) return null;
+    const name = figures.pool ? await poolName(db, figures.pool.groupId) : null;
+    if (figures.pool && name !== null)
+        // The pool's figures as a member may see them (pool.ts shownPoolUsed): whole GiB, and
+        // no reserved bytes, which shipped clients still decode, so the field stays as "0".
+        return {
+            workspaceId: personal.workspaceId,
+            quotaBytes: figures.allowance.toString(),
+            usedBytes: shownPoolUsed(figures.used).toString(),
+            reservedBytes: '0',
+            availableBytes: shownPoolFree(figures.free).toString(),
+            pool: { groupId: figures.pool.groupId, name },
+        };
     return {
-        workspaceId: storage.workspaceId,
-        quotaBytes: quota.toString(),
-        usedBytes: storage.usedBytes.toString(),
-        reservedBytes: storage.reservedBytes.toString(),
-        availableBytes: (remaining > 0n ? remaining : 0n).toString(),
+        workspaceId: personal.workspaceId,
+        quotaBytes: figures.allowance.toString(),
+        usedBytes: figures.used.toString(),
+        reservedBytes: figures.reserved.toString(),
+        availableBytes: (figures.free > 0n ? figures.free : 0n).toString(),
+        pool: null,
     };
 }
 

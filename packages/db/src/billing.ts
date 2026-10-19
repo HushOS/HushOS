@@ -1,5 +1,8 @@
 import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
+import { poolUsage, takePoolLock } from './pool';
+
+export { shownPoolUsed, wholeGibUp } from './pool';
 import {
     accountIntents,
     billingCustomers,
@@ -11,8 +14,6 @@ import {
     groups,
     personalWorkspaces,
     storageEntitlements,
-    workspaceStorage,
-    workspaces,
 } from './schema';
 
 // past_due keeps its allowance through the retry window; the entitlement's own expiry bounds it.
@@ -770,6 +771,9 @@ export async function applyGroupState(input: {
                 : 0n,
             expiresAt: plan ? new Date(plan.currentPeriodEnd.getTime() + input.graceMs) : null,
         };
+        // Under the pool lock, as every upload's check takes it, even for a group whose first
+        // plan this is (no row to lock yet).
+        await takePoolLock(tx, input.groupId);
         await tx
             .insert(groupStorage)
             .values({ groupId: input.groupId, ...pool })
@@ -791,17 +795,13 @@ export async function getGroupPool(groupId: string) {
 }
 
 /*
- * What the family's folders hold, together: the bytes the pool is spent on
- * (drive.ts freeBytes counts the same areas). Reserved bytes of uploads still
- * in flight are left out; the summary shows what is stored.
+ * What the family stores: its folders and every pooled member's own files
+ * (pool.ts poolUsage, the bytes Drive's free-space check counts). Reserved
+ * bytes of uploads still in flight are apart; the summary shows what is
+ * stored, the upload check counts both.
  */
-export async function getGroupPoolUsage(groupId: string) {
-    const [row] = await db
-        .select({ used: sql<string>`coalesce(sum(${workspaceStorage.usedBytes}), 0)::text` })
-        .from(workspaceStorage)
-        .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
-        .where(eq(workspaces.groupId, groupId));
-    return BigInt(row?.used ?? '0');
+export async function getPoolUsage(groupId: string) {
+    return poolUsage(db, groupId);
 }
 
 /* The family's most recent plan that has ended, for the notice once none is live. */

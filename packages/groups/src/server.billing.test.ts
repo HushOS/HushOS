@@ -160,7 +160,7 @@ const { groupsRepository, billingRepository, driveRepository, scopedId } =
     await import('@hushos/db');
 const { areaKeyCommitment } = await import('../../crypto/src/area-keys');
 const { tombstoneAt } = await import('../../crypto/src/group-testkit');
-const { closeDatabase, createTestAccount, createTestFamily, resetDatabase } =
+const { closeDatabase, createTestAccount, createTestFamily, resetDatabase, setTestUsedBytes } =
     await import('../../db/test/helpers');
 const kit = await import('../test/kit');
 const groups = await import('./server');
@@ -319,6 +319,59 @@ describe('admission with billing on', () => {
             status: 409,
             data: { reason: 'newcomer' },
         });
+        expect(polar.updates).toEqual([]);
+        expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
+    });
+
+    test('someone whose own files don’t fit in the family’s free space is refused before Polar is asked for a place', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 1);
+        const newcomer = await kit.member();
+        const call = await admission(fam, newcomer);
+        // The pool is 1 TiB and holds nothing yet: theirs is one byte more.
+        await setTestUsedBytes(newcomer.workspaceId, 1024n ** 4n + 1n);
+        const before = await kit.head(fam.groupId);
+        polar.updates = [];
+        const refused = await refusal(
+            groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call),
+        );
+        expect(refused).toMatchObject({ code: 'pool-full', status: 409 });
+        // No figure reaches the managers: not theirs, not how much is free.
+        expect(refused.data).toBeUndefined();
+        expect(polar.updates).toEqual([]);
+        expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
+        expect(await kit.head(fam.groupId)).toEqual(before);
+        // Exactly what is free fits; the same call then lands.
+        await setTestUsedBytes(newcomer.workspaceId, 1024n ** 4n);
+        await groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call);
+        expect(await state(fam.groupId, newcomer.userId)).toBe('active');
+    });
+
+    test('a pool that fills while the admission is being checked still refuses it before the charge', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 1);
+        const newcomer = await kit.member();
+        const call = await admission(fam, newcomer);
+        await setTestUsedBytes(newcomer.workspaceId, 1024n ** 3n);
+        polar.updates = [];
+        // The route's first check passes; the chain checks wait on the chain cache, held here,
+        // while the organizer's own files fill the pool.
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let admitting: Promise<unknown> | undefined;
+        try {
+            await blocker.query('begin');
+            await blocker.query('lock table group_chain_caches in access exclusive mode');
+            admitting = refusal(
+                groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call),
+            );
+            expect(await kit.lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            await setTestUsedBytes(fam.organizer.workspaceId, 1024n ** 4n);
+        } finally {
+            await blocker.query('commit');
+            await blocker.end();
+        }
+        expect(await admitting).toMatchObject({ code: 'pool-full', status: 409 });
         expect(polar.updates).toEqual([]);
         expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
     });

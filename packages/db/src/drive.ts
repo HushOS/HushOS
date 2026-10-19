@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
-import { billingEnv } from '@hushos/env/billing';
 import { db } from './client';
 import { holdsWorkspace } from './membership';
 import { heldObjectCondition } from './reports';
+import { settlingPool, shownPoolFree, storageFigures, type StorageFigures } from './pool';
 import { openShareCursor, sealShareCursor } from './share-cursor';
 import {
     metadataSigned as metadataSignedStatement,
@@ -24,9 +24,7 @@ import {
     fileVersions,
     groupHolds,
     groupMemberships,
-    groupStorage,
     personalWorkspaces,
-    storageEntitlements,
     users,
     workspaceKeys,
     workspaceStorage,
@@ -1273,76 +1271,32 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
  */
 
 /*
- * What a workspace may still take. A group area whose group has a storage
- * pool (billing wrote one, docs/groups-design.md 3.5) reads the pool instead
- * of its own allowance: the pool's quota against the used and reserved bytes
- * of every area of the group, a deleted one included until its purge. The
- * pool row is locked first, so reservations in two areas of one group cannot
- * both spend the same free bytes; each area still counts its own bytes, so
- * purges and releases are unchanged.
+ * What a workspace may still take, under the locks the reservation needs: a
+ * family folder, or a family member's own files, read the family's pool
+ * (docs/families-shared-pool.md 3.6, pool.ts); anything else its own
+ * allowance. The pool row is locked before the storage row, so reservations
+ * anywhere in one pool queue on it and cannot both spend the same free bytes;
+ * each workspace still counts its own bytes, so purges and releases are
+ * unchanged. Throws PoolMovedError when the owner's family changed under the
+ * check: the caller runs its transaction again (settlingPool).
  */
 async function freeBytes(tx: Tx, workspaceId: string) {
-    const [owner] = await tx
-        .select({ groupId: workspaces.groupId })
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId));
-    // A pool is billing's; with BILLING_PROVIDER=none every area keeps its own allowance.
-    const groupId = billingEnv.BILLING_PROVIDER === 'none' ? null : (owner?.groupId ?? null);
-    const [pool] = groupId
-        ? await tx
-              .select({ quotaBytes: groupStorage.quotaBytes, expiresAt: groupStorage.expiresAt })
-              .from(groupStorage)
-              .where(eq(groupStorage.groupId, groupId))
-              .for('update')
-        : [];
-    const [storage] = await tx
-        .select({
-            baseQuotaBytes: workspaceStorage.baseQuotaBytes,
-            usedBytes: workspaceStorage.usedBytes,
-            reservedBytes: workspaceStorage.reservedBytes,
-        })
-        .from(workspaceStorage)
-        .where(eq(workspaceStorage.workspaceId, workspaceId))
-        .for('update');
-    if (!storage) return null;
-    if (pool && groupId) {
-        const [totals] = await tx
-            .select({
-                used: sql<string>`coalesce(sum(${workspaceStorage.usedBytes}), 0)::text`,
-                reserved: sql<string>`coalesce(sum(${workspaceStorage.reservedBytes}), 0)::text`,
-            })
-            .from(workspaceStorage)
-            .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
-            // A deleted family folder still draws from the pool until the purge deletes its files
-            // (docs/groups-design.md 2.10): its bytes are still stored, and deleting a full folder
-            // must not free room to fill another while they are.
-            .where(eq(workspaces.groupId, groupId));
-        const used = BigInt(totals?.used ?? '0');
-        const reserved = BigInt(totals?.reserved ?? '0');
-        // Past the plan's period and grace, the pool is empty until billing writes it again.
-        const live = pool.expiresAt === null || pool.expiresAt.getTime() > Date.now();
-        const allowance = live ? pool.quotaBytes : 0n;
-        return { allowance, used, reserved, free: allowance - used - reserved };
-    }
-    const grants = await tx
-        .select({ quotaBytes: storageEntitlements.quotaBytes })
-        .from(storageEntitlements)
-        .where(
-            and(
-                eq(storageEntitlements.workspaceId, workspaceId),
-                isNull(storageEntitlements.revokedAt),
-                sql`${storageEntitlements.startsAt} <= now()`,
-                sql`(${storageEntitlements.expiresAt} is null or ${storageEntitlements.expiresAt} > now())`,
-            ),
-        );
-    const allowance = grants.reduce((sum, grant) => sum + grant.quotaBytes, storage.baseQuotaBytes);
-    return {
-        allowance,
-        used: storage.usedBytes,
-        reserved: storage.reservedBytes,
-        free: allowance - storage.usedBytes - storage.reservedBytes,
-    };
+    return storageFigures(tx, workspaceId, { lock: true });
 }
+
+/*
+ * The free space a reservation is checked against, and that a refusal names.
+ * A pool's is its exact free space rounded down to a whole GiB (pool.ts
+ * shownPoolFree), the figure members already see: checked to the byte, the
+ * answers to a run of upload begins (each cancelled once it got through)
+ * would find the exact free space in about 30 tries, and with it another
+ * member's exact usage (docs/families-shared-pool.md 3.6). It costs up to
+ * 1 GiB of the pool. A workspace's own allowance is checked to the byte.
+ */
+function spendable(storage: StorageFigures) {
+    return storage.pool ? shownPoolFree(storage.free) : storage.free;
+}
+const named = (free: bigint) => (free > 0n ? free : 0n);
 
 async function adjustStorage(tx: Tx, workspaceId: string, used: bigint, reserved: bigint) {
     await tx
@@ -1415,6 +1369,10 @@ export type UploadBegin = {
 };
 
 export async function beginUpload(input: UploadBegin) {
+    return settlingPool(() => beginUploadOnce(input));
+}
+
+async function beginUploadOnce(input: UploadBegin) {
     return transactionKeeping(['ok'], async (tx) => {
         await nextChangeSeq(tx, input.workspaceId, input.userId);
         let keyEpoch: number;
@@ -1489,8 +1447,8 @@ export async function beginUpload(input: UploadBegin) {
             return { status: 'bad-signature' as const };
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
-        if (storage.free < input.object.ciphertextSize)
-            return { status: 'over-quota' as const, free: storage.free > 0n ? storage.free : 0n };
+        if (spendable(storage) < input.object.ciphertextSize)
+            return { status: 'over-quota' as const, free: named(spendable(storage)) };
         await adjustStorage(tx, input.workspaceId, 0n, input.object.ciphertextSize);
         if (!input.node.existing) {
             const [node] = await tx
@@ -2057,9 +2015,13 @@ export async function listExpiredUploads(limit = 100) {
     return rows as UploadRow[];
 }
 
-/* Storage figures for a workspace, for the UI and the audit job. */
+/*
+ * Storage figures for a workspace, exact, read once without locks: the path
+ * the account's figures take (getStorageAllowance), not the one a reservation
+ * takes (freeBytes).
+ */
 export async function getStorage(workspaceId: string) {
-    return db.transaction((tx) => freeBytes(tx, workspaceId));
+    return storageFigures(db, workspaceId, { lock: false });
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2161,6 +2123,10 @@ export type CopyFile = {
  * and the object retires when the last reference goes.
  */
 export async function copyFile(input: CopyFile) {
+    return settlingPool(() => copyFileOnce(input));
+}
+
+async function copyFileOnce(input: CopyFile) {
     return transactionKeeping(['ok'], async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
         const source = await walk(tx, input.sourceNodeId);
@@ -2219,8 +2185,8 @@ export async function copyFile(input: CopyFile) {
         const cost = version.ciphertextSize;
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
-        if (storage.free < cost)
-            return { status: 'over-quota' as const, free: storage.free > 0n ? storage.free : 0n };
+        if (spendable(storage) < cost)
+            return { status: 'over-quota' as const, free: named(spendable(storage)) };
         const now = new Date();
         const [node] = await tx
             .insert(driveNodes)

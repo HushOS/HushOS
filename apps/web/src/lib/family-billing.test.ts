@@ -428,7 +428,7 @@ describe('tierMoves', () => {
         );
     });
 
-    test('a smaller tier says how much more the family folders hold than its pool', () => {
+    test('a smaller tier says how much more the family stores than its pool', () => {
         const pool = BigInt(800 * GIB);
         const over = (usedBytes: bigint) =>
             tierMoves(onTier('max-month', { usedBytes })).find(

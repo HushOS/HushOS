@@ -125,6 +125,18 @@ const newcomerInFamily = () =>
         { reason: 'newcomer' },
     );
 
+/*
+ * Their own files would join the family's pool and don't fit in its free
+ * space (docs/families-shared-pool.md 3.2). No figure: the managers learn only
+ * "more than what's free", never the newcomer's usage.
+ */
+const poolFull = () =>
+    new GroupError(
+        'pool-full',
+        'Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in.',
+        409,
+    );
+
 const FAMILY_ROLES: readonly GroupRoleWire[] = ['billing', 'guardian', 'members'];
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -811,6 +823,8 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             throw new GroupError('not-pending', 'This person has not accepted an invitation.', 409);
         case 'in-family':
             throw newcomerInFamily();
+        case 'pool-full':
+            throw poolFull();
         case 'epoch-stale':
             throw new GroupError(
                 'epoch-stale',
@@ -1973,12 +1987,14 @@ export async function admit(
     call: RosterCall & { keySeal?: SealWire },
 ) {
     /*
-     * One family per account, before the chain is checked and before a place is paid for;
-     * asked only once the caller is known to manage this family, so nobody else learns
-     * whether someone is in a family. The repository asks again under the lock.
+     * One family per account, then whether the newcomer's own files fit in the pool's free
+     * space, before the chain is checked and before a place is paid for; asked only once the
+     * caller is known to manage this family, so nobody else learns whether someone is in a
+     * family or how much they store. The repository asks both again under the locks.
      */
     await membershipOf(groupId, userId, 'members');
     if (await groupsRepository.waitingButInFamily(groupId, targetId)) throw newcomerInFamily();
+    if (!(await groupsRepository.admissionFitsNow(groupId, targetId))) throw poolFull();
     return writeChain(
         groupId,
         userId,
@@ -1991,6 +2007,7 @@ export async function admit(
                 // Polar call itself, which an admission elsewhere can still overtake.
                 if (await groupsRepository.waitingButInFamily(groupId, targetId))
                     throw newcomerInFamily();
+                if (!(await groupsRepository.admissionFitsNow(groupId, targetId))) throw poolFull();
                 if (!billingEnabled()) return;
                 const seat = await ensureGroupSeat(groupId, userId);
                 if (seat.status !== 'ok') throw seatRefusal(seat);

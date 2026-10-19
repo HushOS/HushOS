@@ -1550,7 +1550,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
         await change.getByText('Family Plus · 800 GB').click();
         await expect(change.locator('[data-tier-over]')).toContainText(
-            'The family folders hold 900 GB, more than Family Plus’s 800 GB. Free at least 100 GB before changing to it.',
+            'Your family stores 900 GB, more than Family Plus’s 800 GB. Free at least 100 GB before changing to it.',
         );
         await expect(change.getByRole('button', { name: /^Change on / })).toBeDisabled();
         await change.getByRole('button', { name: 'Cancel' }).click();

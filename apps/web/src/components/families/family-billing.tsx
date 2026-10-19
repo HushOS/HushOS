@@ -1170,10 +1170,9 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
                 {chosen.over > 0n && summary.storage && (
                     <Alert variant="warning" data-tier-over>
                         <AlertDescription>
-                            The family folders hold {spaceOf(BigInt(summary.storage.usedBytes))},
-                            more than {tierName(chosen.plan)}’s{' '}
-                            {spaceOf(BigInt(chosen.plan.quotaBytes))}. Free at least{' '}
-                            {spaceOf(chosen.over, 'up')} before changing to it.
+                            Your family stores {spaceOf(BigInt(summary.storage.usedBytes))}, more
+                            than {tierName(chosen.plan)}’s {spaceOf(BigInt(chosen.plan.quotaBytes))}
+                            . Free at least {spaceOf(chosen.over, 'up')} before changing to it.
                         </AlertDescription>
                     </Alert>
                 )}

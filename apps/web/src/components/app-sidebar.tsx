@@ -212,9 +212,15 @@ function PoolMeter({
     );
 }
 
-/* The person's own space; `label` names it where it could be read as something else's. */
-function OwnMeter({ label }: { label: string | null }) {
+/*
+ * The person's own space; `label` names it where it could be read as something else's. While
+ * their files draw from a family's pool (docs/families-shared-pool.md 3.1) the server's figures
+ * are the pool's, named after the family, and no personal plan offers more room.
+ */
+function OwnMeter({ label: given }: { label: string | null }) {
     const { data: storage } = useQuery(storageQueryOptions);
+    const pooled = storage?.pool ?? null;
+    const label = pooled ? pooled.name : given;
     const billing = useBillingEnabled();
     const { data: catalogue } = useQuery({ ...catalogueQueryOptions, enabled: billing });
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: billing });
@@ -223,9 +229,8 @@ function OwnMeter({ label }: { label: string | null }) {
     const current =
         summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
     const currentQuota = current ? BigInt(current.quotaBytes) : 0n;
-    const canUpgrade = Boolean(
-        catalogue?.plans.some((plan) => BigInt(plan.quotaBytes) > currentQuota),
-    );
+    const canUpgrade =
+        !pooled && Boolean(catalogue?.plans.some((plan) => BigInt(plan.quotaBytes) > currentQuota));
     // Nearly full: the bar and the line turn red, and the link offers more room.
     const nearlyFull = used >= 0.95;
     const ending = current?.cancelAtPeriodEnd ? current : null;
