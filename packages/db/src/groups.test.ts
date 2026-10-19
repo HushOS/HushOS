@@ -3958,7 +3958,7 @@ describe('deleting a family folder (groups design 2.10)', () => {
 
 /*
  * A self-grant and a master-key rotation of its writer, racing: the writer
- * holds the user's row for share while it checks the account's key version
+ * holds the user's row for key share while it checks the account's key version
  * and writes, the rotation holds it for update. Whichever goes first, no
  * self-grant may end under a root other than the account's current one.
  */
@@ -4071,7 +4071,7 @@ describe('a self-grant written while its writer rotates their account key', () =
         await rotation.started;
         const write = put(m, 1);
         try {
-            // Without the share lock it would read key version 1 and write under the retired root.
+            // Without the key share lock it would read key version 1 and write under the retired root.
             expect(await pending(write)).toBe(true);
         } finally {
             rotation.release(true);
@@ -4085,8 +4085,11 @@ describe('a self-grant written while its writer rotates their account key', () =
             .set({ keyVersion: 2 })
             .where(eq(workspaceKeys.workspaceId, m.workspaceId));
         expect(await consistent(m.user.id)).toBe(true);
-        // A new family folder made by the same member under the old root is refused too.
-        expect(await groups.createGroup(familyInput({ userId: m.user.id }).input)).toEqual({
+        // A family (its first folder's self-grant) made under a root since replaced is refused
+        // too: someone not yet in a family, since one account is in at most one.
+        const { user: other } = await registered();
+        await db.update(accountKeys).set({ keyVersion: 2 }).where(eq(accountKeys.userId, other.id));
+        expect(await groups.createGroup(familyInput({ userId: other.id }).input)).toEqual({
             status: 'invalid',
             reason: 'self-grant-key-version',
         });
@@ -4116,7 +4119,7 @@ describe('a self-grant written while its writer rotates their account key', () =
         try {
             expect(await pending(write)).toBe(true);
             rotation = rotate(m, [m.workspaceId]);
-            // Without the share lock it would commit now, and the write land under the old root.
+            // Without the key share lock it would commit now, and the write land under the old root.
             expect(await pending(rotation)).toBe(true);
         } finally {
             blocker.release(false);

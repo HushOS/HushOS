@@ -334,14 +334,16 @@ const membersChanged = (reason: string): never => refuse({ status: 'members-chan
  * Whether a self-grant `userId` is about to write is wrapped under their current
  * account key. A master-key rotation (changeAccountSecurity) holds the user's row
  * `for update` while it swaps the root and rewraps every workspace_keys row; the
- * share lock here waits for it, or holds it off until this write commits, so a
- * self-grant is never stored under a root the rotation just retired (it would
- * open for nobody, and the next rotation would refuse the account's rows). A
- * rotation that waited sees the new row and is refused, to be retried with it.
+ * key share lock here waits for it, or holds it off until this write commits,
+ * so a self-grant is never stored under a root the rotation just retired (it
+ * would open for nobody, and the next rotation would refuse the account's
+ * rows). A rotation that waited sees the new row and is refused, to be retried
+ * with it. Key share, not share: an ordinary UPDATE of the row takes `for no
+ * key update`, which it does not block, so only a rotation holds a write up.
  * Take it before the workspace_keys write, and after the group's and areas' locks.
  */
 async function selfGrantUnderCurrentRoot(tx: Tx, userId: string, keyVersion: number) {
-    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('share');
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('key share');
     const [account] = await tx
         .select({ keyVersion: accountKeys.keyVersion })
         .from(accountKeys)
