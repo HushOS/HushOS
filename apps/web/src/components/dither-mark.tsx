@@ -72,7 +72,7 @@ function chunk(type: string, data: number[] | Uint8Array) {
 
 /*
  * An indexed PNG: palette entry 0 clear, then one entry per alpha tier of the one colour (a few
- * dozen), rows unfiltered in a single stored deflate block. About 1.3 kB, the same bytes on the
+ * dozen), rows unfiltered in a single stored deflate block. About 1.7 kB, the same bytes on the
  * server and in the browser, with nothing to load.
  */
 function png(name: string) {
@@ -123,10 +123,18 @@ function png(name: string) {
     return `data:image/png;base64,${btoa(binary)}`;
 }
 
+/*
+ * The last few drawn, most recent last: the roadmap's handful of areas stay, while names that
+ * come from people (an inviter's) cannot grow it for the life of the server.
+ */
+const DRAWN_MAX = 256;
 const drawn = new Map<string, string>();
 export function ditherMarkSrc(name: string) {
     let src = drawn.get(name);
-    if (!src) drawn.set(name, (src = png(name)));
+    if (src) drawn.delete(name);
+    else src = png(name);
+    drawn.set(name, src);
+    if (drawn.size > DRAWN_MAX) drawn.delete(drawn.keys().next().value!);
     return src;
 }
 
