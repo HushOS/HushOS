@@ -151,9 +151,13 @@ struct MainView: View {
                 }
                 // The moment a request says the session is over, find out whether this phone was removed.
                 .onChange(of: store.error) { _, error in
-                    if error == DriveStore.sessionEnded { Task { await model.sessionEnded() } }
+                    // Marked before the question goes out, so the alert below never shows ahead of the answer.
+                    if error == DriveStore.sessionEnded {
+                        model.sessionCheck = .checking
+                        Task { await model.sessionEnded() }
+                    }
                 }
-                .alert("You’ve been signed out", isPresented: Binding(get: { store.error == DriveStore.sessionEnded }, set: { if !$0 { store.error = nil } })) {
+                .alert("You’ve been signed out", isPresented: Binding(get: { store.error == DriveStore.sessionEnded && model.sessionCheck == .kept }, set: { if !$0 { store.error = nil } })) {
                     Button("Sign in") {
                         store.error = nil
                         model.sessionLost()

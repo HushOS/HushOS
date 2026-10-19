@@ -36,6 +36,13 @@ final class AppModel {
     var pendingLink: URL?
     /* This phone was removed from the account on another device: sign-in says so, until someone signs in. */
     var removedNotice = false
+    /*
+     * Where the check of an ended session stands. "You've been signed out" waits for `kept`: while
+     * the server is asked whether this phone was removed it says nothing, and a removal shows only
+     * "This iPhone was removed" (sign-in), never the alert over it.
+     */
+    enum SessionCheck { case none, checking, kept }
+    var sessionCheck: SessionCheck = .none
     private var checkingRemoval = false
     /* Bumped as every sign-in starts: a removal check answered after it clears nothing. */
     private var signInGeneration = 0
@@ -138,6 +145,7 @@ final class AppModel {
     }
 
     private func signedIn(_ user: SessionUser) {
+        sessionCheck = .none
         // The queue opens its own vault from the keychain until the drive hands it the new one.
         BackgroundTransfers.shared.vault = nil
         self.user = user
@@ -222,10 +230,14 @@ final class AppModel {
      * cleared if anyone signed in meanwhile.
      */
     func sessionEnded() async {
-        guard !checkingRemoval, let ended = SharedKeychain.session else { return }
+        guard !checkingRemoval else { return }
+        guard let ended = SharedKeychain.session else {
+            sessionCheck = .kept
+            return
+        }
         checkingRemoval = true
         defer { checkingRemoval = false }
-        await forgetIfRemoved(ended)
+        sessionCheck = await forgetIfRemoved(ended) ? .none : .kept
     }
 
     /*
@@ -234,17 +246,20 @@ final class AppModel {
      * to `wiping` being set nothing suspends, so a sign-in that starts after finds the wipe and
      * waits for it rather than racing it.
      */
-    private func forgetIfRemoved(_ ended: SharedKeychain.Session) async {
+    /* True when this phone was removed and its data wiped. */
+    @discardableResult
+    private func forgetIfRemoved(_ ended: SharedKeychain.Session) async -> Bool {
         let generation = signInGeneration
         guard (try? await Auth.checkSession(ended)) == .removed,
               generation == signInGeneration,
               Devices.mayForgetRemoved(ended: ended, current: SharedKeychain.session, owner: AccountStore.shared.owner())
-        else { return }
+        else { return false }
         let wipe = Task { await forgetRemovedDevice() }
         wiping = wipe
         await wipe.value
         wiping = nil
         removedNotice = true
+        return true
     }
 
     /*
