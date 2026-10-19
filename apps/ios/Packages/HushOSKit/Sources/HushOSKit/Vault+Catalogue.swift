@@ -110,7 +110,7 @@ extension Vault {
         catalogueState = .building
         let workspaceId: String
         do { workspaceId = try await loadWorkspace().workspaceId } catch {
-            catalogueState = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            catalogueState = .failed(ErrorWords.say(error) ?? ErrorWords.generic)
             return false
         }
         do {
@@ -134,7 +134,7 @@ extension Vault {
             catalogueState = .ready
             return pulled
         } catch {
-            catalogueState = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            catalogueState = .failed(ErrorWords.say(error) ?? ErrorWords.generic)
             return false
         }
     }

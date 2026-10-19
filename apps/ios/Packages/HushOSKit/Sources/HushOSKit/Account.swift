@@ -62,7 +62,9 @@ extension Auth {
         do {
             (data, response) = try await URLSession(configuration: testTransport ?? .ephemeral).data(for: request)
         } catch {
-            throw AuthError.message("We couldn’t reach HushOS. Check your connection, then try again.")
+            // Left (the sheet closed, the task ended): a cancellation, never "couldn't reach".
+            if ErrorWords.isCancellation(error) { throw CancellationError() }
+            throw AuthError.message(AuthError.unreachable)
         }
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {

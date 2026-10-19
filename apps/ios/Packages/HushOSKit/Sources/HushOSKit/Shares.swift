@@ -167,7 +167,7 @@ extension Vault {
                 )
                 mounts.append(ShareMount(share: share, root: try adopt(share.node, nodeKey: key, metadata: metadata, in: share.workspaceId), error: nil))
             } catch {
-                mounts.append(ShareMount(share: share, root: nil, error: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription, trust: error as? GranterTrust))
+                mounts.append(ShareMount(share: share, root: nil, error: ErrorWords.say(error, otherwise: "This couldn’t be opened. Try again.") ?? "This couldn’t be opened. Try again.", trust: error as? GranterTrust))
             }
         }
         return mounts

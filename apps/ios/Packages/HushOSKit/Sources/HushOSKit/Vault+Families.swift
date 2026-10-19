@@ -276,7 +276,7 @@ extension Vault {
         let refused = DriveAPIError.server(409, "HushOS couldn’t check who wrote this, so it wasn’t \(copying ? "copied" : "changed"). Try again later.")
         guard let judge = familyJudge else { throw refused }
         do { return try await judge.prior(of: record, in: workspaceId) } catch {
-            if FamilySync.unanswered(error) { throw DriveAPIError.transport(error.localizedDescription) }
+            if FamilySync.unanswered(error) { throw DriveAPI.noAnswer(error) }
             throw refused
         }
     }

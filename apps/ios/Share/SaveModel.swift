@@ -207,33 +207,36 @@ final class SaveModel {
         problem = nil
         var taken = Set(((try? await vault.children(of: target.id)) ?? []).filter { !$0.isFolder }.map { $0.name.lowercased() })
         var notes: [ShareHandoff] = []
+        var sent: Set<UUID> = []
         let uploads = ShareUploads.shared
         for item in items {
             guard let copy = item.copy else { continue }
             let name = Self.freeName(item.name, taken: taken)
-            taken.insert(name.lowercased())
             let id = UUID()
-            let directory = ShareHandoff.directory(id)
             do {
                 Unbacked.folder(ShareHandoff.transfers)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let content = directory.appendingPathComponent("content")
-                try FileManager.default.moveItem(at: copy, to: content)
-                let sealed = try await vault.sealUpload(
-                    fileURL: content, name: name, mime: item.mime, in: target.id, replacing: nil,
-                    thumbnail: Thumbnails.make(for: content, mime: item.mime), into: directory
-                )
-                try? FileManager.default.removeItem(at: content)
-                let note = ShareHandoff(id: id, name: name, folderId: target.id, mime: item.mime, size: item.size, sealed: sealed,
-                                        owner: AccountOwner(vault.api.session))
-                try note.write()
+                // Failing or cancelled before the note is written, the copy is put back for Try again (StagedSave).
+                let note = try await StagedSave.seal(copy, in: ShareHandoff.directory(id)) { content in
+                    let sealed = try await vault.sealUpload(
+                        fileURL: content, name: name, mime: item.mime, in: target.id, replacing: nil,
+                        thumbnail: Thumbnails.make(for: content, mime: item.mime), into: ShareHandoff.directory(id)
+                    )
+                    let note = ShareHandoff(id: id, name: name, folderId: target.id, mime: item.mime, size: item.size, sealed: sealed,
+                                            owner: AccountOwner(vault.api.session))
+                    try note.write()
+                    return note
+                }
+                taken.insert(name.lowercased())
                 uploads.start(note)
                 notes.append(note)
+                sent.insert(item.id)
             } catch {
-                try? FileManager.default.removeItem(at: directory)
-                problem = (error as? LocalizedError)?.errorDescription ?? "Couldn’t save it. Try again."
+                // Never nothing: a cancellation saved nothing either, and the sheet must not say Saved.
+                problem = StagedSave.words(error)
             }
         }
+        // What went to the queue leaves the sheet; what didn't stays, with why, to try again.
+        items.removeAll { sent.contains($0.id) }
         if notes.isEmpty, problem != nil { phase = .ready; return }
         Places.used(target.id, name: target.name)
         // Small files land in a moment: finish them here, then let the app have the rest.
@@ -255,6 +258,8 @@ final class SaveModel {
             note.released = true
             try? note.write()
         }
+        // Some saved, some not: the sheet stays on the ones that didn't, rather than closing as if all had.
+        if problem != nil { phase = .ready; return }
         phase = .done
         saved?()
     }

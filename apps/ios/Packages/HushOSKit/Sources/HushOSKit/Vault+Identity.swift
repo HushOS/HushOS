@@ -317,7 +317,7 @@ extension IdentityEnvelope {
 extension RotationOutcome {
     /* Each reason once, in the words the person reads. */
     mutating func note(_ error: Error) {
-        let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        let reason = ErrorWords.say(error, otherwise: "Their keys couldn’t be checked.") ?? "Their keys couldn’t be checked."
         if !skipped.contains(reason) { skipped.append(reason) }
     }
 }

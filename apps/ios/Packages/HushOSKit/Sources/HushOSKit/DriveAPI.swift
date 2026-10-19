@@ -35,6 +35,8 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     }
 
     public static let noRoom = "This doesn’t fit in your storage. Free up space to upload it."
+    /* A refusal with no message of its own (a proxy's error page, an empty body). */
+    public static let noReply = "HushOS couldn’t do that just now. Try again in a moment."
 }
 
 /*
@@ -58,6 +60,16 @@ public final class DriveAPI: Sendable {
 
     public let session: SharedKeychain.Session
     private let http: URLSession
+
+    /*
+     * A request that got no answer: the network's (`transport`, the offline line, retried by the
+     * queue), unless the task waiting for it was cancelled, which stays a cancellation and is never
+     * shown (a tab switched mid-load once marked every file "Couldn't check"). A request the
+     * system cancelled under a running task is no answer, not a cancellation (`ErrorWords`).
+     */
+    static func noAnswer(_ error: Error) -> Error {
+        ErrorWords.isCancellation(error) ? CancellationError() : DriveAPIError.transport(error.localizedDescription)
+    }
 
     /* `configuration` is for tests, which answer with a stub URLProtocol instead of a server. */
     public init(session: SharedKeychain.Session, configuration: URLSessionConfiguration = .ephemeral) {
@@ -97,7 +109,7 @@ public final class DriveAPI: Sendable {
         do {
             (data, response) = try await http.data(for: request)
         } catch {
-            throw DriveAPIError.transport(error.localizedDescription)
+            throw DriveAPI.noAnswer(error)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401 { throw DriveAPIError.notAuthenticated }
@@ -112,7 +124,7 @@ public final class DriveAPI: Sendable {
             }
             if status == 403, body?["code"] is String { throw DriveAPIError.forbidden(message ?? "You can’t change this.") }
             if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
-            throw DriveAPIError.server(status, message ?? "Request failed")
+            throw DriveAPIError.server(status, message ?? DriveAPIError.noReply)
         }
         return try JSONDecoder().decode(type, from: data)
     }
@@ -135,7 +147,7 @@ public final class DriveAPI: Sendable {
             let (data, response) = try await http.data(for: request)
             return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
         } catch {
-            throw DriveAPIError.transport(error.localizedDescription)
+            throw DriveAPI.noAnswer(error)
         }
     }
 
@@ -194,7 +206,7 @@ public final class DriveAPI: Sendable {
         do {
             (data, response) = try await http.data(for: request)
         } catch {
-            throw DriveAPIError.transport(error.localizedDescription)
+            throw DriveAPI.noAnswer(error)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 206 || status == 200 else { throw DriveAPIError.server(status, "Range request failed") }
@@ -304,7 +316,7 @@ public final class DriveAPI: Sendable {
         do {
             (_, response) = try await http.upload(for: request, from: data)
         } catch {
-            throw DriveAPIError.transport(error.localizedDescription)
+            throw DriveAPI.noAnswer(error)
         }
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             throw DriveAPIError.server((response as? HTTPURLResponse)?.statusCode ?? 0, "Part upload failed")

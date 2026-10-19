@@ -261,6 +261,8 @@ final class DriveStore {
     func adopt(_ next: Vault) async {
         guard next !== vault else { return }
         vault = next
+        // A new session for this account (signed in again, here or from the Files sheet): the old one's end is no longer news.
+        if error == Self.sessionEnded { error = nil }
         // The new session's vault has its own area ledger: families are checked again under it.
         familyVerdicts = [:]
         familiesSyncedAt = nil
@@ -452,11 +454,14 @@ final class DriveStore {
             mounts = try await vault.mountShares()
             mountsError = nil
         } catch {
-            mountsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            // Left before it answered (Shared's task ends with the tab): what was shown stays.
+            guard let words = ErrorWords.say(error) else { return }
+            mountsError = words
         }
         mountsLoaded = true
         // Opening shares may have moved a granter's pin along their succession: whose signatures count changed with it.
-        await refreshSigners()
+        // Not tied to the screen that asked: cancelled with Shared's task, it marked every file "Couldn't check".
+        Task { await refreshSigners() }
     }
 
     /*
@@ -470,6 +475,8 @@ final class DriveStore {
         defer { loadingSigners = false }
         await vault.forgetSigners()
         let next = await TrustState.load { [vault] in try await vault.signers() }
+        // Whoever asked went away mid-load: a cancelled read says nothing about whom to trust.
+        if Task.isCancelled { return }
         pins = await vault.knownPins()
         // Off the network a set already loaded stands: nothing new can arrive to check against it. Any other failure,
         // a refused rollback included, replaces it, and every record says "Couldn't check".
@@ -639,6 +646,8 @@ final class DriveStore {
             for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children)
         } catch {
+            // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
+            if ErrorWords.isCancellation(error) { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
                 if case DriveAPIError.transport = error {
@@ -750,6 +759,7 @@ final class DriveStore {
             FilesDomain.signal(folderId: folder)
             return true
         } catch {
+            if ErrorWords.isCancellation(error) { return false }
             if let failed, !isSessionEnd(error) {
                 if case DriveAPIError.transport = error { offline = true }
                 failed(reason(error))
@@ -1563,12 +1573,15 @@ final class DriveStore {
     }
 
     func report(_ error: Error) {
+        // Cancelled work (a view that went away, a request a newer one replaced) failed nobody: nothing to say.
+        if ErrorWords.isCancellation(error) { return }
         error_: do {
             if endsSession(error) { self.error = Self.sessionEnded; break error_ }
             // No network: say so at the top rather than interrupting; kept files still open.
             if case DriveAPIError.transport = error { offline = true; break error_ }
-            // The core's own sentence (a family folder's write rules among them), never its type's description.
-            let message = FamilyWords.core(error) ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if case AuthError.message(let text) = error, text == AuthError.unreachable { offline = true; break error_ }
+            // The core's own sentence (a family folder's write rules among them), never an error's own description.
+            let message = ErrorWords.say(error) ?? ErrorWords.generic
             // The same failure from every list and every sync would put the alert back the moment
             // it is dismissed and lock the person out of the app (Account, Sign out): once a minute is enough.
             if let last = lastReported, last.message == message, Date().timeIntervalSince(last.at) < 60 { break error_ }

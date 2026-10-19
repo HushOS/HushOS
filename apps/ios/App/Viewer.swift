@@ -40,7 +40,7 @@ struct FileViewer: View {
                 if let url {
                     QuickLookView(url: url).ignoresSafeArea(edges: .horizontal)
                 } else if failed {
-                    EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "“\(current.name)” couldn’t be opened",
+                    EmptyStateView(title: "“\(current.name)” couldn’t be opened",
                                    message: store.offline ? "You’re offline. Files you keep on this phone open without a connection." : "Check your connection and try again.") {
                         Button("Try again") { failed = false; attempt += 1 }.buttonStyle(PrimaryCapsuleStyle())
                     }
@@ -63,7 +63,8 @@ struct FileViewer: View {
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
         .task(id: "\(current.id)-\(attempt)") {
             url = nil
-            do { url = try await store.fetch(current, version: version) } catch { failed = true }
+            // Paged past before it came down: the next page's task is the one that counts.
+            do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
         .onChange(of: store.folders[current.node.parentId ?? ""]?.contains { $0.id == current.id }) { _, here in
             // Moved to the Trash or elsewhere from the menu: the viewer has nothing left to show.

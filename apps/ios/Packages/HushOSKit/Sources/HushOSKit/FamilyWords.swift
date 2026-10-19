@@ -63,7 +63,7 @@ public enum FamilyWords {
             return noAnswer
         case let error as CoreError:
             return keyChangeWords(message(of: error))
-        case let error as LocalizedError:
+        case let error as WordedError:
             return error.errorDescription.map(keyChangeWords) ?? "Something went wrong. Try again."
         default:
             return "Something went wrong. Try again."

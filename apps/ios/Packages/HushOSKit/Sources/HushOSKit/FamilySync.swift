@@ -247,7 +247,7 @@ public actor FamilySync: FamilyJudge {
             let listed: [GroupSummary]
             do { listed = try await list() } catch where Self.unanswered(error) {
                 // No answer is the network's: the queue waits for one, it doesn't fail the upload.
-                throw DriveAPIError.transport(error.localizedDescription)
+                throw DriveAPI.noAnswer(error)
             }
             guard let found = listed.first(where: { $0.id.lowercased() == groupId.lowercased() }) else {
                 throw FamilyFailure.notInFamily
@@ -380,6 +380,8 @@ public actor FamilySync: FamilyJudge {
 
     /* A request that got no answer, the settings route's included: nothing was refused, so nothing is taken away. */
     static func unanswered(_ error: Error) -> Bool {
+        // Cancelled: nobody refused anything either.
+        if ErrorWords.isCancellation(error) { return true }
         if let error = error as? GroupsAPIError { return error.status == 0 }
         if case DriveAPIError.transport = error { return true }
         if case AuthError.message(let text) = error, text == AuthError.unreachable { return true }

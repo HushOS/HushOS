@@ -241,7 +241,7 @@ struct SendCopySheet: View {
         Group {
             if failed {
                 VStack(spacing: Alpine.Space.s3) {
-                    EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "Couldn’t prepare “\(item.name)”", message: "Check your connection and try again.")
+                    EmptyStateView(title: "Couldn’t prepare “\(item.name)”", message: "Check your connection and try again.")
                     HStack(spacing: Alpine.Space.s2) {
                         Button("Cancel") { dismiss() }.buttonStyle(SecondaryCapsuleStyle())
                         Button("Try again") { failed = false; attempt += 1 }.buttonStyle(PrimaryCapsuleStyle())
@@ -453,7 +453,7 @@ struct VersionsSheet: View {
             versions = try await store.vault.versions(of: item.id)
             failure = nil
         } catch {
-            failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if let words = ErrorWords.say(error) { failure = words }
         }
         loaded = true
         // Sizes are sealed in each version's envelope, so they are opened here rather than read off the list.

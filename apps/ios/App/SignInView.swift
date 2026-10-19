@@ -173,7 +173,7 @@ struct SignInView: View {
                 try await model.signIn(email: address, password: password)
                 password = ""
             } catch {
-                formError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { formError = words }
             }
             pending = false
         }

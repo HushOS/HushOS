@@ -253,7 +253,7 @@ extension Vault {
                         guard let pin = pins[share.granteeUserId] else { throw ContactError.unpinned }
                         sealing = try pin.sealKeys(share.grantee.served)
                     } catch {
-                        let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                        let reason = ErrorWords.say(error, otherwise: "Their keys couldn’t be checked.") ?? "Their keys couldn’t be checked."
                         if !outcome.skipped.contains(reason) { outcome.skipped.append(reason) }
                         continue
                     }
