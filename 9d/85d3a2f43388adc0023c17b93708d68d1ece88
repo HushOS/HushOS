@@ -1,0 +1,60 @@
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_c56e31c87cddde::t_3112e3cdc91e43 381
+  s_c56e31c87cddde::t_e3d5fe0a574ac0 382-385
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_7fae82abcb482e 461-462,475-477,479,481,483-487
+  s_c56e31c87cddde::t_92802f11638075 185,478,480,482,488
+  s_c56e31c87cddde::t_3560bef25fc84a 190,489-499
+packages/billing/src/endings.ts
+  s_c56e31c87cddde::t_0ca9dbac140bc2 447,455,464-471,473-543,551,565,576-577,580,586-591,615-622,624-626,646,648-650,654-663,666,672,674,727,729,734-735,744,750-751,756-757,767,771,773,778,899,902,905
+  s_c56e31c87cddde::t_d2f8126118322f 448-454,456-463,472,550,552-563,568-569,635-638,641,643-645,647,651-653,664-665,667-671,673,675-726,728,730-732,766,769-770,772,774-775,827-828,864-866,884-888,894-898,900-901,903-904
+  s_c56e31c87cddde::t_7008dbdaca5af1 125-126,150-243,575,578-579,581-585,592,776-777
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_4016acbeef48cf 235,239-240,568,573-575,577-591,598-600,832-835,991,4266-4299,4303-4305,4340-4354,4361-4362,4365,4375,4385,4415,4417,4445,4540-4577
+  s_c56e31c87cddde::t_1d1b151af08f8e 212,236-238,241-242,813,830-831,836,866,992,4300-4302,4306,4316,4321-4326,4331-4364,4366-4374,4376-4384,4386-4414,4416,4418-4444,4446-4539
+  s_c56e31c87cddde::t_a9e971e567e9cd 243-244,828-829,993,4704-4769
+packages/db/drizzle/20261019171449_refund_disputed/migration.sql
+  s_c56e31c87cddde::t_c2816c2324efe8 3-5
+  s_c56e31c87cddde::t_2043d560a73407 1-2,6
+packages/db/drizzle/20261019171449_refund_disputed/snapshot.json
+  s_c56e31c87cddde::t_c9518995363ef4 1-3,5-13233,13235-13382
+  s_c56e31c87cddde::t_d1db4a4ac193d1 4,13234
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_0c6e58c494b4d7 1165-1166,1168-1170
+  s_6951dd6c5c9737::t_596eb8019c0b13 1163-1164,1167
+  s_c56e31c87cddde::t_f7d090605f42db 1129-1162
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_c9aec63aea4bea 310
+  s_c56e31c87cddde::t_9d05a985cd0e23 311,343
+docs/self-hosting.md
+  s_c56e31c87cddde::t_67c06392840ae5 202,577
+  s_c56e31c87cddde::t_03f86cbd4922b3 582
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_b2fa801313329d 14
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_4d36caf1be35dc 10,41,702-704
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d85d3a2f43388adc0023c17b93708d68d1ece88",
+  "prompts": {},
+  "sessions": {
+    "s_6951dd6c5c9737": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a2454ed5313a9f840",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
