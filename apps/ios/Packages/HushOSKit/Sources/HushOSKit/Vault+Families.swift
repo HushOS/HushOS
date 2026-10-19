@@ -43,7 +43,7 @@ public enum FamilyWriteError: Error, LocalizedError, Equatable {
 public struct UploadLanded: Error, LocalizedError {
     public let published: Vault.Published?
     public init(published: Vault.Published? = nil) { self.published = published }
-    public var errorDescription: String? { "Uploaded. Its size and date will update shortly." }
+    public var errorDescription: String? { "Uploaded. Its size and date in the list may not match the new version." }
 }
 
 /*

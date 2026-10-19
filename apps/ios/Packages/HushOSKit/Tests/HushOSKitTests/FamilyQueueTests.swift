@@ -316,6 +316,59 @@ extension OnFakeDrive {
             #expect(server.allBegins.isEmpty)
         }
 
+        /*
+         * A new version of Recipes.txt is completed but the answer is lost (or the app died before it
+         * saved), so the queue completes again later. In between, another member renamed the file, or
+         * put a newer version on it. The repeat is answered `completed` with the node as it is now: the
+         * upload has landed, and nothing is re-signed, so their name record and their version stay as
+         * they are. Fails if the repeat re-signs the name from the sealed name (their rename overwritten,
+         * or their version given this upload's size).
+         */
+        @Test func aRepeatedCompletionNeverOverwritesAnotherMembersRenameOrNewerVersion() async throws {
+            for change in ["rename", "version"] {
+                let family = try FamilyFixture()
+                let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+                let phone = try await family.phone(server)
+                defer { phone.done() }
+                guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+                let recipes = try #require(try await phone.vault.children(of: family.rootId).first { $0.id == family.fileId })
+                let directory = try queued(Data("Rye bread, the long way, \(change).".utf8))
+                var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
+                                          name: "Recipes.txt", mime: "text/plain", replacingId: recipes.id, replacingVersionId: recipes.node.currentVersion?.id)
+                let uploads = queue(phone)
+                guard case .send = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("not sealed"); return }
+                try await send(&upload, from: directory, with: phone.vault)
+                let sealed = try #require(upload.sealed)
+
+                server.loseCompletions = 1
+                guard case .retry = await uploads.finish(&upload, in: directory) else { Issue.record("a lost answer wasn't looked at again"); return }
+                let landed = try #require(server.node(family.fileId))
+                #expect(landed.currentVersion?.id == sealed.landing?.versionId)
+                let theirs: NodeView
+                if change == "rename" {
+                    let envelope = try metadataSeal(ctx: MetadataContext(workspaceId: family.workspaceId, nodeId: family.fileId, metadataVersion: landed.metadataVersion + 1),
+                                                    nodeKey: family.fileKey, metadata: NodeMetadata(name: "Recipes (Ana).txt", mime: "text/plain", size: 3, modified: nil))
+                    theirs = landed.with(metadataVersion: landed.metadataVersion + 1, metadataEnvelope: base64urlEncode(bytes: envelope))
+                } else {
+                    let ours = try #require(landed.currentVersion)
+                    theirs = landed.with(version: VersionView(id: UUID().uuidString.lowercased(), objectId: UUID().uuidString.lowercased(),
+                                                              contentKeyEnvelope: ours.contentKeyEnvelope, status: "ready", contentSuite: ours.contentSuite,
+                                                              chunkCount: ours.chunkCount, contentNonce: ours.contentNonce, plaintextSize: nil,
+                                                              ciphertextSize: ours.ciphertextSize, readyAt: "2026-10-19T10:05:00.000Z"))
+                }
+                server.put(theirs)
+
+                guard case .landed = await uploads.finish(&upload, in: directory) else { Issue.record("the repeat (\(change)) wasn't landed"); return }
+                #expect(server.sent("/api/drive/nodes/\(family.fileId)/metadata").isEmpty, "\(change): the name record was re-signed")
+                #expect(server.node(family.fileId)?.metadataEnvelope == theirs.metadataEnvelope)
+                #expect(server.node(family.fileId)?.metadataVersion == theirs.metadataVersion)
+                #expect(server.node(family.fileId)?.currentVersion?.id == theirs.currentVersion?.id)
+                #expect(server.count("/api/drive/uploads/\(sealed.uploadId)/complete", method: "POST") == 2)
+                #expect(!server.requested("/api/drive/uploads/\(sealed.uploadId)/abort", method: "POST"))
+                #expect(server.allBegins.count == 1)
+            }
+        }
+
         private func queue(_ phone: FamilyFixture.Phone) -> FamilyUploads {
             FamilyUploads(vault: phone.vault, families: phone.sync, pause: { _ in })
         }

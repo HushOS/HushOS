@@ -302,6 +302,26 @@ extension Vault {
         /* The metadata to show once it lands: a replacement's own, with the new size and date. */
         let final: NodeMetadata
         let replacing: Bool
+        /* What a replacement's name record may be re-signed against once it lands (`Landing`). */
+        let landing: Landing?
+    }
+
+    /*
+     * A new version as begun: its own version id, and the name record it replaces (the metadata
+     * version the file had). A completion answers with the node as it is when the answer is made,
+     * which for a repeated completion (the first answer lost, or the app gone before it saved) may be
+     * after another member renamed the file or put a newer version on it. The name record is
+     * re-signed only while this version is current and the record is still the one replaced.
+     */
+    public struct Landing: Codable, Sendable, Equatable {
+        public let versionId: String
+        public let metadataVersion: UInt64
+        public init(versionId: String, metadataVersion: UInt64) {
+            self.versionId = versionId
+            self.metadataVersion = metadataVersion
+        }
+
+        func holds(_ node: NodeView) -> Bool { node.currentVersion?.id == versionId && node.metadataVersion == metadataVersion }
     }
 
     private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
@@ -401,7 +421,8 @@ extension Vault {
         return Begun(
             workspaceId: workspace.workspaceId, uploadId: begun.upload.id, nodeId: nodeId, parentId: parentId, nodeKey: nodeKey,
             content: content, chunkCount: layout.chunkCount, chunkBytes: layout.chunkBytes, plaintextSize: plaintextSize,
-            urls: urls, final: final, replacing: replacing != nil
+            urls: urls, final: final, replacing: replacing != nil,
+            landing: replacing.map { Landing(versionId: versionId, metadataVersion: $0.node.metadataVersion) }
         )
     }
 
@@ -422,7 +443,7 @@ extension Vault {
 
     /* Completes on the server with every part's ETag; a replacement's metadata is sealed again with its new size and date. */
     private func complete(uploadId: String, workspaceId: String, nodeId: String, parentId: String, replacing: Bool,
-                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String]) async throws -> Opened {
+                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String], landing: Landing?) async throws -> Opened {
         // Built here, not passed in: a dictionary of Any made in this call can be handed to the API; a parameter could not.
         let parts: [[String: Any]] = etags.keys.sorted().map { ["partNumber": $0, "etag": etags[$0]!] }
         // A family folder's replacement is checked before the version goes live: the file's key as the ledger holds it and the
@@ -436,6 +457,10 @@ extension Vault {
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
         guard let node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
         if replacing {
+            // Another member renamed the file or put a newer version on it before this answer (a repeated completion): this
+            // version landed, and their name record is theirs. Nothing is re-signed. An upload sealed before the landing was
+            // kept (an older record) has nothing to check against and is re-signed as before.
+            if let landing, !landing.holds(node) { throw UploadLanded() }
             // The version is live from here: whatever refuses the name record now (a key change, a newer rename, no answer)
             // leaves an upload that landed, with its name to repair, never one to fail, abort or seal again.
             do {
@@ -504,8 +529,20 @@ extension Vault {
             await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
             throw error
         }
-        return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
-                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags)
+        do {
+            return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
+                                      replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
+        } catch let landed as UploadLanded {
+            // Here and now there is no queue to come back: the name is repaired once if it can be, and the item is
+            // answered as the server holds it (a caller such as Files must never take a landed version for a failure and
+            // send it again). Only a row that can't be looked up at all is thrown, still as landed.
+            if let published = landed.published {
+                _ = try? await repairLanded(nodeId: begun.nodeId, workspaceId: begun.workspaceId, final: begun.final, published: published)
+            }
+            try? await lookAgain(begun.parentId)
+            guard let item = opened[NodeRef(workspaceId: begun.workspaceId, nodeId: begun.nodeId)] else { throw landed }
+            return item
+        }
     }
 
     // MARK: - Uploads another process sends
@@ -530,6 +567,8 @@ extension Vault {
         public let modified: String?
         /* Presigned PUT addresses by part number; refreshed when they expire. */
         public var urls: [Int: String]
+        /* A replacement's version and the name record it replaces (nil for a new file, or a record kept before it was stored). */
+        public var landing: Landing? = nil
     }
 
     /*
@@ -589,7 +628,7 @@ extension Vault {
                 uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
                 partCount: Int(begun.chunkCount), replacing: begun.replacing,
                 name: begun.final.name, mime: begun.final.mime, size: begun.final.size, modified: begun.final.modified,
-                urls: urls.mapValues(\.url)
+                urls: urls.mapValues(\.url), landing: begun.landing
             )
         } catch {
             await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
@@ -611,7 +650,7 @@ extension Vault {
         try await complete(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId, nodeId: sealed.nodeId, parentId: sealed.parentId,
                                   replacing: sealed.replacing,
                                   final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified),
-                                  nodeKey: nil, etags: etags)
+                                  nodeKey: nil, etags: etags, landing: sealed.landing)
     }
 
     /* A new version as the server published it: its name record is repaired only while both are still these. */
@@ -632,14 +671,18 @@ extension Vault {
      */
     @discardableResult
     public func repairLanded(_ sealed: SealedUpload, published: Published) async throws -> Bool {
-        let item = try await resolve(sealed.nodeId)
+        try await repairLanded(nodeId: sealed.nodeId, workspaceId: sealed.workspaceId,
+                               final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified), published: published)
+    }
+
+    func repairLanded(nodeId: String, workspaceId: String, final: NodeMetadata, published: Published) async throws -> Bool {
+        let item = try await resolve(nodeId)
         guard item.node.metadataVersion == published.metadataVersion, item.node.currentVersion?.id == published.versionId else { return false }
-        let family = try familyTarget(sealed.workspaceId)
-        let ref = NodeRef(workspaceId: sealed.workspaceId, nodeId: sealed.nodeId)
+        let family = try familyTarget(workspaceId)
+        let ref = NodeRef(workspaceId: workspaceId, nodeId: nodeId)
         guard let nodeKey = family ? try writableKey(of: item) : nodeKeys[ref] else { throw DriveAPIError.server(500, "Node not opened") }
         let prior = try await priorMetadata(of: item.node, family: family)
-        _ = try await resignLanded(item.node, nodeKey: nodeKey, prior: prior,
-                                   final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified))
+        _ = try await resignLanded(item.node, nodeKey: nodeKey, prior: prior, final: final)
         return true
     }
 

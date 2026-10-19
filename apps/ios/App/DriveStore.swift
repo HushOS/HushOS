@@ -220,10 +220,14 @@ final class DriveStore {
         }
         var why: String?
         let ok = await perform(in: upload.folder, failed: { why = $0 }) {
-            _ = try await vault.upload(
-                fileURL: upload.url, name: upload.name, mime: upload.mime, in: upload.folder, replacing: upload.replacing,
-                thumbnail: Thumbnails.make(for: upload.url, mime: upload.mime)
-            ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+            do {
+                _ = try await vault.upload(
+                    fileURL: upload.url, name: upload.name, mime: upload.mime, in: upload.folder, replacing: upload.replacing,
+                    thumbnail: Thumbnails.make(for: upload.url, mime: upload.mime)
+                ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+            } catch is UploadLanded {
+                // On the server; only its row couldn't be looked up. Done, never a failure offering to send it again.
+            }
         }
         finish(ticket, failed: !ok, message: why)
         if ok {

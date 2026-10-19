@@ -203,10 +203,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                 }
                 if changedFields.contains(.contents), let newContents {
                     let mime = current.metadata.mime
-                    current = try await vault.upload(
-                        fileURL: newContents, name: current.name, mime: mime, in: current.node.parentId ?? rootId,
-                        replacing: current, thumbnail: Thumbnails.make(for: newContents, mime: mime)
-                    ) { fraction in progress.completedUnitCount = Int64(fraction * 100) }
+                    do {
+                        current = try await vault.upload(
+                            fileURL: newContents, name: current.name, mime: mime, in: current.node.parentId ?? rootId,
+                            replacing: current, thumbnail: Thumbnails.make(for: newContents, mime: mime)
+                        ) { fraction in progress.completedUnitCount = Int64(fraction * 100) }
+                    } catch is UploadLanded {
+                        // The new version is on the server; only its row couldn't be looked up here. Answered as done, never an
+                        // error, so Files doesn't send the same contents again as another version. The next enumeration shows it.
+                    }
                     remaining.remove(.contents)
                 }
                 // Dates and other fields have no home in the sealed metadata yet; they are acknowledged, not stored.

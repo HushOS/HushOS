@@ -592,6 +592,8 @@ final class FamilyServer: @unchecked Sendable {
     var beginAnswers: [(Int, [String: Any])] = []
     var completeAnswers: [(Int, [String: Any])] = []
     var metadataAnswers: [(Int, [String: Any])] = []
+    /* Completions made but answered with a 503, as if the answer was lost on the way. */
+    var loseCompletions = 0
     /* Uploads completed: a second completion answers `completed` with the node as it is, as the server's startCompleting. */
     private var completed: Set<String> = []
     private var nextEpoch: UInt64 = 10
@@ -867,6 +869,10 @@ final class FamilyServer: @unchecked Sendable {
                 var landed = existing ? tree[id]!.with(version: version) : made(node, workspaceId: begun["workspaceId"] as? String ?? "", kind: "file", version: version)
                 tree[landed.id] = landed
                 completed.insert(rest[1])
+                if loseCompletions > 0 {
+                    loseCompletions -= 1
+                    return (503, ["message": "Drive is temporarily unavailable. Please try again."])
+                }
                 if corruptCompletedNode { landed = landed.with(keyEnvelope: base64urlEncode(bytes: Data(repeating: 0, count: 72))) }
                 return (200, ["status": "complete", "node": json(landed)])
             }
