@@ -93,6 +93,8 @@ final class DriveStore {
     var familyStates: [String: FamilyState] = [:]
     var familyDetails: [String: GroupDetail] = [:]
     var familySyncing: Set<String> = []
+    /* Families whose join screen is open: that screen owns them, so a background check neither clears nor forgets them meanwhile. */
+    var familyJoining: Set<String> = []
     /* Every family folder this session learned of, to its family: only grows (FamilySync.familyAreas), so a family that fails a sync stays read only. */
     var familyAreaGroups: [String: String] = [:]
     var familyVerdicts: [NodeRef: (node: NodeView, verdict: FamilyVerdict)] = [:]

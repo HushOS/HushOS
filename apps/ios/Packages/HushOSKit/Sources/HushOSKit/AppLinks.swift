@@ -3,7 +3,7 @@ import HushOSCore
 
 /*
  * Where a link opens in the app: the paths the web declares for the apps in
- * /.well-known/apple-app-site-association (apps/web/src/lib/app-links.server.ts),
+ * /.well-known/apple-app-site-association (apps/web/src/lib/app-links.server.ts), the invitation included,
  * plus the custom scheme with the same paths and the older hushos://node/<id>.
  * One pure function, so the rules that keep a link's secret and refuse another
  * server's links are tested once and used by every entry point.
@@ -22,6 +22,10 @@ public enum AppLink: Equatable, Sendable {
     case node(id: String)
     /* The emailed link that starts a password reset: /recover/complete#verify=<token>. */
     case recover(token: String)
+    /* The mailed family invitation: /join#invite=<token>. The token rides in the fragment and never reaches a server log. */
+    case join(token: String)
+    /* An invitation link whose token (after the #) was cut off: "This invitation link is incomplete". */
+    case incompleteInvite
 }
 
 public enum AppLinkRefusal: Error, Equatable, Sendable {
@@ -65,6 +69,13 @@ public enum AppLinks {
             let fragment = URLComponents(string: "?" + (components.fragment ?? ""))?.queryItems ?? []
             guard let token = fragment.first(where: { $0.name == "verify" })?.value, isToken(token) else { return .failure(.malformed) }
             return .success(.recover(token: token))
+        case "join":
+            // The web's join page reads `invite=` from the fragment the same way (routes/join/route.tsx).
+            guard path == ["join"] else { return .failure(.webOnly) }
+            let fragment = URLComponents(string: "?" + (components.fragment ?? ""))?.queryItems ?? []
+            guard let token = fragment.first(where: { $0.name == "invite" })?.value, !token.isEmpty else { return .success(.incompleteInvite) }
+            guard isToken(token) else { return .failure(.malformed) }
+            return .success(.join(token: token))
         case "node":
             guard path.count == 2, isId(path[1]) else { return .failure(.malformed) }
             return .success(.node(id: path[1].lowercased()))

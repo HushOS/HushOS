@@ -276,6 +276,15 @@ final class AppModel {
         pendingLink = url
     }
 
+    /* A family invitation's link waits for sign-in (it carries its token only in memory, never to disk). */
+    var invitationWaiting: Bool {
+        guard let pendingLink else { return false }
+        switch AppLinks.parse(pendingLink, server: origin) {
+        case .success(.join), .success(.incompleteInvite): return true
+        default: return false
+        }
+    }
+
     /* Forgot your password, in the app: shown over sign-in (or the drive, when the emailed link opens it). */
     var recovering = false
     /* The emailed link's token, until the reset screen trades it for the enrollment. */

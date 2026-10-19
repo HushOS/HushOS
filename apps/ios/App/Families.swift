@@ -109,13 +109,33 @@ extension DriveStore {
         }
     }
 
-    /* One family checked again, and who route 3 names in it. */
+    /* One family checked again, and who route 3 names in it. Skipped while its join screen is open (that screen checks it). */
     func refreshFamily(_ summary: GroupSummary) async {
-        guard !familySyncing.contains(summary.id) else { return }
+        guard !familySyncing.contains(summary.id), !familyJoining.contains(summary.id) else { return }
         familySyncing.insert(summary.id)
         defer { familySyncing.remove(summary.id) }
         let previous = familyStates[summary.id]
-        let state = await families.sync(summary)
+        await show(await families.sync(summary), of: summary, previous: previous)
+    }
+
+    /*
+     * A join that finished on the join screen: the family as its acceptance left it, shown as a
+     * sync's would be, with route 2 read again so the row says it is in (no second acceptance).
+     */
+    func joined(_ groupId: String, _ state: FamilyState) async {
+        familyJoining.remove(groupId)
+        if let list = try? await families.list() {
+            familyList = list
+            familiesSyncedAt = Date()
+        }
+        guard let summary = familyList?.first(where: { $0.id == groupId }) else {
+            familyStates[groupId] = state
+            return
+        }
+        await show(state, of: summary, previous: familyStates[groupId])
+    }
+
+    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?) async {
         familyStates[summary.id] = state
         familyCheckedAt[summary.id] = Date()
         for (area, groupId) in await families.familyAreas() { familyAreaGroups[area] = groupId }
@@ -257,6 +277,44 @@ private struct FamilyRow: View {
     }
 }
 
+/* The hard warning: the family's member list was shown differently to this person, with what each side was. */
+struct FamilyForkSection: View {
+    let name: String
+    let fork: FamilyFork
+
+    var body: some View {
+        Section {
+            VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                Label("\(name)’s member list was shown differently to you", systemImage: "exclamationmark.triangle.fill")
+                    .font(Theme.Text.headline).foregroundStyle(Alpine.danger)
+                Text("This device won’t change anything in \(name) until it’s sorted. Tell the other members, and don’t use this family until you’ve sorted it out together.")
+                    .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+            }
+            .padding(.vertical, Alpine.Space.s1)
+            .listRowBackground(Alpine.dangerSoft)
+            DisclosureGroup("Technical details") {
+                fact(fork.memberList ? "Member list version" : "Family key version", String(fork.version))
+                ForEach(fork.sides, id: \.digest) { side in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("From \(side.from.joined(separator: ", "))").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                        Text(side.digest).font(.footnote.monospaced()).foregroundStyle(Alpine.ink).textSelection(.enabled)
+                    }
+                }
+            }
+            .tint(Alpine.ink)
+            .listRowBackground(Alpine.dangerSoft)
+        }
+    }
+
+    private func fact(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(Alpine.inkMuted)
+            Spacer()
+            Text(value).monospacedDigit().foregroundStyle(Alpine.ink)
+        }
+    }
+}
+
 /* A status in words on its soft fill, drawn as the Unverified mark is: never colour alone. */
 private struct StateBadge: View {
     let text: String
@@ -298,25 +356,34 @@ struct FamilyPage: View {
 
     typealias Accepted = HushOSKit.FamilyView
 
+    private var joining: Bool { state == .waiting || state == .unchecked }
+
     var body: some View {
         List {
             Section {} header: {
-                ScreenHeader(title: name, back: { dismiss() })
+                ScreenHeader(title: joining ? "Join \(name)" : name, back: { dismiss() })
                     .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
             }
-            alerts
-            if let view {
+            if joining {
+                // Accepted but not let in, or let in with nothing on this phone or account checking the family yet:
+                // the join screen is where that goes on (the web's family page redirects to it too).
+                JoinSections(groupId: groupId, family: name)
+            } else if let view {
+                alerts
                 folders(view)
                 members(view)
                 technical(view)
             } else if state == nil || store.familySyncing.contains(groupId) {
+                alerts
                 Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, Alpine.Space.s4).bareRow() }
+            } else {
+                alerts
             }
         }
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .listSectionSpacing(Alpine.Space.s4)
-        .screenChrome(title: name, back: { dismiss() })
+        .screenChrome(title: joining ? "Join \(name)" : name, back: { dismiss() })
         .refreshable { await store.refreshFamilies(force: true) }
         .task {
             if store.familyList == nil { await store.refreshFamilies() } else if let summary { await store.refreshFamily(summary) }
@@ -326,27 +393,7 @@ struct FamilyPage: View {
     @ViewBuilder private var alerts: some View {
         switch state {
         case .fork(let fork):
-            Section {
-                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                    Label("\(name)’s member list was shown differently to you", systemImage: "exclamationmark.triangle.fill")
-                        .font(Theme.Text.headline).foregroundStyle(Alpine.danger)
-                    Text("This device won’t change anything in \(name) until it’s sorted. Tell the other members, and don’t use this family until you’ve sorted it out together.")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
-                }
-                .padding(.vertical, Alpine.Space.s1)
-                .listRowBackground(Alpine.dangerSoft)
-                DisclosureGroup("Technical details") {
-                    fact(fork.memberList ? "Member list version" : "Family key version", String(fork.version))
-                    ForEach(fork.sides, id: \.digest) { side in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("From \(side.from.joined(separator: ", "))").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
-                            Text(side.digest).font(.footnote.monospaced()).foregroundStyle(Alpine.ink).textSelection(.enabled)
-                        }
-                    }
-                }
-                .tint(Alpine.ink)
-                .listRowBackground(Alpine.dangerSoft)
-            }
+            FamilyForkSection(name: name, fork: fork)
         case .failed(let message):
             notice(title: "Couldn’t check \(name)", message: message, danger: false) {
                 Button("Try again") { Task { if let summary { await store.refreshFamily(summary) } } }
@@ -354,10 +401,9 @@ struct FamilyPage: View {
             }
         case .wiped:
             notice(title: "You’re not in \(name) any more", message: "What this device kept of the family has been cleared.", danger: false) { EmptyView() }
-        case .unchecked:
-            notice(title: "Finish joining \(name) on the web", message: nil, danger: false) { EmptyView() }
-        case .waiting:
-            notice(title: "Waiting to join", message: "Finish joining \(name) on the web.", danger: false) { EmptyView() }
+        case .unchecked, .waiting:
+            // The join screen takes the page's place (body).
+            EmptyView()
         case .accepted(let view):
             if view.ownEntryWrong {
                 notice(title: "Your entry in \(name)’s member list isn’t your keys", message: "Ask someone who manages the family to check your words again.", danger: true) { EmptyView() }

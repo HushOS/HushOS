@@ -32,6 +32,16 @@ struct AppLinksTests {
         #expect(parse("https://hushos.com/s/short#\(secret)") == .failure(.malformed))
     }
 
+    @Test func aFamilyInvitationKeepsItsTokenAndRefusesACutOrForgedOne() {
+        #expect(parse("https://hushos.com/join#invite=\(token)") == .success(.join(token: token)))
+        #expect(parse("hushos://join#invite=\(token)") == .success(.join(token: token)))
+        #expect(parse("https://hushos.com/join") == .success(.incompleteInvite))
+        #expect(parse("https://hushos.com/join#invite=") == .success(.incompleteInvite))
+        #expect(parse("https://hushos.com/join#invite=\(token.dropLast(3))") == .failure(.malformed))
+        #expect(parse("https://hushos.com/join/extra#invite=\(token)") == .failure(.webOnly))
+        #expect(parse("https://evil.example/join#invite=\(token)") == .failure(.otherServer(host: "evil.example")))
+    }
+
     @Test func folderAndFileInTheViewer() {
         #expect(parse("https://hushos.com/app/drive") == .success(.files(folder: nil, preview: nil)))
         #expect(parse("https://hushos.com/app/drive?folder=\(folder)") == .success(.files(folder: folder, preview: nil)))

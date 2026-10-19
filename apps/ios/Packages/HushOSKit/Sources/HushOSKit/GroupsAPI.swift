@@ -18,8 +18,25 @@ public struct GroupsAPIError: Error, LocalizedError, Equatable, Sendable {
     public let status: Int
     public let code: String?
     public let message: String
+    /* The caller's own family an `in-family` refusal names (`data.family`), when it names one. */
+    public var family: Invitation.Family? = nil
+    /* `data.reason` (an `in-family` about the newcomer, a `seats` refusal's why) and `data.invitee` (a `no-plan` for someone invited). */
+    public var reason: String? = nil
+    public var invitee = false
 
     public var isNotMember: Bool { status == 404 && code == "not-member" }
+
+    /* A refusal as the server words it: `{ message, code, data }`. */
+    static func refusal(status: Int, body data: Data) -> GroupsAPIError {
+        let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let detail = body?["data"] as? [String: Any]
+        let family = (detail?["family"] as? [String: Any]).flatMap { family -> Invitation.Family? in
+            guard let groupId = family["groupId"] as? String, let name = family["name"] as? String else { return nil }
+            return Invitation.Family(groupId: groupId, name: name)
+        }
+        return GroupsAPIError(status: status, code: body?["code"] as? String, message: body?["message"] as? String ?? "Please try again.",
+                              family: family, reason: detail?["reason"] as? String, invitee: detail?["invitee"] as? Bool == true)
+    }
 
     /* What the families screens say, as the web's errorCopy words it for a read. */
     public var errorDescription: String? {
@@ -35,6 +52,27 @@ public struct GroupsAPIError: Error, LocalizedError, Equatable, Sendable {
     }
 
     public static let noAnswer = "Couldn’t reach HushOS. Check your connection, then retry."
+}
+
+/* Route 14's answer: an invitation as the server describes it to the signed-in invitee. */
+public struct Invitation: Codable, Sendable, Equatable {
+    public struct Family: Codable, Sendable, Equatable {
+        public let groupId: String
+        public let name: String
+    }
+    public struct Inviter: Codable, Sendable, Equatable {
+        public let id: String
+        public let name: String
+        public let email: String?
+    }
+    /* The invitee's own family (one per account): they leave it before they can accept. Never this one. */
+    public let inFamily: Family?
+    public let invitationId: String
+    public let groupId: String
+    public let kind: String
+    public let name: String
+    public let inviter: Inviter?
+    public let expiresAt: String
 }
 
 /* Route 2's row: one family this account accepted an invitation to or is in. */
@@ -227,11 +265,44 @@ public final class GroupsAPI: Sendable {
             throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
         }
         if status == 401 { throw DriveAPIError.notAuthenticated }
-        guard (200 ..< 300).contains(status) else {
-            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            throw GroupsAPIError(status: status, code: body?["code"] as? String, message: body?["message"] as? String ?? "Please try again.")
-        }
+        guard (200 ..< 300).contains(status) else { throw GroupsAPIError.refusal(status: status, body: data) }
         return try JSONDecoder().decode(type, from: data)
+    }
+
+    private func post<T: Decodable>(_ path: String, body: [String: Any], as type: T.Type) async throws -> T {
+        let status: Int
+        let data: Data
+        do {
+            var request = try drive.apiRequest(path)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            (status, data) = try await drive.send(request)
+        } catch DriveAPIError.transport {
+            throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
+        }
+        if status == 401 { throw DriveAPIError.notAuthenticated }
+        guard (200 ..< 300).contains(status) else { throw GroupsAPIError.refusal(status: status, body: data) }
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    /*
+     * 14: what the mailed invitation is, for this account (no chain, no member list). The token
+     * goes in the body, never a path or query, so it reaches no log; one that isn't a token is
+     * refused here as the server would (410 `gone`).
+     */
+    public func openInvitation(_ token: String) async throws -> Invitation {
+        guard AppLinks.isToken(token) else { throw GroupsAPIError(status: 410, code: "gone", message: "This invitation is no longer open.") }
+        return try await post("/invitations/open", body: ["token": token], as: Invitation.self)
+    }
+
+    /* 15: the invitation bound to this account, which must hold the invited address. Lets nobody in: the words and the join code come next. */
+    public func acceptInvitation(_ token: String) async throws -> String {
+        guard AppLinks.isToken(token) else { throw GroupsAPIError(status: 410, code: "gone", message: "This invitation is no longer open.") }
+        struct Reply: Decodable { let groupId: String }
+        let groupId = try await post("/invitations/accept", body: ["token": token], as: Reply.self).groupId.lowercased()
+        guard FamilyRecords.valid(groupId) else { throw GroupsAPIError(status: 400, code: "invalid", message: "Please try again.") }
+        return groupId
     }
 
     /* 2 */
@@ -279,9 +350,6 @@ public final class GroupsAPI: Sendable {
             throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
         }
         if status == 401 { throw DriveAPIError.notAuthenticated }
-        guard (200 ..< 300).contains(status) else {
-            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            throw GroupsAPIError(status: status, code: body?["code"] as? String, message: body?["message"] as? String ?? "Please try again.")
-        }
+        guard (200 ..< 300).contains(status) else { throw GroupsAPIError.refusal(status: status, body: data) }
     }
 }

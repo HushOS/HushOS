@@ -381,6 +381,8 @@ struct FamilyFixture {
     let r2: SignedGroupStatement
     let r3: SignedGroupStatement
     let r3Fork: SignedGroupStatement
+    /* Another roster 2 on the same roster 1 (the member let in with another role): what a server shows instead of r2. */
+    let r2Other: SignedGroupStatement
     let r4Fork: SignedGroupStatement
     let grant: Data
     let root: NodeView
@@ -427,6 +429,7 @@ struct FamilyFixture {
         r2 = try next(r1, version: 2, try member.entry([], since: 2))
         r3 = try next(r2, version: 3, try member.entry([.billing], since: 3))
         r3Fork = try next(r2, version: 3, try member.entry([.guardian], since: 3))
+        r2Other = try next(r1, version: 2, try member.entry([.guardian], since: 2))
         r4Fork = try next(r3Fork, version: 4, try member.entry([], since: 4))
 
         // The creator's device grants the folder's key to the member at roster 2.
@@ -556,6 +559,15 @@ final class FamilyServer: @unchecked Sendable {
     private var chain: [SignedGroupStatement] = []
     private var ignoringAfter = false
     var notMember = false
+    /* Route 2's state for the member: `accepted` (waiting to be let in) or `active`. */
+    var groupState = "active"
+    /* Routes 14 and 15, answered with these when set (the invitation the member opens from the mailed link). */
+    var invitationAnswer: (Int, Any)?
+    var acceptAnswer: (Int, Any)?
+    /* Every request as it went out: method, the whole URL (query included) and the body's bytes. */
+    private(set) var traffic: [(method: String, url: String, body: Data)] = []
+    /* Every settings document a PUT stored, sealed as sent. */
+    private(set) var savedSettings: [SettingsEnvelope] = []
     /* Runs as route 5 is answered: another process at work meanwhile. */
     var onRosters: (@Sendable () -> Void)?
     /* Runs once, after the first route 5 answer is built: the server or another device moves on meanwhile. */
@@ -640,13 +652,18 @@ final class FamilyServer: @unchecked Sendable {
     var writes: [String] { lock.withLock { requests.filter { $0.method != "GET" && !$0.path.hasPrefix("/api/auth/settings") && !$0.path.hasSuffix("/self-grant") }.map(\.path) } }
 
     /* The member's settings document, sealed one version above what is stored, holding `pin` for the family. */
-    func storeSettings(pin: GroupPin, contacts: [ContactPin] = []) throws {
+    func storeSettings(pin: GroupPin?, contacts: [ContactPin] = []) throws {
         var document = Settings()
-        document.setGroupPin(family.groupId, pin)
+        if let pin { document.setGroupPin(family.groupId, pin) }
         for contact in contacts { document.setPin(contact) }
         let next = (lock.withLock { settings?.settingsVersion } ?? 0) + 1
         let sealed = try settingsSeal(userId: family.member.userId, settingsKey: settingsKey, settingsVersion: next, json: try document.json())
         lock.withLock { settings = sealed }
+    }
+
+    /* Every settings document the phone saved, opened: what it wrote into the account's own sealed settings. */
+    func savedDocuments() throws -> [String] {
+        try lock.withLock { savedSettings }.compactMap { try settingsOpen(userId: family.member.userId, settingsKey: settingsKey, envelope: $0) }
     }
 
     /* The family's pin as the stored settings hold it. */
@@ -702,6 +719,7 @@ final class FamilyServer: @unchecked Sendable {
         let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         lock.withLock {
             requests.append((method, path))
+            traffic.append((method, request.url?.absoluteString ?? "", body ?? Data()))
             if method != "GET" { bodies.append((method, path, sent)) }
         }
         let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -737,6 +755,7 @@ final class FamilyServer: @unchecked Sendable {
                 guard expected == (settings?.settingsVersion ?? 0) else { return (409, ["message": "Your settings changed on another device."]) }
                 settings = SettingsEnvelope(version: UInt32((sent["version"] as? NSNumber)?.intValue ?? 2), settingsVersion: expected + 1,
                                             nonce: sent["nonce"] as? String ?? "", ciphertext: sent["ciphertext"] as? String ?? "")
+                savedSettings.append(settings!)
                 return (200, ["settingsVersion": expected + 1])
             }
         case ("GET", "/api/groups/\(f.groupId)/rosters"):
@@ -752,8 +771,12 @@ final class FamilyServer: @unchecked Sendable {
             let next = lock.withLock { () -> (@Sendable () -> Void)? in defer { afterRosters = nil }; return afterRosters }
             next?()
             return answer
+        case ("POST", "/api/invitations/open"):
+            return lock.withLock { invitationAnswer } ?? (410, ["code": "gone", "message": "This invitation is no longer open."] as [String: Any])
+        case ("POST", "/api/invitations/accept"):
+            return lock.withLock { acceptAnswer } ?? (410, ["code": "gone", "message": "This invitation is no longer open."] as [String: Any])
         case ("GET", "/api/groups"):
-            return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": [String](), "state": "active",
+            return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": [String](), "state": lock.withLock { groupState },
                                       "rosterVersion": lock.withLock { chain.count }, "groupKeyVersion": 1]]])
         case ("GET", "/api/groups/\(f.groupId)"):
             return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6]])
