@@ -1,0 +1,21 @@
+docs/release/google.md
+  s_c56e31c87cddde::t_4648e9ea8551d2 114,125
+docs/release/store-listing.md
+  s_c56e31c87cddde::t_7638ee84328a74 3,88-94,97,100-102,105,108-110,113,115-118,124-127,131-134,136-137,144,147-149,154-158,162,164,166,168-194,198,216,226-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ac90a6b85a64f2b064d7865af307d375de3cab5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
