@@ -1,0 +1,27 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c56e31c87cddde::t_65a7c1dacc4c15 52
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobEnd.kt
+  s_c56e31c87cddde::t_0c649a42211ddb 12
+apps/android/app/src/main/kotlin/com/hushos/app/data/LandedJobs.kt
+  s_c56e31c87cddde::t_6d7b0d3c307080 1-35
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_c56e31c87cddde::t_5efde953966bcb 114,252-253,279-281,301-302,339-340
+apps/android/app/src/test/kotlin/com/hushos/app/data/LandedJobsTest.kt
+  s_c56e31c87cddde::t_a072145437e4bc 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f5d8beb23796be9690bb2d5b0f0480fc2ddd5a86",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
