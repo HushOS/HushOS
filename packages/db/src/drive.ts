@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-or
 import { db } from './client';
 import { holdsWorkspace } from './membership';
 import { heldObjectCondition } from './reports';
-import { settlingPool, shownPoolFree, storageFigures, type StorageFigures } from './pool';
+import { settlingPool, storageFigures, type StorageFigures } from './pool';
 import { openShareCursor, sealShareCursor } from './share-cursor';
 import {
     metadataSigned as metadataSignedStatement,
@@ -1285,16 +1285,16 @@ async function freeBytes(tx: Tx, workspaceId: string) {
 }
 
 /*
- * The free space a reservation is checked against, and that a refusal names.
- * A pool's is its exact free space rounded down to a whole GiB (pool.ts
- * shownPoolFree), the figure members already see: checked to the byte, the
- * answers to a run of upload begins (each cancelled once it got through)
- * would find the exact free space in about 30 tries, and with it another
- * member's exact usage (docs/families-shared-pool.md 3.6). It costs up to
- * 1 GiB of the pool. A workspace's own allowance is checked to the byte.
+ * The free space a reservation is checked against, and that a refusal names. A
+ * pool's counts every other part (the family folders, each other member's own
+ * files) in whole GiB and only the workspace's own part to the byte (pool.ts
+ * PoolPart), so the answers to a run of upload begins, each cancelled once it
+ * got through, learn the writer's own bytes and nothing finer than a GiB of
+ * anyone else's (docs/families-shared-pool.md 3.6). A workspace's own
+ * allowance is checked to the byte.
  */
 function spendable(storage: StorageFigures) {
-    return storage.pool ? shownPoolFree(storage.free) : storage.free;
+    return storage.free;
 }
 const named = (free: bigint) => (free > 0n ? free : 0n);
 

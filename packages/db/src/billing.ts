@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'driz
 import { db } from './client';
 import { memberUsage, poolUsage, pooledFamilyOf, takePoolLock } from './pool';
 
-export { shownPoolUsed, wholeGibUp } from './pool';
+export { wholeGibUp } from './pool';
 import {
     accountIntents,
     billingCustomers,
@@ -798,13 +798,16 @@ export async function getGroupPool(groupId: string) {
 }
 
 /*
- * What the family stores: its folders and every pooled member's own files
- * (pool.ts poolUsage, the bytes Drive's free-space check counts). Reserved
- * bytes of uploads still in flight are apart; the summary shows what is
- * stored, the upload check counts both.
+ * What the family stores, as the pool counts it (pool.ts PoolPart): its folders
+ * together and every pooled member's own files, each part rounded up to a whole
+ * GiB on its own. `used` is that count, what the summary shows and the downgrade
+ * and first-purchase guards compare with a tier; never the exact total, which
+ * would tell a payer another member's bytes. Uploads in flight are apart: the
+ * summary shows what is stored, the upload check counts both.
  */
 export async function getPoolUsage(groupId: string) {
-    return poolUsage(db, groupId);
+    const usage = await poolUsage(db, groupId);
+    return { used: usage.counted, reserved: usage.reserved };
 }
 
 /* The family's most recent plan that has ended, for the notice once none is live. */

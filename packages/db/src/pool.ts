@@ -63,19 +63,22 @@ export function wholeGibUp(bytes: bigint) {
 }
 
 /*
- * A pool's figures as a member may see them (3.9, decision 6): what is used
- * rounded up to a whole GiB (so anything above nothing and up to 1 GiB reads as
- * 1 GiB, "Under 1 GB"; nothing at all reads as 0), what is free rounded down, never a reserved
- * figure. Exact totals would give away another member's usage, and the live
- * reserved bytes the size and timing of their uploads. The server still
- * checks every reservation against the exact figures.
+ * How a pool counts what it holds (3.6 step 5, 3.9): in parts, the family folders
+ * together and each pooled member's own files, each rounded up to a whole GiB on
+ * its own, and summed. Every check against the pool (an upload or copy, pool-full,
+ * the downgrade and first-purchase guards) and every figure shown reads it, never
+ * the exact total. Tier quotas are whole GiB, so a rounded total would change at
+ * exactly the byte the exact one does: a member adding single bytes to their own
+ * files could watch it change and learn the others' usage to the byte, modulo a
+ * GiB. Counted part by part, another member's files move any figure only when
+ * they cross a whole GiB, which managers already see (3.9). It costs up to a GiB
+ * of the pool per part (each member, and the folders).
  */
-export function shownPoolUsed(bytes: bigint) {
-    return wholeGibUp(bytes);
-}
-export function shownPoolFree(bytes: bigint) {
-    return bytes <= 0n ? 0n : (bytes / GIB) * GIB;
-}
+export type PoolPart = { workspaceId: string | null; used: bigint; reserved: bigint };
+
+/* A part as the pool counts it: its used and reserved bytes together, rounded up to a whole GiB. */
+const counted = (part: { used: bigint; reserved: bigint }, reserved: boolean) =>
+    wholeGibUp(part.used + (reserved ? part.reserved : 0n));
 
 /*
  * The pool's usage: the used and reserved bytes of every workspace of the
@@ -89,23 +92,49 @@ export function shownPoolFree(bytes: bigint) {
  * family without one counts what would draw from it once it has one.
  */
 export async function poolUsage(tx: Conn, groupId: string) {
-    const result = await tx.execute<{ used: string; reserved: string }>(sql`
-        select coalesce(sum(s.used_bytes), 0)::text as used,
+    const parts = await poolParts(tx, groupId);
+    return {
+        used: parts.reduce((sum, part) => sum + part.used, 0n),
+        reserved: parts.reduce((sum, part) => sum + part.reserved, 0n),
+        // What the pool counts as stored, part by part (see PoolPart): the figure shown and
+        // the one the downgrade and first-purchase guards compare.
+        counted: parts.reduce((sum, part) => sum + counted(part, false), 0n),
+        // The same with uploads in flight, as every reservation and pool-full count it.
+        countedReserved: parts.reduce((sum, part) => sum + counted(part, true), 0n),
+        parts,
+    };
+}
+
+/*
+ * The pool's parts (PoolPart): the family folders together (`workspaceId` null), a
+ * deleted one included until its purge, and each active member's own workspace.
+ */
+async function poolParts(tx: Conn, groupId: string): Promise<PoolPart[]> {
+    const result = await tx.execute<{
+        workspace_id: string | null;
+        used: string;
+        reserved: string;
+    }>(sql`
+        select null::uuid as workspace_id,
+               coalesce(sum(s.used_bytes), 0)::text as used,
                coalesce(sum(s.reserved_bytes), 0)::text as reserved
         from ${workspaceStorage} s
-        where s.workspace_id in (
-            select w.id from ${workspaces} w where w.group_id = ${groupId}
-            union
-            select p.workspace_id
-            from ${personalWorkspaces} p
-            join ${groupMemberships} m on m.user_id = p.user_id
-            where m.group_id = ${groupId}
-              and m.group_kind = 'family'
-              and m.state = 'active'
-        )
+        join ${workspaces} w on w.id = s.workspace_id
+        where w.group_id = ${groupId}
+        union all
+        select s.workspace_id, s.used_bytes::text, s.reserved_bytes::text
+        from ${personalWorkspaces} p
+        join ${groupMemberships} m on m.user_id = p.user_id
+        join ${workspaceStorage} s on s.workspace_id = p.workspace_id
+        where m.group_id = ${groupId}
+          and m.group_kind = 'family'
+          and m.state = 'active'
     `);
-    const row = result.rows[0];
-    return { used: BigInt(row?.used ?? '0'), reserved: BigInt(row?.reserved ?? '0') };
+    return result.rows.map((row) => ({
+        workspaceId: row.workspace_id,
+        used: BigInt(row.used),
+        reserved: BigInt(row.reserved),
+    }));
 }
 
 /* The family `userId` is an active member of (one at most, group_memberships_one_family_idx). */
@@ -177,20 +206,42 @@ async function ownFigures(
         used: own.usedBytes,
         reserved: own.reservedBytes,
         free: allowance - own.usedBytes - own.reservedBytes,
+        shown: null,
         pool: null,
     };
 }
 
+/*
+ * The pool's figures for one of its workspaces. `free` is what that workspace may
+ * still take: the pool less every other part as it counts (whole GiB, uploads in
+ * flight included) less this part's own exact bytes. Its own bytes are known to
+ * whoever writes there; the others' move it only a GiB at a time. `shown` is what
+ * a member reads: what is stored, counted part by part, and what is free with
+ * uploads in flight counted the same way, so an upload moves either figure only
+ * when its part crosses a whole GiB.
+ */
 async function poolFigures(
     tx: Conn,
     groupId: string,
+    workspace: { id: string; isArea: boolean },
     pool: { quotaBytes: bigint; expiresAt: Date | null },
     at: Date,
 ): Promise<StorageFigures> {
-    const { used, reserved } = await poolUsage(tx, groupId);
+    const usage = await poolUsage(tx, groupId);
     // Past the plan's period and grace (or before any plan), the pool is empty.
     const allowance = planLive(pool, at) ? pool.quotaBytes : 0n;
-    return { allowance, used, reserved, free: allowance - used - reserved, pool: { groupId } };
+    const own = usage.parts.find((part) =>
+        workspace.isArea ? part.workspaceId === null : part.workspaceId === workspace.id,
+    ) ?? { used: 0n, reserved: 0n };
+    const others = usage.countedReserved - counted(own, true);
+    return {
+        allowance,
+        used: usage.used,
+        reserved: usage.reserved,
+        free: allowance - others - own.used - own.reserved,
+        shown: { used: usage.counted, free: allowance - usage.countedReserved },
+        pool: { groupId },
+    };
 }
 
 export type StorageFigures = {
@@ -198,6 +249,8 @@ export type StorageFigures = {
     used: bigint;
     reserved: bigint;
     free: bigint;
+    /* A pool's figures as its members read them (poolFigures); null for an own allowance. */
+    shown: { used: bigint; free: bigint } | null;
     /* The family whose pool these figures are, or null for the workspace's own allowance. */
     pool: { groupId: string } | null;
 };
@@ -273,7 +326,7 @@ export async function storageFigures(
         const at = new Date();
         // A group made before billing has no pool: its areas keep their own allowances.
         return pool
-            ? poolFigures(tx, owner.groupId, pool, at)
+            ? poolFigures(tx, owner.groupId, { id: workspaceId, isArea: true }, pool, at)
             : ownFigures(tx, workspaceId, own, at);
     }
     if (billing && owner.userId) {
@@ -285,7 +338,8 @@ export async function storageFigures(
             const own = await readOwn(tx, workspaceId, lock);
             if (!own) return null;
             const at = new Date();
-            if (pool && planLive(pool, at)) return poolFigures(tx, familyId, pool, at);
+            if (pool && planLive(pool, at))
+                return poolFigures(tx, familyId, { id: workspaceId, isArea: false }, pool, at);
             return ownFigures(tx, workspaceId, own, at);
         }
         const own = await readOwn(tx, workspaceId, lock);
@@ -305,8 +359,8 @@ export async function poolName(tx: Conn, groupId: string) {
 
 /*
  * Whether `userId`'s own files fit in the family's free space (3.2,
- * `pool-full`): their used and reserved bytes against the pool's quota less
- * its usage. Inside an admission's transaction, after the group's and areas'
+ * `pool-full`): their used and reserved bytes, rounded up to a whole GiB, beside
+ * the pool's parts as it counts them (PoolPart), against its quota. Inside an admission's transaction, after the group's and areas'
  * locks and the pool row's (lockPool), the newcomer's storage row is locked
  * too, so an upload of theirs in flight is either counted here or, if it
  * starts later, finds them in the family (storageFigures, step 4). True when
@@ -332,8 +386,13 @@ export async function admissionFits(
     if (!own) return true;
     const at = new Date();
     if (!planLive(pool, at)) return true;
-    const { used, reserved } = await poolUsage(tx, groupId);
-    return own.usedBytes + own.reservedBytes <= pool.quotaBytes - used - reserved;
+    // As the pool will count them once they're in: their files rounded up to a whole GiB on
+    // their own, beside every part already in it, uploads in flight included (PoolPart).
+    const { countedReserved } = await poolUsage(tx, groupId);
+    return (
+        countedReserved + counted({ used: own.usedBytes, reserved: own.reservedBytes }, true) <=
+        pool.quotaBytes
+    );
 }
 
 /*
