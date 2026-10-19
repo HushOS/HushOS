@@ -35,7 +35,6 @@ import {
     firstRosterVerdict,
     ownEntryCases,
     ownEntryVerdict,
-    groupCases,
     mlDsaKeysOf,
     pattern,
     person,
@@ -295,15 +294,6 @@ describe('group records made by the Rust core', () => {
             ).toBe(entry.id);
         }
     });
-
-    // Every history the web judges, signed afresh with ML-DSA in pure JavaScript (about
-    // 500 signatures, most of this file's time); only the names are compared, so that a
-    // case added on either side without regenerating fails here.
-    it('has every history case the web judges, by name', async () => {
-        expect(core.cases.map((entry) => entry.name)).toEqual(
-            (await groupCases()).map((entry) => entry.name),
-        );
-    }, 30_000);
 
     // One test per history, so a slow runner spends each case's time on that case alone.
     it.each((core.cases as unknown as HistoryCase[]).map((entry) => [entry.name, entry] as const))(

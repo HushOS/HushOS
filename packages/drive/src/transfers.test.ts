@@ -1786,6 +1786,10 @@ function memoryCopy(size: number, name = 'copy.bin') {
     for (let i = 0; i < Math.min(256, size); i++) content[i] = (i * 31 + 11) & 0xff;
     for (let filled = 256; filled < size; filled *= 2)
         content.copyWithin(filled, 0, Math.min(filled, size - filled));
+    // A chunk is a whole number of patterns, so every chunk would read the same: each one's
+    // first four bytes carry its index, and a chunk swapped or read twice shows.
+    for (let start = 0; start + 4 <= size; start += CHUNK)
+        new DataView(content.buffer).setUint32(start, start / CHUNK + 1, false);
     const cut = [0, 1000, CHUNK + 7, size].filter(
         (at, i, all) => at <= size && all.indexOf(at) === i,
     );
