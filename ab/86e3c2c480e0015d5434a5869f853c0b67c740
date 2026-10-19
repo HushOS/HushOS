@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/FilesRoots.kt
+  s_c56e31c87cddde::t_19038269e318e3 1-19
+apps/android/app/src/main/kotlin/com/hushos/app/data/Shared.kt
+  s_c56e31c87cddde::t_6fd5be36dd016b 72-76,78-79,83
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_723891711cd35b 252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab86e3c2c480e0015d5434a5869f853c0b67c740",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
