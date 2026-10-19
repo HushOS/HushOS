@@ -43,7 +43,12 @@ export type {
     ServedChain,
 } from './session-groups';
 export type { RememberedAccount } from './device';
-export type { SecurityAction, SecurityChallenge, SecurityUpdate } from './security';
+export type {
+    SecurityAction,
+    SecurityChallenge,
+    SecurityUpdate,
+    SecurityWorkspaceGrant,
+} from './security';
 export type { WorkspaceKeyEnvelope } from './workspace';
 export type { NodeMetadata } from './drive';
 export type { Integrity, NodeKind, SignatureForm } from './signatures';

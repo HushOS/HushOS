@@ -2490,6 +2490,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         params.invitationId,
                     ),
             )
+            .get('/invitations', async ({ request, sessionToken }) =>
+                groups.listMyInvitations((await groupUser(request, sessionToken)).id),
+            )
             .post(
                 '/invitations/open',
                 { body: t.Object({ token: tokenSchema }) },

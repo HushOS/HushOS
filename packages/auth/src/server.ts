@@ -2,6 +2,7 @@ import type {
     SecurityAction,
     SecurityChallenge,
     SecurityUpdate,
+    SecurityWorkspaceGrant,
     WorkspaceKeyEnvelope,
 } from '@hushos/crypto';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
@@ -1683,10 +1684,11 @@ function encodeWorkspaceGrant(
     grant: NonNullable<
         Awaited<ReturnType<typeof authRepository.getSecurityBundles>>
     >['workspaces'][number],
-): WorkspaceKeyEnvelope {
+): SecurityWorkspaceGrant {
     return {
         version: 1,
         workspaceId: grant.workspaceId,
+        groupId: grant.groupId,
         keyVersion: grant.keyVersion,
         workspaceKeyVersion: grant.workspaceKeyVersion,
         wrappingSalt: grant.wrappingSalt.toString('base64url'),

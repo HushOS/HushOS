@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
     expect,
@@ -15,6 +15,7 @@ import {
     PASSWORD,
     registerAccount,
     rotationsDone,
+    saveKit,
     verificationLink,
     waitForRotation,
 } from './helpers';
@@ -35,7 +36,9 @@ import {
  *    sees it with no mark (her own words check of him vouches); the creator
  *    uploads, and the newcomer, who never checked her words, sees "Verified by
  *    Lindqvist family" in Info; the creator makes a second family folder, and
- *    the newcomer opens it and adds to it.
+ *    the newcomer opens it and adds to it. Last, the newcomer rotates his
+ *    account key: his self-grants for both folders are rewrapped as the
+ *    family's, and a fresh device opens both without writing new ones.
  * 2. Three people: an invitation opened by the wrong account; the admin on two
  *    devices, one admission held on the wire while the other device lets
  *    someone else in, so the held one meets a stale answer, is signed again
@@ -54,7 +57,8 @@ import {
  * 4. Deleting a family folder: a manager deletes a second folder from its
  *    row's menu, it is gone for the other member too, and the removal that
  *    follows rotates only the folder that is left.
- * 5. Families off: hidden from the sidebar, and the page says so.
+ * 5. Families off: no family row in the sidebar, no Family section in
+ *    Account, and the old families address says so.
  *
  * Whether families are on is this run's GROUPS_ENABLED (from the environment
  * or .env, as the dev server reads it). The server must agree: one that says
@@ -93,10 +97,10 @@ const fileRow = (page: Page, name: string) =>
     page.locator('[data-node-id]').filter({ has: page.getByText(name, { exact: true }) });
 const mark = (page: Page, name: string) => fileRow(page, name).locator('[data-integrity]');
 
-/* The family's row under My files, then one of its folders, open and drawn. */
-async function openFamilyFolder(who: Person, family: string, folder: string) {
+/* Family folders, under My files in the sidebar, then one of them, open and drawn. */
+async function openFamilyFolder(who: Person, _family: string, folder: string) {
     await who.page.goto('/app/drive');
-    await who.page.getByRole('link', { name: family, exact: true }).first().click();
+    await who.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
     await expect(who.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
     const row = who.page.locator(`[data-area="${folder}"]`);
     // Writable once the family is checked here, the folder's key opened and its top folder listed.
@@ -129,8 +133,12 @@ async function info(who: Person, name: string) {
 }
 
 async function createFamily(owner: Person, name: string) {
-    await owner.page.goto('/app/families');
-    await owner.page.getByRole('button', { name: 'Create a family' }).click();
+    // Account → Family, where someone in no family makes one (one family per account).
+    await owner.page.goto('/app/family');
+    await owner.page
+        .locator('[data-no-family]')
+        .getByRole('button', { name: 'Create a family' })
+        .click();
     const dialog = owner.page.getByRole('dialog', { name: 'Create a family' });
     await dialog.getByLabel('Name').fill(name);
     await dialog.getByRole('button', { name: 'Create family' }).click();
@@ -332,6 +340,21 @@ test.describe.serial('two people', () => {
         await expect(maya.page.locator('[data-invitation="nobody-yet@hushos.local"]')).toHaveCount(
             0,
         );
+        // In a family: Account names it and leads to Account → Family, which offers no second
+        // one; the old families addresses open it, and its name heads the sidebar.
+        await maya.page.goto('/app/account');
+        await expect(maya.page.locator('[data-your-family]')).toContainText(family, {
+            timeout: 60_000,
+        });
+        for (const old of ['/app/families', `/app/families/${randomUUID()}`]) {
+            await maya.page.goto(old);
+            await expect(maya.page).toHaveURL(/\/app\/family$/);
+            await expect(maya.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+                timeout: 60_000,
+            });
+        }
+        await expect(maya.page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await expect(maya.page.locator('[data-family-header]')).toContainText(family);
         await invite(maya, sam.email);
     });
 
@@ -592,7 +615,7 @@ test.describe.serial('two people', () => {
 
     test('a manager makes a second family folder, and the newcomer opens it and adds to it', async () => {
         test.setTimeout(240_000);
-        await maya.page.getByRole('link', { name: family, exact: true }).first().click();
+        await maya.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
         await expect(maya.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
         await maya.page.getByRole('button', { name: 'New family folder' }).click();
         const dialog = maya.page.getByRole('dialog', { name: 'New family folder' });
@@ -608,8 +631,56 @@ test.describe.serial('two people', () => {
         // Sam doesn't manage the family: no button, but the folder is his to open and add to.
         await openFamilyFolder(sam, family, 'Photos');
         await upload(sam, 'beach.txt', 'Sand\n');
-        await sam.page.getByRole('link', { name: family, exact: true }).last().click();
+        await sam.page.getByRole('link', { name: 'Family folders', exact: true }).last().click();
+        await expect(sam.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+        await expect(sam.page.locator('[data-area="Photos"]')).toBeVisible({ timeout: 60_000 });
         await expect(sam.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
+    });
+
+    test('a member rotates their account key: their family folders’ self-grants come along, and the folders open on a fresh device', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        // Sam holds a self-grant for each folder he has opened (route 23), sealed to the family.
+        // Every one must be rewrapped as the family's, or the rotation is refused outright.
+        await sam.page.goto('/app/account', { waitUntil: 'networkidle' });
+        await expect(sam.page.getByText(/ of .+ used$/)).toBeVisible({ timeout: 60_000 });
+        const show = sam.page.getByRole('button', { name: 'Show' });
+        await hydrated(show);
+        await show.click();
+        await sam.page.getByRole('button', { name: 'Rotate account key' }).click();
+        const dialog = sam.page.getByRole('dialog');
+        await dialog.getByLabel('Password', { exact: true }).fill(PASSWORD);
+        const challenge = sam.page.waitForResponse('**/api/auth/security/start');
+        await dialog.getByRole('button', { name: 'Rotate account key' }).click();
+        const served = (await (await challenge).json()) as {
+            workspaces: { groupId: string | null }[];
+        };
+        // Not vacuous: his personal grant and a self-grant for each of the two folders.
+        expect(served.workspaces.filter((grant) => grant.groupId !== null)).toHaveLength(2);
+        await expect(sam.page).toHaveURL(/\/setup\/recovery-key/, { timeout: 120_000 });
+        await saveKit(sam.page);
+        await expect(sam.page).toHaveURL(/\/app/, { timeout: 60_000 });
+
+        // A fresh device holds only the new root: both folders open and list what is in them.
+        // A self-grant that did not open under it would be replaced from the area grant (a PUT
+        // to route 23), so none may be sent: the rewrapped ones are what opened the folders.
+        const replaced: string[] = [];
+        const fresh = await signIn(browser, sam, async (page) =>
+            page.on('request', (request) => {
+                if (request.method() === 'PUT' && request.url().endsWith('/self-grant'))
+                    replaced.push(request.url());
+            }),
+        );
+        try {
+            await openFamilyFolder(fresh, family, 'Family');
+            await expect(fileRow(fresh.page, 'from-maya.txt')).toBeVisible({ timeout: 60_000 });
+            await openFamilyFolder(fresh, family, 'Photos');
+            await expect(fileRow(fresh.page, 'beach.txt')).toBeVisible({ timeout: 60_000 });
+            expect(replaced).toEqual([]);
+        } finally {
+            await fresh.page.context().close();
+        }
     });
 });
 
@@ -623,7 +694,7 @@ async function openSubfolder(who: Person, name: string) {
     ).toHaveText(name, { timeout: 60_000 });
 }
 
-/* The family's own page (`/app/families/<id>`), where its members and Technical details are. */
+/* The family's own page (`/app/family`, Account → Family), where its members and Technical details are. */
 async function openFamilyPage(who: Person, path: string, family: string) {
     await who.page.goto(path);
     await expect(who.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
@@ -727,6 +798,8 @@ test.describe.serial('removal, leaving and key changes', () => {
     let sam: Person;
     let ana: Person;
     let groupPath = '';
+    // The family's folders (/app/s/<id>), from Family folders in the sidebar.
+    let spacePath = '';
     const family = 'Holm family';
 
     test.beforeAll(async ({ browser }) => {
@@ -743,6 +816,10 @@ test.describe.serial('removal, leaving and key changes', () => {
         test.setTimeout(480_000);
         await createFamily(maya, family);
         groupPath = new URL(maya.page.url()).pathname;
+        spacePath = (await maya.page
+            .getByRole('link', { name: 'Family folders', exact: true })
+            .first()
+            .getAttribute('href'))!;
         for (const newcomer of [sam, ana]) {
             await invite(maya, newcomer.email);
             await accept(newcomer, family);
@@ -1082,7 +1159,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         );
         await maya.page.screenshot({ path: test.info().outputPath('rekeyed-info.png') });
         await maya.page.keyboard.press('Escape');
-        await fresh.page.goto(groupPath.replace('/families/', '/s/'));
+        await fresh.page.goto(spacePath);
         await expect(fresh.page.locator('[data-area="Family"]')).toHaveAttribute(
             'data-area-write',
             'writable',
@@ -1095,7 +1172,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         await expect(sam.page.getByRole('link', { name: family, exact: true })).toHaveCount(0, {
             timeout: 60_000,
         });
-        await sam.page.goto(groupPath.replace('/families/', '/s/'));
+        await sam.page.goto(spacePath);
         await expect(sam.page.getByText('You’re not in this family')).toBeVisible({
             timeout: 60_000,
         });
@@ -1344,7 +1421,12 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         test.setTimeout(300_000);
         maya = await person(browser, 'Maya Ekström');
         await createFamily(maya, family);
-        groupId = new URL(maya.page.url()).pathname.split('/').at(-1)!;
+        // The family's id, from Family folders in the sidebar (its page is /app/family).
+        const folders = await maya.page
+            .getByRole('link', { name: 'Family folders', exact: true })
+            .first()
+            .getAttribute('href');
+        groupId = folders!.split('/').at(-1)!;
         await maya.page.route(
             (url) => url.pathname === `/api/billing/groups/${groupId}`,
             (route: Route) =>
@@ -1357,7 +1439,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await maya?.page.context().close();
     });
 
-    async function show(summary: unknown, path = `/app/families/${groupId}`) {
+    async function show(summary: unknown, path = '/app/family') {
         answer = summary;
         await maya.page.goto(path);
     }
@@ -1550,7 +1632,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 
 /*
  * The pricing page's Create a family, pressed signed out: it signs up first and lands on
- * Families, through the return it keeps in this browser (rememberReturn, for an hour). The
+ * Account → Family, through the return it keeps in this browser (rememberReturn, for an hour). The
  * section shows only where the server sells plans and lists a family plan, so this skips
  * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
  * (verify-hushos `launch --billing polar`).
@@ -1558,7 +1640,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 test.describe('creating a family from the pricing page', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 
-    test('someone without an account signs up from Create a family and lands on Families', async ({
+    test('someone without an account signs up from Create a family and lands on Account → Family', async ({
         browser,
         request,
     }) => {
@@ -1582,11 +1664,11 @@ test.describe('creating a family from the pricing page', () => {
         await expect(page).toHaveURL(/\/register$/);
         await registerAccount(page, 'Rosa Ekström', undefined, {
             viaCurrentPage: true,
-            landsOn: /\/app\/families$/,
+            landsOn: /\/app\/family$/,
         });
-        await expect(page.getByRole('heading', { level: 1, name: 'Families' })).toBeVisible({
-            timeout: 60_000,
-        });
+        await expect(
+            page.locator('[data-no-family]').getByRole('button', { name: 'Create a family' }),
+        ).toBeVisible({ timeout: 60_000 });
     });
 });
 
@@ -1623,7 +1705,7 @@ test.describe.serial('deleting a family folder', () => {
         await dialog.getByRole('button', { name: 'Done' }).click();
 
         // A second folder, which Leo opens and adds to.
-        await ida.page.getByRole('link', { name: family, exact: true }).first().click();
+        await ida.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
         await expect(ida.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
         const spacePath = new URL(ida.page.url()).pathname;
         await ida.page.getByRole('button', { name: 'New family folder' }).click();
@@ -1746,7 +1828,18 @@ test.describe('families off', () => {
         const page = await (await newContext(browser)).newPage();
         await registerAccount(page, 'Rae Off');
         await expect(page.getByRole('link', { name: 'My files' }).first()).toBeVisible();
-        await expect(page.getByRole('link', { name: 'Families' })).toHaveCount(0);
+        // Asked only once the server has said families are off, so the absence means something.
+        const capabilities = page.waitForResponse(
+            (response) => response.url().endsWith('/api/drive/capabilities') && response.ok(),
+        );
+        await page.goto('/app/account');
+        expect(((await (await capabilities).json()) as { groups?: boolean }).groups).not.toBe(true);
+        await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.locator('[data-your-family]')).toHaveCount(0);
+        await expect(page.getByRole('heading', { level: 2, name: 'Family' })).toHaveCount(0);
+        await expect(page.locator('[data-family-header]')).toHaveCount(0);
         await page.goto('/app/families');
         await expect(page.getByText('Families aren’t available here')).toBeVisible({
             timeout: 60_000,

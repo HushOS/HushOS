@@ -135,6 +135,8 @@ export function createGroupsApi(client = () => apiClient()) {
         /* 13 */
         revokeInvitation: (groupId: string, invitationId: string) =>
             answer(groups(groupId).invitations({ invitationId }).delete({})),
+        /* 14b: open invitations to this account's address (accepted from the emailed link) */
+        myInvitations: () => answer(client().invitations.get()),
         /* 14 */
         openInvitation: (token: string) => answer(client().invitations.open.post({ token })),
         /* 15 */

@@ -344,6 +344,10 @@ export const groupInvitations = pgTable(
             .on(table.groupId, table.normalizedEmail)
             .where(sql`${table.state} = 'open'`),
         index('group_invitations_expiry_idx').on(table.expiresAt),
+        // Account → Family's list of the open invitations to an account's own address.
+        index('group_invitations_open_email_idx')
+            .on(table.normalizedEmail)
+            .where(sql`${table.state} = 'open'`),
         index('group_invitations_invited_by_idx')
             .on(table.invitedBy)
             .where(sql`${table.invitedBy} is not null`),

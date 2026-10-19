@@ -495,14 +495,7 @@ object Auth {
         val settingsKey = challenge.optJSONObject("settingsKey")?.let {
             com.hushos.core.settingsKeyRewrap(userId, oldRoot, newRoot, com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")))
         }
-        val workspaces = JSONArray()
-        val grants = challenge.getJSONArray("workspaces")
-        for (index in 0 until grants.length()) {
-            val g = grants.getJSONObject(index)
-            val grant = com.hushos.core.WorkspaceGrant(g.getInt("version").toUInt(), g.getString("workspaceId"), g.getLong("keyVersion").toULong(),
-                g.getLong("workspaceKeyVersion").toULong(), g.getString("wrappingSalt"), g.getString("wrappingNonce"), g.getString("encryptedKey"))
-            workspaces.put(json(com.hushos.core.workspaceGrantRewrap(userId, oldRoot, newRoot, grant, keyVersion)))
-        }
+        val workspaces = rewrapGrants(challenge.getJSONArray("workspaces"), userId, oldRoot, newRoot, keyVersion)
         call(context, "/api/auth/security/finish", JSONObject().put("action", "master-key").put("attemptToken", challenge.getString("attemptToken"))
             .put("finishLoginRequest", finish.request).put("registrationRecord", registered.record)
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
@@ -512,6 +505,26 @@ object Auth {
             .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } })
         Shared.writeDevice(context, deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
         return recovery.phrase
+    }
+
+    /*
+     * Every grant a rotation's challenge serves, under the new root. A family folder's self-grant opens only as its
+     * family's, so it is rewrapped as one: the server names the family (`groupId`), and a wrong or missing one makes
+     * the core refuse, never guess.
+     */
+    internal fun rewrapGrants(grants: JSONArray, userId: String, oldRoot: ByteArray, newRoot: ByteArray, keyVersion: ULong): JSONArray {
+        val out = JSONArray()
+        for (index in 0 until grants.length()) {
+            val g = grants.getJSONObject(index)
+            val grant = com.hushos.core.WorkspaceGrant(g.getInt("version").toUInt(), g.getString("workspaceId"), g.getLong("keyVersion").toULong(),
+                g.getLong("workspaceKeyVersion").toULong(), g.getString("wrappingSalt"), g.getString("wrappingNonce"), g.getString("encryptedKey"))
+            val groupId = if (g.isNull("groupId")) null else g.getString("groupId")
+            out.put(json(
+                if (groupId != null) com.hushos.core.areaSelfGrantRewrap(userId, groupId, oldRoot, newRoot, grant, keyVersion)
+                else com.hushos.core.workspaceGrantRewrap(userId, oldRoot, newRoot, grant, keyVersion),
+            ))
+        }
+        return out
     }
 
     fun updateName(context: Context, name: String): SessionUser =

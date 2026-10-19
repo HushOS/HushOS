@@ -55,7 +55,7 @@ import {
     versionStatements,
 } from './signatures';
 import { deriveId, type IdKind } from './ids';
-import { openWorkspaceKey } from './workspace';
+import { openAreaSelfGrant, openWorkspaceKey } from './workspace';
 import { openShareKey } from './shares';
 import { openSettings, openSettingsKey } from './contacts';
 import web from '../../../crates/hushos-core/fixtures/web.json';
@@ -344,6 +344,31 @@ describe('records sealed by the Rust core', () => {
         expect(await openIdentitySigningKey(newRoot, rotation.userId, legacy)).toEqual(
             await openIdentitySigningKey(oldRoot, rotation.userId, web.upgrade.legacy as never),
         );
+    });
+
+    it('opens a family self-grant the core rewrapped for a rotation, only as its family’s', async () => {
+        const area = core.rotation.areaSelfGrant;
+        const newRoot = decode(core.rotation.newRoot, 32);
+        const grant = area.grant as never;
+        expect(area.grant.keyVersion).toBe(7);
+        expect(area.grant.workspaceKeyVersion).toBe(web.areaSelfGrant.grant.workspaceKeyVersion);
+        expect(await openAreaSelfGrant(newRoot, area.userId, area.groupId, grant)).toEqual(
+            decode(area.areaKey, 32),
+        );
+        // Bound to its family under the new root, as the web would have sealed it: never
+        // opened as a personal grant, nor as another family's, nor under the old root.
+        await expect(openWorkspaceKey(newRoot, area.userId, grant)).rejects.toThrow();
+        await expect(
+            openAreaSelfGrant(newRoot, area.userId, crypto.randomUUID(), grant),
+        ).rejects.toThrow();
+        await expect(
+            openAreaSelfGrant(
+                decode(web.areaSelfGrant.accountKey, 32),
+                area.userId,
+                area.groupId,
+                grant,
+            ),
+        ).rejects.toThrow();
     });
 
     it('opens a suite 4 share the core sealed and signed, and only from its signer', async () => {

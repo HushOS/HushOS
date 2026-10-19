@@ -1305,16 +1305,19 @@ export async function getSecurityBundles(userId: string) {
         .innerJoin(accountIdentities, eq(accountIdentities.userId, accountKeys.userId))
         .where(eq(accountKeys.userId, userId));
     if (!bundles) return null;
+    // A group area's self-grant is sealed under its group's context, so a rotation needs
+    // the group to rewrap it: the workspace's own group, null for a personal workspace.
     const grants = await db
-        .select()
+        .select({ grant: workspaceKeys, groupId: workspaces.groupId })
         .from(workspaceKeys)
+        .innerJoin(workspaces, eq(workspaces.id, workspaceKeys.workspaceId))
         .where(eq(workspaceKeys.userId, userId))
         .orderBy(workspaceKeys.workspaceId);
     // Earlier identities and the settings key are sealed under the root too: a master-key
     // rotation re-wraps them.
     return {
         ...bundles,
-        workspaces: grants,
+        workspaces: grants.map(({ grant, groupId }) => ({ ...grant, groupId })),
         identityHistory: await listIdentityHistory(userId),
         settingsKey: await getSettingsKey(userId),
     };

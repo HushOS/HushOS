@@ -55,11 +55,7 @@ function FamilySpacePage() {
                 title={space.family}
                 description="Family folders. Everyone in the family can open what’s in them."
             >
-                <Link
-                    to="/app/families/$groupId"
-                    params={{ groupId: space.groupId }}
-                    className={buttonVariants({ variant: 'outline' })}
-                >
+                <Link to="/app/family" className={buttonVariants({ variant: 'outline' })}>
                     Members
                 </Link>
                 <Link

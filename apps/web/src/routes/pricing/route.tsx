@@ -24,7 +24,9 @@ import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { faqFor } from '@/lib/pricing-faq';
+import { activeFamily, familiesQueryOptions } from '@/lib/families-shell';
 import { rememberReturn } from '@/lib/return-to';
+import { sessionQueryOptions } from '@/lib/session';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -667,12 +669,44 @@ function Business() {
 }
 
 /*
- * The family tiers, shown only where the server serves families and sells
- * plans, priced like the personal cards above (the same currency and the same
- * Monthly or Yearly). Choosing one happens on the family's own page, after it
- * is made: signed in, the button opens Families; signed out, it signs up first
- * and lands there.
+ * The family section's button. Create a family is offered only to someone in no family (one
+ * per account), and leads to Account → Family (/app/family), where the family is made; signed
+ * out, it signs up first and lands there. Someone already in a family opens theirs instead.
+ * Nothing shows until that is known, so the button never offers what the server would refuse;
+ * if the families can't be read, it opens /app/family, which shows whichever is true. A
+ * session cookie that turns out to have expired (no account behind it) is treated as signed out.
  */
+function FamilyAction({ hasSession }: { hasSession: boolean }) {
+    const session = useQuery({ ...sessionQueryOptions, enabled: hasSession });
+    const userId = session.data?.id;
+    const families = useQuery({ ...familiesQueryOptions(userId ?? ''), enabled: Boolean(userId) });
+    const className = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
+    const signedOut = !hasSession || (session.isSuccess && !session.data);
+    if (signedOut)
+        return (
+            <Link
+                to="/register"
+                onClick={() => rememberReturn('/app/family')}
+                className={className}
+            >
+                Create a family
+            </Link>
+        );
+    if (session.isError || families.isError)
+        return (
+            <Link to="/app/family" className={className}>
+                Family
+            </Link>
+        );
+    if (!userId || families.isPending) return null;
+    const yours = activeFamily(families.data);
+    return (
+        <Link to="/app/family" className={className}>
+            {yours ? `Open ${yours.name}` : 'Create a family'}
+        </Link>
+    );
+}
+
 function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSession: boolean }) {
     // The same on every tier (a tier change keeps the family's places), as the questions say too.
     const { includedMembers, maxMembers } = offers[0]!.plan;
@@ -697,17 +731,7 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                             the folders. {FAMILY_POOL_LINE}
                         </p>
                     </div>
-                    <Link
-                        to={hasSession ? '/app/families' : '/register'}
-                        // Signed out: the new account lands on Families once it is set up.
-                        onClick={hasSession ? undefined : () => rememberReturn('/app/families')}
-                        className={buttonVariants({
-                            size: 'lg',
-                            className: 'w-full shrink-0 lg:w-fit',
-                        })}
-                    >
-                        Create a family
-                    </Link>
+                    <FamilyAction hasSession={hasSession} />
                 </div>
             </div>
             <ul className="grid gap-4 lg:grid-cols-3">

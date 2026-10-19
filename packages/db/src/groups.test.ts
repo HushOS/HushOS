@@ -23,6 +23,7 @@ import * as rotations from './rotations';
 import { metadataStatement } from './signatures';
 import {
     accountIdentities,
+    accountKeys,
     areaGrants,
     driveLinks,
     driveNodes,
@@ -2373,6 +2374,31 @@ describe('departures', () => {
         expect((await areaRow(group.areaId)).workspaceKeyVersion).toBe(2);
     });
 
+    test('a rotation whose self-grant is wrapped under a root the account has since replaced is invalid, and changes nothing', async () => {
+        const { creator, group, head } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        // The creator rotated their account key (a master-key rotation) after reading the area.
+        await db
+            .update(accountKeys)
+            .set({ keyVersion: 2 })
+            .where(eq(accountKeys.userId, creator.userId));
+        expect(
+            await groups.appendChain({
+                ...rotationCall(group, head, creator.userId),
+                rotations: [await rotationNow(group, root.id, creator.userId, [])],
+            }),
+        ).toEqual({ status: 'invalid', reason: 'self-grant-key-version' });
+        expect((await areaRow(group.areaId)).workspaceKeyVersion).toBe(1);
+        const rotation = await rotationNow(group, root.id, creator.userId, []);
+        await okHead(
+            await groups.appendChain({
+                ...rotationCall(group, head, creator.userId),
+                rotations: [{ ...rotation, selfGrant: { ...rotation.selfGrant, keyVersion: 2 } }],
+            }),
+        );
+        expect((await areaRow(group.areaId)).workspaceKeyVersion).toBe(2);
+    });
+
     test('a kind the area does not hold, or one named twice, is invalid; one left out or at another version is stale; each leaves nothing behind', async () => {
         const { creator, group, head } = await threeMembers();
         const root = await areaRoot(group, creator.userId);
@@ -3927,5 +3953,183 @@ describe('deleting a family folder (groups design 2.10)', () => {
         await db.update(driveReports).set({ heldAt: null }).where(eq(driveReports.id, reportId));
         expect(await groups.purgeDeletedAreas(30)).toBe(1);
         expect(await db.select().from(workspaces).where(eq(workspaces.id, photos))).toEqual([]);
+    });
+});
+
+/*
+ * A self-grant and a master-key rotation of its writer, racing: the writer
+ * holds the user's row for key share while it checks the account's key version
+ * and writes, the rotation holds it for update. Whichever goes first, no
+ * self-grant may end under a root other than the account's current one.
+ */
+describe('a self-grant written while its writer rotates their account key', () => {
+    /* A transaction held open until released; rolled back if `commit` is false. */
+    function held(
+        work: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<void>,
+    ) {
+        let release!: (commit: boolean) => void;
+        const gate = new Promise<boolean>((resolve) => (release = resolve));
+        let ready!: () => void;
+        const started = new Promise<void>((resolve) => (ready = resolve));
+        const done = db
+            .transaction(async (tx) => {
+                await work(tx);
+                ready();
+                if (!(await gate)) throw new Error('rolled back');
+            })
+            .catch((error: Error) => {
+                if (error.message !== 'rolled back') throw error;
+            });
+        return { started, release, done };
+    }
+    const pending = async (promise: Promise<unknown>) =>
+        (await Promise.race([
+            promise.then(() => 'settled'),
+            new Promise((resolve) => setTimeout(() => resolve('pending'), 300)),
+        ])) === 'pending';
+
+    async function member() {
+        const { user, workspaceId } = await registered();
+        const group = await family({ userId: user.id });
+        return { user, workspaceId, group, sessionTokenHash: await signedIn(user.id) };
+    }
+    /* Every grant the account holds, at the key version its root is now at. */
+    async function consistent(userId: string) {
+        const [account] = await db
+            .select({ keyVersion: accountKeys.keyVersion })
+            .from(accountKeys)
+            .where(eq(accountKeys.userId, userId));
+        const rows = await db
+            .select({ keyVersion: workspaceKeys.keyVersion })
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.userId, userId));
+        return rows.every((row) => row.keyVersion === account!.keyVersion);
+    }
+    /* changeAccountSecurity for a master-key rotation carrying `workspaceIds`' grants (each at version 1). */
+    async function rotate(m: Awaited<ReturnType<typeof member>>, workspaceIds: string[]) {
+        const stored = (await auth.getIdentity(m.user.id))!;
+        return auth.changeAccountSecurity({
+            userId: m.user.id,
+            action: 'master-key',
+            sessionTokenHash: m.sessionTokenHash,
+            credentialVersion: 1,
+            registrationRecord: 'record-2',
+            envelope: {
+                keyVersion: 2,
+                wrappingSalt: randomBytes(32),
+                wrappingNonce: randomBytes(24),
+                encryptedKey: randomBytes(48),
+            },
+            recovery: {
+                keyVersion: 2,
+                recoveryVersion: 2,
+                wrappingSalt: randomBytes(32),
+                wrappingNonce: randomBytes(24),
+                encryptedKey: randomBytes(48),
+                backupNonce: randomBytes(24),
+                encryptedRecoveryKey: randomBytes(48),
+                publicKey: randomBytes(32),
+            },
+            identity: {
+                keyVersion: 2,
+                wrappingSalt: randomBytes(32),
+                encryptionPublicKey: stored.encryptionPublicKey,
+                encryptionPrivateKeyNonce: randomBytes(24),
+                encryptedEncryptionPrivateKey: randomBytes(48),
+                signingPublicKey: stored.signingPublicKey,
+                signingSeedNonce: randomBytes(24),
+                encryptedSigningSeed: randomBytes(48),
+            },
+            workspaces: workspaceIds.map((id) => ({
+                id,
+                grant: { ...selfGrant(), keyVersion: 2 },
+            })),
+        });
+    }
+    const put = (m: Awaited<ReturnType<typeof member>>, keyVersion: number) =>
+        groups.putSelfGrant({
+            groupId: m.group.groupId,
+            workspaceId: m.group.areaId,
+            userId: m.user.id,
+            grant: { ...selfGrant(), keyVersion },
+        });
+
+    test('rotation first: the writer waits for it, then is refused under the old root', async () => {
+        const m = await member();
+        // The rotation's lock and its new root, not yet committed.
+        const rotation = held(async (tx) => {
+            await tx
+                .select({ id: users.id })
+                .from(users)
+                .where(eq(users.id, m.user.id))
+                .for('update');
+            await tx
+                .update(accountKeys)
+                .set({ keyVersion: 2 })
+                .where(eq(accountKeys.userId, m.user.id));
+        });
+        await rotation.started;
+        const write = put(m, 1);
+        try {
+            // Without the key share lock it would read key version 1 and write under the retired root.
+            expect(await pending(write)).toBe(true);
+        } finally {
+            rotation.release(true);
+            await rotation.done;
+        }
+        expect(await write).toEqual({ status: 'stale' });
+        // The client re-makes it from the area grant under the new root.
+        expect(await put(m, 2)).toEqual({ status: 'ok' });
+        await db
+            .update(workspaceKeys)
+            .set({ keyVersion: 2 })
+            .where(eq(workspaceKeys.workspaceId, m.workspaceId));
+        expect(await consistent(m.user.id)).toBe(true);
+        // A family (its first folder's self-grant) made under a root since replaced is refused
+        // too: someone not yet in a family, since one account is in at most one.
+        const { user: other } = await registered();
+        await db.update(accountKeys).set({ keyVersion: 2 }).where(eq(accountKeys.userId, other.id));
+        expect(await groups.createGroup(familyInput({ userId: other.id }).input)).toEqual({
+            status: 'invalid',
+            reason: 'self-grant-key-version',
+        });
+    });
+
+    test('writer first: the rotation waits for it, then is refused for leaving the new row behind', async () => {
+        const m = await member();
+        // A member who has not stored a self-grant for the folder yet.
+        await db
+            .delete(workspaceKeys)
+            .where(
+                and(
+                    eq(workspaceKeys.userId, m.user.id),
+                    eq(workspaceKeys.workspaceId, m.group.areaId),
+                ),
+            );
+        // Holds the writer between its check and its insert: the same row, uncommitted.
+        const blocker = held(async (tx) => {
+            await tx
+                .insert(workspaceKeys)
+                .values({ ...selfGrant(), workspaceId: m.group.areaId, userId: m.user.id });
+        });
+        await blocker.started;
+        const write = put(m, 1);
+        // The client read only the personal grant: the folder's self-grant did not exist yet.
+        let rotation: Promise<boolean> | undefined;
+        try {
+            expect(await pending(write)).toBe(true);
+            rotation = rotate(m, [m.workspaceId]);
+            // Without the key share lock it would commit now, and the write land under the old root.
+            expect(await pending(rotation)).toBe(true);
+        } finally {
+            blocker.release(false);
+            await blocker.done;
+        }
+        expect(await write).toEqual({ status: 'ok' });
+        expect(await rotation).toBe(false);
+        expect(await consistent(m.user.id)).toBe(true);
+        // Read again, with the new row, the rotation goes through.
+        expect(await rotate(m, [m.workspaceId, m.group.areaId])).toBe(true);
+        expect(await consistent(m.user.id)).toBe(true);
     });
 });

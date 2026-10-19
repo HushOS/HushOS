@@ -58,7 +58,8 @@ export function groupIdOf(externalId: string) {
 
 const customerKey = (groupId: string) => `${GROUP_CUSTOMER_PREFIX}${groupId}`;
 const graceMs = () => billingEnv.BILLING_GRACE_DAYS * DAY;
-const familyPage = (groupId: string) => `${appEnv.APP_ORIGIN}/app/families/${groupId}`;
+// Account → Family: the page of the one family an account is in (docs/families-shared-pool.md 7.2).
+const familyPage = () => `${appEnv.APP_ORIGIN}/app/family`;
 
 function requireFamilyBilling() {
     if (!billingEnabled()) throw new BillingError('Billing is not available on this server.', 404);
@@ -968,8 +969,8 @@ export async function startGroupCheckout(
             max_units: plan.maxMembers,
             customer_ip_address:
                 input.address && input.address !== 'unknown' ? input.address : null,
-            success_url: `${familyPage(groupId)}?checkout_id={CHECKOUT_ID}`,
-            return_url: familyPage(groupId),
+            success_url: `${familyPage()}?checkout_id={CHECKOUT_ID}`,
+            return_url: familyPage(),
             allow_trial: false,
             allow_discount_codes: true,
             metadata: { hushos_group_id: groupId },
@@ -990,7 +991,7 @@ async function portalFor(groupId: string, payerUserId: string) {
         const session = await polar().customerSessions.create({
             external_customer_id: customerKey(groupId),
             external_member_id: payerUserId,
-            return_url: familyPage(groupId),
+            return_url: familyPage(),
         });
         return { url: session.customer_portal_url };
     } catch (error) {
