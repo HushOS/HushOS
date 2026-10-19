@@ -36,8 +36,20 @@ test.beforeAll(async ({ browser }) => {
         writeFileSync(path, lines());
         return path;
     });
-    await page.locator('input[type=file]').first().setInputFiles(files);
-    await expect(page.locator('[data-node-id]')).toHaveCount(2, { timeout: 90_000 });
+    // Past the colouring threshold (512 KB): offered Colour anyway.
+    const big = join(dir, 'big.ts');
+    writeFileSync(
+        big,
+        Array.from(
+            { length: 12_000 },
+            (_, n) => `export const value${n}: number = ${n} * 2; // line ${n}`,
+        ).join('\n'),
+    );
+    await page
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles([...files, big]);
+    await expect(page.locator('[data-node-id]')).toHaveCount(3, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.close();
@@ -103,3 +115,40 @@ for (const name of ['gutter.ts', 'gutter.txt']) {
         await expect(dialog(page)).toHaveCount(0);
     });
 }
+
+test('Colour anyway holds when the folder is listed again behind the viewer', async () => {
+    // In My files, whose listing is what a change to the folder fetches again.
+    await page.goto('/app/drive');
+    await row(page, 'big.ts').locator('button').first().dblclick(grip);
+    const colour = dialog(page).getByRole('button', { name: 'Colour anyway' });
+    await colour.click({ timeout: 60_000 });
+    await expect(dialog(page).locator('output', { hasText: 'Coloured.' })).toHaveCount(1, {
+        timeout: 120_000,
+    });
+    // Another tab of the same account adds a file to the folder; this tab, coming back to the
+    // front, reads the change feed and lists the folder again, which hands the viewer a new copy
+    // of the open file. That copy once reopened the file and drew it uncoloured.
+    const other = await page.context().newPage();
+    await other.goto('/app/drive');
+    const dir = mkdtempSync(join(tmpdir(), 'hushos-other-'));
+    writeFileSync(join(dir, 'other.txt'), 'another file\n');
+    await other.locator('input[type=file]').first().setInputFiles(join(dir, 'other.txt'));
+    await expect(row(other, 'other.txt')).toBeVisible({ timeout: 60_000 });
+    await other.close();
+    await page.evaluate(() => {
+        for (const state of ['hidden', 'visible']) {
+            Object.defineProperty(document, 'visibilityState', {
+                configurable: true,
+                get: () => state,
+            });
+            document.dispatchEvent(new Event('visibilitychange'));
+        }
+        window.dispatchEvent(new Event('focus'));
+    });
+    // Listed again: the new file is in the list behind the viewer.
+    await expect(row(page, 'other.txt')).toBeAttached({ timeout: 30_000 });
+    await page.waitForTimeout(1_000);
+    await expect(colour).toHaveCount(0);
+    await expect(dialog(page).locator('.rt-source .line').first()).toBeVisible();
+    await page.keyboard.press('Escape');
+});

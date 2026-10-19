@@ -1,4 +1,5 @@
 import type { RosterFork } from '@hushos/crypto';
+import { ChevronDownIcon } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import type { GroupNotice } from '@/lib/groups/context';
 import { noticeCopy, noticeTitle } from '@/lib/groups/copy';
@@ -38,9 +39,13 @@ export function ForkAlert({ family, fork }: { family: string; fork: RosterFork }
                     This device won’t change anything in {family} until it’s sorted. Tell the other
                     members, and don’t use this family until you’ve sorted it out together.
                 </p>
-                <details className="mt-2">
-                    <summary className="cursor-pointer text-[13px] font-semibold text-foreground">
+                <details className="group mt-2">
+                    <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-[13px] font-semibold text-foreground [&::-webkit-details-marker]:hidden">
                         Technical details
+                        <ChevronDownIcon
+                            aria-hidden="true"
+                            className="size-3.5 transition-transform group-open:rotate-180"
+                        />
                     </summary>
                     <dl className="mt-2 flex flex-col gap-2 text-[13px]">
                         <div>

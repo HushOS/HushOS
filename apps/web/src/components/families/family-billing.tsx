@@ -418,7 +418,17 @@ function PlanTop(props: Inner) {
 }
 
 /* The plans, monthly or yearly, in the visitor's currency as the pricing page picks it. */
-function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?: boolean }) {
+function ChoosePlan({
+    userId,
+    groupId,
+    family,
+    summary,
+    members,
+    renewing,
+}: Inner & { renewing?: boolean }) {
+    // Only you in it so far (a new family): said. Others already in it (a plan that never
+    // started, members kept from before): the sentence would be false, so it goes.
+    const alone = !members?.some((member) => member.state === 'active' && member.userId !== userId);
     const hint = useQuery(localeHintQueryOptions);
     const plans = summary.plans;
     const currencies = familyCurrencies(plans);
@@ -468,7 +478,7 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
                 {!renewing && (
                     <p className="max-w-[43em] text-sm text-muted-foreground">
                         {family} needs a plan before you can invite anyone or make family folders.
-                        Until then, only you are in it.
+                        {alone && ' Until then, only you are in it.'}
                     </p>
                 )}
             </div>

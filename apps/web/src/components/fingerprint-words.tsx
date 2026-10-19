@@ -20,10 +20,11 @@ export function FingerprintWords({ fingerprint }: { fingerprint: string }) {
                     {fingerprint}
                 </p>
             ) : (
+                // As many 7rem tiles as fit (four on a desk, two on a phone): no word reaches its tile's edge.
                 <ol
                     data-fingerprint-words={words.join(' ')}
                     aria-label="Twelve words"
-                    className="grid w-full grid-cols-3 gap-1.5 sm:grid-cols-4"
+                    className="grid w-full grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-1.5"
                 >
                     {words.map((word, index) => (
                         <li

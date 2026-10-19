@@ -69,6 +69,9 @@ test('a CSV renders as a table, quoted fields whole and accents intact', async (
         timeout: 60_000,
     });
     await expect(sheet.getByRole('cell', { name: 'S\u00e3o Paulo' })).toBeVisible();
+    // Its first row names the columns: a header, not data row 1.
+    await expect(sheet.getByRole('columnheader', { name: 'city' })).toBeVisible();
+    await expect(sheet.getByRole('cell', { name: 'city', exact: true })).toHaveCount(0);
     await expect(sheet.getByRole('cell', { name: '12325232' })).toBeVisible();
     await expect(sheet.getByRole('tab')).toHaveCount(0);
     // The text itself is one click away in the header, and the table one click back.

@@ -176,15 +176,18 @@ export async function removeMember(
     };
 
     // Finish: a walk running in a folder would make the removal answer `rotating`, and one that
-    // re-keyed anything cannot be taken over (groups-server 8).
-    options.onStep?.('finish');
+    // re-keyed anything cannot be taken over (groups-server 8). Said as a step only when a walk
+    // was running: otherwise nothing was finished.
     synced = await syncGroup(ctx, groupId);
     if (synced.status === 'wiped') return { status: 'wiped' };
     if (synced.status !== 'accepted')
         return { status: 'failed', message: `Couldn’t check ${family}. Try again.` };
+    let finishing = false;
     for (const area of synced.areas) {
         const running = area.view.rotation;
         if (!running) continue;
+        if (!finishing) options.onStep?.('finish');
+        finishing = true;
         // Placed again before each folder's walk: walks of large folders add up past 15 minutes.
         const lapsed = await holdAgain();
         if (lapsed) return lapsed;
@@ -212,7 +215,11 @@ export async function removeMember(
             ctx,
             groupId,
             { kind: 'remove', userId, rotations: await rotations.read(groupId, areas) },
-            { writers: await rotations.writers(groupId) },
+            {
+                writers: await rotations.writers(groupId),
+                // The server answered `rotating`: a walk that started meanwhile is finished first.
+                walking: (running) => options.onStep?.(running ? 'finish' : 'remove'),
+            },
         );
         if (staged.status === 'sent' && staged.outcome.status === 'membership-moved') {
             if (staged.outcome.code === 'left-due') {

@@ -696,6 +696,10 @@ function TreeRow({
             aria-selected={active || undefined}
             aria-label={spoken(row)}
             data-active={active ? '' : undefined}
+            // Focus belongs to the tree (aria-activedescendant names the row): a row that gets
+            // it anyway, from a click or a screen reader, becomes the active row and hands it back,
+            // so there is never a ring on one row and the highlight on another.
+            onFocus={() => onPick(index, false)}
             onClick={() => onPick(index, false)}
             onDoubleClick={() => onPick(index, true)}
             className="jv-row absolute top-0 left-0 flex min-h-7 w-full cursor-default items-start gap-1 py-1 pr-3 hover:bg-muted/60 pointer-coarse:min-h-11 pointer-coarse:py-3"

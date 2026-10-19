@@ -12,7 +12,16 @@ import {
     UserPlusIcon,
     XIcon,
 } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+    lazy,
+    Suspense,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
 import { FileMark } from '@/components/drive/file-mark';
 import { SavedFromLinkLine, UnverifiedMark } from '@/components/drive/unverified-mark';
 import {
@@ -333,13 +342,23 @@ const NO_READER: { reader: FileReader | null; error: string | null } = {
 
 function useReader(node: DriveNode, enabled: boolean, wholeRead: boolean) {
     const [state, setState] = useState(NO_READER);
+    /*
+     * Opened again only for another file or version. A refetched listing hands the viewer a new
+     * node object for the same version (every window focus does); reopening on that read the
+     * file again and remounted what showed it, which undid Colour anyway and Expand all.
+     */
+    const latest = useRef(node);
+    useEffect(() => {
+        latest.current = node;
+    });
+    const identity = `${node.id}:${node.currentVersion?.id ?? ''}:${node.keyEpoch}`;
     useEffect(() => {
         if (!enabled) return;
         let active = true;
         let opened: FileReader | null = null;
         let failure: string | null = null;
         try {
-            opened = openReader(node, wholeRead);
+            opened = openReader(latest.current, wholeRead);
         } catch (cause) {
             failure = cause instanceof Error ? cause.message : 'This file could not be opened.';
         }
@@ -353,7 +372,7 @@ function useReader(node: DriveNode, enabled: boolean, wholeRead: boolean) {
             // A closed reader must never be handed out again: the next one starts from nothing.
             setState(NO_READER);
         };
-    }, [node, enabled, wholeRead]);
+    }, [identity, enabled, wholeRead]);
     // While disabled (the preview is remembered, or held behind the card) there is no reader.
     return enabled ? state : NO_READER;
 }
@@ -405,7 +424,13 @@ function PreviewBody({
     useFocusWhenShown(opened || textWhole);
     // An unknown type still gets a look: a small file that reads as text opens as text.
     const sniff = kind === 'none' && size <= PREVIEW_LIMITS.text && Boolean(node.currentVersion);
-    const recalled = node.currentVersion ? recallPreview(node.currentVersion.id) : null;
+    // What this device remembers of the version, looked up once, when the body opens. Looked up
+    // on every render, it turned up as soon as the read below stored it, so the next render (a
+    // refetched listing, a window focus) swapped what was showing for the remembered copy, and
+    // undid Colour anyway or Expand all, even the first click right after opening.
+    const [recalled] = useState(() =>
+        node.currentVersion ? recallPreview(node.currentVersion.id) : null,
+    );
     // Asked for the whole of a text remembered in part: read it again.
     const remembered =
         textWhole && recalled?.kind === 'text' && recalled.truncated ? null : recalled;

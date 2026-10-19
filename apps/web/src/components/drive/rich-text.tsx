@@ -292,7 +292,7 @@ const ColouredBlock = memo(function ColouredBlock({ lines }: { lines: ColouredLi
     );
 });
 
-/* A whole file of code: line numbers, coloured when possible, wrapped never. */
+/* A whole file of code: line numbers, coloured when possible, wrapped only on a phone. */
 export function CodeView({
     text,
     language,
@@ -341,7 +341,11 @@ export function CodeView({
                     onContinue={() => setAsked(true)}
                 />
             )}
-            <div className="rt-code" data-language={language ?? undefined}>
+            <div
+                className="rt-code"
+                data-language={language ?? undefined}
+                data-marked={markLine !== null ? '' : undefined}
+            >
                 <Gutter count={lines.length} markLine={markLine} />
                 <div className="rt-source">
                     <pre className="shiki">

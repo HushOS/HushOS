@@ -5,6 +5,7 @@ import { flushSync } from 'react-dom';
 import { FingerprintWords } from '@/components/fingerprint-words';
 import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
     AlertDialog,
@@ -400,23 +401,25 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                             words.
                         </p>
                     ) : personMismatch ? (
-                        <div className="flex flex-col items-start gap-3">
-                            <div role="alert" className="flex flex-col gap-2 text-sm">
-                                <p className="text-destructive">Don’t let {first} in yet.</p>
+                        // The hard alarm, as the newcomer's screen gives it: they may not be who they say.
+                        <Alert variant="destructive" data-mismatch="words">
+                            <AlertTitle>Don’t let {first} in yet</AlertTitle>
+                            <AlertDescription>
                                 <p>
                                     First check that {first} is reading the words on their own join
                                     screen, then compare again: nothing was saved. If they still
                                     don’t match, check the email address with them; if it’s right,
                                     HushOS may not be showing you their real keys.
                                 </p>
-                            </div>
-                            <Button
-                                variant="outline"
-                                onClick={() => compareAgain(1, () => setPersonMismatch(false))}
-                            >
-                                Compare again
-                            </Button>
-                        </div>
+                                <Button
+                                    variant="outline"
+                                    className="mt-3"
+                                    onClick={() => compareAgain(1, () => setPersonMismatch(false))}
+                                >
+                                    Compare again
+                                </Button>
+                            </AlertDescription>
+                        </Alert>
                     ) : (
                         <div className="flex flex-col gap-3">
                             {changedSince ? (
@@ -473,31 +476,36 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                             </p>
                             <WordList words={admitted} label="Join code" kind="join-code" />
                             {notMatching ? (
-                                <>
-                                    <div role="alert" className="flex flex-col gap-2 text-sm">
+                                // The same hard alarm the newcomer sees for the same moment.
+                                <Alert variant="destructive" data-mismatch="join-code">
+                                    <AlertTitle>
+                                        Don’t share anything with {first} through {family} yet
+                                    </AlertTitle>
+                                    <AlertDescription>
                                         <p>
                                             First check that {first} is on their own join screen and
                                             that you both read this code, word for word. If it still
                                             doesn’t match, HushOS may be showing {first} a different
                                             member list.
                                         </p>
-                                        <p>
+                                        <p className="mt-2">
                                             {first} is in {family}’s member list, but their device
                                             won’t use the family until the codes match, so their
-                                            folders stay closed to them. Don’t share anything with{' '}
-                                            {first} through the family until you’ve sorted it out
-                                            together. If you can’t, close this and choose Remove
-                                            from family in {first}’s row under Members.
+                                            folders stay closed to them. Sort it out together. If
+                                            you can’t, close this and choose Remove from family in{' '}
+                                            {first}’s row under Members.
                                         </p>
-                                    </div>
-                                    <Button
-                                        variant="outline"
-                                        className="self-start"
-                                        onClick={() => compareAgain(3, () => setNotMatching(false))}
-                                    >
-                                        Compare again
-                                    </Button>
-                                </>
+                                        <Button
+                                            variant="outline"
+                                            className="mt-3"
+                                            onClick={() =>
+                                                compareAgain(3, () => setNotMatching(false))
+                                            }
+                                        >
+                                            Compare again
+                                        </Button>
+                                    </AlertDescription>
+                                </Alert>
                             ) : (
                                 <Button
                                     variant="ghost"

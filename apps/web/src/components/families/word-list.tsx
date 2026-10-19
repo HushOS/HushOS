@@ -18,7 +18,7 @@ export function WordList({
             aria-label={label}
             data-words={words.join(' ')}
             data-kind={kind}
-            className="grid w-full grid-cols-3 gap-1.5 sm:grid-cols-4"
+            className="grid w-full grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-1.5"
         >
             {words.map((word, index) => (
                 <li
