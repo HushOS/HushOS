@@ -317,7 +317,12 @@ struct ShareItemSheet: View {
                     made = try await store.vault.createLink(for: item, password: nil, expiresAt: nil)
                 } catch let failure as DriveAPIError {
                     // Rotated elsewhere since this device listed it: read it again and seal at the current epoch.
-                    guard case .server(409, _) = failure, let fresh = try await store.reload(item) else { throw failure }
+                    let conflict: Bool
+                    switch failure {
+                    case .server(409, _), .stale: conflict = true
+                    default: conflict = false
+                    }
+                    guard conflict, let fresh = try await store.reload(item) else { throw failure }
                     item = fresh
                     made = try await store.vault.createLink(for: fresh, password: nil, expiresAt: nil)
                 }

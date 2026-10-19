@@ -8,7 +8,8 @@ import HushOSCore
  * chain committed this session); the record written from that acceptance only, never over a
  * record at a later roster version; every family folder from route 25 opened from its grant
  * and its top folder listed through the ledger; and only then the settings pin brought up to
- * the acceptance with the folders just opened. Read only: nothing here writes a family folder.
+ * the acceptance with the folders just opened. Nothing here writes a family folder; the vault's
+ * writes there take their keys from the same ledger and their records' forms from `prior`.
  *
  * Every rule (what is a rollback, a fork, a race, whose grant opens what) is the core's; this
  * file fetches, stores and keeps the order. Runs for one family at a time: a second sync of the
@@ -36,7 +37,8 @@ public struct FamilyArea: Sendable, Equatable, Identifiable {
 
     /* What its row says under its name, in the web's words (s/$groupId/index.tsx, areaLine). */
     public var line: String {
-        if !opened || root == nil { return "Couldn’t check this folder’s keys" }
+        // Its top folder didn't open through the ledger (a key the member list never committed to, NOT_COMMITTED_ROOT): Couldn't check.
+        if !opened || root == nil || name == nil { return "Couldn’t check this folder’s keys" }
         switch write {
         case .readOnly: return "Open only: its keys couldn’t be checked here"
         case .keysChanged: return "Its keys changed. Open it to check again."
@@ -155,7 +157,7 @@ struct FamilyFailure: Error, LocalizedError, Equatable {
     var errorDescription: String? { message }
 }
 
-public actor FamilySync {
+public actor FamilySync: FamilyJudge {
     let vault: Vault
     let api: GroupsAPI
     let records: FamilyRecords
@@ -165,6 +167,10 @@ public actor FamilySync {
     private var details: [String: GroupDetail] = [:]
     private var identities: [String: [String: MemberIdentity]] = [:]
     private var families: [String: String] = [:]
+    /* Each family as route 2 or a caller last named it, for checking it again from a write that waits. */
+    private var summaries: [String: GroupSummary] = [:]
+    /* Syncs not finished yet, per family: uploads waiting together share the one running rather than queue one each. */
+    private var running: [String: Int] = [:]
     private var areasOf: [String: [String]] = [:]
     /* Every family folder this process learned of, to its family: never forgotten in a session (a wipe or fork keeps it a family folder). */
     private var groupsOf: [String: String] = [:]
@@ -211,8 +217,39 @@ public actor FamilySync {
     /* Route 2: the families whose ids are ids (a server's other strings never reach a path or a file name). */
     public func list() async throws -> [GroupSummary] {
         let groups = try await api.listGroups().filter { FamilyRecords.valid($0.id) }
-        for group in groups { families[group.id] = group.name }
+        for group in groups {
+            families[group.id] = group.name
+            summaries[group.id] = group
+        }
         return groups
+    }
+
+    /*
+     * A family's folders open in this process's ledger for a write that may run without the
+     * screens (the upload queue, after a background launch): checked now unless this process
+     * already accepted it. Throws the family's words when it isn't accepted.
+     */
+    public func ensureOpen(_ groupId: String) async throws {
+        if areasOf[groupId] != nil, ledger.isArea(workspaceId: areasOf[groupId]?.first ?? "") { return }
+        let summary: GroupSummary
+        if let known = summaries[groupId] { summary = known } else {
+            let listed: [GroupSummary]
+            do { listed = try await list() } catch where Self.unanswered(error) {
+                // No answer is the network's: the queue waits for one, it doesn't fail the upload.
+                throw DriveAPIError.transport(error.localizedDescription)
+            }
+            guard let found = listed.first(where: { $0.id.lowercased() == groupId.lowercased() }) else {
+                throw FamilyFailure(message: "You’re not in this family any more.")
+            }
+            summary = found
+        }
+        switch await sync(summary) {
+        case .accepted: return
+        case .failed(let words) where words == FamilyWords.noAnswer: throw DriveAPIError.transport(words)
+        case .failed(let words): throw FamilyFailure(message: words)
+        case .wiped: throw FamilyFailure(message: "You’re not in this family any more.")
+        default: throw FamilyFailure(message: FamilyWords.openAgain)
+        }
     }
 
     /* Route 3 as the last sync read it: who is in the family, named by the server. */
@@ -230,12 +267,17 @@ public actor FamilySync {
     /* One family synced, after any sync of it already running. */
     public func sync(_ summary: GroupSummary) async -> FamilyState {
         families[summary.id] = summary.name
+        summaries[summary.id] = summary
+        // The vault asks this sync how family records are signed again (FamilyJudge).
+        await vault.useFamilyJudge(self)
         let previous = tails[summary.id]
         let task = Task { () -> FamilyState in
             _ = await previous?.value
             return await self.run(summary)
         }
         tails[summary.id] = task
+        running[summary.id, default: 0] += 1
+        defer { running[summary.id, default: 1] -= 1 }
         return await task.value
     }
 
@@ -623,6 +665,36 @@ public actor FamilySync {
 
     public func verdict(of node: NodeView, groupId: String) async -> FamilyVerdict {
         await verdicts(of: [node], groupId: groupId)[0]
+    }
+
+    // MARK: Writes
+
+    /*
+     * The form a family folder record is signed again with when a write carries it over (a
+     * rename's name, a copy, a replacement's name): the core's `copy_form` over the committed
+     * chain, with this account's records by its own keys and everyone else's by the member list.
+     * Verified stays ordinary, saved from a link stays saved, anything else (a former member, keys
+     * that don't match, someone nobody checked) is re-sealed; unchecked refuses.
+     */
+    public func prior(of record: ServedRecord, in workspaceId: String) async throws -> Integrity {
+        guard let groupId = groupsOf[workspaceId.lowercased()], let served = identities[groupId] else {
+            throw FamilyFailure(message: Provenance.couldNotCheck)
+        }
+        let signers = try await vault.signers()
+        let reader = try await reader()
+        let pins = await vault.knownPins()
+        return try ledger.copyForm(groupId: groupId, reader: reader, writers: groupWriters(served, signers: signers, pins: pins), record: record, cache: nil)
+    }
+
+    /* The family of a folder checked again, for an upload waiting out a key change there. */
+    public func recheck(_ workspaceId: String) async {
+        guard let groupId = groupsOf[workspaceId.lowercased()], let summary = summaries[groupId] else { return }
+        // A check still running (another waiting upload's) is the one this waits for; a finished one is not asked again.
+        if running[groupId, default: 0] > 0, let tail = tails[groupId] {
+            _ = await tail.value
+            return
+        }
+        _ = await sync(summary)
     }
 
     /* The web's issues, mark and Info lines over the judged records. */

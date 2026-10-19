@@ -24,7 +24,8 @@ enum TransferWords {
         case DriveAPIError.notAuthenticated: return signedOut
         case DriveAPIError.server(402, _): return noRoom
         case let cocoa as CocoaError where cocoa.code == .fileNoSuchFile || cocoa.code == .fileReadNoSuchFile: return gone
-        default: return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        // The core's sentence, never its type's description; a family folder's key change said as the web says it.
+        default: return FamilyWords.core(error) ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -51,6 +52,8 @@ struct TransferRowModel: Identifiable, Equatable {
     var folder = false
     /* Waiting because the last try failed for a reason that passes (HushOS or its storage not answering). */
     var retrying = false
+    /* An upload into a family folder waiting out a key change the folder hasn't reached yet. */
+    var keyChange = false
     var canRetry = false
     /* Only background transfers can be stopped; this session's run to the end. */
     var cancellable = false
@@ -97,6 +100,7 @@ struct TransferRowModel: Identifiable, Equatable {
                 message: record.state == .failed ? record.message ?? TransferWords.repeated : nil,
                 noRoom: record.noRoom == true,
                 retrying: record.state != .failed && record.state != .done && record.failures > 0,
+                keyChange: record.state == .waiting && record.keyChangeSince != nil,
                 canRetry: BackgroundTransfers.shared.canRetry(record),
                 cancellable: record.state != .done && record.state != .failed,
                 queuedId: record.id
@@ -164,6 +168,7 @@ enum TransferSummary {
         switch row.status {
         case .waiting:
             if offline { return "Waiting for a connection" }
+            if row.keyChange { return KeyChangeWait.finishing }
             return row.retrying ? "HushOS isn’t answering. Trying again shortly." : "Waiting"
         case .running:
             if row.retrying && !offline { return "HushOS isn’t answering. Trying again shortly." }

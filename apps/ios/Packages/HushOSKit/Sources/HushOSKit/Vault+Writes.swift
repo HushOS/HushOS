@@ -4,7 +4,11 @@ import HushOSCore
 /*
  * Writing to the Drive: folders, renames, moves, trash, restore and uploads.
  * Every envelope is sealed in the Rust core exactly as the web app seals it;
- * the server only ever sees ciphertext and the shape of the tree.
+ * the server only ever sees ciphertext and the shape of the tree. In a family
+ * folder every key a write wraps, seals under or re-wraps comes from the area
+ * ledger (`new_node_key`, `writable_node_key`, `rewrap_node`), which refuses a
+ * key not rooted at the folder's current key (KEY_CHANGE_PENDING), and records
+ * signed again are judged by the family's member list (`copy_form`).
  */
 extension Vault {
     /*
@@ -17,31 +21,63 @@ extension Vault {
     public func createFolder(in parentId: String, name: String, signing: Signing = .own) async throws -> Opened {
         _ = try await loadWorkspace()
         let parent = try await resolve(parentId)
-        try refuseFamilyWrite(parent.node.workspaceId)
+        let family = try familyTarget(parent.node.workspaceId)
         // Shared folders belong to the granter's workspace; an editor writes there.
         let workspace = Target(workspaceId: parent.node.workspaceId)
-        guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
         let made = try mint(.node, in: workspace.workspaceId)
         let id = made.id
+        let (key, wrapped) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
+        do {
+            let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil)
+            let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+            let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
+            let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
+                "id": id, "idSeed": made.seed, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
+                "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
+            ]])
+            guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
+            return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
+        } catch {
+            // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
+            if family { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) }
+            throw error
+        }
+    }
+
+    /*
+     * A new node's key and its envelope under `parent`: in a family folder made and wrapped by the
+     * ledger, never under a parent key it doesn't hold rooted at the folder's write version; in
+     * any other drive under the parent's key as this process opened it.
+     */
+    private func newKey(_ id: String, under parent: Opened, keyEpoch: UInt64, family: Bool) throws -> (key: Data, envelope: Data) {
+        let workspaceId = parent.node.workspaceId
+        if family {
+            let made = try areaLedger.newNodeKey(workspaceId: workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: keyEpoch)
+            return (made.key, made.keyEnvelope)
+        }
+        guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let key = try randomBytes(length: 32)
-        let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: id, parentId: parent.node.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
-        let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)
-        let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil)
-        let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
-        let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
-        let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
-            "id": id, "idSeed": made.seed, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
-            "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
-        ]])
-        guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
-        return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
+        let ctx = NodeKeyContext(workspaceId: workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: keyEpoch)
+        return (key, try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key))
+    }
+
+    /* The form a record written again in place is signed with: by the family's member list in a family folder, else the trust set. */
+    private func priorMetadata(of node: NodeView, family: Bool) async throws -> Integrity {
+        if family { return try await familyPrior(FamilySync.metadataRecord(of: node), in: node.workspaceId, copying: false) }
+        return try await changeSigners().metadata(of: node)
     }
 
     public func rename(_ nodeId: String, to name: String) async throws -> Opened {
         let item = try await resolve(nodeId)
-        try refuseFamilyWrite(item.node.workspaceId)
-        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+        let family = try familyTarget(item.node.workspaceId)
+        let key: Data
+        if family {
+            key = try writableKey(of: item)
+        } else {
+            guard let opened = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+            key = opened
+        }
         let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified)
         let sealed = try metadataSeal(
             ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
@@ -49,7 +85,7 @@ extension Vault {
         )
         // The new name goes out beside the record's other fields (type, size, date), which this signature vouches for
         // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
-        let prior = try await changeSigners().metadata(of: item.node)
+        let prior = try await priorMetadata(of: item.node, family: family)
         let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
                                                version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
         let node = try await api.rename(
@@ -64,16 +100,53 @@ extension Vault {
         guard item.node.workspaceId.lowercased() == parent.node.workspaceId.lowercased() else {
             throw DriveAPIError.server(400, "Items can only move within one drive.")
         }
+        // A family folder's item is re-wrapped by the ledger, under a parent rooted at the folder's current key only.
+        if try familyTarget(item.node.workspaceId) {
+            return base64urlEncode(bytes: try areaLedger.rewrapNode(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id,
+                                                                    parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch))
+        }
         guard let key = nodeKey(of: item), let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Node not opened") }
         let ctx = NodeKeyContext(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch)
         return base64urlEncode(bytes: try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key))
     }
 
+    /* Whether moving `nodeId` under `parentId` crosses spaces (another workspace: a family folder, someone's share, one's own files). */
+    public func movesAcross(_ nodeId: String, to parentId: String) async throws -> Bool {
+        let item = try await resolve(nodeId)
+        let parent = try await resolve(parentId)
+        return item.node.workspaceId.lowercased() != parent.node.workspaceId.lowercased()
+    }
+
+    /*
+     * Move, wherever it goes: within one space the item is re-parented (one key re-wrapped, through
+     * the ledger in a family folder); across spaces (a family folder and one's own files, either
+     * way, or someone's share) the server can't move it, since it copies and moves within one
+     * workspace only, so it is uploaded again under the destination's keys and the original goes
+     * to the Trash. Older versions, and the original's writer signature, stay behind
+     * (docs/families-shared-pool.md 3.8; the server's pool-neutral `moveOf` isn't built yet).
+     */
+    public func relocate(_ nodeId: String, to parentId: String, progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, across: Bool) {
+        guard try await movesAcross(nodeId, to: parentId) else { return (try await move(nodeId, to: parentId), false) }
+        // A family folder that may not be written now gives nothing up: checked before anything is copied out of it.
+        let source = try await resolve(nodeId)
+        _ = try familyTarget(source.node.workspaceId)
+        let copied = try await copyAcross(nodeId, to: parentId, progress: progress)
+        do {
+            try await trash(nodeId)
+        } catch {
+            // The copy landed: said as such, never as a move that failed and changed nothing.
+            let why = FamilyWords.core(error) ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            throw DriveAPIError.server(409, "Copied, but the original couldn’t be moved to the Trash. \(why)")
+        }
+        return (copied, true)
+    }
+
     public func move(_ nodeId: String, to parentId: String) async throws -> Opened {
         let item = try await resolve(nodeId)
         let parent = try await resolve(parentId)
-        try refuseFamilyWrite(item.node.workspaceId)
-        try refuseFamilyWrite(parent.node.workspaceId)
+        // Within one family folder through the ledger (see `rewrap`); across spaces the store copies and trashes instead.
+        _ = try familyTarget(item.node.workspaceId)
+        _ = try familyTarget(parent.node.workspaceId)
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let node = try await api.move(
             nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
@@ -92,18 +165,25 @@ extension Vault {
      */
     public func copy(_ nodeId: String, to parentId: String, name: String? = nil, progress: @Sendable (Int) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
-        // A family folder's records are judged by its member list, not the personal trust set a copy signs by.
-        try refuseFamilyWrite(source.node.workspaceId)
-        let trusted = try await copySigners()
         let parent = try await resolve(parentId)
-        try refuseFamilyWrite(parent.node.workspaceId)
+        // A family folder's records are judged by its member list, not the personal trust set; the server copies
+        // within one workspace, so a family folder's item is copied in place only within that folder.
+        let sourceFamily = isFamilyWorkspace(source.node.workspaceId)
+        let family = try familyTarget(parent.node.workspaceId)
+        if sourceFamily || family, source.node.workspaceId.lowercased() != parent.node.workspaceId.lowercased() {
+            throw DriveAPIError.server(400, "Items can only be copied within one drive here.")
+        }
+        let trusted: TrustedSigners? = family ? nil : try await copySigners()
+        func prior(_ record: ServedRecord, _ personal: (TrustedSigners) -> Integrity) async throws -> Integrity {
+            if let trusted { return personal(trusted) }
+            return try await familyPrior(record, in: source.node.workspaceId, copying: true)
+        }
         _ = try await loadWorkspace()
         let workspace = Target(workspaceId: parent.node.workspaceId)
-        guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let newName = try checkName(name: name ?? source.name)
         var done = 0
         if source.isFolder {
-            let made = try await createFolder(in: parent.id, name: newName, signing: .copy(trusted.metadata(of: source.node)))
+            let made = try await createFolder(in: parent.id, name: newName, signing: .copy(try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }))
             done += 1
             progress(done)
             for child in try await children(of: source.id) {
@@ -120,9 +200,10 @@ extension Vault {
         let made = try mint(.node, in: workspace.workspaceId)
         let madeVersion = try mint(.version, in: workspace.workspaceId)
         let (id, versionId) = (made.id, madeVersion.id)
-        let key = try randomBytes(length: 32)
-        let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
-        let keyEnvelope = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)
+        let metadataPrior = try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }
+        let versionPrior = try await prior(FamilySync.versionRecord(version, of: source.node)) { $0.version(version, of: source.node) }
+        let (key, keyEnvelope) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
+        defer { if family, self.opened[NodeRef(workspaceId: workspace.workspaceId, nodeId: id)] == nil { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) } }
         let metadata = NodeMetadata(name: newName, mime: source.metadata.mime, size: source.metadata.size, modified: source.metadata.modified)
         let metadataEnvelope = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
         let contentKeyEnvelope = try versionReseal(
@@ -132,10 +213,10 @@ extension Vault {
         )
         // Signed where they land: the copy's node and version, over the source's object and its suite, by the source's verdicts.
         let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope,
-                                                       signing: .copy(trusted.metadata(of: source.node)))
+                                                       signing: .copy(metadataPrior))
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
                                                      suite: version.contentSuite, envelope: contentKeyEnvelope,
-                                                     signing: .copy(trusted.version(version, of: source.node)))
+                                                     signing: .copy(versionPrior))
         let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
             "sourceVersionId": version.id,
             "node": ["id": id, "idSeed": made.seed, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
@@ -151,14 +232,19 @@ extension Vault {
 
     public func trash(_ nodeId: String) async throws {
         let item = try await resolve(nodeId)
-        try refuseFamilyWrite(item.node.workspaceId)
+        // Nothing is sealed, but a family folder takes it only while this device may write there.
+        _ = try familyTarget(item.node.workspaceId)
         _ = try await api.trash(nodeId: nodeId, workspaceId: item.node.workspaceId)
         forget(nodeId)
     }
 
     /* Back where it was, or under the root when its old folder is in the trash too. */
     public func restore(_ item: Opened, parentTrashed: Bool) async throws -> Opened {
-        try refuseFamilyWrite(item.node.workspaceId)
+        // In a family folder only back where it was (a trash's Undo): under the top folder would re-wrap under the family's root.
+        if isFamilyWorkspace(item.node.workspaceId) {
+            if parentTrashed { throw FamilyWriteError.unavailable }
+            _ = try familyTarget(item.node.workspaceId)
+        }
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         var toRoot: (UInt64, String)? = nil
         if parentTrashed {
@@ -218,13 +304,25 @@ extension Vault {
         let replacing: Bool
     }
 
-    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnailBytes: UInt32,
-                       signing: (metadata: Signing, version: Signing)) async throws -> Begun {
+    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
+                       signing: (metadata: Signing, version: Signing), waited: Bool = false) async throws -> Begun {
         _ = try await loadWorkspace()
+        var replacing = given
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
         let workspace: Target
         if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await resolve(parentId).node.workspaceId) }
-        try refuseFamilyWrite(workspace.workspaceId)
+        let family = try familyTarget(workspace.workspaceId)
+        if family {
+            // Looked up afresh before a node or a content key is made: the folder (and the file replaced) as the server serves
+            // them now, which a walk may have re-keyed since they were listed (the web's openNodes before every seal).
+            try await lookAgain(parentId)
+            if let given {
+                guard let fresh = opened[given.ref] else { throw DriveAPIError.notFound("This item no longer exists.") }
+                // A file someone replaced while this upload waited is never overwritten: their version stays current.
+                if waited, fresh.node.currentVersion?.id != given.node.currentVersion?.id { throw DriveAPIError.server(409, KeyChangeWait.versionMoved) }
+                replacing = fresh
+            }
+        }
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let plaintextSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
         let modified = ISO8601DateFormatter().string(from: (attributes[.modificationDate] as? Date) ?? Date())
@@ -238,25 +336,37 @@ extension Vault {
         let nodeKey: Data
         var nodeInput: [String: Any]
         let final: NodeMetadata
+        // A new node's key the ledger made: dropped unless the server takes the begin (the web's forgetNodeKey).
+        var madeKey: String?
+        var begunHere = false
+        defer { if let madeKey, !begunHere { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: madeKey) } }
         if let replacing {
-            // The replacement re-signs the record's name when it completes (see `complete`): without whom to trust, nothing is sent.
-            _ = try await changeSigners()
+            // The replacement re-signs the record's name when it completes (see `complete`): without whom to trust, nothing is
+            // sent. In a family folder that is the family's judgement, asked at completion.
+            if !family { _ = try await changeSigners() }
             nodeId = replacing.id
-            guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
-            nodeKey = key
+            // In a family folder the file's key only as the ledger holds it rooted at the folder's current key (KEY_CHANGE_PENDING otherwise).
+            if family {
+                nodeKey = try writableKey(of: replacing)
+            } else {
+                guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
+                nodeKey = key
+            }
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": replacing.node.currentVersion?.id ?? NSNull()]
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified)
         } else {
             let parent = try await resolve(parentId)
-            guard let parentKey = self.nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
+            // The folder's key as the ledger holds it, before anything is asked of the server: a key change that hasn't
+            // reached the folder is a wait (KEY_CHANGE_PENDING), not an epoch allocated for nothing.
+            if family { _ = try areaLedger.writableNodeKey(workspaceId: workspace.workspaceId, nodeId: parent.id) }
             let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
             let made = try mint(.node, in: workspace.workspaceId)
             nodeId = made.id
-            nodeKey = try randomBytes(length: 32)
-            let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: nodeId, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
-            let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: nodeKey)
+            let wrapped: Data
+            (nodeKey, wrapped) = try newKey(nodeId, under: parent, keyEpoch: epochs.from, family: family)
+            madeKey = family ? nodeId : nil
             final = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified)
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: final)
             nodeInput = ["existing": false, "id": nodeId, "idSeed": made.seed, "parentId": parent.id, "keyEpoch": epochs.from,
@@ -285,6 +395,7 @@ extension Vault {
             "contentNonce": base64urlEncode(bytes: contentNonce),
             "contentSuite": Int(suite), "chunkCount": Int(layout.chunkCount), "ciphertextSize": String(layout.ciphertextSize),
         ])
+        begunHere = true
         var urls: [Int: PartUrl] = [:]
         for part in begun.parts { urls[part.partNumber] = part }
         return Begun(
@@ -314,11 +425,19 @@ extension Vault {
                           final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String]) async throws -> Opened {
         // Built here, not passed in: a dictionary of Any made in this call can be handed to the API; a parameter could not.
         let parts: [[String: Any]] = etags.keys.sorted().map { ["partNumber": $0, "etag": etags[$0]!] }
+        // A family folder's replacement is checked before the version goes live: the file's key as the ledger holds it and the
+        // family's judgement of the name it carries over, so a key change or a refusal never leaves a version without its metadata.
+        let family = replacing ? try familyTarget(workspaceId) : false
+        var familyName: (key: Data, prior: Integrity)?
+        if replacing, family {
+            let item = try await resolve(nodeId)
+            familyName = (try knownKey ?? writableKey(of: item), try await priorMetadata(of: item.node, family: true))
+        }
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
         guard var node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
         if replacing {
             let ref = NodeRef(workspaceId: workspaceId, nodeId: nodeId)
-            var key = knownKey ?? nodeKeys[ref]
+            var key = familyName?.key ?? knownKey ?? nodeKeys[ref]
             if key == nil { _ = try await resolve(nodeId); key = nodeKeys[ref] }
             guard let nodeKey = key else { throw DriveAPIError.server(500, "Node not opened") }
             let sealed = try metadataSeal(
@@ -326,7 +445,8 @@ extension Vault {
                 nodeKey: nodeKey, metadata: final
             )
             // The name kept from the record as the server holds it now: vouched for again only if that verified.
-            let prior = try await changeSigners().metadata(of: node)
+            let prior: Integrity
+            if let familyName { prior = familyName.prior } else { prior = try await priorMetadata(of: node, family: false) }
             let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed,
                                                    signing: .after(prior))
             node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
@@ -334,9 +454,14 @@ extension Vault {
             return try adopt(node, nodeKey: nodeKey, metadata: final, in: workspaceId)
         }
         if let knownKey { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) }
-        // Finished by another launch: the node key comes from the parent's, which the tree opens.
-        _ = try await resolve(parentId)
-        return try open(node)
+        // Finished by another launch: the node key comes from the parent's, which the tree opens. The upload has landed
+        // either way: a row that doesn't open here now is not an upload to fail, retry or abort.
+        do {
+            _ = try await resolve(parentId)
+            return try open(node)
+        } catch {
+            throw UploadLanded()
+        }
     }
 
     /*
@@ -409,10 +534,41 @@ extension Vault {
         public var urls: [Int: String]
     }
 
+    /*
+     * `waiting`: how an upload into a family folder waits out a key change (KeyChangeWait): the
+     * folder looked up again and the upload sealed afresh after each pause, the family checked
+     * again between, until it goes or half an hour from `since` has passed. Nothing refused is sent
+     * again: its envelopes were under keys the change replaces. Without it, the wait is an error.
+     */
     public func sealUpload(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
-                           thumbnail: Data?, into directory: URL) async throws -> SealedUpload {
+                           thumbnail: Data?, into directory: URL, waiting: KeyChangeWait.Policy? = nil) async throws -> SealedUpload {
+        let target: String
+        if let replacing { target = replacing.node.workspaceId } else { target = try await resolve(parentId).node.workspaceId }
+        var since = waiting?.since
+        var attempt = 0
+        while true {
+            do {
+                return try await sealUploadOnce(fileURL: fileURL, name: name, mime: mime, in: parentId, replacing: replacing,
+                                                thumbnail: thumbnail, into: directory, waited: since != nil)
+            } catch {
+                guard let waiting, isFamilyWorkspace(target), KeyChangeWait.meets(error, waited: since != nil) else { throw error }
+                let start = since ?? waiting.now()
+                since = start
+                waiting.waiting(start)
+                if waiting.now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw DriveAPIError.server(409, KeyChangeWait.gaveUp) }
+                attempt += 1
+                try await waiting.pause(attempt)
+                if waiting.now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw DriveAPIError.server(409, KeyChangeWait.gaveUp) }
+                // The family checked again: a walk's roster (the folder's next key) is accepted before the next look.
+                await familyJudge?.recheck(target)
+            }
+        }
+    }
+
+    private func sealUploadOnce(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
+                                thumbnail: Data?, into directory: URL, waited: Bool) async throws -> SealedUpload {
         let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: (.own, .own))
+                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: (.own, .own), waited: waited)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let handle = try FileHandle(forReadingFrom: fileURL)
@@ -540,16 +696,32 @@ extension Vault {
     public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil,
                            progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
-        try refuseFamilyWrite(source.node.workspaceId)
-        let trusted = try await copySigners()
-        let metadata: Signing = .copy(trusted.metadata(of: source.node))
+        // Out of a family folder each record is judged by the family's member list (`copy_form`): a former member's
+        // file, or keys that don't match, is re-sealed as the copier's and never vouched for. Elsewhere by the trust set.
+        let family = isFamilyWorkspace(source.node.workspaceId)
+        let trusted: TrustedSigners? = family ? nil : try await copySigners()
+        let metadata: Signing
+        if let trusted {
+            metadata = .copy(trusted.metadata(of: source.node))
+        } else {
+            metadata = .copy(try await familyPrior(FamilySync.metadataRecord(of: source.node), in: source.node.workspaceId, copying: true))
+        }
         if source.isFolder {
             let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata)
             for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
             return made
         }
         // A file without a version has nothing to vouch for: whatever it is, it isn't verified.
-        let version: Signing = .copy(source.node.currentVersion.map { trusted.version($0, of: source.node) } ?? .unsigned)
+        let version: Signing
+        if let current = source.node.currentVersion {
+            if let trusted {
+                version = .copy(trusted.version(current, of: source.node))
+            } else {
+                version = .copy(try await familyPrior(FamilySync.versionRecord(current, of: source.node), in: source.node.workspaceId, copying: true))
+            }
+        } else {
+            version = .copy(.unsigned)
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("copy-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -9,6 +9,10 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     case trashed(String)
     /* A row or document sealed in an envelope suite newer than this app reads. */
     case newerEnvelope
+    /* A Drive key change has not reached the folder or the file yet: the server's 409 `rotating`, a wait (uploads wait it out). */
+    case rotating(String)
+    /* Envelopes under a key epoch or a version that is no longer the item's: the server's 409 `stale`. */
+    case stale(String)
 
     public var errorDescription: String? {
         switch self {
@@ -17,7 +21,7 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.
         case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
-        case .server(_, let message), .notFound(let message), .trashed(let message): return message
+        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message): return message
         case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
@@ -94,6 +98,8 @@ public final class DriveAPI: Sendable {
             let message = body?["message"] as? String
             if status == 404 { throw DriveAPIError.notFound(message ?? "This item no longer exists.") }
             if status == 409, body?["code"] as? String == "trashed" { throw DriveAPIError.trashed(message ?? "This item is in the trash.") }
+            if status == 409, body?["code"] as? String == "rotating" { throw DriveAPIError.rotating(message ?? "Keys are being rotated for this folder. Try again in a moment.") }
+            if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
             throw DriveAPIError.server(status, message ?? "Request failed")
         }
         return try JSONDecoder().decode(type, from: data)

@@ -32,8 +32,6 @@ extension OnFakeDrive {
             // The member never compared the creator's words: the family's member list vouches for them.
             #expect(verdict.mark == nil)
             #expect(verdict.verifiedBy == "Verified by Lindqvist family")
-            // Nothing is written into a family folder by this version, whatever the screens offer.
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await phone.vault.createFolder(in: family.rootId, name: "New") }
         }
 
         /*
@@ -281,8 +279,12 @@ extension OnFakeDrive {
             #expect(verdict.verifiedBy == nil)
         }
 
-        /* Every write the vault offers is refused in a family folder before anything reaches the server. */
-        @Test func everyWriteIntoAFamilyFolderIsRefusedBeforeItIsSent() async throws {
+        /*
+         * What family folders don't offer (sharing, links, reports, keeping, earlier versions, a
+         * rotation of one's own, a restore under the top folder) is refused before anything reaches
+         * the server, whatever the screens offer. Fails if any of their gates is removed.
+         */
+        @Test func shareLinkReportKeepAndVersionsStayRefusedInAFamilyFolder() async throws {
             let family = try FamilyFixture()
             let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
             let phone = try await family.phone(server)
@@ -290,28 +292,20 @@ extension OnFakeDrive {
             guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
             let vault = phone.vault
             let file = try #require(try await vault.children(of: family.rootId).first)
-            let source = FileManager.default.temporaryDirectory.appendingPathComponent("family-write-\(UUID().uuidString).txt")
-            try Data("x".utf8).write(to: source)
             let anyone = try pinned(family.creator.userId, family.creator.keys)
             server.clearRequests()
 
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.move(file.id, to: family.rootId) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.copy(file.id, to: family.rootId) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.upload(fileURL: source, name: "x.txt", mime: "text/plain", in: family.rootId, replacing: nil) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.share(file, with: anyone, role: "viewer") }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.createLink(for: file, password: nil, expiresAt: nil) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.rotate(file) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.report(file, category: "spam", reason: "x", email: nil) }
-            await #expect(throws: FamilyWriteError.readOnly) { try await vault.keepDownloaded(file) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.rename(file.id, to: "renamed.txt") }
-            await #expect(throws: FamilyWriteError.readOnly) { try await vault.trash(file.id) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.restore(file, parentTrashed: false) }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.share(file, with: anyone, role: "viewer") }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.createLink(for: file, password: nil, expiresAt: nil) }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.rotate(file) }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.report(file, category: "spam", reason: "x", email: nil) }
+            await #expect(throws: FamilyWriteError.unavailable) { try await vault.keepDownloaded(file) }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.restore(file, parentTrashed: true) }
             let version = VersionListView(id: UUID().uuidString.lowercased(), objectId: UUID().uuidString.lowercased(), contentKeyEnvelope: "AA", status: "ready",
                                           contentSuite: 3, contentNonce: "AA", plaintextSize: nil, ciphertextSize: nil, current: false, supersededAt: nil,
                                           createdAt: "2026-10-18T10:00:00.000Z")
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.restoreVersion(version, of: file.id) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.copyAcross(file.id, to: family.personal) }
-            await #expect(throws: FamilyWriteError.readOnly) { _ = try await vault.planKeep(file) }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.restoreVersion(version, of: file.id) }
+            await #expect(throws: FamilyWriteError.unavailable) { _ = try await vault.planKeep(file) }
             #expect(server.writes.isEmpty)
         }
 
@@ -391,7 +385,19 @@ struct FamilyFixture {
     let grant: Data
     let root: NodeView
     let file: NodeView
+    let fileKey: Data
     let personal = UUID().uuidString.lowercased()
+    /* The member's own drive: its key and top folder, where a move out of the family folder lands. */
+    let personalKey: Data
+    let personalRootKey: Data
+    let personalRoot: NodeView
+    /* A folder in the family folder (not served unless a test adds it) and a photo with content the creator uploaded. */
+    let docsKey: Data
+    let docs: NodeView
+    let photoKey: Data
+    let photo: NodeView
+    let photoBytes: Data
+    let photoObject: Data
 
     var summary: GroupSummary { GroupSummary(id: groupId, kind: "family", name: "Lindqvist family", roles: [], state: "active", rosterVersion: 2, groupKeyVersion: 1) }
     var firstKeys: GroupPublicKey { get throws { try groupPublicKey(seed: groupSeed) } }
@@ -439,19 +445,60 @@ struct FamilyFixture {
         rootId = try newId(kind: .node, scopeId: workspaceId).id
         fileId = try newId(kind: .node, scopeId: workspaceId).id
         root = try Self.node(id: rootId, in: workspaceId, parent: nil, parentKey: areaKey, key: rootKey, kind: .folder, name: "Photos", writer: creator)
-        file = try Self.node(id: fileId, in: workspaceId, parent: rootId, parentKey: rootKey, key: try randomBytes(length: 32), kind: .file,
+        fileKey = try randomBytes(length: 32)
+        file = try Self.node(id: fileId, in: workspaceId, parent: rootId, parentKey: rootKey, key: fileKey, kind: .file,
                              name: "Recipes.txt", writer: creator)
+        personalKey = try randomBytes(length: 32)
+        personalRootKey = try randomBytes(length: 32)
+        personalRoot = try Self.node(id: try newId(kind: .node, scopeId: personal).id, in: personal, parent: nil, parentKey: personalKey, key: personalRootKey,
+                                     kind: .folder, name: "Drive", writer: member)
+        docsKey = try randomBytes(length: 32)
+        docs = try Self.node(id: try newId(kind: .node, scopeId: workspaceId).id, in: workspaceId, parent: rootId, parentKey: rootKey, key: docsKey,
+                             kind: .folder, name: "Docs", writer: creator, keyEpoch: 2)
+        // The creator's photo: real content, sealed as an upload seals it, with a signed version.
+        photoKey = try randomBytes(length: 32)
+        let photoId = try newId(kind: .node, scopeId: workspaceId).id
+        let bare = try Self.node(id: photoId, in: workspaceId, parent: rootId, parentKey: rootKey, key: photoKey, kind: .file, name: "Beach.jpg", writer: creator, keyEpoch: 3)
+        photoBytes = Data((0 ..< 3000).map { UInt8($0 % 251) })
+        let versionId = try newId(kind: .version, scopeId: workspaceId).id
+        let objectId = try newId(kind: .object, scopeId: workspaceId).id
+        let contentKey = try randomBytes(length: 32)
+        let nonce = try randomBytes(length: 16)
+        let suite = HushOSCore.contentSuite()
+        let size = UInt64(photoBytes.count)
+        let content = Content(workspaceId: workspaceId, objectId: objectId, suite: suite, key: contentKey, nonce: nonce, plaintextSize: size, thumbnailBytes: 0)
+        let layout = try contentLayout(suite: suite, plaintextSize: size, thumbnailBytes: 0)
+        var object = Data()
+        var at = 0
+        for index in 0 ..< layout.chunkCount {
+            let length = Int(chunkLength(plaintextSize: size, index: index))
+            object.append(try chunkEncrypt(content: content, index: index, plaintext: photoBytes.subdata(in: at ..< at + length)))
+            at += length
+        }
+        photoObject = object
+        let sealed = try versionSeal(ctx: VersionContext(workspaceId: workspaceId, nodeId: photoId, versionId: versionId, objectId: objectId),
+                                     nodeKey: photoKey, contentKey: contentKey, plaintextSize: size, thumbnailBytes: 0)
+        let versionSignature = try versionSign(signingSeed: creator.keys.signingSeed,
+                                               statement: VersionStatement(workspaceId: workspaceId, nodeId: photoId, versionId: versionId, objectId: objectId, contentSuite: suite),
+                                               contentKeyEnvelope: sealed.envelope)
+        var version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: base64urlEncode(bytes: sealed.envelope), status: "ready", contentSuite: suite,
+                                  chunkCount: Int(layout.chunkCount), contentNonce: base64urlEncode(bytes: nonce), plaintextSize: nil,
+                                  ciphertextSize: String(object.count), readyAt: "2026-10-18T10:00:00.000Z")
+        version.signer = Signer(id: creator.userId)
+        version.signature = base64urlEncode(bytes: versionSignature)
+        photo = bare.with(version: version)
     }
 
     /* A node wrapped under its parent (the area key at version 1 for the top folder) and signed by its writer. */
-    static func node(id: String, in workspaceId: String, parent: String?, parentKey: Data, key: Data, kind: NodeKind, name: String, writer: FamilyPerson) throws -> NodeView {
-        let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspaceId, nodeId: id, parentId: parent ?? workspaceId, parentKeyEpoch: 1, keyEpoch: 1),
+    static func node(id: String, in workspaceId: String, parent: String?, parentKey: Data, key: Data, kind: NodeKind, name: String, writer: FamilyPerson,
+                     keyEpoch: UInt64 = 1, parentKeyEpoch: UInt64 = 1) throws -> NodeView {
+        let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspaceId, nodeId: id, parentId: parent ?? workspaceId, parentKeyEpoch: parentKeyEpoch, keyEpoch: keyEpoch),
                                    parentKey: parentKey, nodeKey: key)
         let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
                                       metadata: NodeMetadata(name: name, mime: kind == .file ? "text/plain" : nil, size: nil, modified: nil))
         let signature = try metadataSign(signingSeed: writer.keys.signingSeed,
                                          statement: MetadataStatement(workspaceId: workspaceId, nodeId: id, kind: kind, metadataVersion: 1), metadataEnvelope: sealed)
-        var node = NodeView(id: id, workspaceId: workspaceId, parentId: parent, kind: kind == .folder ? "folder" : "file", keyEpoch: 1, parentKeyEpoch: 1,
+        var node = NodeView(id: id, workspaceId: workspaceId, parentId: parent, kind: kind == .folder ? "folder" : "file", keyEpoch: keyEpoch, parentKeyEpoch: parentKeyEpoch,
                             keyEnvelope: base64urlEncode(bytes: wrapped), metadataVersion: 1, metadataEnvelope: base64urlEncode(bytes: sealed),
                             currentVersion: nil, trashedAt: nil, changeSeq: 1, createdAt: "2026-10-18T10:00:00.000Z", updatedAt: "2026-10-18T10:00:00.000Z")
         node.metadataSigner = Signer(id: writer.userId)
@@ -488,7 +535,7 @@ struct FamilyFixture {
         await vault.adopt(identity: member.keys, envelope: member.envelope)
         // The personal workspace's grant names the account key's version, which a self-grant names too.
         let grant = GrantView(version: 1, workspaceId: personal, keyVersion: 1, workspaceKeyVersion: 1, wrappingSalt: "", wrappingNonce: "", encryptedKey: "")
-        await vault.adopt(workspace: WorkspaceView(workspaceId: personal, changeSeq: nil, grant: grant, root: nil), key: try randomBytes(length: 32))
+        await vault.adopt(workspace: WorkspaceView(workspaceId: personal, changeSeq: nil, grant: grant, root: personalRoot), key: personalKey)
         let store = records ?? FamilyRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-records-\(UUID().uuidString)"), activity: .expired)
         return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store), records: store)
     }
@@ -501,7 +548,7 @@ struct FamilyFixture {
     }
 }
 
-/* The group routes, the settings routes and one family folder's listing, as the server has them. */
+/* The group routes, the settings routes, and the family folder's and the member's own drive's tree, as the server has them. */
 final class FamilyServer: @unchecked Sendable {
     nonisolated(unsafe) static var current: FamilyServer?
     let family: FamilyFixture
@@ -523,6 +570,21 @@ final class FamilyServer: @unchecked Sendable {
     var selfGrant: [String: Any]?
     /* Route 25's grant envelope and route 6's granter key as something that doesn't decode. */
     var malformedGrant = false
+    /* The family folder's key version and the member's grant at it, as route 25 serves them. */
+    var areaVersion: UInt64 = 1
+    var areaGrant: (rosterVersion: UInt64, rosterDigest: String, envelope: Data)
+    /* Every node either drive holds, by id: listings, route 25's top folder and every write go through it. */
+    var tree: [String: NodeView] = [:]
+    /* Upload begins answered 409 `rotating` (a key change the server knows of), then 409 `stale`, before one is taken. */
+    var rotatingBegins = 0
+    var staleBegins = 0
+    /* What the phone sent: each upload begin's body, by upload id, and each part it PUT, by upload and part. */
+    private(set) var begins: [(id: String, body: [String: Any])] = []
+    private(set) var parts: [String: [Int: Data]] = [:]
+    private(set) var bodies: [(method: String, path: String, body: [String: Any])] = []
+    /* Stored objects, by version id: what a ranged read of a version's URL is answered from. */
+    var objects: [String: Data] = [:]
+    private var nextEpoch: UInt64 = 10
     private var requests: [(method: String, path: String)] = []
     private let settingsKey: Data
     private let settingsKeyEnvelope: SettingsKeyEnvelope
@@ -533,13 +595,18 @@ final class FamilyServer: @unchecked Sendable {
         let made = try! settingsKeyCreate(userId: family.member.userId, accountKey: family.member.root)
         settingsKey = made.key
         settingsKeyEnvelope = made.envelope
+        areaGrant = (2, rosterDigest(statement: family.r2.statement), family.grant)
+        for node in [family.root, family.file, family.personalRoot] { tree[node.id] = node }
     }
 
     func serve(chain: [SignedGroupStatement], ignoringAfter: Bool = false) {
         lock.withLock { self.chain = chain; self.ignoringAfter = ignoringAfter }
     }
 
-    func clearRequests() { lock.withLock { requests = [] } }
+    func put(_ nodes: NodeView...) { lock.withLock { for node in nodes { tree[node.id] = node } } }
+    func node(_ id: String) -> NodeView? { lock.withLock { tree[id] } }
+
+    func clearRequests() { lock.withLock { requests = []; bodies = [] } }
 
     func requested(_ path: String, method: String = "GET") -> Bool {
         lock.withLock { requests.contains { $0.path == path && $0.method == method } }
@@ -548,6 +615,14 @@ final class FamilyServer: @unchecked Sendable {
     func count(_ path: String, method: String = "GET") -> Int {
         lock.withLock { requests.filter { $0.path == path && $0.method == method }.count }
     }
+
+    /* The bodies sent to `path` with `method`, in order. */
+    func sent(_ path: String, method: String = "POST") -> [[String: Any]] {
+        lock.withLock { bodies.filter { $0.path == path && $0.method == method }.map(\.body) }
+    }
+
+    var allBegins: [(id: String, body: [String: Any])] { lock.withLock { begins } }
+    func putParts(_ uploadId: String) -> [Int: Data] { lock.withLock { parts[uploadId] ?? [:] } }
 
     /* Anything but a read: a write the phone must never send. */
     var writes: [String] { lock.withLock { requests.filter { $0.method != "GET" && !$0.path.hasPrefix("/api/auth/settings") && !$0.path.hasSuffix("/self-grant") }.map(\.path) } }
@@ -586,12 +661,51 @@ final class FamilyServer: @unchecked Sendable {
                              "mlDsaPublicKey": keys.mlDsaPublicKey!, "kemPublicKey": keys.kemPublicKey!, "keysSignature": ""]]
     }
 
+    /* A folder's listing from the tree: its ancestors top first, and its children not in the trash. */
+    private func listing(_ id: String) -> (Int, Any) {
+        lock.withLock {
+            guard let folder = tree[id] else { return (404, ["message": "This item no longer exists."]) }
+            var ancestors: [NodeView] = []
+            var cursor = folder.parentId
+            while let parent = cursor, let node = tree[parent] { ancestors.insert(node, at: 0); cursor = node.parentId }
+            let children = tree.values.filter { $0.parentId == id && $0.trashedAt == nil }.sorted { $0.id < $1.id }
+            return (200, ["folder": json(folder), "ancestors": ancestors.map(json), "children": children.map(json), "nextCursor": NSNull()])
+        }
+    }
+
+    /* A node a write made, as the server stores it: the envelopes it was sent, signed by the member. */
+    private func made(_ body: [String: Any], workspaceId: String, kind: String, version: VersionView? = nil) -> NodeView {
+        var node = NodeView(id: body["id"] as? String ?? "", workspaceId: workspaceId, parentId: body["parentId"] as? String, kind: kind,
+                            keyEpoch: (body["keyEpoch"] as? NSNumber)?.uint64Value ?? 0, parentKeyEpoch: (body["parentKeyEpoch"] as? NSNumber)?.uint64Value ?? 0,
+                            keyEnvelope: body["keyEnvelope"] as? String ?? "", metadataVersion: 1, metadataEnvelope: body["metadataEnvelope"] as? String ?? "",
+                            currentVersion: version, trashedAt: nil, changeSeq: 3, createdAt: "2026-10-19T10:00:00.000Z", updatedAt: "2026-10-19T10:00:00.000Z")
+        node.metadataSigner = Signer(id: family.member.userId)
+        node.metadataSignature = body["metadataSignature"] as? String
+        return node
+    }
+
     func answer(_ request: URLRequest, body: Data?) -> (Int, Any) {
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
-        lock.withLock { requests.append((method, path)) }
+        let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        lock.withLock {
+            requests.append((method, path))
+            if method != "GET" { bodies.append((method, path, sent)) }
+        }
         let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let f = family
+        let parts = path.split(separator: "/").map(String.init)
+        // The object store: a part PUT, a ranged read of a version.
+        if request.url?.host == "store.test" {
+            if method == "PUT", parts.count == 2 {
+                lock.withLock { self.parts[parts[0], default: [:]][Int(parts[1]) ?? 0] = body ?? Data() }
+                return (200, Data())
+            }
+            guard parts.count == 1, let object = lock.withLock({ objects[parts[0]] }) else { return (404, Data()) }
+            let range = (request.value(forHTTPHeaderField: "Range") ?? "").dropFirst("bytes=".count).split(separator: "-").compactMap { Int($0) }
+            guard range.count == 2 else { return (200, object) }
+            return (206, object.subdata(in: range[0] ..< min(range[1] + 1, object.count)))
+        }
         switch (method, path) {
         case ("GET", "/api/auth/settings"):
             return lock.withLock {
@@ -603,7 +717,6 @@ final class FamilyServer: @unchecked Sendable {
         case ("PUT", "/api/auth/settings"):
             let hook = lock.withLock { () -> (@Sendable () -> Void)? in defer { beforePut = nil }; return beforePut }
             hook?()
-            let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             return lock.withLock {
                 let expected = (sent["expectedVersion"] as? NSNumber)?.uint64Value ?? 0
                 guard expected == (settings?.settingsVersion ?? 0) else { return (409, ["message": "Your settings changed on another device."]) }
@@ -635,28 +748,125 @@ final class FamilyServer: @unchecked Sendable {
             }
             return (200, ["identities": [creator, identity(f.member)].sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
         case ("PUT", "/api/groups/\(f.groupId)/areas/\(f.workspaceId)/self-grant"):
-            let sent = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-            guard let grant = sent["grant"] as? [String: Any], (grant["workspaceKeyVersion"] as? NSNumber)?.intValue == 1 else {
-                return (409, ["code": "area-moved", "message": "This folder's key changed."])
+            return lock.withLock {
+                guard let grant = sent["grant"] as? [String: Any], (grant["workspaceKeyVersion"] as? NSNumber)?.uint64Value == areaVersion else {
+                    return (409, ["code": "area-moved", "message": "This folder's key changed."])
+                }
+                selfGrant = grant
+                return (200, ["ok": true])
             }
-            lock.withLock { selfGrant = grant }
-            return (200, ["ok": true])
         case ("GET", "/api/drive/spaces"):
-            return (200, ["spaces": [
-                ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
-                ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
-                    "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": 1, "changeSeq": 2, "root": json(f.root), "rotation": NSNull(),
-                    "grant": ["workspaceKeyVersion": 1, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId, "rosterVersion": 2,
-                              "rosterDigest": rosterDigest(statement: f.r2.statement),
-                              "envelope": lock.withLock { malformedGrant } ? "not base64url!" : base64urlEncode(bytes: f.grant)],
-                    "selfGrant": (lock.withLock { selfGrant } as Any?) ?? NSNull(),
-                ]]],
-            ]])
-        case ("GET", "/api/drive/nodes/\(f.rootId)/children"):
-            return (200, ["folder": json(f.root), "ancestors": [Any](), "children": [json(f.file)], "nextCursor": NSNull()])
+            return lock.withLock {
+                (200, ["spaces": [
+                    ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
+                    ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
+                        "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": 2,
+                        "root": tree[f.rootId].map(json) ?? NSNull(), "rotation": NSNull(),
+                        "grant": ["workspaceKeyVersion": areaVersion, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId,
+                                  "rosterVersion": areaGrant.rosterVersion, "rosterDigest": areaGrant.rosterDigest,
+                                  "envelope": malformedGrant ? "not base64url!" : base64urlEncode(bytes: areaGrant.envelope)],
+                        "selfGrant": (selfGrant as Any?) ?? NSNull(),
+                    ]]],
+                ]])
+            }
+        default:
+            break
+        }
+        // Drive: listings, the writes a family folder takes, uploads and versions.
+        let workspaceId = sent["workspaceId"] as? String ?? query.first { $0.name == "workspaceId" }?.value ?? ""
+        switch (method, parts.count >= 3 ? Array(parts.dropFirst(2)) : []) {
+        case ("GET", let rest) where rest.count == 3 && rest[0] == "nodes" && rest[2] == "children":
+            return listing(rest[1])
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "workspaces" && rest[2] == "epochs":
+            return lock.withLock {
+                let count = (sent["count"] as? NSNumber)?.uint64Value ?? 1
+                defer { nextEpoch += count }
+                return (200, ["from": nextEpoch, "to": nextEpoch + count - 1])
+            }
+        case ("POST", ["folders"]):
+            let folders = (sent["folders"] as? [[String: Any]] ?? []).map { made($0, workspaceId: workspaceId, kind: "folder") }
+            lock.withLock { for folder in folders { tree[folder.id] = folder } }
+            return (200, ["nodes": folders.map(json)])
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "nodes":
+            return lock.withLock {
+                guard let node = tree[rest[1]] else { return (404, ["message": "This item no longer exists."]) }
+                let changed: NodeView
+                switch rest[2] {
+                case "metadata":
+                    changed = node.with(metadataVersion: node.metadataVersion + 1, metadataEnvelope: sent["metadataEnvelope"] as? String ?? "",
+                                        signature: sent["metadataSignature"] as? String)
+                case "parent":
+                    changed = node.with(parentId: sent["parentId"] as? String, parentKeyEpoch: (sent["parentKeyEpoch"] as? NSNumber)?.uint64Value ?? 0,
+                                        keyEnvelope: sent["keyEnvelope"] as? String ?? "")
+                case "trash":
+                    changed = node.with(trashedAt: "2026-10-19T10:00:00.000Z")
+                case "restore":
+                    changed = node.with(trashedAt: nil)
+                default:
+                    return (404, ["message": "Not here."])
+                }
+                tree[changed.id] = changed
+                return (200, ["node": json(changed)])
+            }
+        case ("POST", ["uploads"]):
+            return lock.withLock {
+                if rotatingBegins > 0 {
+                    rotatingBegins -= 1
+                    return (409, ["code": "rotating", "message": "Keys are being rotated for this folder. Try again in a moment."])
+                }
+                if staleBegins > 0 {
+                    staleBegins -= 1
+                    return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+                }
+                let id = UUID().uuidString.lowercased()
+                begins.append((id, sent))
+                let count = (sent["chunkCount"] as? NSNumber)?.intValue ?? 1
+                let node = sent["node"] as? [String: Any] ?? [:]
+                return (200, ["upload": ["id": id, "nodeId": node["id"] as? String ?? "", "versionId": sent["versionId"] as? String ?? "", "status": "pending", "chunkCount": count],
+                              "parts": (1 ... count).map { ["partNumber": $0, "length": 0, "url": "https://store.test/\(id)/\($0)"] },
+                              "urlExpiresAt": "2026-10-19T11:00:00.000Z"])
+            }
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":
+            return lock.withLock {
+                guard let begun = begins.first(where: { $0.id == rest[1] })?.body, let node = begun["node"] as? [String: Any] else { return (404, ["message": "No upload."]) }
+                let version = VersionView(id: begun["versionId"] as? String ?? "", objectId: begun["objectId"] as? String ?? "",
+                                          contentKeyEnvelope: begun["contentKeyEnvelope"] as? String ?? "", status: "ready",
+                                          contentSuite: UInt32((begun["contentSuite"] as? NSNumber)?.intValue ?? 3), chunkCount: (begun["chunkCount"] as? NSNumber)?.intValue ?? 1,
+                                          contentNonce: begun["contentNonce"] as? String ?? "", plaintextSize: nil, ciphertextSize: begun["ciphertextSize"] as? String,
+                                          readyAt: "2026-10-19T10:00:00.000Z")
+                let landed = made(node, workspaceId: begun["workspaceId"] as? String ?? "", kind: "file", version: version)
+                tree[landed.id] = landed
+                return (200, ["status": "complete", "node": json(landed)])
+            }
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":
+            return (200, ["status": "aborted"])
+        case ("GET", let rest) where rest.count == 3 && rest[0] == "versions" && rest[2] == "url":
+            return (200, ["url": "https://store.test/\(rest[1])", "urlExpiresAt": "2026-10-19T11:00:00.000Z"])
         default:
             return (404, ["message": "Not here."])
         }
+    }
+}
+
+extension NodeView {
+    /* The same row with some of its fields as a write left them. */
+    func with(parentId: String?? = nil, parentKeyEpoch: UInt64? = nil, keyEpoch: UInt64? = nil, keyEnvelope: String? = nil, metadataVersion: UInt64? = nil,
+              metadataEnvelope: String? = nil, signature: String?? = nil, version: VersionView?? = nil, trashedAt: String?? = nil,
+              prev: (envelope: String, epoch: UInt64, parentEpoch: UInt64)?? = nil) -> NodeView {
+        var node = NodeView(id: id, workspaceId: workspaceId, parentId: parentId ?? self.parentId, kind: kind, keyEpoch: keyEpoch ?? self.keyEpoch,
+                            parentKeyEpoch: parentKeyEpoch ?? self.parentKeyEpoch, keyEnvelope: keyEnvelope ?? self.keyEnvelope,
+                            metadataVersion: metadataVersion ?? self.metadataVersion, metadataEnvelope: metadataEnvelope ?? self.metadataEnvelope,
+                            currentVersion: version ?? currentVersion, trashedAt: trashedAt ?? self.trashedAt, changeSeq: (changeSeq ?? 0) + 1,
+                            createdAt: createdAt, updatedAt: updatedAt)
+        node.envelopeSuite = envelopeSuite
+        node.metadataSigner = metadataSigner
+        node.metadataSignature = signature ?? metadataSignature
+        node.metadataRekey = metadataRekey
+        let previous = prev ?? (prevKeyEnvelope.map { ($0, prevKeyEpoch ?? 0, prevParentKeyEpoch ?? 0) })
+        node.prevKeyEnvelope = previous?.envelope
+        node.prevKeyEpoch = previous?.epoch
+        node.prevParentKeyEpoch = previous?.parentEpoch
+        return node
     }
 }
 
@@ -679,9 +889,12 @@ final class FamilyServerProtocol: URLProtocol {
             body = data
         }
         let (status, json) = FamilyServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        var headers = ["Content-Type": json is Data ? "application/octet-stream" : "application/json"]
+        // The store answers a part PUT with its ETag.
+        if request.url?.host == "store.test", request.httpMethod == "PUT" { headers["ETag"] = "\"etag-\(request.url?.lastPathComponent ?? "")\"" }
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: json)) ?? Data())
+        client?.urlProtocol(self, didLoad: (json as? Data) ?? (try? JSONSerialization.data(withJSONObject: json)) ?? Data())
         client?.urlProtocolDidFinishLoading(self)
     }
 

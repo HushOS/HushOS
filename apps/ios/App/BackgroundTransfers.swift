@@ -19,6 +19,16 @@ import UIKit
  * offline cannot be sealed yet (the server allocates its node), so it waits for
  * the app to run with a network: in the foreground, or when iOS grants the
  * background task below. Once sealed, iOS's own session waits for a network.
+ *
+ * An upload into a family folder is sealed with the area ledger's keys (the family checked in
+ * this process first, which a background launch does from its device record). A key change the
+ * folder hasn't reached yet (the ledger's KEY_CHANGE_PENDING, the server's 409 `rotating`) is a
+ * wait, not a failure: the row says "Finishing a key change…" and the upload is looked up and
+ * sealed again (5 s, doubling to a minute), in a task of its own so the rest of the queue keeps
+ * moving, until it goes or half an hour from when it began waiting (kept in the record) has
+ * passed. Its plaintext stays until it lands: a key change that reaches the folder while the
+ * parts are in flight makes the server refuse the completion, and the upload is sealed afresh
+ * from the file, waiting as before, rather than lost.
  */
 @MainActor
 @Observable
@@ -57,6 +67,12 @@ final class BackgroundTransfers {
         var groupName: String?
         /* Whose transfer it is: it runs only while that account is signed in, and is dropped once another is (TransferOwnership). */
         var owner: AccountOwner?
+        /* An upload into a family folder: which family and folder, and since when it has waited out a key change there. */
+        struct Family: Codable, Equatable { let groupId: String; let workspaceId: String }
+        var family: Family?
+        var keyChangeSince: Date?
+        /* The version a replacement set out to replace, as queued: someone else's newer one is never overwritten. */
+        var replacingVersionId: String?
 
         var total: Int { sealed?.partCount ?? plan?.chunkCount ?? 0 }
         var landed: Int { kind == .upload ? etags.count : fetched.count }
@@ -85,6 +101,9 @@ final class BackgroundTransfers {
     private var pumpAgain = false
     private var retryScheduled = false
     private var networkToken: UUID?
+    /* Family uploads being sealed (or waiting out a key change) in a task of their own, a few at a time. */
+    private var sealing: [UUID: Task<Void, Never>] = [:]
+    private static let sealingAtOnce = 2
 
     private init() {
         let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
@@ -135,9 +154,12 @@ final class BackgroundTransfers {
     // MARK: - Queueing
 
     /* Queues a file for upload into `folderId`; the file is copied into the queue, so the picker's copy can go. */
-    func upload(fileURL: URL, name: String, mime: String?, folderId: String, replacingId: String?) {
+    func upload(fileURL: URL, name: String, mime: String?, folderId: String, replacingId: String?, family: Record.Family? = nil,
+                replacingVersionId: String? = nil) {
         var record = Record(id: UUID(), kind: .upload, name: name, folderId: folderId, mime: mime, replacingId: replacingId)
         record.owner = AccountOwner.signedIn
+        record.family = family
+        record.replacingVersionId = replacingVersionId
         let directory = folder(record.id)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let content = directory.appendingPathComponent("content")
@@ -210,6 +232,7 @@ final class BackgroundTransfers {
     /* Stops a transfer: its tasks go, an upload the server began is aborted, its files are removed. */
     func cancel(_ id: UUID) async {
         guard let record = records.first(where: { $0.id == id }) else { return }
+        sealing.removeValue(forKey: id)?.cancel()
         for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
         // Aborted only under the session of the account that began it; another account's session never names its upload.
         if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
@@ -289,6 +312,10 @@ final class BackgroundTransfers {
                 switch (record.kind, record.state) {
                 case (.upload, .waiting):
                     guard NetworkWatch.shared.online else { continue }
+                    if record.family != nil {
+                        sealFamily(record, vault)
+                        continue
+                    }
                     try await seal(record, vault)
                 case (.keep, .waiting):
                     guard NetworkWatch.shared.online else { continue }
@@ -298,6 +325,10 @@ final class BackgroundTransfers {
                     start(id, skipping: running)
                 case (.upload, .finishing):
                     guard let sealed = record.sealed else { continue }
+                    if record.family != nil {
+                        if sealing[id] == nil { finishFamily(record, sealed, vault) }
+                        continue
+                    }
                     _ = try await vault.finishUpload(sealed, etags: record.etags)
                     land(id)
                 case (.keep, .finishing):
@@ -307,12 +338,19 @@ final class BackgroundTransfers {
                 default:
                     continue
                 }
+            } catch is UploadLanded {
+                // The server completed it; only its row didn't open in this process.
+                land(id)
             } catch {
                 fail(id, error)
             }
         }
         save()
-        // Something could not start for a reason that passes (the server or its storage down): look again shortly.
+        scheduleRetry()
+    }
+
+    /* Something could not start for a reason that passes (the server or its storage down): look again shortly. */
+    private func scheduleRetry() {
         if records.contains(where: { ($0.state == .waiting || $0.state == .finishing) && $0.failures > 0 }), !retryScheduled {
             retryScheduled = true
             Task {
@@ -336,6 +374,107 @@ final class BackgroundTransfers {
         try? FileManager.default.removeItem(at: content)
         update(record.id) { $0.sealed = sealed; $0.state = .sending }
         start(record.id, skipping: [])
+    }
+
+    /*
+     * A family folder's upload, sealed off the pass: the family opened in this process's ledger,
+     * the folder found in its workspace, then sealed with the wait for a key change the folder
+     * hasn't reached. A record cancelled meanwhile has its begun upload aborted.
+     */
+    private func sealFamily(_ record: Record, _ vault: Vault) {
+        guard record.family != nil, let folderId = record.folderId, sealing[record.id] == nil, sealing.count < Self.sealingAtOnce else { return }
+        let id = record.id
+        sealing[id] = Task { @MainActor in
+            defer { sealing[id] = nil }
+            do {
+                try await openFamily(record, vault)
+                let directory = folder(id)
+                let content = directory.appendingPathComponent("content")
+                var replacing: Opened?
+                if let replacingId = record.replacingId {
+                    replacing = try await vault.resolve(replacingId)
+                    // Someone else's version made since this was queued is never the one replaced.
+                    if let expected = record.replacingVersionId, replacing?.node.currentVersion?.id != expected {
+                        throw DriveAPIError.server(409, KeyChangeWait.versionMoved)
+                    }
+                }
+                let policy = KeyChangeWait.Policy(since: record.keyChangeSince, waiting: { began in
+                    Task { @MainActor in
+                        guard BackgroundTransfers.shared.record(id)?.keyChangeSince == nil else { return }
+                        BackgroundTransfers.shared.update(id) { $0.keyChangeSince = began }
+                        BackgroundTransfers.shared.save()
+                    }
+                })
+                let sealed = try await vault.sealUpload(
+                    fileURL: content, name: record.name, mime: record.mime, in: folderId, replacing: replacing,
+                    thumbnail: Thumbnails.make(for: content, mime: record.mime), into: directory, waiting: policy
+                )
+                guard self.record(id) != nil, !Task.isCancelled else {
+                    await vault.abortUpload(sealed)
+                    return
+                }
+                // The plaintext stays until it lands (see the type's note): a refused completion seals afresh from it.
+                update(id) { $0.sealed = sealed; $0.state = .sending; $0.keyChangeSince = nil }
+                save()
+                start(id, skipping: [])
+            } catch {
+                guard self.record(id) != nil, !Task.isCancelled else { return }
+                // A wait for a connection isn't a key change: the row says so, and the half hour starts again with the next one.
+                if Resumable.retryable(error) { update(id) { $0.keyChangeSince = nil } }
+                fail(id, error)
+                save()
+                scheduleRetry()
+            }
+            // A slot is free: the next family upload waiting for one goes.
+            Task { await BackgroundTransfers.shared.pump() }
+        }
+    }
+
+    /* A family folder's open in this process's ledger, the folder listed in its own workspace: what sealing and finishing need after a background launch. */
+    private func openFamily(_ record: Record, _ vault: Vault) async throws {
+        guard let family = record.family, let folderId = record.folderId else { return }
+        try await FamilySync.shared(for: vault).ensureOpen(family.groupId)
+        await vault.hint(workspace: family.workspaceId, for: folderId)
+        _ = try await vault.listChildren(of: folderId)
+    }
+
+    /*
+     * A family upload's completion: the family opened here first (a background launch has nothing open), then finished.
+     * A key change that reached the folder while the parts were in flight is refused by the server (or the ledger, for a
+     * replacement's name): the upload is aborted and sealed afresh from the file it kept, waiting as before.
+     */
+    private func finishFamily(_ record: Record, _ sealed: Vault.SealedUpload, _ vault: Vault) {
+        let id = record.id
+        sealing[id] = Task { @MainActor in
+            defer { sealing[id] = nil }
+            do {
+                try await openFamily(record, vault)
+                _ = try await vault.finishUpload(sealed, etags: record.etags)
+                land(id)
+            } catch is UploadLanded {
+                land(id)
+            } catch {
+                guard self.record(id) != nil, !Task.isCancelled else { return }
+                let content = folder(id).appendingPathComponent("content")
+                if KeyChangeWait.meets(error, waited: true), FileManager.default.fileExists(atPath: content.path) {
+                    await vault.abortUpload(sealed)
+                    for part in (try? FileManager.default.contentsOfDirectory(at: folder(id), includingPropertiesForKeys: nil)) ?? []
+                    where part.lastPathComponent != "content" {
+                        try? FileManager.default.removeItem(at: part)
+                    }
+                    update(id) {
+                        $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0
+                        $0.keyChangeSince = $0.keyChangeSince ?? Date()
+                    }
+                    save()
+                    Task { await pump() }
+                    return
+                }
+                fail(id, error)
+                save()
+                scheduleRetry()
+            }
+        }
     }
 
     private func plan(_ record: Record, _ vault: Vault) async throws {
@@ -602,7 +741,7 @@ final class BackgroundTransfers {
     func retry(_ id: UUID) {
         guard let record = records.first(where: { $0.id == id }), canRetry(record) else { return }
         update(id) {
-            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil
+            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil; $0.keyChangeSince = nil
         }
         save()
         Task { await pump() }

@@ -51,6 +51,12 @@ struct MovePicker: View {
         var cursor: String? = at
         while let id = cursor, chain.count < 64 {
             if id == store.rootId { chain.append((id, "Files")); break }
+            if let root = store.familyRoot(id) {
+                // A family folder is reached from the top level, beside Files, as a shared folder is.
+                chain.append((id, root.name))
+                if let top = store.rootId { chain.append((top, "Files")) }
+                break
+            }
             if let mount = store.mounts.first(where: { $0.root?.id == id }), let root = mount.root {
                 // A shared folder is reached from the top level, beside Files: going back lands there.
                 chain.append((id, root.name))
@@ -70,6 +76,9 @@ struct MovePicker: View {
     /* Who will be able to open what is moved, when the place is shared. */
     private var audience: String? {
         guard let at else { return nil }
+        if let family = trail.lazy.compactMap({ store.familyRoot($0.id) }).first, !items.allSatisfy({ store.isFamily($0) }) {
+            return "Everyone in \(family.family) will be able to open \(items.count == 1 ? "it" : "them") there."
+        }
         if let mount = store.mounts.first(where: { mount in trail.contains { $0.id == mount.root?.id } }), let root = mount.root {
             return "Everyone who can open “\(root.name)” will be able to open it there."
         }
@@ -109,6 +118,16 @@ struct MovePicker: View {
                         }
                     } header: {
                         Text("Shared with you").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                    }
+                }
+                if at == store.rootId, !store.writableFamilyRoots.isEmpty {
+                    Section {
+                        ForEach(store.writableFamilyRoots, id: \.id) { root in
+                            Button { at = root.id } label: { familyRow(root.name, detail: root.family) }
+                                .buttonStyle(.plain).itemRow()
+                        }
+                    } header: {
+                        Text("Family folders").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
                     }
                 }
             }
@@ -171,6 +190,21 @@ struct MovePicker: View {
             .buttonStyle(.plain)
             .foregroundStyle(Alpine.primary)
         }
+    }
+
+    /* A family folder's top folder, whose row isn't in any listing. */
+    private func familyRow(_ name: String, detail: String) -> some View {
+        HStack(spacing: Alpine.Space.s3) {
+            FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)
+                Text(detail).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted)
+        }
+        .frame(minHeight: Theme.row)
+        .contentShape(Rectangle())
     }
 
     private func pickerRow(_ folder: Opened, detail: String?, link: Bool = false) -> some View {

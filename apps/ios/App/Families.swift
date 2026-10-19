@@ -2,11 +2,13 @@ import HushOSKit
 import SwiftUI
 
 /*
- * Families on the phone, read only (docs/groups-mobile-plan.md, iOS 1): a row per family in
- * Account (the web's Families list and sidebar row), the family's page with its folders and
- * members, and each family folder as the same Files list without anything that writes. Every
- * family is checked on this phone first (FamilySync); a member list shown differently is the
- * hard warning and nothing of the family opens. The words are the web's.
+ * Families on the phone (docs/groups-mobile-plan.md, iOS 1 and 2): a row per family in Account
+ * (the web's Families list and sidebar row), the family's page with its folders and members, and
+ * each family folder as the same Files list: new folders, uploads, renames, moves and copies
+ * within it, and the trash, while this device may write there (the web's areaWrite), and nothing
+ * that shares, links, reports or keeps. Every family is checked on this phone first
+ * (FamilySync); a member list shown differently is the hard warning and nothing of the family
+ * opens. The words are the web's.
  */
 
 extension DriveStore {
@@ -25,6 +27,45 @@ extension DriveStore {
         if familyRoots[id.lowercased()] != nil { return true }
         if let item = known(id) { return isFamily(item) }
         return false
+    }
+
+    /*
+     * Whether this device may write in the family folder an item or folder is in (the web's
+     * `writable`: its family accepted here, the folder's keys checked at its latest version and its
+     * top folder opened). The vault asks the ledger again on every write; this only decides what
+     * the screens offer.
+     */
+    func familyWritable(workspace: String) -> Bool {
+        let workspace = workspace.lowercased()
+        guard let groupId = familyAreaGroups[workspace], let view = familyShown[groupId],
+              let area = view.areas.first(where: { $0.workspaceId.lowercased() == workspace }) else { return false }
+        return area.openable && area.write == .writable
+    }
+
+    func familyWritable(_ item: Opened) -> Bool { familyWritable(workspace: item.node.workspaceId) }
+
+    /* A family folder's top folder: its name and its family's, as the family's page shows them; nil for any other folder. */
+    func familyRoot(_ id: String) -> (name: String, family: String)? {
+        guard let groupId = familyRoots[id.lowercased()],
+              let area = familyShown[groupId]?.areas.first(where: { $0.root?.id.lowercased() == id.lowercased() }) else { return nil }
+        return (area.name ?? "Family folder", familyList?.first { $0.id == groupId }?.name ?? "the family")
+    }
+
+    /* Family folders this device may write in, for the move picker's top level beside Files. */
+    var writableFamilyRoots: [(id: String, name: String, family: String)] {
+        familyShown.flatMap { groupId, view in
+            view.areas.filter { $0.openable && $0.write == .writable }.compactMap { area in
+                area.root.map { ($0.id, area.name ?? "Family folder", familyList?.first { $0.id == groupId }?.name ?? "the family") }
+            }
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func familyFolderWritable(_ id: String) -> Bool {
+        if let item = known(id) { return familyWritable(item) }
+        // A family folder's top folder before its row is known: by route 25's root.
+        guard let groupId = familyRoots[id.lowercased()],
+              let area = familyShown[groupId]?.areas.first(where: { $0.root?.id.lowercased() == id.lowercased() }) else { return false }
+        return familyWritable(workspace: area.workspaceId)
     }
 
     /* The family's verdict for an item as it is now; nil while it is being judged. */
@@ -161,6 +202,17 @@ extension DriveStore {
     }
 }
 
+/*
+ * Where Account's stack goes in a family: its page, then a family folder. Pushed by value, as a
+ * family folder's own rows push their subfolders (`Opened`): a value link in a view pushed with
+ * NavigationLink(destination:) pops that view instead of pushing, so a family folder's
+ * subfolders never opened. AccountView declares the destinations at the stack's root.
+ */
+enum FamilyRoute: Hashable {
+    case family(String)
+    case folder(String, String)
+}
+
 /* Account's Families: one row per family, as the web's list draws it. Absent on a server without families, or with none. */
 struct FamiliesSection: View {
     @Environment(DriveStore.self) private var store
@@ -169,7 +221,7 @@ struct FamiliesSection: View {
         if let list = store.familyList, !list.isEmpty {
             Section {
                 ForEach(list) { family in
-                    NavigationLink { FamilyPage(groupId: family.id).environment(store) } label: { FamilyRow(family: family) }
+                    NavigationLink(value: FamilyRoute.family(family.id)) { FamilyRow(family: family) }
                         .alpineRow()
                 }
             } header: {
@@ -355,7 +407,7 @@ struct FamilyPage: View {
             }
             ForEach(view.areas.sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }) { area in
                 if area.openable, let root = area.root {
-                    NavigationLink { FolderView(folderId: root.id, title: area.name ?? "Family folder").environment(store) } label: { folderRow(area) }
+                    NavigationLink(value: FamilyRoute.folder(root.id, area.name ?? "Family folder")) { folderRow(area) }
                         .itemRow()
                 } else {
                     folderRow(area).itemRow()

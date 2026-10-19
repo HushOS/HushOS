@@ -86,6 +86,14 @@ struct AccountView: View {
             .navigationTitle("Account")
             .screenChrome(title: "Account")
             .navigationDestination(isPresented: $showingTrash) { TrashView().environment(store) }
+            // Families, a family folder and its subfolders, all pushed by value and declared at the stack's root (FamilyRoute).
+            .navigationDestination(for: FamilyRoute.self) { route in
+                switch route {
+                case .family(let groupId): FamilyPage(groupId: groupId).environment(store)
+                case .folder(let id, let title): FolderView(folderId: id, title: title).environment(store)
+                }
+            }
+            .navigationDestination(for: Opened.self) { folder in FolderView(folderId: folder.id, title: folder.name).environment(store) }
             .sheet(isPresented: $changingPassword) { ChangePasswordSheet().environment(store) }
             .sheet(isPresented: $showingPhrase) { RecoveryPhraseSheet().environment(store) }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
