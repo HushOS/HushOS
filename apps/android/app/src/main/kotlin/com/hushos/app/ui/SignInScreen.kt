@@ -126,8 +126,14 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         Button(onClick = ::submit, enabled = !pending, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
             Text(if (pending) "Signing in…" else "Sign in")
         }
-        // Recovery happens here in the app now, with the kit or the 24 words (RecoverScreen).
-        TextButton(onClick = model::startRecovery) { Text("Forgot your password?") }
+        // Recovery happens here in the app now, with the kit or the 24 words (RecoverScreen). From a file picker it
+        // happens in the app's own screen: its emailed link opens there, and the new words are shown there.
+        val recoverInApp = LocalRecoverInApp.current
+        if (recoverInApp == null) TextButton(onClick = model::startRecovery) { Text("Forgot your password?") }
+        else {
+            Text("Forgot your password?", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S2))
+            TextButton(onClick = recoverInApp) { Text("Recover your account in the HushOS app") }
+        }
         // Accounts are made on the web; said as plain text, with no link to plans or pricing.
         Text("New to HushOS? Create an account at ${if (custom) hostOf(state.origin) else "hushos.com"}.", style = MaterialTheme.typography.bodyMedium,
             color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S4))

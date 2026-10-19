@@ -25,7 +25,13 @@ data class SessionUser(val id: String, val name: String, val email: String, val 
 }
 
 /* `status` is the HTTP status when the server refused, 0 otherwise: 409 on settings means another device saved first. */
-class AuthFailure(message: String, val status: Int = 0) : Exception(message)
+open class AuthFailure(message: String, val status: Int = 0) : Exception(message)
+
+/* The account has no recovery words to show (no recovery key on the server): a definite answer, unlike a failure. */
+class NoRecoveryKey : AuthFailure("This account has no recovery key.")
+
+/* An account call that couldn't reach the server: offline, told apart by its type (Problems.offline), never by its words. */
+class AuthUnreachable : AuthFailure(Auth.UNREACHABLE)
 
 /* The session's device: which one, and whether it has described itself yet. */
 data class SessionDevice(val id: String, val registered: Boolean) {
@@ -101,6 +107,19 @@ object Auth {
     /* The two sign-in failures a person can act on, in the words the board settles on. */
     const val MISMATCH = "That email and password don’t match. Check them and try again."
     const val UNREACHABLE = "We couldn’t reach HushOS. Check your connection, then try again."
+    /* Fixed words for a phrase the core refused: its own text (a type name, a detail) never reaches the screen. */
+    fun phraseRefused(coreMessage: String?): String {
+        val said = coreMessage?.substringAfter(": ").orEmpty()
+        return if (said.isBlank() || said.startsWith("The recovery phrase does not match")) PHRASE_REFUSED else PHRASE_UNCHECKED
+    }
+
+    /* Fixed words for a reset whose last step failed, whatever that step said. */
+    fun resetUnfinished(error: AuthFailure): String = if (error is AuthUnreachable) RESET_UNREACHABLE else RESET_UNFINISHED
+
+    const val PHRASE_REFUSED = "These words didn’t open your account. Check you used your newest kit."
+    const val PHRASE_UNCHECKED = "These words couldn’t be checked. Check you used your newest kit, then try again."
+    const val RESET_UNREACHABLE = "We couldn’t reach HushOS to finish the reset. Try signing in with your new password first: the reset may already have been applied."
+    const val RESET_UNFINISHED = "The reset didn’t finish. Try signing in with your new password first: it may already have been applied."
 
     private class Reply(val body: JSONObject, val cookie: String?, val enrollment: String? = null)
 
@@ -122,7 +141,7 @@ object Auth {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             text = stream?.bufferedReader()?.use { it.readText() } ?: ""
         } catch (error: java.io.IOException) {
-            throw AuthFailure(UNREACHABLE)
+            throw AuthUnreachable()
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
         if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")))
@@ -156,7 +175,10 @@ object Auth {
     }
 
     /* Resets the password with the phrase; returns the new phrase to save. The caller signs in with the new password. */
-    fun recover(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): String {
+    /* The account a recovery opened, and its new phrase. */
+    data class Recovered(val userId: String, val phrase: String)
+
+    fun recover(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): Recovered {
         val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
         val registration = opaqueStartRegistration(password)
         val challenge = post(origin, "/api/auth/recover/start", JSONObject().put("registrationRequest", registration.request), cookie).body
@@ -167,9 +189,10 @@ object Auth {
         val accountKey = try {
             com.hushos.core.recoveryOpen(userId, phrase, current)
         } catch (error: com.hushos.core.CoreException) {
-            // The web's words for a phrase that isn't this account's (or is an older kit's).
-            val said = error.message?.substringAfter(": ")?.takeIf { it.isNotBlank() }
-            throw AuthFailure(if (said == null || said.startsWith("The recovery phrase does not match")) "These words didn’t open your account. Check you used your newest kit." else said)
+            // The web's words for a phrase that isn't this account's (or is an older kit's). The core's own text is
+            // for developers: it goes to the log, and anything else the core refused gets fixed words too.
+            android.util.Log.w("HushOS", "recovery phrase refused", error)
+            throw AuthFailure(phraseRefused(error.message))
         }
         val registered = opaqueFinishRegistration(password, registration.state, challenge.getString("registrationResponse"))
         val sealed = accountSeal(userId, registered.exportKey, accountKey, current.keyVersion, credentialVersion + 1uL)
@@ -184,13 +207,18 @@ object Auth {
                     .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
                 .put("recovery", json(next.envelope)).put("signature", signature), cookie)
         } catch (error: AuthFailure) {
-            // The server may have committed before the reply was lost: say so, as the web does.
-            throw AuthFailure("${error.message} If it keeps failing, try signing in with your new password first: the reset may already have been applied.")
+            // The server may have committed before the reply was lost: say so, as the web does, in fixed words.
+            android.util.Log.w("HushOS", "recovery finish failed", error)
+            throw AuthFailure(resetUnfinished(error))
         }
-        return next.phrase
+        return Recovered(userId, next.phrase)
     }
 
-    fun signIn(context: Context, origin: String, email: String, password: String): SessionUser {
+    /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
+    fun signIn(context: Context, origin: String, email: String, password: String): SessionUser =
+        SessionGuard.signingIn { signInNow(context, origin, email, password) }
+
+    private fun signInNow(context: Context, origin: String, email: String, password: String): SessionUser {
         val start = opaqueStartLogin(password)
         val started = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request)).body
         val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
@@ -328,7 +356,7 @@ object Auth {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             text = stream?.bufferedReader()?.use { it.readText() } ?: ""
         } catch (error: java.io.IOException) {
-            throw AuthFailure(UNREACHABLE)
+            throw AuthUnreachable()
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
         if (status == 401) throw NotAuthenticated()
@@ -462,7 +490,7 @@ object Auth {
 
     /* The recovery key envelope the server keeps. */
     fun recoveryKey(context: Context): com.hushos.core.RecoveryEnvelope =
-        recoveryEnvelope(call(context, "/api/auth/recovery-key").optJSONObject("recovery") ?: throw AuthFailure("This account has no recovery key."))
+        recoveryEnvelope(call(context, "/api/auth/recovery-key").optJSONObject("recovery") ?: throw NoRecoveryKey())
 
     /*
      * Rotates the master key, as the web's "Rotate keys" does: a fresh account
@@ -535,7 +563,7 @@ object Auth {
 
     /* The recovery key as the server keeps it (for the kit file) and whether its phrase was confirmed as saved. */
     fun recoveryBackup(context: Context): Pair<JSONObject, Boolean> = call(context, "/api/auth/recovery-key").let {
-        (it.optJSONObject("recovery") ?: throw AuthFailure("This account has no recovery key.")) to it.optBoolean("confirmed")
+        (it.optJSONObject("recovery") ?: throw NoRecoveryKey()) to it.optBoolean("confirmed")
     }
 
     /* Marks the phrase as saved, as the web does after its check; the server refuses an older phrase's version. */

@@ -47,7 +47,7 @@ object TransferQueue {
 
     /* Whether a failure's words are the out-of-room refusal (the server's own sentence too). */
     fun isNoRoom(message: String?): Boolean =
-        message != null && (message == NO_ROOM || message.contains("Not enough storage", ignoreCase = true) || message.contains("quota", ignoreCase = true))
+        message != null && (message == NO_ROOM || message == Problems.ROOM || message.contains("Not enough storage", ignoreCase = true) || message.contains("quota", ignoreCase = true))
 
     /* A failure's reason in words that say what to do: the transfers sheet's and the notification's. */
     fun reasonWords(message: String?): String {
@@ -111,6 +111,7 @@ object TransferQueue {
      * alone, since a copy lands before its job is queued.
      */
     fun sweep(context: Context, inUse: Set<String>) {
+        LandedJobs.of(context).sweep()
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
         // A failed upload on the app's own record keeps its copy for Retry, however old its job.
         val recorded = FailedTransfers.of(context).all().mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()
@@ -167,7 +168,7 @@ object TransferQueue {
     fun ongoingText(keeping: Boolean, count: Int, fraction: Float): NoticeText {
         val n = count.coerceAtLeast(1)
         val title = if (keeping) "Keeping $n ${if (n == 1) "item" else "items"} on this phone" else "Uploading $n ${if (n == 1) "file" else "files"}"
-        val text = if (fraction > 0f) "${(fraction * 100).toInt()}%" else null
+        val text = if (fraction > 0f) "${(fraction * 100).toInt()}%" else "Starting"
         return NoticeText(title, text, null, title)
     }
 
@@ -222,7 +223,8 @@ private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data
     else -> failed(when {
         error is NotAuthenticated -> "Sign in again to finish this."
         error is ApiError && error.status == 402 -> TransferQueue.NO_ROOM
-        else -> error.message ?: "The transfer failed."
+        // Words for the transfers sheet; the exception's own text goes to the log.
+        else -> Problems.say(error.also { android.util.Log.w("HushOS", "transfer failed", it) }, "The transfer failed.")
     }, inputs)
 }
 
@@ -246,19 +248,27 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f)
 
-    override suspend fun doWork(): Result {
+    // One run per job id at a time: a rerun waits for a stopped run still inside the upload (JobLocks).
+    override suspend fun doWork(): Result = JobLocks.run(id.toString()) { work() }
+
+    private suspend fun work(): Result {
+        // A rerun of a run that landed after its stop: already uploaded and said; its copy is gone, so nothing else is looked at.
+        if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
         if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
-        runCatching { setForeground(getForegroundInfo()) }
+        // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
+        attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
         return withContext(Dispatchers.IO) {
-            try {
-                val folder = inputData.getString("folder")!!
+            val folder = inputData.getString("folder")!!
+            val end = stoppable({ isStopped }) { checkStop ->
                 if (vault.item(folder) == null) vault.resolve(folder)
                 val replacing = inputData.getString("replacing")?.let { vault.resolve(it) }
                 val mime = inputData.getString("mime")
                 var shown = 0
                 vault.upload(file, name, mime, folder, replacing, vault.makeThumbnail(file, mime)) { fraction ->
+                    // A stop (Cancel, or the network constraint lost) abandons the upload here; the vault aborts it.
+                    checkStop()
                     setProgressAsync(workDataOf("fraction" to fraction))
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
@@ -266,12 +276,20 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                         runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), fraction)) }
                     }
                 }
-                file.parentFile?.deleteRecursively()
-                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
-                Result.success()
-            } catch (error: Exception) {
+            }
+            when (end) {
+                is JobEnd.Done -> {
+                    // Stopped while the last step was under way: it landed all the same, so it's said, and marked so a
+                    // rerun WorkManager schedules does nothing (no duplicate, no same-name failure, nothing cancelled).
+                    if (end.stopped) LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
+                    file.parentFile?.deleteRecursively()
+                    TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
+                    Result.success()
+                }
+                // Nothing said, nothing recorded: WorkManager drops a cancelled job and reschedules one whose constraint went.
+                JobEnd.Stopped -> Result.retry()
                 // A failure keeps the copy: the panel can retry from it, and removes it when the row goes.
-                outcome(error, inputData)
+                is JobEnd.Failed -> outcome(end.error, inputData)
             }
         }
     }
@@ -282,11 +300,17 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f, keeping = true)
 
-    override suspend fun doWork(): Result {
-        runCatching { setForeground(getForegroundInfo()) }
+    override suspend fun doWork(): Result = JobLocks.run(id.toString()) { work() }
+
+    private suspend fun work(): Result {
+        // A rerun of a run that kept the item after its stop: done already. The next keep queued behind it runs as usual.
+        if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
+        // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
+        attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.")
         return withContext(Dispatchers.IO) {
-            try {
+            // Done(null): kept, and said; Done(a result): ended another way (the folder or share went), said by that result.
+            val end = stoppable({ isStopped }) { checkStop ->
                 val id = inputData.getString("node")!!
                 val folder = inputData.getBoolean("folder", false)
                 val shareRoot = inputData.getString("share")
@@ -294,16 +318,17 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     if (folder) vault.openKeptFolder(id, shareRoot) else vault.resolve(id)
                 } catch (error: NotFound) {
                     // A kept folder deleted from the drive: its files leave the phone with it.
-                    if (folder) { Offline.forgetFolder(applicationContext, id); return@withContext Result.success() }
+                    if (folder) { Offline.forgetFolder(applicationContext, id); return@stoppable Result.success() }
                     throw error
                 }
                 if (item == null) {
                     // The share stopped: what was kept from it goes, and the app says so.
                     Offline.forgetFolder(applicationContext, id)
-                    return@withContext Result.success(workDataOf("unshared" to name))
+                    return@stoppable Result.success(workDataOf("unshared" to name))
                 }
                 var shown = 0
                 val report = { fraction: Float, done: Int, total: Int ->
+                    checkStop()
                     setProgressAsync(workDataOf("fraction" to fraction, "done" to done, "total" to total))
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
@@ -312,10 +337,19 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     }
                 }
                 if (item.isFolder) vault.keepFolder(item, shareRoot, report) else vault.keepDownloaded(item) { report(it, 0, 1) }
-                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
-                Result.success()
-            } catch (error: Exception) {
-                outcome(error)
+                null
+            }
+            when (end) {
+                is JobEnd.Done -> {
+                    // Kept all the same: said, and marked so a rerun does nothing (the chain behind it isn't cancelled).
+                    if (end.stopped) LandedJobs.of(applicationContext).markOrLog(this@KeepWorker.id.toString())
+                    end.value ?: run {
+                        TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
+                        Result.success()
+                    }
+                }
+                JobEnd.Stopped -> Result.retry()
+                is JobEnd.Failed -> outcome(end.error)
             }
         }
     }
@@ -325,6 +359,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
  * Every text field a transfer notification sets: title, content text, big text, the public version's title, and the
  * action labels. Built from counts and kinds only, so a test can hold all of them to naming no file.
  */
-data class NoticeText(val title: String, val text: String?, val bigText: String?, val publicTitle: String, val actions: List<String> = emptyList()) {
-    val fields: List<String> get() = listOfNotNull(title, text, bigText, publicTitle) + actions
+data class NoticeText(
+    val title: String, val text: String?, val bigText: String?, val publicTitle: String, val actions: List<String> = emptyList(), val publicText: String? = null,
+) {
+    val fields: List<String> get() = listOfNotNull(title, text, bigText, publicTitle, publicText) + actions
 }

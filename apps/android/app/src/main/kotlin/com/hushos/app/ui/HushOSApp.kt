@@ -124,20 +124,13 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         },
         confirmButton = { TextButton(onClick = model::clearSignedOut) { Text("Sign in") } },
     )
-    // What happened and what to do, in plain words; the raw detail only behind Details.
+    // What happened and what to do, in plain words. The exception's own text went to the log (DriveViewModel.io).
     state.error?.let { problem ->
-        var details by remember(problem) { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = model::clearError,
             confirmButton = { TextButton(onClick = model::clearError) { Text("OK") } },
-            dismissButton = problem.detail?.takeIf { !details && it != problem.body }?.let { { TextButton(onClick = { details = true }) { Text("Details") } } },
             title = { Text(problem.title) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-                    Text(problem.body)
-                    if (details) problem.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Alpine.colors.inkMuted) }
-                }
-            },
+            text = { Text(problem.body) },
         )
     }
 }
@@ -173,7 +166,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             // These are taken (and cleared) by the screen they open: the link browser, a folder, By me, Trash.
             request.startsWith("link:") || request.startsWith("shared:") -> tab = Tab.SHARED
             request.startsWith("files:") -> tab = Tab.FILES
-            request == "trash" -> tab = Tab.ACCOUNT
+            request == "trash" || request == "words" -> tab = Tab.ACCOUNT
             request.startsWith("node:") -> scope.launch {
                 // A file or a folder, whichever it is: a folder opens, a file opens in its folder.
                 model.clearRequest()

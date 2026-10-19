@@ -1312,7 +1312,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
             api.abortUpload(begun.uploadId, ws)
             throw error
         }
-        var node = api.completeUpload(begun.uploadId, ws, etags) ?: throw ApiError(500, "Upload completed without a node")
+        // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
+        var node = UploadFinish.complete({ api.completeUpload(begun.uploadId, ws, etags) }, { api.abortUpload(begun.uploadId, ws) })
+            ?: throw ApiError(500, "Upload completed without a node")
         checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {

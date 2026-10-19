@@ -168,7 +168,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp + LocalFootBars.current)) {
                     if (firstRun) {
                         item(key = "first") {
-                            EmptyState("Nothing here yet", "Files you add or change show up here.", Icons.Outlined.UploadFile, modifier = Modifier.padding(top = 40.dp)) {
+                            EmptyState("Nothing here yet", "Files you add or change show up here.", modifier = Modifier.padding(top = 40.dp)) {
                                 Button(onClick = add.pickFiles, modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Outlined.UploadFile, null, modifier = Modifier.padding(end = AlpineSpace.S2)); Text("Upload files")
                                 }
@@ -306,7 +306,7 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
                     "No results for “${query.trim()}”",
                     if (model.searchesEverything()) "Search looks at names, tags and file types in every folder. Check the spelling, or try fewer words."
                     else "Search looks in folders you’ve opened on this phone. Check the spelling, or try fewer words.",
-                    Icons.Outlined.Search, modifier = Modifier.padding(top = 64.dp),
+                    modifier = Modifier.padding(top = 64.dp),
                 ) { if (filter != TypeFilter.ALL) TextButton(onClick = { filter = TypeFilter.ALL }) { Text("Search all types") } }
             }
             items(hits, key = { it.id }) { item ->
@@ -350,7 +350,7 @@ fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Un
         DestinationBar("On this phone", onBack = onBack)
         if (state.unreachable) OfflineCapsule()
         if (state.offline.isEmpty() && state.keptFolders.isEmpty()) {
-            EmptyState("Nothing on this phone yet", "Choose Keep on this phone on any file or folder to open it without a connection.", Icons.Outlined.Smartphone, modifier = Modifier.padding(top = 120.dp))
+            EmptyState("Nothing on this phone yet", "Choose Keep on this phone on any file or folder to open it without a connection.", modifier = Modifier.padding(top = 120.dp))
             return@Column
         }
         LazyColumn(Modifier.fillMaxSize()) {

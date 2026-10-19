@@ -278,7 +278,7 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
         Column(Modifier.padding(padding)) {
         if (state.unreachable) OfflineCapsule()
         PullToRefreshBox(isRefreshing = state.refreshingTrash, onRefresh = { model.refreshTrash(pulled = true) }, modifier = Modifier.weight(1f)) {
-            if (state.trash.isEmpty()) EmptyState("Trash is empty", "Items you move to the Trash stay here for 30 days.", icon = Icons.Outlined.Delete,
+            if (state.trash.isEmpty()) EmptyState("Trash is empty", "Items you move to the Trash stay here for 30 days.",
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
             else LazyColumn(Modifier.fillMaxSize()) {
                 // Emptying: the count and a bar under the top bar; otherwise how long things stay.

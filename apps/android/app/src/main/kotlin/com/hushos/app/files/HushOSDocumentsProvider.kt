@@ -77,11 +77,15 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         trustLoad.reset(null) { trust = TrustState.Loading }
     }
 
+    /*
+     * The picker starts this for a result, in its own task, so no FLAG_ACTIVITY_NEW_TASK (a new task answers
+     * RESULT_CANCELED at once). PickerSignInActivity finishes with RESULT_OK once the account is open, and the
+     * picker comes back to the foreground and lists the drive. The app's launcher entry is untouched.
+     */
     private fun authenticationRequired(): Exception {
         val ctx = context!!
-        val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: Intent()
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val pending = PendingIntent.getActivity(ctx, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val signIn = Intent(ctx, com.hushos.app.PickerSignInActivity::class.java)
+        val pending = PendingIntent.getActivity(ctx, 0, signIn, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return AuthenticationRequiredException(NotAuthenticated(), pending)
     }
 

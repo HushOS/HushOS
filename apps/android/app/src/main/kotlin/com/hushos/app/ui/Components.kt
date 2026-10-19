@@ -78,12 +78,47 @@ fun Modifier.raised(shape: Shape, elevation: Dp = 3.dp): Modifier {
     return (if (alpine.high) this else this.shadow(elevation, shape, clip = false)).border(1.dp, alpine.edge, shape)
 }
 
+/* How tall the app's fields are (Home's search pill, the field in a folder) and the button that sits beside one. */
+val FieldHeight = 56.dp
+
+/*
+ * The app's text field: filled, fully round, no underline, a placeholder rather than a floating label, as Home's
+ * search and a folder's search are. In high contrast the fill alone hardly shows against the ground, so the field's
+ * outline marks it. A button beside it takes Modifier.height(FieldHeight) so the two line up on one row.
+ */
+@Composable
+fun PillField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default,
+) {
+    val alpine = Alpine.colors
+    androidx.compose.material3.TextField(
+        value = value, onValueChange = onValueChange, singleLine = true,
+        placeholder = { Text(placeholder, maxLines = 1) },
+        leadingIcon = leadingIcon, trailingIcon = trailingIcon,
+        keyboardOptions = keyboardOptions, keyboardActions = keyboardActions,
+        shape = CircleShape,
+        colors = androidx.compose.material3.TextFieldDefaults.colors(
+            focusedContainerColor = alpine.fill, unfocusedContainerColor = alpine.fill, disabledContainerColor = alpine.fill,
+            focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent,
+            unfocusedPlaceholderColor = alpine.inkMuted, focusedPlaceholderColor = alpine.inkMuted,
+        ),
+        modifier = modifier.heightIn(min = FieldHeight).then(if (alpine.high) Modifier.border(1.dp, alpine.field, CircleShape) else Modifier),
+    )
+}
+
 /* Home's header: a pill that opens search. */
 @Composable
 fun SearchPill(placeholder: String, onClick: () -> Unit, trailing: (@Composable () -> Unit)? = null) {
     val alpine = Alpine.colors
     Row(
-        Modifier.padding(horizontal = AlpineSpace.S4).fillMaxWidth().height(56.dp).clip(CircleShape).background(alpine.fill)
+        Modifier.padding(horizontal = AlpineSpace.S4).fillMaxWidth().height(FieldHeight).clip(CircleShape).background(alpine.fill)
             // In high contrast the fill alone hardly shows against the ground; the field's outline marks it.
             .then(if (alpine.high) Modifier.border(1.dp, alpine.field, CircleShape) else Modifier)
             .clickable(onClick = onClick, role = Role.Button).padding(start = AlpineSpace.S4, end = AlpineSpace.S1),
@@ -192,16 +227,12 @@ fun PasteBar(text: String, reason: String?, onPaste: () -> Unit, onClear: () -> 
     }
 }
 
-/* An empty, failed or offline state: a quiet mark, a short title, one line, and what to do. */
+/* An empty, failed or offline state: a short title, one line, and what to do. */
 @Composable
-fun EmptyState(title: String, body: String? = null, icon: ImageVector? = null, danger: Boolean = false, modifier: Modifier = Modifier, actions: (@Composable () -> Unit)? = null) {
+fun EmptyState(title: String, body: String? = null, modifier: Modifier = Modifier, actions: (@Composable () -> Unit)? = null) {
     val alpine = Alpine.colors
+    // A heading and a line, as the web's empty states: no icon in a tinted circle (no icon tiles).
     Column(modifier.fillMaxWidth().padding(horizontal = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        icon?.let {
-            Box(Modifier.padding(bottom = AlpineSpace.S4).size(56.dp).background(if (danger) alpine.dangerSoft else alpine.tint, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(it, null, tint = if (danger) alpine.danger else alpine.onTint)
-            }
-        }
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, color = alpine.ink)
         body?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = AlpineSpace.S2)) }
         actions?.let { Column(Modifier.padding(top = AlpineSpace.S6).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2), horizontalAlignment = Alignment.CenterHorizontally) { it() } }

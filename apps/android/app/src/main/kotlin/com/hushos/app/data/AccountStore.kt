@@ -27,7 +27,9 @@ class AccountStore(private val files: File, private val cache: File, private val
      */
     fun claim(userId: String) {
         val owner = owner()
-        if (owner == null || !owner.equals(userId, ignoreCase = true)) wipe()
+        if (owner == null || !owner.equals(userId, ignoreCase = true)) wipe(keepRecoveryFor = userId)
+        // A recovery marker is this account's or nobody's.
+        RecoveryWords.keepOnlyFor(userId)
         files.mkdirs()
         ownerFile.writeText(userId)
     }
@@ -38,8 +40,10 @@ class AccountStore(private val files: File, private val cache: File, private val
     }
 
     /* Sign-out and account deletion: every account file, decrypted or not, and the owner. */
-    fun wipe() {
+    fun wipe(keepRecoveryFor: String? = null) {
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
+        // Sign-out and removal: no recovery waits any more. Another account signing in keeps only its own (claim).
+        RecoveryWords.keepOnlyFor(keepRecoveryFor)
         // The cache is all account data (opened files, links, the Files app's copies and
         // thumbnails, staged uploads, photos, the recovery kit) except JNA's native library.
         cache.listFiles()?.filterNot { it.name.startsWith("jna") }?.forEach { it.deleteRecursively() }
@@ -49,7 +53,7 @@ class AccountStore(private val files: File, private val cache: File, private val
 
     companion object {
         /* Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones awaiting a notification. */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE)
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR)
 
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir) {
             // Jobs queued for that account would run under the next one's session.

@@ -165,13 +165,14 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun chooseFolder() {
         val last = Places.last(context)
         val result = withContext(Dispatchers.IO) {
-            runCatching {
+            // attempt, not runCatching: the block suspends (withContext), and a cancelled screen is not "no folder".
+            com.hushos.app.data.attempt {
                 val vault = vault ?: Vault.fromShared(context)?.also { runCatching { it.buildCatalogue() }; vault = it } ?: throw IllegalStateException("Signed out")
                 val top = Places.Folder(vault.rootId, "Files")
                 withContext(Dispatchers.Main) { root = top }
                 if (last != null) {
                     val found = try { vault.resolve(last.id) } catch (gone: NotFound) { null }
-                    if (found != null && found.isFolder && found.node.trashedAt == null) return@runCatching Places.Folder(found.id, if (found.node.parentId == null) "Files" else found.name)
+                    if (found != null && found.isFolder && found.node.trashedAt == null) return@attempt Places.Folder(found.id, if (found.node.parentId == null) "Files" else found.name)
                 }
                 top
             }

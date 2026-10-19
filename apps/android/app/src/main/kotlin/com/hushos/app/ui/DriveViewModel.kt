@@ -11,6 +11,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hushos.app.BuildConfig
+import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.catalogueAll
 import com.hushos.app.data.BillingSummary
@@ -41,8 +42,10 @@ import com.hushos.app.data.VersionListView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -193,18 +196,38 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // Started without a network: say so at once rather than after the first request fails.
         if (connectivity.activeNetwork == null) _state.update { it.copy(unreachable = true) }
         runCatching { connectivity.registerDefaultNetworkCallback(network) }.onFailure { android.util.Log.w("HushOS", "network callback", it) }
+        checkSession()
+    }
+
+    /*
+     * Back in front while signed out: a sign-in from a file picker (PickerSignInActivity, its own view model) may have
+     * opened the account meanwhile, and this screen would still offer sign-in. A session on the phone is checked again.
+     */
+    fun resumed() {
+        if (state.value.gate != Gate.SIGNED_OUT || state.value.signedOutNotice) return
+        viewModelScope.launch {
+            if (withContext(Dispatchers.IO) { Shared.session(context) } != null && state.value.gate == Gate.SIGNED_OUT) checkSession()
+        }
+    }
+
+    private fun checkSession() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
+            val seen = com.hushos.app.data.SessionGuard.seen()
             val check = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context) } }
             val user = check.map { (it as? com.hushos.app.data.SessionCheck.SignedIn)?.user }
             when {
                 check.getOrNull() is com.hushos.app.data.SessionCheck.Removed -> {
                     // Removed from the account on another device: what this phone kept for it goes,
                     // queued transfers first, so none writes a decrypted file after the wipe.
-                    withContext(Dispatchers.IO) {
-                        stopTransfers()
-                        Auth.forgetRemoved(context)
+                    // Not if a sign-in began meanwhile (in a picker's sign-in screen too): that session is someone's now.
+                    val wiped = withContext(Dispatchers.IO) {
+                        com.hushos.app.data.SessionGuard.wipeUnlessSignedInSince(seen) {
+                            stopTransfers()
+                            Auth.forgetRemoved(context)
+                        }
                     }
+                    if (wiped == null) { checkSession(); return@launch }
                     filesAppChanged()
                     _state.update { it.copy(gate = Gate.SIGNED_OUT, signedOutNotice = true, removed = true) }
                 }
@@ -225,8 +248,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /* The Files app asks again: its root says signed in or out, and lists this account's drive. */
-    private fun filesAppChanged() = context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
+    /* The Files app and pickers ask again: the root says signed in or out, and its listing is this account's drive. */
+    private fun filesAppChanged() = com.hushos.app.data.FilesRoots.changed(context)
 
     private fun signedIn(user: SessionUser) {
         showingOwnWords = false
@@ -371,11 +394,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun setOrigin(origin: String) = _state.update { it.copy(origin = origin.trim().trimEnd('/')) }
 
     fun signIn(email: String, password: String, done: (String?) -> Unit) {
-        signInGeneration++
         viewModelScope.launch {
-            wiping?.join()
+            // SessionGuard (inside Auth.signIn) waits for a removal wipe under way, in this screen or another.
             val result = withContext(Dispatchers.IO) { runCatching { Auth.signIn(context, state.value.origin, email, password) } }
-            result.onSuccess { signedIn(it); done(null) }.onFailure { done(it.message ?: Auth.UNREACHABLE) }
+            result.onSuccess { signedIn(it); done(null) }.onFailure { done(com.hushos.app.data.Problems.say(it, Auth.UNREACHABLE)) }
         }
     }
 
@@ -405,27 +427,24 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // unless someone has signed in since (the generation moved), and a sign-in started after the
         // answer waits for the wipe (signIn joins `wiping`).
         if (ended != null) viewModelScope.launch {
-            val generation = signInGeneration
+            val seen = com.hushos.app.data.SessionGuard.seen()
             val removed = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context, ended) }.getOrNull() } is com.hushos.app.data.SessionCheck.Removed
-            // On the main thread from here to `wiping` being set: no sign-in can start in between.
-            if (!removed || generation != signInGeneration ||
-                !Auth.mayForgetRemoved(ended, Shared.session(context), com.hushos.app.data.AccountStore.of(context).owner())) return@launch
-            val wipe = launch(Dispatchers.IO) {
-                stopTransfers()
-                Auth.forgetRemoved(context)
+            if (!removed) return@launch
+            // Process-wide: a sign-in begun since (here or in a picker's sign-in screen) drops the wipe, and one
+            // beginning while it runs waits for it.
+            val wiped = withContext(Dispatchers.IO) {
+                com.hushos.app.data.SessionGuard.wipeUnlessSignedInSince(seen) {
+                    if (!Auth.mayForgetRemoved(ended, Shared.session(context), com.hushos.app.data.AccountStore.of(context).owner())) return@wipeUnlessSignedInSince false
+                    stopTransfers()
+                    Auth.forgetRemoved(context)
+                    true
+                }
             }
-            wiping = wipe
-            wipe.join()
-            wiping = null
+            if (wiped != true) return@launch
             filesAppChanged()
             _state.update { if (it.gate == Gate.SIGNED_OUT) it.copy(signedOutNotice = true, removed = true) else it }
         }
     }
-
-    /* Bumped as every sign-in starts: a removal check answered after it clears nothing. */
-    private var signInGeneration = 0
-    /* A removal wipe under way: a sign-in waits for it, so the wipe never takes the new session. */
-    private var wiping: kotlinx.coroutines.Job? = null
 
     /*
      * Stops the account's queued and running transfers and waits for the cancel to be recorded, before
@@ -439,7 +458,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun loadDevices(done: (List<com.hushos.app.data.AccountDevice>?, String?) -> Unit) = viewModelScope.launch {
         val result = withContext(Dispatchers.IO) { runCatching { Auth.devices(context) } }
         result.onSuccess { done(it, null) }.onFailure { failure ->
-            if (failure is NotAuthenticated) sessionLost() else done(null, failure.message ?: com.hushos.app.data.Problems.SERVER)
+            if (failure is NotAuthenticated) sessionLost() else done(null, com.hushos.app.data.Problems.say(failure, com.hushos.app.data.Problems.SERVER))
         }
     }
 
@@ -447,7 +466,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun changeDevices(action: (Context) -> Unit, done: (String?) -> Unit) = viewModelScope.launch {
         val result = withContext(Dispatchers.IO) { runCatching { action(context) } }
         result.onSuccess { done(null) }.onFailure { failure ->
-            if (failure is NotAuthenticated) sessionLost() else done(failure.message ?: com.hushos.app.data.Problems.SERVER)
+            if (failure is NotAuthenticated) sessionLost() else done(com.hushos.app.data.Problems.say(failure, com.hushos.app.data.Problems.SERVER))
         }
     }
 
@@ -499,6 +518,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         } catch (error: Unreachable) {
             _state.update { it.copy(unreachable = true) }; null
         } catch (error: Exception) {
+            // The screen that asked went away: not a failure, and the coroutine ends as asked.
+            error.rethrowIfCancelled()
+            if (com.hushos.app.data.Problems.offline(error)) _state.update { it.copy(unreachable = true) }
             null
         }
     }
@@ -520,9 +542,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             failure?.invoke(error.message ?: "Could not reach HushOS.")
             null
         } catch (error: Exception) {
-            val message = error.message ?: error.toString()
+            // Cancelled because the screen that asked went away (left the composition, a restarted
+            // effect, a stopped lifecycle): nothing failed, so nothing is said.
+            error.rethrowIfCancelled()
+            // An account call that couldn't reach the server is offline too: the line at the top, not an alert.
+            if (com.hushos.app.data.Problems.offline(error)) {
+                _state.update { it.copy(unreachable = true) }
+                failure?.invoke(com.hushos.app.data.Problems.OFFLINE)
+                return null
+            }
+            // The exception's own text is for developers: the log has it, the person gets words.
+            android.util.Log.w("HushOS", "request failed", error)
             lastFailure = error
-            if (failure != null) failure(message) else _state.update { it.copy(error = com.hushos.app.data.Problems.of(error)) }
+            if (failure != null) failure(com.hushos.app.data.Problems.say(error, "This didn’t finish. Try again."))
+            else _state.update { it.copy(error = com.hushos.app.data.Problems.of(error)) }
             null
         }
     }
@@ -607,7 +640,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             val failed = io({ reason = it }) { v -> v.refreshOffline(ids) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } }
             // Offline, the banner already says why; a row per kept file would only repeat it.
             tickets.forEach { (id, ticket) ->
-                val failure = if (failed == null) reason ?: "Couldn't update the downloaded copy." else failed[id]?.let { it.message ?: "Couldn't update the downloaded copy." }
+                val failure = if (failed == null) reason ?: "Couldn't update the downloaded copy." else failed[id]?.let { com.hushos.app.data.Problems.say(it, "Couldn't update the downloaded copy.") }
                 if (failure != null && state.value.unreachable) drop(ticket)
                 else finish(ticket, failed = failure != null, message = failure)
             }
@@ -838,7 +871,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun closeOwnWords() { showingOwnWords = false }
 
     fun startRecovery() { recovery = RecoveryFlow(RecoveryStep.EMAIL) }
-    fun leaveRecovery() { recovery = null }
+
+    /* Sent from a file picker's sign-in screen: recovery starts once the gate says signed out (not over one under way). */
+    fun recoverWhenSignedOut() = viewModelScope.launch {
+        val gate = state.first { it.gate != Gate.CHECKING }.gate
+        if (gate == Gate.SIGNED_OUT && recovery == null) startRecovery()
+    }
+    fun leaveRecovery() {
+        recovery = null
+        com.hushos.app.data.RecoveryWords.settled()
+    }
     fun clearRecoveryError() { recovery = recovery?.takeIf { it.error != null }?.copy(error = null) ?: recovery }
     fun recoveryBack() {
         if (recovery?.pending == true) return
@@ -858,7 +900,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             recovery = recovery?.let { flow ->
                 result.fold(
                     { flow.copy(step = RecoveryStep.SENT, pending = false, resent = again) },
-                    { flow.copy(pending = false, error = it.message ?: com.hushos.app.data.Problems.SERVER) },
+                    { flow.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER)) },
                 )
             }
         }
@@ -871,7 +913,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.verifyRecoveryLink(state.value.origin, verify) } }
             recovery = result.fold(
                 { RecoveryFlow(RecoveryStep.KIT, email = it.email, enrollment = it) },
-                { RecoveryFlow(RecoveryStep.LINK_FAILED, error = it.message ?: "This link didn’t work.") },
+                { RecoveryFlow(RecoveryStep.LINK_FAILED, error = com.hushos.app.data.Problems.say(it, "This link didn’t work.")) },
             )
         }
     }
@@ -882,10 +924,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val enrollment = flow.enrollment ?: return
         recovery = flow.copy(pending = true, error = null)
         viewModelScope.launch {
+          try {
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val phrase = Auth.recover(origin, enrollment, words.joinToString(" "), password)
+                    val recovered = Auth.recover(origin, enrollment, words.joinToString(" "), password)
+                    // Before the session is stored: a picker's sign-in screen waits for this account's new words.
+                    com.hushos.app.data.RecoveryWords.begun(recovered.userId)
+                    val phrase = recovered.phrase
                     val user = try {
                         Auth.signIn(context, origin, enrollment.email, password)
                     } catch (error: Exception) {
@@ -899,8 +945,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     recovery = RecoveryFlow(RecoveryStep.NEW_PHRASE, email = enrollment.email, newPhrase = phrase)
                     signedIn(user)
                 },
-                { recovery = recovery?.copy(pending = false, error = it.message ?: com.hushos.app.data.Problems.SERVER) },
+                {
+                    com.hushos.app.data.RecoveryWords.settled()
+                    recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
+                },
             )
+          } finally {
+            // Cancelled (the view model went) or failed: no new words are on screen, so nothing waits for them.
+            if (recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
+          }
         }
     }
 
@@ -1032,7 +1085,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private fun account(block: () -> String?, done: (String?) -> Unit) = viewModelScope.launch {
         val result = withContext(Dispatchers.IO) { runCatching(block) }
         result.onSuccess { done(it) }.onFailure { failure ->
-            if (failure is NotAuthenticated) sessionLost() else done(failure.message ?: com.hushos.app.data.Problems.SERVER)
+            if (failure is NotAuthenticated) sessionLost() else done(com.hushos.app.data.Problems.say(failure, com.hushos.app.data.Problems.SERVER))
         }
     }
 
@@ -1048,7 +1101,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun links(item: Opened): List<Pair<LinkView, String?>>? = io { vault -> vault.links(item).map { it to runCatching { vault.linkUrlOf(it, item) }.getOrNull() } }
     suspend fun createLink(item: Opened, password: String?, expiresAt: java.time.Instant?): Pair<LinkView, String>? = io { it.createLink(item, password, expiresAt) }
     /* Turns a link off, then rotates the item's keys as the web does, so the old link's secret opens nothing new. */
-    suspend fun revokeLink(link: LinkView, item: Opened): Boolean {
+    /*
+     * Stopping access then re-securing runs in the view model's scope, awaited by the sheet: a sheet closed half-way
+     * (its scope cancelled) must not leave a revoked share un-rotated or its lists un-redrawn.
+     */
+    suspend fun revokeLink(link: LinkView, item: Opened): Boolean = viewModelScope.async { revokeLinkNow(link, item) }.await()
+
+    private suspend fun revokeLinkNow(link: LinkView, item: Opened): Boolean {
         io { it.revokeLink(link, item); true } ?: return false
         // Awaited, as after stopping a share: anything sealed next must use the item's new keys.
         // Re-securing what was shared happens quietly (it isn't a transfer); only a failure, or someone left out, is said.
@@ -1075,7 +1134,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }
     suspend fun share(item: Opened, pin: ContactPin, role: String): Result<OwnedShare> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).share(item, pin, role) } }
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
-    suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean {
+    suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean = viewModelScope.async { revokeShareNow(share, item) }.await()
+
+    private suspend fun revokeShareNow(share: OwnedShare, item: Opened): Boolean {
         val revoked = io { it.revokeShare(share, item); true } ?: return false
         // Re-securing what was shared happens quietly (it isn't a transfer); only a failure, or someone left out, is said.
         var reason: String? = null
@@ -1113,7 +1174,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val origin = state.value.origin
         val result = withContext(Dispatchers.IO) { runCatching { Auth.rotateKeys(context, password); Auth.signIn(context, origin, email, password) } }
         result.onSuccess { user -> signedIn(user); done(true, null) }.onFailure { failure ->
-            if (failure is NotAuthenticated) sessionLost() else done(false, failure.message ?: com.hushos.app.data.Problems.SERVER)
+            if (failure is NotAuthenticated) sessionLost() else done(false, com.hushos.app.data.Problems.say(failure, com.hushos.app.data.Problems.SERVER))
         }
     }
 
@@ -1139,7 +1200,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val origin = state.value.origin
         val result = withContext(Dispatchers.IO) { runCatching { Auth.changePassword(context, current, new); Auth.signIn(context, origin, email, new) } }
         result.onSuccess { signedIn(it); done("Your password was changed.") }.onFailure { failure ->
-            if (failure is NotAuthenticated) sessionLost() else done(failure.message ?: com.hushos.app.data.Problems.SERVER)
+            if (failure is NotAuthenticated) sessionLost() else done(com.hushos.app.data.Problems.say(failure, com.hushos.app.data.Problems.SERVER))
         }
     }
 
@@ -1155,6 +1216,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }, done)
 
     fun clearSignedOut() = _state.update { it.copy(signedOutNotice = false, accountDeleted = false, removed = false) }
+
+    /*
+     * Whether this account's recovery words still wait to be confirmed as saved, as the server keeps it (a reset clears
+     * it, the word check sets it), so it survives the app being stopped: true or false, false too when there are no
+     * words to show, and null when the server couldn't be asked.
+     */
+    suspend fun recoveryWordsUnsaved(): Boolean? =
+        com.hushos.app.data.RecoveryWords.answer(withContext(Dispatchers.IO) { runCatching { Auth.recoveryBackup(context).second } })
 
     /* The phrase, the recovery key for the kit file, and whether the phrase was confirmed as saved. */
     data class RecoveryKit(val phrase: String, val recovery: org.json.JSONObject, val confirmed: Boolean)
@@ -1197,13 +1266,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun write(folder: String?, failure: ((String) -> Unit)? = null, block: (Vault) -> Unit): Boolean {
         _state.update { it.copy(busy = true) }
+        // Cancelled too (a caller's screen went away): busy ends with it.
+        try { return writing(folder, failure, block) } finally { _state.update { it.copy(busy = false) } }
+    }
+
+    private suspend fun writing(folder: String?, failure: ((String) -> Unit)?, block: (Vault) -> Unit): Boolean {
         val ok = io(failure) { block(it); true } ?: false
         // Offline the write did not happen: say so plainly rather than failing without a word (a transfer's row says it).
         if (!ok && failure == null && state.value.unreachable) notify("You’re offline, so that didn’t happen. Try again once you’re connected.")
         // The catalogue answers listings, so pull the feed first: the write is in it already.
         if (ok) sync()
         if (ok && folder != null) io { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
-        _state.update { it.copy(busy = false) }
         if (ok) context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
         // A change made here inside a kept folder of a share isn't in this drive's feed: look at those now too.
         if (ok && Offline.folders(context).any { it.shareRoot != null }) refreshKeptFolders(withShares = true)
@@ -1804,11 +1877,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
         val file = File(context.cacheDir, "opened/${item.id}/${version?.id ?: item.node.currentVersion?.id ?: "current"}/${item.name}")
         var reason: String? = null
-        val ok = if (file.exists()) true else io({ reason = it }) { vault ->
-            vault.download(item.id, file, version) { fraction -> _state.update { it.copy(opening = it.opening + (item.id to fraction)) } }
-            true
-        } ?: false
-        _state.update { it.copy(opening = it.opening - item.id) }
+        val ok = try {
+            if (file.exists()) true else io({ reason = it }) { vault ->
+                vault.download(item.id, file, version) { fraction -> _state.update { it.copy(opening = it.opening + (item.id to fraction)) } }
+                true
+            } ?: false
+        } finally {
+            // Cancelled too (the screen that asked went away): the ring goes with it.
+            _state.update { it.copy(opening = it.opening - item.id) }
+        }
         // A failure is said on a notice, not an alert: the row it came from is still there to try again.
         if (!ok && !quiet && !state.value.unreachable) notify("Couldn’t open “${item.name}”. ${reason ?: "Try again."}")
         if (!ok && !quiet && state.value.unreachable) notify("You’re offline. Files you keep on this phone open without a connection.", action = "Show") { _state.update { it.copy(request = "phone") } }

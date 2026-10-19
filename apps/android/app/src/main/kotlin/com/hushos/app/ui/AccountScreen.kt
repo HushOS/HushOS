@@ -117,7 +117,13 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     var signingOut by rememberSaveable { mutableStateOf(false) }
     var showingPeople by rememberSaveable { mutableStateOf(false) }
     // /app/trash: straight to Trash.
-    LaunchedEffect(state.request) { if (state.request == "trash") { page = Page.TRASH; model.clearRequest() } }
+    LaunchedEffect(state.request) {
+        when (state.request) {
+            "trash" -> { page = Page.TRASH; model.clearRequest() }
+            // A file picker's "Save your recovery words": the words and, while unconfirmed, their check.
+            "words" -> { page = Page.PHRASE; model.clearRequest() }
+        }
+    }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
     BackHandler(enabled = page != Page.MAIN) { page = if (page == Page.RESET || page == Page.REPLACE) Page.ADVANCED else Page.MAIN }
     when (page) {

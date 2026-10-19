@@ -1,6 +1,6 @@
 # HushOS for Android
 
-Jetpack Compose app with Material 3 Expressive, minSdk 29, and the DocumentsProvider that puts HushOS in the system Files app and every file picker. `:core` holds the UniFFI Kotlin bindings of `crates/hushos-core` and its shared libraries; `:app` is the app. The repository's root `AGENTS.md` applies here too.
+Jetpack Compose app with Material 3 Expressive, minSdk 29, and the DocumentsProvider that puts HushOS in the system file picker (Storage Access Framework) and in Files by Google; Samsung's My Files never lists third-party providers. `:core` holds the UniFFI Kotlin bindings of `crates/hushos-core` and its shared libraries; `:app` is the app. The repository's root `AGENTS.md` applies here too.
 
 ## Building
 

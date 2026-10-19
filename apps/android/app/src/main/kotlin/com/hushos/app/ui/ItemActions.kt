@@ -679,14 +679,13 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
             if (items.size == 1) ItemHeader(model, state, items[0], subtitle = "Tags")
             else Text("Tags for ${items.size} items", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2))
             Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6), verticalAlignment = Alignment.CenterVertically) {
-                TextField(
-                    value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Find or add a tag") },
-                    leadingIcon = { Icon(Icons.Outlined.Search, null, tint = alpine.inkMuted) }, shape = CircleShape,
+                PillField(
+                    value = query, onValueChange = { query = it }, placeholder = "Find or add a tag",
+                    leadingIcon = { Icon(Icons.Outlined.Search, null, tint = alpine.inkMuted) },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { add() }),
-                    colors = TextFieldDefaults.colors(focusedContainerColor = alpine.fill, unfocusedContainerColor = alpine.fill, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
-                    modifier = Modifier.weight(1f).then(if (alpine.high) Modifier.border(1.dp, alpine.field, CircleShape) else Modifier),
+                    modifier = Modifier.weight(1f),
                 )
-                FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2)) { Text("Add") }
+                FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2).height(FieldHeight)) { Text("Add") }
             }
             // The colour a new tag gets.
             Row(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
@@ -697,10 +696,12 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
                 val on = stateOf(tag.id)
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).background(if (on == ToggleableState.On) alpine.tint else Color.Transparent)
-                        .clickable(role = Role.Checkbox) { choice = choice + (tag.id to (on != ToggleableState.On)) }.padding(horizontal = AlpineSpace.S4),
+                        .clickable(role = Role.Checkbox) { choice = choice + (tag.id to (on != ToggleableState.On)) }.padding(horizontal = AlpineSpace.S6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // The box is the control and the dot belongs to the name: a list's 16dp between them, 8dp from dot to name.
                     androidx.compose.material3.TriStateCheckbox(state = on, onClick = null)
+                    Spacer(Modifier.width(AlpineSpace.S4))
                     TagDot(tag.colour, 10.dp)
                     Text(tag.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S2))
                     Text("${state.tags.nodesWith(tag.id).size}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
