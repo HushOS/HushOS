@@ -1,0 +1,29 @@
+apps/web/src/components/drive/move-dialog.tsx
+  s_c56e31c87cddde::t_2e472c8467bf6b 332-341
+apps/web/src/lib/move-across.ts
+  s_c56e31c87cddde::t_041fc1cb5f48c3 108-111,182-186
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_aeb9459cf9fcc7 506,508-509,516
+packages/db/src/drive.moves.test.ts
+  s_c56e31c87cddde::t_b7bfc19b4934ab 21-22,29-30,331-341,460-528,715-744
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_12df2009916b44 20-21,122-123,128,151,179-206,253-318
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_e12dcd8c633e7f 1811-1818,1829-1837,1857-1858,1875-1877,1912-1930,2030,2161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "db87b79453220d587c9e74c4fb2700bbaa2d0923",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
