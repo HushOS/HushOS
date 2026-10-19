@@ -1,0 +1,33 @@
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_7fe0b2df2f78c3 113
+apps/ios/App/DriveStore.swift
+  s_c56e31c87cddde::t_35a4c3858c9644 223-230
+apps/ios/Files/FileProviderExtension.swift
+  s_c56e31c87cddde::t_ed6fcccebd0061 206-214
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c56e31c87cddde::t_b181c22d7ff166 46
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c56e31c87cddde::t_31438d16731a90 305-324,424-425,446,460-463,532-545,570-571,631,653,674-679,681-682,685
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyQueueTests.swift
+  s_c56e31c87cddde::t_f9ef60a38e1bcd 319-371
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_c56e31c87cddde::t_2485f84224cac0 595-596,872-875
+docs/groups-mobile-plan.md
+  s_c56e31c87cddde::t_55891ba4c28a24 155,157-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f61dc2d23783311355b21aaf96596fcb57c9dab",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
