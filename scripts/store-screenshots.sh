@@ -172,13 +172,14 @@ android() {
     say "First keep Lisbon 2026, Finances and Q3 report.md on this phone (each one's ⋮ > Keep on this phone)."
     shot 01 home "Home, scrolled to the top." "hushos://app"
     shot 02 folder "Lisbon 2026 as a grid: More (or the sort button on Android) > View > Grid." "hushos://app/drive?folder=$LISBON_FOLDER"
-    shot 03 share "In Lisbon 2026, tap Manage on the banner, so the sheet shows Maya, Jonas and one link." ""
+    shot 03 share "Back up to Family, tap Manage on the banner, so the sheet is titled Family and shows Maya, Jonas and one link." ""
     # Android opens files in their own apps, so a viewer shot would show another app; Shared instead.
     shot 04 shared "Shared, By me: the folders and links Maya shares." "hushos://app/shared?view=by-me"
     shot 05 phone "Home > On this phone." "hushos://app"
-    shot 06 account "The Account tab, scrolled to the top." ""
-    shot 07 words "Account > Your twelve words." ""
-    shot 08 files "Android's Files app: open it, then the menu > HushOS (the root, as a grid)." ""
+    # No plan or storage figures in Play's set (store-listing.md): Devices, not the Account tab.
+    shot 06 devices "Account > Devices, with one browser left (Remove the spec's other sessions)." ""
+    shot 07 words "Shared > People > Your twelve words, so no plan shows behind the sheet." ""
+    shot 08 files "Android's Files app: the menu > HushOS > Family > Lisbon 2026, as a grid." ""
     demo exit
     $a emu kill >/dev/null 2>&1 || true
     say "Android done: $OUT/android"

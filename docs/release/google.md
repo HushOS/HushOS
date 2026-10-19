@@ -122,7 +122,7 @@ Everything from store-listing.md:
 - **App name, short description, full description.**
 - **App icon:** `docs/release/assets/google-play-icon.png` (512×512, 32-bit PNG).
 - **Feature graphic:** `docs/release/assets/google-feature-graphic.png` (1024×500, no alpha).
-- **Phone screenshots:** `docs/release/screenshots/android/play/01-home.png` … `08-account.png`, in that order (the captioned set; store-listing.md has the captions and the raw captures beside them) (2 to 8; JPEG or 24-bit PNG; 320 to 3840 px; the long side at most twice the short; 1080×1920 makes them eligible for promotion). Source: https://support.google.com/googleplay/android-developer/answer/9866151.
+- **Phone screenshots:** `docs/release/screenshots/android/play/01-home.png` … `08-devices.png`, in that order (the captioned set; store-listing.md has the captions and the raw captures beside them) (2 to 8; JPEG or 24-bit PNG; 320 to 3840 px; the long side at most twice the short; 1080×1920 makes them eligible for promotion). Source: https://support.google.com/googleplay/android-developer/answer/9866151.
 - **Tablet screenshots:** leave empty (needed only for large-screen promotion).
 - **Video:** none.
 

@@ -167,16 +167,16 @@ The first release of HushOS for Android.
 
 `scripts/store-screenshots.sh` captures these from the debug apps signed in to the local demo account (Maya Lindqvist; made-up names and generated photos, no real data), light mode, clean status bar. The spec that makes the account (`e2e/screenshots.spec.ts`) also makes Jonas Berg, shares Family with him and leaves Family with one link; the trip photos are CC0 from Wikimedia Commons (`e2e/fixtures/photos/README.md`). Times on screen are in a timezone where it is mid-morning when the shots are taken. Output: `docs/release/screenshots/{ios,android}/`. iOS taken 2026-10-06. Android retaken 2026-10-19 from `main`, against an isolated instance (`SCREENSHOTS_DOMAIN=example.org`, so addresses read `maya.lindqvist@example.org` in full), with the status-bar clock set to the time on the device so it is never earlier than the newest row.
 
-| #   | File                       | iOS screen                                         | Android screen                                                                                     |
-| --- | -------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 1   | `01-home`                  | Home, after the keeps in shot 5                    | Same                                                                                               |
-| 2   | `02-folder`                | Files > Family > Lisbon 2026 as a grid of photos   | Same                                                                                               |
-| 3   | `03-share`                 | Share sheet for Family: Jonas Berg and one link    | Same                                                                                               |
-| 4   | `04-preview` / `04-shared` | A photo open in the HushOS viewer (QuickLook)      | Shared > By me (Android opens files in other apps, so a viewer shot would show someone else's app) |
-| 5   | `05-phone`                 | On this phone: Lisbon 2026, Finances, Q3 report.md | Same                                                                                               |
-| 6   | `06-account`               | Account, top                                       | Same                                                                                               |
-| 7   | `07-words`                 | Not taken                                          | Account > Your twelve words                                                                        |
-| 8   | `08-files`                 | Not taken                                          | Android's Files app open on the HushOS root                                                        |
+| #   | File                        | iOS screen                                         | Android screen                                                                                     |
+| --- | --------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 1   | `01-home`                   | Home, after the keeps in shot 5                    | Same                                                                                               |
+| 2   | `02-folder`                 | Files > Family > Lisbon 2026 as a grid of photos   | Same                                                                                               |
+| 3   | `03-share`                  | Share sheet for Family: Jonas Berg and one link    | Same, opened from Family itself so the title matches the page behind it                            |
+| 4   | `04-preview` / `04-shared`  | A photo open in the HushOS viewer (QuickLook)      | Shared > By me (Android opens files in other apps, so a viewer shot would show someone else's app) |
+| 5   | `05-phone`                  | On this phone: Lisbon 2026, Finances, Q3 report.md | Same                                                                                               |
+| 6   | `06-account` / `06-devices` | Account, top                                       | Account > Devices: this phone and one browser (no plan or storage figures)                         |
+| 7   | `07-words`                  | Not taken                                          | Shared > People > Your twelve words (nothing about the plan behind it)                             |
+| 8   | `08-files`                  | Not taken                                          | Android's Files app in HushOS > Family > Lisbon 2026, with the photos' thumbnails                  |
 
 **Play's set, with captions.** `bun run --cwd apps/web store:graphics` draws each Android capture under one line of Geist on white, the capture rounded, ruled and cut off at the foot, into `docs/release/screenshots/android/play/`, numbered in the order Play shows them. Upload those, in that order. The first two carry the message; each line is something the app does today. Captions take about 8% of the image (Google's limit is 20%) and read at Play's thumbnail size.
 
@@ -189,13 +189,13 @@ The first release of HushOS for Android.
 | 5      | `04-shared`  | See everything you share                  |
 | 6      | `05-phone`   | Keep folders on your phone for offline    |
 | 7      | `08-files`   | Open and save from any app                |
-| 8      | `06-account` | Your password never leaves your phone     |
+| 8      | `06-devices` | See every device that's signed in         |
 
 The iOS captions, if added later: 1 Nobody else can look inside. 2 Locked on your phone before it uploads. 3 Share with the people you choose, or with a link. 4 Open files right in the app. 5 Keep folders on your phone for when you're offline. 6 Your password never leaves your phone.
 
 Sizes: iOS 1320×2868 (the 6.9-inch set; Apple scales it down for smaller iPhones). Android 1080×1920 (9:16; meets Play's 2:1 limit and the 1080-pixel minimum for promotion). If the app stays universal, iPad screenshots are also required (2064×2752); the script does not make them, because nothing is designed for iPad (see signing.md).
 
-Take shot 6 from a build after 2026-10-05: an older screenshot showing "Manage on the web" is itself metadata pointing at an outside purchase. Shot 6 shows the plan's name ("Free · 3.7 MB of 2 GB"), which is account information, not a promotion; if review objects to the word, scroll Account past Plan and storage and retake.
+Take iOS shot 6 from a build after 2026-10-05: an older screenshot showing "Manage on the web" is itself metadata pointing at an outside purchase. No Android shot shows the plan's name or storage figures (the rule below): the Account tab is replaced by Devices, and the twelve words open from People rather than over Account. The iOS Account shot still shows them; retake it the same way before iOS goes up.
 
 ## What the apps and the listings must and must not say about plans
 

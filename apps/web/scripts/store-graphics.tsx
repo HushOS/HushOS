@@ -136,7 +136,7 @@ const shots: [file: string, caption: string][] = [
     ['04-shared', 'See everything\nyou share'],
     ['05-phone', 'Keep folders on your\nphone for offline'],
     ['08-files', 'Open and save\nfrom any app'],
-    ['06-account', 'Your password never\nleaves your phone'],
+    ['06-devices', 'See every device\nthat’s signed in'],
 ];
 // The capture sits below the line at this width, rounded and ruled, cut off at the foot.
 const SHOT_WIDTH = 880;
