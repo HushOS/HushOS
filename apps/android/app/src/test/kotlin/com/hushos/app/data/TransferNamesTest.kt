@@ -64,6 +64,8 @@ class TransferNamesTest {
             assertEquals(want.second, words.text)
             // No big style on a finished one: the line is the whole notification.
             assertEquals(null, words.bigText)
+            // A lock screen hiding content shows the public version: never a title over an empty card.
+            assertEquals(TransferNotices.PUBLIC_TEXT, words.publicText)
             assertNamesNothing(words)
         }
         // A failure among them goes to the transfers sheet and says so.

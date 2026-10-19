@@ -342,6 +342,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
  * Every text field a transfer notification sets: title, content text, big text, the public version's title, and the
  * action labels. Built from counts and kinds only, so a test can hold all of them to naming no file.
  */
-data class NoticeText(val title: String, val text: String?, val bigText: String?, val publicTitle: String, val actions: List<String> = emptyList()) {
-    val fields: List<String> get() = listOfNotNull(title, text, bigText, publicTitle) + actions
+data class NoticeText(
+    val title: String, val text: String?, val bigText: String?, val publicTitle: String, val actions: List<String> = emptyList(), val publicText: String? = null,
+) {
+    val fields: List<String> get() = listOfNotNull(title, text, bigText, publicTitle, publicText) + actions
 }

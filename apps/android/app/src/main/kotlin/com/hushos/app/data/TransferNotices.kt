@@ -64,7 +64,8 @@ object TransferNotices {
                 else -> "Tap to see ${if (ended.size == 1) "it" else "them"} in Files."
             }
         }
-        return NoticeText(title, text, text.takeIf { failed > 0 }, title, if (retry) listOf(RETRY_LABEL) else emptyList())
+        // A lock screen hiding content shows the public version: the count and a neutral line, never an empty card.
+        return NoticeText(title, text, text.takeIf { failed > 0 }, title, if (retry) listOf(RETRY_LABEL) else emptyList(), publicText = PUBLIC_TEXT)
     }
 
     /*
@@ -87,6 +88,7 @@ object TransferNotices {
     private fun count(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
 
     const val RETRY_LABEL = "Retry"
+    const val PUBLIC_TEXT = "Open HushOS to see more."
 
     /*
      * Whether the app's own screen (the one with the transfers sheet) is showing. Save to
@@ -160,15 +162,15 @@ object TransferNotices {
             .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
             .setContentTitle(words.title)
             .setContentText(words.text)
-            // A plain notification when it finished: no big style, no progress, nothing ongoing.
+            // Big text only for a failure: a finished one is a plain notification.
             .setStyle(words.bigText?.let { NotificationCompat.BigTextStyle().bigText(it) })
-            .setOngoing(false)
             .setContentIntent(open)
             .setAutoCancel(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
                 .setContentTitle(words.publicTitle)
+                .setContentText(words.publicText)
                 .setLocalOnly(true)
                 .build())
             // File names stay on this phone: never bridged to a watch or another device.
