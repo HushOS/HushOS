@@ -37,13 +37,13 @@ export default function ShareNotice({
     granterEmail = 'ada@example.com',
     role = 'viewer',
     sharedUrl = 'http://localhost:5173/app/shared',
-    logoUrl = '/static/hushos-logo-dark.png',
+    logoUrl = '/static/hushos-logo-square.png',
 }: {
     granterName?: string;
     granterEmail?: string;
     role?: 'viewer' | 'editor';
     sharedUrl?: string;
-    /** The light mark; it sits on the brand blue in both colour schemes. */
+    /** The logo: the brand square as one image, the same in both colour schemes. */
     logoUrl?: string;
 }) {
     const facts: [string, string][] = [
@@ -66,7 +66,6 @@ export default function ShareNotice({
                         .email-body { background-color: #0f1013 !important; color: #ecedf1 !important; }
                         .email-body > table > tbody > tr > td { background-color: #0f1013 !important; color: #ecedf1 !important; }
                         .email-card { background-color: #17181c !important; border-color: #2a2c33 !important; }
-                        .email-logo { background-color: #3a3a3a !important; }
                         .email-cell { border-color: #2a2c33 !important; }
                         .email-heading, .email-value { color: #ecedf1 !important; }
                         .email-muted { color: #9a9ea9 !important; }
@@ -76,7 +75,6 @@ export default function ShareNotice({
                     [data-ogsc] .email-body { background-color: #0f1013 !important; color: #ecedf1 !important; }
                     [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0f1013 !important; color: #ecedf1 !important; }
                     [data-ogsc] .email-card { background-color: #17181c !important; border-color: #2a2c33 !important; }
-                    [data-ogsc] .email-logo { background-color: #3a3a3a !important; }
                     [data-ogsc] .email-cell { border-color: #2a2c33 !important; }
                     [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #ecedf1 !important; }
                     [data-ogsc] .email-muted { color: #9a9ea9 !important; }
@@ -116,35 +114,17 @@ export default function ShareNotice({
                         <Row>
                             <Column style={{ width: '34px', verticalAlign: 'middle' }}>
                                 {/*
-                                 * The light mark on a black square, as on the site. In the dark the
-                                 * square lightens to grey so it stays clear of the dark card; the mark,
-                                 * an image, can't swap to the dark one as the site's does.
+                                 * The black square and its mark are one image: Gmail on iOS repaints
+                                 * CSS colours in the dark but never images, so a square drawn in CSS
+                                 * behind the mark turned white under it.
                                  */}
-                                <table role="presentation" cellPadding={0} cellSpacing={0}>
-                                    <tbody>
-                                        <tr>
-                                            <td
-                                                className="email-logo"
-                                                style={{
-                                                    width: '26px',
-                                                    height: '26px',
-                                                    backgroundColor: '#000000',
-                                                    borderRadius: '8px',
-                                                    textAlign: 'center',
-                                                    verticalAlign: 'middle',
-                                                }}
-                                            >
-                                                <Img
-                                                    src={logoUrl}
-                                                    alt=""
-                                                    width="11"
-                                                    height="16"
-                                                    style={{ display: 'block', margin: '0 auto' }}
-                                                />
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
+                                <Img
+                                    src={logoUrl}
+                                    alt=""
+                                    width="26"
+                                    height="26"
+                                    style={{ display: 'block' }}
+                                />
                             </Column>
                             <Column style={{ verticalAlign: 'middle' }}>
                                 <Text

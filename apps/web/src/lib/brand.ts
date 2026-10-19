@@ -82,14 +82,20 @@ export const BRAND_GROUND_DARK = '#0f1013';
 const BADGE = 539;
 const MARK_SCALE = (BADGE * 0.58) / 419;
 
-function badge(square: string, mark = '#ffffff') {
+/* A hairline just inside the square's edge, `width` in the badge's 539 units. */
+export type BadgeRing = { color: string; width: number };
+
+function badge(square: string, mark = '#ffffff', ring?: BadgeRing) {
     const width = 300 * MARK_SCALE;
     const height = 419 * MARK_SCALE;
-    return `<rect width="${BADGE}" height="${BADGE}" rx="${BADGE * 0.3}" fill="${square}"/><g transform="translate(${(BADGE - width) / 2} ${(BADGE - height) / 2}) scale(${MARK_SCALE})">${paths(mark)}</g>`;
+    const edge = ring
+        ? `<rect x="${ring.width / 2}" y="${ring.width / 2}" width="${BADGE - ring.width}" height="${BADGE - ring.width}" rx="${BADGE * 0.3 - ring.width / 2}" stroke="${ring.color}" stroke-width="${ring.width}"/>`
+        : '';
+    return `<rect width="${BADGE}" height="${BADGE}" rx="${BADGE * 0.3}" fill="${square}"/>${edge}<g transform="translate(${(BADGE - width) / 2} ${(BADGE - height) / 2}) scale(${MARK_SCALE})">${paths(mark)}</g>`;
 }
 
-export function badgeSvg(square = LOGO_BLACK, mark = LOGO_WHITE) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BADGE} ${BADGE}" width="${BADGE}" height="${BADGE}" fill="none">${badge(square, mark)}</svg>`;
+export function badgeSvg(square = LOGO_BLACK, mark = LOGO_WHITE, ring?: BadgeRing) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BADGE} ${BADGE}" width="${BADGE}" height="${BADGE}" fill="none">${badge(square, mark, ring)}</svg>`;
 }
 
 export const BADGE_SIDE = BADGE;
