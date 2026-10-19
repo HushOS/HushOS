@@ -13,7 +13,6 @@ import {
     Volume2Icon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { useStore } from 'zustand';
 import type { NavItem } from '@/components/app-sidebar';
 import { lockDevice, openDeviceDialog } from '@/components/device-control';
 import { TextSwap } from '@/components/motion';
@@ -39,12 +38,11 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { authClient } from '@/lib/auth-client';
-import { forgetSession } from '@/lib/session';
+import { useAuthView } from '@/lib/auth-view';
 import { useBillingEnabled } from '@/lib/queries';
 import { helpContactQueryOptions } from '@/lib/social';
 import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
-import { signOut as signOutOfBrowser } from '@/lib/sign-out';
+import { leaveApp } from '@/lib/sign-out';
 
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -103,8 +101,8 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
     const soundsEnabled = useSoundsEnabled();
     const billing = useBillingEnabled();
     const { data: contact } = useQuery(helpContactQueryOptions);
-    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
-    const restoring = useStore(authClient.store, (state) => state.restoring);
+    const unlocked = useAuthView((state) => state.unlockedUserId) === user.id;
+    const restoring = useAuthView((state) => state.restoring);
     const [signingOut, setSigningOut] = useState(false);
     const [showingWords, setShowingWords] = useState(false);
     return (
@@ -200,15 +198,11 @@ function SignOutDialog({
         setPending(true);
         setFailed(false);
         try {
-            await signOutOfBrowser();
-            forgetSession(router.options.context.queryClient, false);
-            await router.navigate({ to: '/login' });
-            // Clearing before leaving would refetch queries the old page still holds.
-            router.options.context.queryClient.clear();
+            // Busy here until the sign-in page replaces the app; the page behind holds still.
+            await leaveApp(router);
         } catch {
             cue('error');
             setFailed(true);
-        } finally {
             setPending(false);
         }
     }

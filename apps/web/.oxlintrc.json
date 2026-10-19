@@ -1,6 +1,35 @@
 {
     "extends": ["../../packages/config/oxlint.json"],
     "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y"],
-    "env": { "browser": true },
-    "ignorePatterns": ["src/routeTree.gen.ts", "dist/**", ".output/**", ".nitro/**", ".tanstack/**"]
+    "env": {
+        "browser": true
+    },
+    "ignorePatterns": [
+        "src/routeTree.gen.ts",
+        "dist/**",
+        ".output/**",
+        ".nitro/**",
+        ".tanstack/**"
+    ],
+    "overrides": [
+        // Components and routes draw auth state through useAuthView, never authClient.store:
+        // a sign-out holds the view so the page being left does not redraw as locked. oxlint's
+        // no-restricted-properties matches the object by name only, so `authClient as ac` would
+        // slip past a ban on authClient.store; the ban is on every `.store` read instead. A
+        // read that is not the auth client's (TanStack Form's `form.store`, say) is allowed
+        // where it is made, with its reason:
+        //   // oxlint-disable-next-line no-restricted-properties -- TanStack Form's store, not auth
+        {
+            "files": ["src/components/**", "src/routes/**"],
+            "rules": {
+                "no-restricted-properties": [
+                    "error",
+                    {
+                        "property": "store",
+                        "message": "No .store reads in components or routes, so the auth client's store is caught under any name. Draw auth state with useAuthView from lib/auth-view: a sign-out holds it, so the page being left never redraws as locked. For an action about to use keys, read unlockedNow()."
+                    }
+                ]
+            }
+        }
+    ]
 }

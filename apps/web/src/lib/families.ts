@@ -1,8 +1,7 @@
 import type { GroupRole } from '@hushos/crypto';
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
-import { useStore } from 'zustand';
-import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { familiesSyncAllKey, familySynced } from '@/lib/families-keys';
 import { familyKeys } from '@/lib/families-shell';
 import { groupsApi, type GroupDetail, type GroupSummary } from '@/lib/groups/api';
@@ -84,7 +83,7 @@ export type Invitation = Awaited<ReturnType<typeof groupsApi.invitations>>['invi
 export const firstName = (name: string) => name.trim().split(/\s+/)[0] || name;
 
 export function useUnlocked(userId: string) {
-    return useStore(authClient.store, (state) => state.unlockedUserId === userId);
+    return useAuthView((state) => state.unlockedUserId === userId);
 }
 
 export type FamiliesSync = {

@@ -5,7 +5,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ShieldAlertIcon, ShieldQuestionIcon } from 'lucide-react';
 import { useState } from 'react';
-import { useStore } from 'zustand';
 import { CheckContact } from '@/components/drive/check-contact';
 import { useFamilyArea } from '@/components/drive/family-area';
 import { TrustAsFamily } from '@/components/drive/trust-as-family';
@@ -19,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from '@/components/ui/toast';
-import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { settingsQueryOptions } from '@/lib/contacts';
 import { familyWord, pinName, pinsById } from '@/lib/family-pin';
 import {
@@ -100,7 +99,7 @@ export function SavedFromLinkLine({
     node: Pick<DriveNode, 'metadataSigner' | 'currentVersion' | 'integrity'>;
     className?: string;
 }) {
-    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const userId = useAuthView((state) => state.unlockedUserId);
     const saved =
         node.integrity?.metadata === 'saved-from-link' ||
         node.integrity?.version === 'saved-from-link';
@@ -143,7 +142,7 @@ export function UnverifiedMark({
     const issues = given ?? (node ? integrityIssues(node) : []);
     const area = useFamilyArea();
     const queryClient = useQueryClient();
-    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const userId = useAuthView((state) => state.unlockedUserId);
     const names = useSignerNames(userId, issues.length > 0);
     const [open, setOpen] = useState(false);
     const [checking, setChecking] = useState<Signer | null>(null);

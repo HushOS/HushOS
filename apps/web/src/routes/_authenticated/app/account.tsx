@@ -1,7 +1,6 @@
 import { createFileRoute, getRouteApi, Link, useRouter } from '@tanstack/react-router';
 import { ChevronDownIcon, LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
 import { useState, useSyncExternalStore } from 'react';
-import { useStore } from 'zustand';
 import {
     ChangePasswordDialog,
     DeleteAccountDialog,
@@ -19,6 +18,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { authError } from '@/lib/form';
 import { useBillingEnabled } from '@/lib/queries';
 import { forgetSession } from '@/lib/session';
@@ -361,9 +361,9 @@ function NameSetting({ name }: { name: string }) {
 function BrowserSettings() {
     const { theme, setTheme, contrast, setContrast, isPending, error } = useTheme();
     const sounds = useSoundsEnabled();
-    const restoring = useStore(authClient.store, (state) => state.restoring);
+    const restoring = useAuthView((state) => state.restoring);
     const { user } = Route.useRouteContext();
-    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
+    const unlocked = useAuthView((state) => state.unlockedUserId) === user.id;
     return (
         <SettingsGroup title="On this browser" description="These stay on this browser only.">
             <Setting

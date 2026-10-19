@@ -5,7 +5,6 @@ import { cn } from 'cn';
 import { CopyIcon, DownloadIcon, PrinterIcon, QrCodeIcon } from 'lucide-react';
 import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { useStore } from 'zustand';
 import { AuthLayout, AuthNote } from '@/components/auth-layout';
 import { LogoBadge } from '@/components/brand';
 import { Cover } from '@/components/cover';
@@ -17,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { authError } from '@/lib/form';
 import { checkQuestions, kitText } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
@@ -30,8 +30,8 @@ export type RecoveryReason = 'master-key' | 'recovery-key';
  * showing it is gone. A lock changes the key, so the phrase goes with it.
  */
 export function useRecoveryBackup(user: SessionUser) {
-    const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
-    const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const lockRevision = useAuthView((state) => state.lockRevision);
+    const unlockedUserId = useAuthView((state) => state.unlockedUserId);
     const key = ['auth', 'recovery-backup', user.id, user.credentialVersion, lockRevision];
     const query = useQuery({
         queryKey: key,
@@ -96,7 +96,7 @@ export function RecoveryPhrase({
 }) {
     const router = useRouter();
     const queryClient = useQueryClient();
-    const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const unlockedUserId = useAuthView((state) => state.unlockedUserId);
     const {
         key: backupKey,
         query: backupQuery,

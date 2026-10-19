@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { useStore } from 'zustand';
 import { FingerprintWords } from '@/components/fingerprint-words';
 import { Spinner } from '@/components/motion';
 import {
@@ -10,7 +9,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { ownFingerprintQueryOptions } from '@/lib/contacts';
 
 /*
@@ -32,7 +31,7 @@ export function OwnWordsDialog({
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }) {
-    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === userId;
+    const unlocked = useAuthView((state) => state.unlockedUserId) === userId;
     useEffect(() => {
         if (open && !unlocked) onOpenChange(false);
     }, [open, unlocked, onOpenChange]);

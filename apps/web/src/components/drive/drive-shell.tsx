@@ -1,14 +1,14 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useStore } from 'zustand';
 import { LockKeyholeIcon } from 'lucide-react';
 import { useRouter } from '@tanstack/react-router';
-import { forgetSession } from '@/lib/session';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { backfillOwnConsent, bindContactsToQueries } from '@/lib/contacts';
 import {
     closeSpaces,
@@ -26,7 +26,8 @@ import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
-import { signOut as signOutOfBrowser } from '@/lib/sign-out';
+import { leaveApp } from '@/lib/sign-out';
+import { cue } from '@/lib/sounds';
 
 /*
  * Every Drive page needs the account key unlocked on this device and
@@ -52,7 +53,7 @@ export function useDrive() {
  * any of that again.
  */
 export function DriveRuntime({ user }: { user: SessionUser }) {
-    const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
+    const unlockedUser = useAuthView((state) => state.unlockedUserId);
     const unlocked = unlockedUser === user.id;
     // A lock wipes every key in the worker. Forget the open workspace and the cached
     // listings with it, so unlocking unwraps everything again instead of trusting
@@ -143,10 +144,10 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
 }
 
 export function DriveShell({ user, children }: { user: SessionUser; children: ReactNode }) {
-    const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
-    const restoring = useStore(authClient.store, (state) => state.restoring);
+    const unlockedUser = useAuthView((state) => state.unlockedUserId);
+    const restoring = useAuthView((state) => state.restoring);
     const unlocked = unlockedUser === user.id;
-    const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
+    const lockRevision = useAuthView((state) => state.lockRevision);
     // Saved device access is tried before anything is called locked, so a refresh
     // shows "opening" and then the folder, never a flash of the unlock form. A
     // query, so the attempt is made once per account, credential and lock, and
@@ -165,13 +166,15 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     // The same query the runtime holds open: no second request, no second open.
     const opened = useQuery({ ...driveOpenQueryOptions(user.id), enabled: unlocked });
     const router = useRouter();
+    const [signOutFailed, setSignOutFailed] = useState(false);
     async function signOut() {
+        setSignOutFailed(false);
         try {
-            await signOutOfBrowser();
-        } finally {
-            forgetSession(router.options.context.queryClient, false);
-            await router.navigate({ to: '/login' });
-            router.options.context.queryClient.clear();
+            await leaveApp(router, { dim: true });
+        } catch {
+            // Locked here and still signed in: the locked screen says so beside Unlock.
+            cue('error');
+            setSignOutFailed(true);
         }
     }
 
@@ -188,6 +191,14 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                 <p className="mt-1.5 text-[15px] text-muted-foreground">
                     Enter your password to open your files on this browser.
                 </p>
+                {signOutFailed && (
+                    <Alert variant="destructive" className="mt-5 text-left">
+                        <AlertDescription>
+                            Signing out didn’t finish. Check your connection and try again from your
+                            account menu.
+                        </AlertDescription>
+                    </Alert>
+                )}
                 <UnlockDevice user={user} className="mt-5 w-full" />
             </Centered>
         );
@@ -202,6 +213,13 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                 <p className="mt-1.5 text-[15px] text-muted-foreground">
                     {driveError(opened.error)}
                 </p>
+                {signOutFailed && (
+                    <Alert variant="destructive" className="mt-5 text-left">
+                        <AlertDescription>
+                            Signing out didn’t finish. Check your connection and try again.
+                        </AlertDescription>
+                    </Alert>
+                )}
                 <div className="mt-5 flex gap-2">
                     <Button onClick={() => void opened.refetch()}>Try again</Button>
                     <Button variant="ghost" onClick={() => void signOut()}>

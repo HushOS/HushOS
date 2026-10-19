@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { SearchIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
+import { useAuthView, useSigningOut } from '@/lib/auth-view';
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
 import { UserMenu } from '@/components/user-menu';
@@ -55,9 +55,9 @@ function AppLayout() {
     const tablet = useIsTablet();
     const sidebarOpen = sidebarChoice ?? !tablet;
     const queryClient = router.options.context.queryClient;
-    const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
-    const rememberError = useStore(authClient.store, (state) => state.rememberError);
-    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId === user.id);
+    const lockRevision = useAuthView((state) => state.lockRevision);
+    const rememberError = useAuthView((state) => state.rememberError);
+    const unlocked = useAuthView((state) => state.unlockedUserId === user.id);
     const [setupError, setSetupError] = useState('');
     const [checkingOut, setCheckingOut] = useState(false);
     // Back from Polar's checkout: show the app, not "Taking you to checkout…".
@@ -160,6 +160,7 @@ function AppLayout() {
             style={{ '--sidebar-width': '15rem' } as CSSProperties}
         >
             <NavigationBar />
+            <SigningOutCover />
             <AppSidebar user={user} />
             {/*
              * The panel every page sits in. On a desk-sized screen it keeps its place, a margin
@@ -259,5 +260,41 @@ function AppLayout() {
             <CollisionDialog />
             <CommandCenter user={user} />
         </SidebarProvider>
+    );
+}
+
+const passesThrough = (event: KeyboardEvent) =>
+    event.key === 'Tab' ||
+    event.key === 'Escape' ||
+    event.key === 'F5' ||
+    ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'r');
+
+/*
+ * While signing out the page takes no keys: a shortcut would act on what is leaving. Signing out
+ * from the palette or a Drive that didn't open leaves no busy control on screen, so the page also
+ * dims and takes no clicks until the sign-in page replaces it.
+ */
+function SigningOutCover() {
+    const { held, dim } = useSigningOut();
+    useEffect(() => {
+        if (!held) return;
+        const swallow = (event: KeyboardEvent) => {
+            // Moving focus, Escape and reloading stay the person's own.
+            if (passesThrough(event)) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        };
+        for (const type of ['keydown', 'keypress', 'keyup'] as const)
+            window.addEventListener(type, swallow, { capture: true });
+        return () => {
+            for (const type of ['keydown', 'keypress', 'keyup'] as const)
+                window.removeEventListener(type, swallow, { capture: true });
+        };
+    }, [held]);
+    if (!dim) return null;
+    return (
+        <div className="fixed inset-0 z-50 bg-scrim transition-opacity duration-150 starting:opacity-0">
+            <output className="sr-only">Signing out</output>
+        </div>
     );
 }

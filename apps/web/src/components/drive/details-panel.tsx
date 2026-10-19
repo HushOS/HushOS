@@ -3,7 +3,6 @@ import { integrityIssues, type IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
 import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { useStore } from 'zustand';
 import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import {
@@ -16,7 +15,7 @@ import { FileMark } from '@/components/drive/file-mark';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
-import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import {
     changedByLabel,
     changedByWords,
@@ -337,7 +336,7 @@ function OwnCopy({ node }: { node: DriveNode }) {
 
 /* Who wrote what did not verify, as this person can name them: from their own pins only. */
 function ChangedBy({ issue }: { issue: IntegrityIssue }) {
-    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const userId = useAuthView((state) => state.unlockedUserId);
     return <span>{changedByWords(issue, useSignerNames(userId, true))}</span>;
 }
 
@@ -356,7 +355,7 @@ export function ItemDetails({
     const area = useFamilyArea();
     const registry = useQuery({ ...tagsQueryOptions, enabled: !area }).data ?? null;
     const tagIds = registry ? tagsOf(registry, node.id) : [];
-    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const userId = useAuthView((state) => state.unlockedUserId);
     const names = useSignerNames(userId, true);
     // In a family folder the verdict says whose word vouched (`via`); elsewhere a writer pinned
     // on a family's word does.

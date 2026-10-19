@@ -2,6 +2,7 @@ import type { NodeChange, ShareChange } from '@hushos/drive/api';
 import { DriveApiError } from '@hushos/drive/api';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
+import { isLeaving } from '@/lib/auth-view';
 import { driveClient, driveKeys, sharedQueryOptions } from '@/lib/drive';
 
 /*
@@ -61,7 +62,9 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
         let timer: number | undefined;
         async function tick() {
             if (stopped) return;
-            if (document.visibilityState === 'visible') {
+            // Signing out: the mirror is being cleared, and a page of changes would write the
+            // tree back and redraw the page being left.
+            if (document.visibilityState === 'visible' && !isLeaving()) {
                 await pollOwn();
                 await pollShares();
             }
@@ -71,11 +74,14 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
             const cursor = own.current;
             try {
                 let page = await driveClient.changesSince(workspaceId!, cursor.since);
+                // A sign-out began while it was on its way: the page being left stays as drawn.
+                if (isLeaving()) return;
                 apply(queryClient, page.changes);
                 cursor.since = page.nextCursor;
                 // A backlog after a long sleep: drain it in a few more pages, then rest.
                 for (let more = 0; page.hasMore && more < 5; more++) {
                     page = await driveClient.changesSince(workspaceId!, cursor.since);
+                    if (isLeaving()) return;
                     apply(queryClient, page.changes);
                     cursor.since = page.nextCursor;
                 }
@@ -97,6 +103,7 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
                     continue;
                 try {
                     const page = await driveClient.shareChangesSince(mount.id, cursor.cursor);
+                    if (isLeaving()) return;
                     apply(queryClient, page.changes);
                     cursor.cursor = page.cursor;
                     cursor.failures = 0;

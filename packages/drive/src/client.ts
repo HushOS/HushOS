@@ -598,15 +598,22 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         };
     }
 
-    /* Pulls the feed from the mirror's cursor until the head (or `until`), committing each page; returns what arrived. */
+    /*
+     * Pulls the feed from the mirror's cursor until the head (or `until`), committing each page;
+     * returns what arrived. A close() in between stops it before the next write: signing out
+     * clears the mirror, and a pull still on its way must not write the tree back.
+     */
     function pullFeed(workspaceId: string, until?: number) {
         const mirror = options.mirror!;
+        const startedIn = generation;
         const work = feedChain.then(async () => {
             const arrived: NodeChange[] = [];
+            if (generation !== startedIn) return arrived;
             let cursor = await mirror.cursor(workspaceId);
             for (;;) {
                 if (until !== undefined && cursor >= until) break;
                 const page = await api.changes(workspaceId, cursor, FEED_PAGE);
+                if (generation !== startedIn) break;
                 for (const change of page.changes)
                     if (change.kind === 'node') remember([change.node]);
                 await mirror.apply(workspaceId, page.changes, page.nextCursor);

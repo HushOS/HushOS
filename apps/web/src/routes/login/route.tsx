@@ -97,7 +97,8 @@ function LoginPage() {
             setPending(true);
             try {
                 await authClient.login(value.email, value.password);
-                form.reset();
+                // The form keeps what was typed and stays busy until the app replaces it:
+                // emptied first, it would look for a moment as if signing in had failed.
                 cue('success');
                 const queryClient = router.options.context.queryClient;
                 queryClient.clear();
@@ -121,6 +122,8 @@ function LoginPage() {
                 cue('error');
                 setError(authError(error, { signIn: true }));
             } finally {
+                // Unmounted by now, unless the app sent this page back to itself (a session the
+                // browser did not keep): then the form, still filled in, can be used again.
                 setPending(false);
             }
         },

@@ -20,6 +20,7 @@ import { PasswordInput } from '@/components/password-input';
 import { toast } from '@/components/ui/toast';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { unlockedNow, useAuthView } from '@/lib/auth-view';
 import { downloadNodes } from '@/lib/downloads';
 import {
     driveClient,
@@ -51,7 +52,6 @@ import {
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { useStore } from 'zustand';
 
 /*
  * A link opened by anyone: the path token names the share, the fragment
@@ -744,7 +744,7 @@ function SaveToDrive({ opened }: { opened: Opened }) {
     const { hasSession } = useRouteContext({ from: '__root__' });
     const queryClient = useQueryClient();
     const router = useRouter();
-    const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const unlockedUserId = useAuthView((state) => state.unlockedUserId);
     const [unlocking, setUnlocking] = useState(false);
     const [saving, setSaving] = useState(false);
     // Who is signed in is asked only once the visitor presses Save: until then, nothing on
@@ -816,7 +816,7 @@ function SaveToDrive({ opened }: { opened: Opened }) {
         } catch {
             /* No remembered device: the dialog below asks for the password. */
         }
-        if (authClient.store.getState().unlockedUserId === signedIn.id) return save(signedIn);
+        if (unlockedNow() === signedIn.id) return save(signedIn);
         setUnlocking(true);
     }
     return (

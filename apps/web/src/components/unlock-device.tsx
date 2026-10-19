@@ -37,9 +37,11 @@ export function UnlockDevice({
             setError('');
             try {
                 await authClient.login(user.email, value.password);
-                form.reset();
                 cue('success');
+                // Kept, and busy, while what unlocking opens takes over; emptied after,
+                // in case this form stays on screen.
                 await onUnlocked?.();
+                form.reset();
             } catch (error) {
                 cue('error');
                 setError(authError(error));

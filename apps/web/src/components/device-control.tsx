@@ -1,6 +1,5 @@
 import { LockKeyholeIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useStore } from 'zustand';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -21,6 +20,7 @@ import {
 import { toast } from '@/components/ui/toast';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -59,7 +59,7 @@ export function DeviceControl({
     user: { id: string; email: string };
     onUnlocked?: () => void | Promise<void>;
 }) {
-    const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
+    const unlockedUser = useAuthView((state) => state.unlockedUserId);
     const unlocked = unlockedUser === user.id;
     const [open, setOpen] = useState(false);
     const [locking, setLocking] = useState(false);
