@@ -116,7 +116,7 @@ function RecoveryKeyPage() {
                                         id="phrase-saved"
                                         checked={saved}
                                         onCheckedChange={(value) => setSaved(value === true)}
-                                        className="mt-0.5"
+                                        className="mt-px"
                                     />
                                     I’ve saved my recovery phrase somewhere private. I understand
                                     HushOS can’t recover it for me.

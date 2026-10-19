@@ -210,7 +210,7 @@ export function RecoveryPhrase({
                                         onCheckedChange={(value) =>
                                             setSavedAt(value === true ? lockRevision : null)
                                         }
-                                        className="mt-0.5"
+                                        className="mt-px"
                                     />
                                     I’ve saved my kit or written the words down, somewhere private.
                                 </label>

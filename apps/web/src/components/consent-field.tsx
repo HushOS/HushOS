@@ -28,7 +28,7 @@ export function ConsentField({
                     aria-invalid={invalid}
                     aria-describedby={invalid ? 'agree-error' : undefined}
                     disabled={disabled}
-                    className="mt-0.5"
+                    className="mt-px"
                 />
                 <label htmlFor="agree" className="text-sm leading-snug select-none">
                     I agree to the{' '}
