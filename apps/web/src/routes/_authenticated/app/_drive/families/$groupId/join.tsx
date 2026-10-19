@@ -318,8 +318,8 @@ function JoinFamily() {
                             </Alert>
                         )}
                         <p className="text-[15px]">
-                            When {them}’s screen shows a join code, they’ll read it to you. Check
-                            the words match and type the two that are hidden.
+                            {them}’s screen shows the join code now. Ask them to read it to you,
+                            check the words match, and type the two that are hidden.
                         </p>
                         <HiddenCode
                             shown={step.mark.code.map((word, at) =>
@@ -334,7 +334,8 @@ function JoinFamily() {
                             }}
                         />
                         {step.wrong && (
-                            <p role="alert" data-wrong-words className="text-sm">
+                            // The calm retry: a typo is likely, so an error line by the fields, never the alarm.
+                            <p role="alert" data-wrong-words className="text-sm text-destructive">
                                 {wrongWordsCopy(them)}
                             </p>
                         )}
@@ -457,7 +458,7 @@ function HiddenCode({
             data-kind="join-code"
             data-words={shown.map((word) => word ?? '?').join(' ')}
             data-hidden={hidden.map((at) => at + 1).join(' ')}
-            className="grid w-full grid-cols-3 gap-1.5 sm:grid-cols-4"
+            className="grid w-full grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-1.5"
         >
             {shown.map((word, at) => {
                 const slot = hidden.indexOf(at);

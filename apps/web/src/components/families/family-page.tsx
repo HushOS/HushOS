@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useNavigate } from '@tanstack/react-router';
-import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
+import { ChevronDownIcon, RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -347,9 +347,13 @@ export function FamilyPage({
             />
 
             <section className="flex flex-col gap-3 px-5 pt-8 sm:px-8">
-                <details className="rounded-xl border border-rule px-4 py-3 text-[13px]">
-                    <summary className="cursor-pointer font-semibold">
+                <details className="group rounded-xl border border-rule px-4 py-3 text-[13px]">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-semibold [&::-webkit-details-marker]:hidden">
                         Technical details and leaving
+                        <ChevronDownIcon
+                            aria-hidden="true"
+                            className="size-4 text-muted-foreground transition-transform group-open:rotate-180"
+                        />
                     </summary>
                     {view ? (
                         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">

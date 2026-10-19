@@ -243,11 +243,15 @@ export function MemberList({
     const [removing, setRemoving] = useState<FamilyMember | null>(null);
     const [busy, setBusy] = useState(false);
     const [showingCode, setShowingCode] = useState<FamilyMember | null>(null);
-    const active = members.filter((member) => member.state === 'active');
     // Roles as the member list this device checked says, where it has one; else the server's.
     const rolesOf = (member: FamilyMember): GroupRole[] =>
         (view?.members.find((entry) => entry.userId === member.userId)?.roles ??
             member.roles) as GroupRole[];
+    // The organizer first, then everyone else in the order the server gives.
+    const organizer = (member: FamilyMember) => (rolesOf(member).includes('billing') ? 0 : 1);
+    const active = members
+        .filter((member) => member.state === 'active')
+        .sort((a, b) => organizer(a) - organizer(b));
     const me = active.find((member) => member.userId === userId);
     const iAmOrganizer = me ? rolesOf(me).includes('billing') : false;
 

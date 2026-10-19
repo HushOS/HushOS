@@ -29,7 +29,8 @@ import '@/lib/spaces';
 
 /*
  * "Remove from family" (1c step 7): asked once, then a sheet that shows the
- * removal going hold, finish, remove (lib/groups/removal.ts). The walk of
+ * removal going hold, finish (only when an earlier key change was running),
+ * remove (lib/groups/removal.ts). The walk of
  * each family folder that follows runs in the background, and the family
  * page says how far it got. When someone paused this manager's changes, it
  * says so plainly; when that someone is the person being removed (they manage
@@ -39,8 +40,8 @@ import '@/lib/spaces';
 
 type Phase =
     | { kind: 'confirm' }
-    | { kind: 'running'; step: RemovalStep; demote: boolean }
-    | { kind: 'done'; outcome: RemovalOutcome; demoted: boolean }
+    | { kind: 'running'; step: RemovalStep; demote: boolean; finished: boolean }
+    | { kind: 'done'; outcome: RemovalOutcome; demoted: boolean; finished: boolean }
     | { kind: 'error'; message: string };
 
 const STEPS: { step: RemovalStep; label: (who: string) => string }[] = [
@@ -72,15 +73,20 @@ export function RemoveDialog({
     const busy = phase.kind === 'running';
 
     async function run(demote: boolean) {
-        setPhase({ kind: 'running', step: demote ? 'demote' : 'hold', demote });
+        // Whether an earlier key change was running and had to be finished: its step shows then.
+        let finished = false;
+        setPhase({ kind: 'running', step: demote ? 'demote' : 'hold', demote, finished });
         try {
             const outcome = await removeMember(familyContext(userId), groupId, member.userId, {
                 family,
                 demoteFirst: demote,
-                onStep: (step) => setPhase({ kind: 'running', step, demote }),
+                onStep: (step) => {
+                    if (step === 'finish') finished = true;
+                    setPhase({ kind: 'running', step, demote, finished });
+                },
             });
             cue(outcome.status === 'removed' ? 'success' : 'error');
-            setPhase({ kind: 'done', outcome, demoted: demote });
+            setPhase({ kind: 'done', outcome, demoted: demote, finished });
         } catch (cause) {
             cue('error');
             setPhase({ kind: 'error', message: errorCopy(cause, { family, person: who }) });
@@ -112,12 +118,13 @@ export function RemoveDialog({
             </AlertDialog>
         );
 
-    const steps = STEPS.filter(
-        (entry) =>
-            entry.step !== 'demote' ||
-            (phase.kind === 'running' && phase.demote) ||
-            (phase.kind === 'done' && phase.demoted),
-    );
+    const steps = STEPS.filter((entry) => {
+        if (phase.kind !== 'running' && phase.kind !== 'done')
+            return entry.step !== 'demote' && entry.step !== 'finish';
+        if (entry.step === 'demote') return phase.kind === 'running' ? phase.demote : phase.demoted;
+        if (entry.step === 'finish') return phase.finished;
+        return true;
+    });
     const at = phase.kind === 'running' ? steps.findIndex((s) => s.step === phase.step) : -1;
     const removed = phase.kind === 'done' && phase.outcome.status === 'removed';
     return (

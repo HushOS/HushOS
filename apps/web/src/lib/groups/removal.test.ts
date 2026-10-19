@@ -137,7 +137,8 @@ describe('removing someone: hold, finish, remove', () => {
             onStep: (step) => steps.push(step),
         });
         expect(outcome).toEqual({ status: 'removed' });
-        expect(steps).toEqual(['demote', 'hold', 'finish', 'remove']);
+        // No walk was running, so no earlier key change is said to be finished.
+        expect(steps).toEqual(['demote', 'hold', 'remove']);
         const [demotion] = server.sent('member');
         expect(demotion!.succession).toBeDefined();
         expect(rotationsOf(demotion!)).toEqual([]);

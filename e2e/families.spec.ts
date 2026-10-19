@@ -993,11 +993,13 @@ test.describe.serial('removal, leaving and key changes', () => {
         await confirm.getByRole('button', { name: 'Remove from family' }).click();
         const sheet = maya.page.getByRole('dialog', { name: 'Remove Sam' });
         await expect(sheet.locator('[data-outcome="removed"]')).toBeVisible({ timeout: 120_000 });
-        for (const step of ['hold', 'finish', 'remove'])
+        for (const step of ['hold', 'remove'])
             await expect(sheet.locator(`[data-step="${step}"]`)).toHaveAttribute(
                 'data-state',
                 'done',
             );
+        // Replace keys' walk ended above, so no earlier key change was finished, and none is said.
+        await expect(sheet.locator('[data-step="finish"]')).toHaveCount(0);
         await maya.page.screenshot({ path: test.info().outputPath('removal-progress.png') });
         await sheet.getByRole('button', { name: 'Done' }).click();
         await expect(maya.page.locator(`[data-member="${sam.email}"]`)).toHaveCount(0, {
@@ -1153,10 +1155,9 @@ test.describe.serial('removal, leaving and key changes', () => {
             .first()
             .click({ position: { x: 16, y: 12 } });
         await maya.page.keyboard.press('i');
-        await expect(maya.page.locator('[data-details] [data-keys-replaced]')).toHaveText(
-            'Keys replaced by you',
-            { timeout: 60_000 },
-        );
+        await expect(maya.page.locator('[data-details] [data-keys-replaced]')).toHaveText('You', {
+            timeout: 60_000,
+        });
         await maya.page.screenshot({ path: test.info().outputPath('rekeyed-info.png') });
         await maya.page.keyboard.press('Escape');
         await fresh.page.goto(spacePath);
