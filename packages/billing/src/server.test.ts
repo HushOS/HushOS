@@ -221,6 +221,8 @@ const polar = {
     refundErrorsAfterStripe: false,
     /* Each refunds call waits this long, so two runs can interleave. */
     refundLatencyMs: 0,
+    /* Awaited once inside the next refunds listing: a run that stalls there. */
+    onRefundList: null as (() => Promise<void>) | null,
     /* The status Polar gives a new refund. */
     refundStatus: 'succeeded' as 'pending' | 'succeeded' | 'failed',
     /* The refunds API can't be read (a token without `refunds:read`). */
@@ -752,13 +754,17 @@ const fakeClient = {
     refunds: {
         async list(query: { order_id?: string }) {
             polar.calls.push(`refunds.list:${query.order_id}`);
+            if (polar.refundsUnreadable) throw new PolarClientError(403, { error: 'NotPermitted' });
+            // What Polar held when it answered; the answer may then be slow to arrive.
+            const items = polar.refunds
+                .filter((refund) => refund.order_id === query.order_id)
+                .map((refund) => ({ ...refund }));
+            const stall = polar.onRefundList;
+            polar.onRefundList = null;
+            await stall?.();
             if (polar.refundLatencyMs)
                 await new Promise((r) => setTimeout(r, polar.refundLatencyMs));
-            if (polar.refundsUnreadable) throw new PolarClientError(403, { error: 'NotPermitted' });
-            return {
-                items: polar.refunds.filter((refund) => refund.order_id === query.order_id),
-                pagination: { total_count: 0, max_page: 1 },
-            };
+            return { items, pagination: { total_count: 0, max_page: 1 } };
         },
         async create(body: {
             order_id: string;
@@ -910,6 +916,7 @@ beforeEach(async () => {
     polar.refundAnswerLost = false;
     polar.refundErrorsAfterStripe = false;
     polar.refundLatencyMs = 0;
+    polar.onRefundList = null;
     polar.refundStatus = 'succeeded';
     polar.refundsUnreadable = false;
     polar.revokeAt = null;
@@ -3942,9 +3949,10 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         expect(await billingRepository.listLiveSubscriptionIds(member.userId)).toEqual([]);
 
         // pg-boss runs the same job again: the worker died after Polar refunded, before the
-        // refund and the ending were marked done here.
+        // refund and the ending were marked done here, and (a restore from an older backup)
+        // without even the record that HushOS had asked. Only the key ties Polar's refund to it.
         await rawSql(
-            "update personal_plan_refunds set status = 'requested', provider_refund_id = null",
+            "update personal_plan_refunds set status = 'requested', provider_refund_id = null, first_attempted_at = null, last_attempted_at = null",
         );
         await rawSql('update personal_plan_endings set outcome = null');
         await billing.endPersonalPlans(job);
@@ -4102,8 +4110,41 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         ]);
     });
 
-    test('a credit from the customer’s balance is never refunded as if paid by card', async () => {
-        // 300 of the 999 came from credit: half of the 699 paid, 349.
+    test('an operator’s pending refund that later fails is owed again, though HushOS already asked for its own', async () => {
+        const { member, job } = await pooledSubscriber();
+        polar.refunds.push({
+            id: 'refund_by_hand',
+            order_id: 'order_cycle',
+            amount: 199,
+            status: 'pending',
+            metadata: {},
+            created_at: new Date(Date.now() - DAY).toISOString(),
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([
+            ['order_cycle', 199],
+            ['order_cycle', 400],
+        ]);
+        // Something is still pending on the order: it is read again, not settled.
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily).map((queued) => queued.userId)).toEqual([member.userId]);
+        // The operator's refund fails; the next run owes the 99 it no longer covers.
+        polar.refunds[0]!.status = 'failed';
+        await runQueued(daily);
+        expect(
+            polar.refunds
+                .filter((refund) => refund.status === 'succeeded')
+                .map((refund) => refund.amount),
+        ).toEqual([400, 99]);
+        const next = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(next)).toEqual([]);
+    });
+
+    test('an order paid partly from the customer’s balance refunds its unused share, within what Polar takes', async () => {
+        // 300 of the 999 came from credit (from an earlier period): the unused half, 499, is
+        // within the 699 Polar will refund on it.
         const { job } = await pooledSubscriber({
             orders: (now) => [
                 {
@@ -4116,12 +4157,12 @@ describe('a personal plan ends when its owner’s files join a family', () => {
             ],
         });
         await billing.endPersonalPlans(job);
-        expect(refundsMade()).toEqual([['order_cycle', 349]]);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
         expect(await billingRepository.listRefundsOwed()).toEqual([]);
     });
 
     test('a credit of most of the order leaves a refund Polar will take, not one refused for ever', async () => {
-        // 800 of credit: Polar takes at most 199 back, so half of it, 99.
+        // 800 of credit: Polar takes at most 199 back on it, so 199, never 499 refused for ever.
         const { job } = await pooledSubscriber({
             orders: (now) => [
                 {
@@ -4134,7 +4175,8 @@ describe('a personal plan ends when its owner’s files join a family', () => {
             ],
         });
         await billing.endPersonalPlans(job);
-        expect(refundsMade()).toEqual([['order_cycle', 99]]);
+        expect(refundsMade()).toEqual([['order_cycle', 199]]);
+        expect(await billingRepository.listRefundsOwed()).toEqual([]);
     });
 
     test('a mid-period downgrade’s credit is netted against the refund', async () => {
@@ -4159,6 +4201,41 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         await billing.endPersonalPlans(job);
         expect(refundsMade()).toEqual([['order_cycle', 200]]);
         expect(callsTo('refunds.list:order_downgrade')).toEqual([]);
+    });
+
+    test('a downgrade then an upgrade paid from its credit: every unused share counts, signed', async () => {
+        // 30 days, revoked on day 15. Day 0 renewal 1000; day 10 a downgrade credits 400 to the
+        // balance (300 of it for days 10-30 still unused at day 15); day 12 an upgrade charges
+        // 360 for days 12-30, all of it from that balance (300 for the 15 days unused). Owed:
+        // 500 - 300 + 300 = 500, all on the renewal, the only order Polar refunds by card. The
+        // 40 left in the balance is what the days used were worth.
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+                {
+                    id: 'order_downgrade',
+                    created_at: new Date(now - 5 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: -400,
+                },
+                {
+                    id: 'order_upgrade',
+                    created_at: new Date(now - 3 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: 360,
+                    applied_balance_amount: -360,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 500]]);
+        // Polar would refund nothing on the upgrade: its refunds are never even listed.
+        expect(callsTo('refunds.list:order_upgrade')).toEqual([]);
     });
 
     test('an order that charged nothing is settled without listing its refunds', async () => {
@@ -4194,10 +4271,42 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         ]);
         // One did the work; the other stopped before asking Polar for anything.
         expect(runs.map((run) => run.status).sort()).toEqual(['fulfilled', 'rejected']);
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+        expect(callsTo('refunds.list')).toHaveLength(1);
         expect(refundsMade()).toEqual([['order_cycle', 499]]);
         // The retry pg-boss makes of the one that stopped finds it done.
         polar.refundLatencyMs = 0;
         await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a run that stalled past its lease, which another run took, asks Polar for nothing more', async () => {
+        const { job, now } = await pooledSubscriber();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            vi.setSystemTime(now);
+            // The first run revokes, then stalls in its refunds listing.
+            let resume = () => {};
+            let stalled = () => {};
+            const reached = new Promise<void>((resolve) => (stalled = resolve));
+            polar.onRefundList = () =>
+                new Promise<void>((resolve) => {
+                    resume = resolve;
+                    stalled();
+                });
+            const first = billing.endPersonalPlans(job);
+            await reached;
+            // Past its lease (pg-boss's ten minutes, say), a retry takes the ending and refunds.
+            vi.setSystemTime(now + billing.PLAN_ENDING_LEASE_MS + 60_000);
+            await billing.endPersonalPlans(job);
+            expect(refundsMade()).toEqual([['order_cycle', 499]]);
+            // The first resumes with its stale listing: it must not ask for 499 again.
+            resume();
+            await expect(first).rejects.toMatchObject({ name: 'PlanEndingBusyError' });
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(callsTo('refunds.create')).toHaveLength(1);
         expect(refundsMade()).toEqual([['order_cycle', 499]]);
     });
 

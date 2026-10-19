@@ -253,6 +253,14 @@ export const personalPlanEndings = pgTable(
          * revoked, `ended` when Polar had ended it before they were pooled.
          */
         outcome: text(),
+        /*
+         * The run working this ending and until when (the app's clock): taken with a
+         * conditional update, renewed between steps and checked right before every refund
+         * is asked for, so a run that lost it (stalled past it while pg-boss retried) asks
+         * Polar for nothing more.
+         */
+        leaseOwner: text('lease_owner'),
+        leaseUntil: timestamp('lease_until', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
@@ -283,7 +291,11 @@ export const personalPlanRefunds = pgTable(
         orderId: text('order_id').primaryKey(),
         subscriptionId: text('subscription_id').notNull(),
         refundKey: text('refund_key').notNull().unique(),
-        // Minor units, before tax: Polar adds the matching tax itself.
+        /*
+         * What HushOS means to have refunded on the order in all, minor units, before tax
+         * (Polar adds the matching tax itself): recomputed from the order's refunds at every
+         * run, so a refund that fails later is owed again.
+         */
         amount: bigint('amount', { mode: 'number' }).notNull(),
         currency: text().notNull(),
         /*
@@ -294,16 +306,13 @@ export const personalPlanRefunds = pgTable(
         status: text().notNull(),
         providerRefundId: text('provider_refund_id'),
         /*
-         * When HushOS last asked Polar for it. Until the first ask the amount is recomputed
-         * from each listing of the order's refunds; from then on it is fixed.
+         * When HushOS first asked Polar for it: a live refund without the key that appears
+         * on the order from then on (one Polar recorded without the metadata after a call
+         * that errored, or an operator's) counts as this refund.
          */
-        attemptedAt: timestamp('attempted_at', { withTimezone: true }),
-        /*
-         * The order's other refunds (pending or succeeded, without this key) the amount
-         * already allowed for. Any other refund that appears later, whoever made it (an
-         * operator by hand, a refund Polar recorded without the key), counts against it.
-         */
-        countedRefundIds: text('counted_refund_ids').array(),
+        firstAttemptedAt: timestamp('first_attempted_at', { withTimezone: true }),
+        /* When it last asked: an owed refund is asked again at most daily. */
+        lastAttemptedAt: timestamp('last_attempted_at', { withTimezone: true }),
         failures: integer().notNull().default(0),
         owedSince: timestamp('owed_since', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

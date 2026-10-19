@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "1d5daa5b-daf1-4562-aa75-7d3e19009925",
+    "id": "2920d56f-9da9-49f8-b1bb-e816183c1cd9",
     "prevIds": ["79d87a46-916c-4807-ac98-6e3cae82a737"],
     "ddl": [
         {
@@ -7611,6 +7611,32 @@
             "table": "personal_plan_endings"
         },
         {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "lease_owner",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_endings"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "lease_until",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_endings"
+        },
+        {
             "type": "timestamp with time zone",
             "typeSchema": null,
             "notNull": true,
@@ -7735,20 +7761,20 @@
             "default": null,
             "generated": null,
             "identity": null,
-            "name": "attempted_at",
+            "name": "first_attempted_at",
             "entityType": "columns",
             "schema": "public",
             "table": "personal_plan_refunds"
         },
         {
-            "type": "text",
+            "type": "timestamp with time zone",
             "typeSchema": null,
             "notNull": false,
-            "dimensions": 1,
+            "dimensions": 0,
             "default": null,
             "generated": null,
             "identity": null,
-            "name": "counted_refund_ids",
+            "name": "last_attempted_at",
             "entityType": "columns",
             "schema": "public",
             "table": "personal_plan_refunds"

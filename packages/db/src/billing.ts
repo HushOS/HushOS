@@ -960,8 +960,7 @@ export async function getPlanRefund(orderId: string) {
 
 /*
  * Written before Polar is asked, with the key and amount, so the operators' list can
- * name a refund that never lands. Made once; `revisePlanRefund` brings the amount up
- * to date until it is first asked for.
+ * name a refund that never lands; made once, its amount kept current (setPlanRefundAmount).
  */
 export async function notePlanRefund(input: {
     orderId: string;
@@ -969,7 +968,6 @@ export async function notePlanRefund(input: {
     refundKey: string;
     amount: number;
     currency: string;
-    countedRefundIds: string[] | null;
     status?: 'requested' | 'none';
 }) {
     await db
@@ -978,57 +976,85 @@ export async function notePlanRefund(input: {
         .onConflictDoNothing();
 }
 
-/*
- * The amount recomputed from a fresh listing of the order's refunds, only while
- * HushOS has never asked Polar for it: once asked, the amount is fixed.
- */
-export async function revisePlanRefund(
-    orderId: string,
-    input: { amount: number; countedRefundIds: string[] },
-) {
+/* What HushOS means to have refunded on the order in all, as this run computed it. */
+export async function setPlanRefundAmount(orderId: string, amount: number) {
     await db
         .update(personalPlanRefunds)
-        .set({ ...input, updatedAt: new Date() })
-        .where(
-            and(eq(personalPlanRefunds.orderId, orderId), isNull(personalPlanRefunds.attemptedAt)),
-        );
+        .set({ amount, updatedAt: new Date() })
+        .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
-/* Stamped just before Polar is asked, so a crash mid-call leaves the amount fixed. */
+/* Stamped just before Polar is asked: the first ask once, the last every time. */
 export async function markPlanRefundAttempt(orderId: string, at: Date) {
     await db
         .update(personalPlanRefunds)
-        .set({ attemptedAt: at, updatedAt: at })
+        .set({
+            firstAttemptedAt: sql`coalesce(${personalPlanRefunds.firstAttemptedAt}, ${at.toISOString()}::timestamptz)`,
+            lastAttemptedAt: at,
+            updatedAt: at,
+        })
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
 /*
- * Runs `work` holding one person's plan-ending lock (a session advisory lock on a
- * connection of its own, held across Polar's calls), or returns null when another
- * run holds it: two runs of the job for one person (pg-boss retrying one it took
- * for dead while it still runs) never ask Polar for the same refund at once. The
- * lock goes with the connection if the process dies.
+ * Takes the ending for `owner` until `now + ms` (the app's clock), when nobody holds
+ * it, its holder's time ran out, or `owner` holds it already: true when taken. Two
+ * runs for one person never work one ending at once, and a run that stalled past its
+ * lease finds it gone (renewPlanEndingLease) before it asks Polar for anything more.
+ * Plain rows and the app's clock, so it holds behind a transaction-mode pooler and
+ * survives a dropped connection.
  */
-const PLAN_ENDING_LOCK_SPACE = 0x706c616e;
-export async function withPlanEndingLock<T>(userId: string, work: () => Promise<T>) {
-    const client = await db.$client.connect();
-    try {
-        const { rows } = await client.query<{ ok: boolean }>(
-            'select pg_try_advisory_lock($1::int, hashtext($2)) as ok',
-            [PLAN_ENDING_LOCK_SPACE, userId],
+export async function takePlanEndingLease(
+    subscriptionId: string,
+    owner: string,
+    now: Date,
+    ms: number,
+) {
+    const rows = await db
+        .update(personalPlanEndings)
+        .set({ leaseOwner: owner, leaseUntil: new Date(now.getTime() + ms) })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                sql`(${personalPlanEndings.leaseUntil} is null or ${personalPlanEndings.leaseUntil} <= ${now.toISOString()}::timestamptz or ${personalPlanEndings.leaseOwner} = ${owner})`,
+            ),
+        )
+        .returning({ subscriptionId: personalPlanEndings.subscriptionId });
+    return rows.length === 1;
+}
+
+/* Extends the lease only while `owner` still holds it and it hasn't run out: false otherwise. */
+export async function renewPlanEndingLease(
+    subscriptionId: string,
+    owner: string,
+    now: Date,
+    ms: number,
+) {
+    const rows = await db
+        .update(personalPlanEndings)
+        .set({ leaseUntil: new Date(now.getTime() + ms) })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                eq(personalPlanEndings.leaseOwner, owner),
+                sql`${personalPlanEndings.leaseUntil} > ${now.toISOString()}::timestamptz`,
+            ),
+        )
+        .returning({ subscriptionId: personalPlanEndings.subscriptionId });
+    return rows.length === 1;
+}
+
+/* Lets the lease go, if `owner` still holds it. */
+export async function releasePlanEndingLease(subscriptionId: string, owner: string) {
+    await db
+        .update(personalPlanEndings)
+        .set({ leaseOwner: null, leaseUntil: null })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                eq(personalPlanEndings.leaseOwner, owner),
+            ),
         );
-        if (!rows[0]?.ok) return { held: false as const };
-        try {
-            return { held: true as const, value: await work() };
-        } finally {
-            await client.query('select pg_advisory_unlock($1::int, hashtext($2))', [
-                PLAN_ENDING_LOCK_SPACE,
-                userId,
-            ]);
-        }
-    } finally {
-        client.release();
-    }
 }
 
 /*

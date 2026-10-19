@@ -34,6 +34,7 @@ export {
 } from './provider';
 export {
     endPersonalPlans,
+    PLAN_ENDING_LEASE_MS,
     PlanEndingBusyError,
     queuePlanEnding,
     reconcilePlanEndings,
