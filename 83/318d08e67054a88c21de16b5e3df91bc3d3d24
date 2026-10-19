@@ -1,0 +1,43 @@
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_92c0cf3097db27 156
+DESIGN.md
+  s_c56e31c87cddde::t_5f55efe83f0169 331,527
+apps/web/scripts/optimize-images.tsx
+  s_c56e31c87cddde::t_9f1c1ae4a280c2 6,15-37,47
+apps/web/src/lib/brand.ts
+  s_c56e31c87cddde::t_df2ef16b64b39e 85-88,91-94,97-98
+packages/emails/src/rendered/group-invitation.ts
+  s_c56e31c87cddde::t_3a1e1b75d91863 3
+packages/emails/src/rendered/security-notice.ts
+  s_c56e31c87cddde::t_71c25e53bb306c 4,8,12,16
+packages/emails/src/rendered/share-notice.ts
+  s_c56e31c87cddde::t_a834483c21e43f 4,8
+packages/emails/src/rendered/verify-email.ts
+  s_c56e31c87cddde::t_7919c26a5206f3 4,8
+packages/emails/src/service.ts
+  s_c56e31c87cddde::t_8301a196af8937 126,153,186,213
+packages/emails/src/templates/group-invitation.tsx
+  s_c56e31c87cddde::t_2b0a0b12ae3f23 42,48,120-122,124-130
+packages/emails/src/templates/security-notice.tsx
+  s_c56e31c87cddde::t_bd60df476568f9 87,157-168
+packages/emails/src/templates/share-notice.tsx
+  s_c56e31c87cddde::t_05b3fe7d95155b 40,46,117-119,121-127
+packages/emails/src/templates/verify-email.tsx
+  s_c56e31c87cddde::t_f2dcb721e969ac 19-20,35,40,116-118,120-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "83318d08e67054a88c21de16b5e3df91bc3d3d24",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
