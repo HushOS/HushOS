@@ -1,0 +1,87 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ErrorWords.swift
+  s_c56e31c87cddde::t_2064ed04c05113 1-62
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ErrorWordsTests.swift
+  s_c56e31c87cddde::t_30829d06c4b8ec 1-134
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_6aed0e433290ce 39-40,79
+apps/ios/App/AccountView.swift
+  s_c56e31c87cddde::t_4090f77429515d 208,651,831,914,985,1042
+apps/ios/App/ActionSheets.swift
+  s_c56e31c87cddde::t_6b50482ad1ae19 244,456
+apps/ios/App/AppModel.swift
+  s_c56e31c87cddde::t_faaf3705f68613 121-122,126-128,168-170,173-184
+apps/ios/App/BrowseView.swift
+  s_c56e31c87cddde::t_ccbc6fe28acd0b 319,324,327,337,342,344
+apps/ios/App/DevicesView.swift
+  s_c56e31c87cddde::t_e547e43c493e3f 144,165,179,191
+apps/ios/App/DriveStore.swift
+  s_c56e31c87cddde::t_879792c9712267 455-457,461-462,476-477,647-648,760,1574-1575,1580-1581
+apps/ios/App/Received.swift
+  s_c56e31c87cddde::t_3e0c0aa50090ff 121,124-133,155,161,253,259,367-369,527,530,547,617,619,631,638,643,662,774
+apps/ios/App/RecentsView.swift
+  s_c56e31c87cddde::t_76f10cbe7e3b05 69,306,651
+apps/ios/App/RecoveryView.swift
+  s_c56e31c87cddde::t_fbd787ebdfe43f 71,111,363,388
+apps/ios/App/Sharing.swift
+  s_c56e31c87cddde::t_9f74fe209d9f89 286,303,332,433,527,611,624,820,837,997,1021,1093
+apps/ios/App/SignInView.swift
+  s_c56e31c87cddde::t_0fe9fac26147be 176
+apps/ios/App/Theme.swift
+  s_c56e31c87cddde::t_54a936e9141f82 152-155,177-178
+apps/ios/App/TransferNotices.swift
+  s_c56e31c87cddde::t_5f4205fa6da2c2 105-107,117-126
+apps/ios/App/Transfers.swift
+  s_c56e31c87cddde::t_76c324ff716154 28
+apps/ios/App/Viewer.swift
+  s_c56e31c87cddde::t_ea7fe056243523 43,66-67
+apps/ios/Files/FileProviderExtension.swift
+  s_c56e31c87cddde::t_f7cb5f7e0ec2be 24-28,48,51,58-59,72-73,288-311
+apps/ios/FilesUI/FileProviderUIController.swift
+  s_c56e31c87cddde::t_7c84f443593045 17-27,151
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_c56e31c87cddde::t_5db83327295474 89
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_c56e31c87cddde::t_50365b0d0446c2 38-39,64-72,111,126,149,208,318
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c56e31c87cddde::t_253fde3ed40e06 250,383-384
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWords.swift
+  s_c56e31c87cddde::t_f21b41b30f61ff 66
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FilesDomain.swift
+  s_c56e31c87cddde::t_e32ad39ec7cc60 126,140-152
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Integrity.swift
+  s_c56e31c87cddde::t_ba928c4dc293ca 288
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_c56e31c87cddde::t_cd034e973929c1 103,147
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_c56e31c87cddde::t_60b13a78c9f97f 170-171,314
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_c56e31c87cddde::t_a618e60f8727ca 170
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_c56e31c87cddde::t_b9c6a36821a889 113,137
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c56e31c87cddde::t_94ce38555cc08b 279
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_c56e31c87cddde::t_713839fb3a3079 320
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_c56e31c87cddde::t_b56d292b71d7eb 256
+apps/ios/Share/SaveModel.swift
+  s_c56e31c87cddde::t_455a4b4ac5e2f7 234
+apps/ios/Share/SaveView.swift
+  s_c56e31c87cddde::t_1b9ecce4157d7c 122,163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51b3a45d5687f5613e9886c33135581a04a09005",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
