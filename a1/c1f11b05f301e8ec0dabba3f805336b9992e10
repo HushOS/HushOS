@@ -1,0 +1,25 @@
+DESIGN.md
+  s_c56e31c87cddde::t_a8ec979d15d87b 346
+apps/web/src/components/drive/drive-shell.tsx
+  s_c56e31c87cddde::t_99b26b59a40c4d 3-11,15,189-215,217-238,261-276,278-281
+apps/web/src/components/drive/file-list.tsx
+  s_c56e31c87cddde::t_f532e6a46335df 15,630-633,635
+apps/web/src/components/drive/first-paint.ts
+  s_c56e31c87cddde::t_6e3900e43221e6 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a1c1f11b05f301e8ec0dabba3f805336b9992e10",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
