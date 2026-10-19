@@ -1,0 +1,25 @@
+apps/web/scripts/store-graphics.tsx
+  s_c56e31c87cddde::t_94b01aa8a2f85c 139
+docs/release/google.md
+  s_c56e31c87cddde::t_19fe39f206a03a 125
+docs/release/store-listing.md
+  s_c56e31c87cddde::t_f0cf8607ceae89 170-179,192,198
+scripts/store-screenshots.sh
+  s_c56e31c87cddde::t_2f2c07301619fa 175,179-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ddf397f792d0b98fe99a59ce56efc8f43cb26c7e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
