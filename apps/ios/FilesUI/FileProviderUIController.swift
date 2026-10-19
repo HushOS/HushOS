@@ -14,6 +14,17 @@ final class FileProviderUIController: FPUIActionExtensionViewController {
     override func prepare(forError error: Error) {
         show(SignInView(onDone: { [weak self] in self?.extensionContext.completeRequest() },
                         onCancel: { [weak self] in self?.cancel() }))
+        // Files keeps its "Authentication Required" page (and its Authenticate button) after a sign-in
+        // until the folder is opened again. Signed in already (from this sheet, or in the app): the
+        // location is told so and the sheet ends at once, rather than asking for the password twice.
+        Task { @MainActor [weak self] in
+            guard let session = SharedKeychain.session,
+                  FilesDomainOwner.admit(recorded: FilesDomainOwner.shared.read(), session: session) != nil,
+                  case .signedIn = try? await Auth.checkSession(session)
+            else { return }
+            await FilesDomain.register(for: AccountOwner(session))
+            self?.extensionContext.completeRequest()
+        }
     }
 
     override func prepare(forAction actionIdentifier: String, itemIdentifiers: [NSFileProviderItemIdentifier]) {
@@ -137,7 +148,7 @@ struct SignInView: View {
                 await FilesDomain.register(for: AccountOwner(userId: user.id, origin: origin))
                 onDone()
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
         }

@@ -231,7 +231,7 @@ final class SaveModel {
                 notes.append(note)
             } catch {
                 try? FileManager.default.removeItem(at: directory)
-                problem = (error as? LocalizedError)?.errorDescription ?? "Couldn’t save it. Try again."
+                if let words = ErrorWords.say(error, otherwise: "Couldn’t save it. Try again.") { problem = words }
             }
         }
         if notes.isEmpty, problem != nil { phase = .ready; return }

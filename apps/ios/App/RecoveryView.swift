@@ -68,7 +68,7 @@ struct RecoveryView: View {
             step = .kit(try await Auth.verifyRecoveryLink(origin: model.origin, token: token))
         } catch is CancellationError {
         } catch {
-            step = .linkFailed((error as? LocalizedError)?.errorDescription ?? "Please try again.")
+            step = .linkFailed(ErrorWords.say(error, otherwise: "Please try again.") ?? "Please try again.")
         }
     }
 
@@ -108,7 +108,7 @@ struct RecoveryView: View {
                 if case .inbox = step { resent = true }
                 step = .inbox(address)
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? "Please try again."
+                if let words = ErrorWords.say(error, otherwise: "Please try again.") { self.error = words }
             }
             pending = false
         }
@@ -360,7 +360,7 @@ private struct RecoverKitStep: View {
                 let account = try await model.recover(enrollment, password: password, phrase: phrase)
                 done(account)
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? "Please try again."
+                if let words = ErrorWords.say(error, otherwise: "Please try again.") { self.error = words }
                 reveal = "error"
                 pending = false
             }
@@ -385,7 +385,7 @@ private struct KitScanner: View {
                                 .padding(Alpine.Space.s3).background(.black.opacity(0.6), in: Capsule()).padding(Alpine.Space.s6)
                         }
                 } else {
-                    EmptyStateView(symbol: "camera", title: "This phone can’t scan here",
+                    EmptyStateView(title: "This phone can’t scan here",
                                    message: "Choose the kit file or type the 24 words instead.")
                 }
             }

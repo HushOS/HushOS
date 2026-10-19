@@ -100,7 +100,7 @@ public final class PublicAPI: Sendable {
         do {
             (data, response) = try await http.data(for: request)
         } catch {
-            throw DriveAPIError.transport(error.localizedDescription)
+            throw DriveAPI.noAnswer(error)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
@@ -144,7 +144,7 @@ public final class PublicAPI: Sendable {
         do {
             (data, response) = try await http.data(for: request)
         } catch {
-            throw DriveAPIError.transport(error.localizedDescription)
+            throw DriveAPI.noAnswer(error)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 206 || status == 200 else { throw DriveAPIError.server(status, "Range request failed") }

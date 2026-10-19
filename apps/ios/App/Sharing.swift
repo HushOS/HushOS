@@ -283,7 +283,7 @@ struct ShareItemSheet: View {
             urls = found
             error = ""
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if let words = ErrorWords.say(error) { self.error = words }
         }
         loaded = true
         await store.refreshSharing()
@@ -300,7 +300,7 @@ struct ShareItemSheet: View {
                 role = "viewer"
                 await load()
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             sharing = false
         }
@@ -329,7 +329,7 @@ struct ShareItemSheet: View {
                 urls[made.link.id] = made.url
                 await load()
             } catch {
-                self.error = "Couldn’t make a link. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                if let words = ErrorWords.say(error, otherwise: "Try again.") { self.error = "Couldn’t make a link. " + words }
             }
             making = false
         }
@@ -430,7 +430,7 @@ private struct LinkCard: View {
                 try await store.turnOffLink(link, for: item)
                 store.notify("Link turned off. Anyone who has it can’t open “\(item.name)” any more.")
             } catch {
-                store.notify("Couldn’t turn the link off. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
+                if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t turn the link off. " + words) }
             }
             await changed()
             busy = false
@@ -524,7 +524,7 @@ struct LinkOptionsSheet: View {
                 await changed()
                 dismiss()
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             saving = false
         }
@@ -608,7 +608,7 @@ private struct PersonAccessSheet: View {
                 await changed()
                 dismiss()
             } catch {
-                store.notify("Couldn’t change what they can do. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
+                if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t change what they can do. " + words) }
             }
             busy = false
         }
@@ -621,7 +621,7 @@ private struct PersonAccessSheet: View {
                 try await store.revokeAndRotate(share, for: item)
                 store.notify("\(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name) can’t open “\(item.name)” any more")
             } catch {
-                store.notify("Couldn’t stop sharing. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
+                if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t stop sharing. " + words) }
             }
             await changed()
             busy = false
@@ -817,7 +817,7 @@ struct CheckContactView: View {
         error = ""
         Task {
             do { found = try await store.vault.lookup(email: email.trimmingCharacters(in: .whitespaces)) } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? "Check the address and try again."
+                if let words = ErrorWords.say(error, otherwise: "Check the address and try again.") { self.error = words }
             }
             looking = false
         }
@@ -834,7 +834,7 @@ struct CheckContactView: View {
                 found = next
                 if next.changed { unfollowed = true } else { Task { await store.refreshSigners() } }
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn’t check again. Try again."
+                if let words = ErrorWords.say(error, otherwise: "Couldn’t check again. Try again.") { self.error = words }
             }
             following = false
         }
@@ -994,7 +994,7 @@ struct PeopleView: View {
                             store.notify("\(firstName(pin)) removed")
                             await store.refreshSigners()
                         } catch {
-                            store.notify("Couldn’t remove them. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
+                            if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t remove them. " + words) }
                         }
                         await load()
                     }
@@ -1018,7 +1018,7 @@ struct PeopleView: View {
         } catch {
             // A session that ended is the store's to say (it closes People); anything else is said here.
             if endsSession(error) { store.report(error); return }
-            self.error = "This list couldn’t be opened. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            if let words = ErrorWords.say(error, otherwise: "Try again.") { self.error = "This list couldn’t be opened. " + words }
         }
         loaded = true
     }
@@ -1090,7 +1090,7 @@ struct OwnWordsSheet: View {
             do { words = try await store.vault.currentOwnFingerprint() } catch {
                 // A session that ended is the store's to say (and closes this sheet); anything else is said here.
                 if endsSession(error) { store.report(error); return }
-                self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn’t open them. Try again."
+                if let words = ErrorWords.say(error, otherwise: "Couldn’t open them. Try again.") { self.error = words }
             }
         }
         .onChange(of: signedIn) { _, now in if now == nil || now != account { dismiss() } }

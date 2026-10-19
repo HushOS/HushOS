@@ -167,9 +167,8 @@ public enum Recovery {
 
     /* The core's message without its type around it, and the web's wording where it has its own. */
     static func message(_ error: Error) -> String {
-        let raw = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-        var text = raw
-        if let found = raw.firstMatch(of: /message: "(.*)"\)/) { text = String(found.1) }
+        // The core's sentence or HushOS's own words, never a type's description.
+        let text = (error as? CoreError).map(FamilyWords.message(of:)) ?? ErrorWords.say(error, otherwise: "Please try again.") ?? "Please try again."
         if text == "The recovery phrase does not match this account." { return "These words didn’t open your account. Check you used your newest kit." }
         return text
     }
@@ -312,7 +311,7 @@ extension Auth {
             ], enrollment: enrollment.token)
         } catch {
             // The server may have committed before the reply was lost; retrying with the old phrase would then fail for the wrong reason.
-            let said = (error as? LocalizedError)?.errorDescription ?? "Please try again."
+            let said = ErrorWords.say(error, otherwise: "Please try again.") ?? "Please try again."
             throw AuthError.message("\(said) If it keeps failing, try signing in with your new password first: the reset may already have been applied.")
         }
         let user: SessionUser

@@ -25,7 +25,7 @@ enum TransferWords {
         case DriveAPIError.server(402, _): return noRoom
         case let cocoa as CocoaError where cocoa.code == .fileNoSuchFile || cocoa.code == .fileReadNoSuchFile: return gone
         // The core's sentence, never its type's description; a family folder's key change said as the web says it.
-        default: return FamilyWords.core(error) ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        default: return ErrorWords.say(error, otherwise: "This didn’t finish. Try again.") ?? "This didn’t finish. Try again."
         }
     }
 

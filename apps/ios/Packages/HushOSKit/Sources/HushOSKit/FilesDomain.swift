@@ -123,7 +123,7 @@ public enum FilesDomain {
         let ours = existing.first { $0.identifier == identifier }
         switch FilesDomainOwner.plan(domainExists: ours != nil, recorded: record.read(), signingIn: owner) {
         case .keep:
-            signal()
+            await signedIn()
             return
         case .replace:
             guard let ours, await removeAll(ours) else { return }
@@ -137,6 +137,19 @@ public enum FilesDomain {
         domain.testingModes = .alwaysEnabled
         #endif
         try? await NSFileProviderManager.add(domain)
+        await signedIn()
+    }
+
+    /*
+     * Someone signed in: Files paused the location ("Syncing with HushOS Paused", read only) when
+     * the extension refused with `.notAuthenticated`, and resumes it only when told the error is
+     * resolved. Then everything is listed again, so Files shows the folders without a pull.
+     */
+    private static func signedIn() async {
+        let domain = NSFileProviderDomain(identifier: identifier, displayName: "HushOS")
+        if let manager = NSFileProviderManager(for: domain) {
+            try? await manager.signalErrorResolved(NSFileProviderError(.notAuthenticated))
+        }
         signal()
     }
 

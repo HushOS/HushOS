@@ -102,8 +102,9 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
     /*
      * Android's headlines, without names: a notification shows on the Lock Screen to whoever
      * holds the phone (with previews on), and the app opens on the list that names them.
-     * Finished: "3 files uploaded", "Kept on this phone"; didn't: "1 upload didn’t finish"
-     * with its reason. Mixed or several keeps use the transfers bar's own words.
+     * Finished: "3 files uploaded", "Kept on this phone", with a second line saying where a tap
+     * goes (worked out by `target`, which the tap uses, so the two agree; Android's words); didn't:
+     * "1 upload didn’t finish" with its reason. Mixed or several keeps use the transfers bar's own words.
      */
     static func words(_ ended: [Outcome]) -> (title: String, body: String?) {
         let failed = ended.filter { $0.reason != nil }
@@ -113,9 +114,16 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
         if !failed.isEmpty {
             return ("\(failed.count) \(failed.allSatisfy(\.upload) ? "uploads" : "transfers") didn’t finish", "Open HushOS to see which.")
         }
-        if ended.allSatisfy(\.upload) { return ("\(ended.count) \(ended.count == 1 ? "file" : "files") uploaded", nil) }
-        if ended.count == 1 { return ("Kept on this phone", nil) }
-        return ("\(ended.count) transfers finished", nil)
+        let tap: String
+        let them = ended.count == 1 ? "it" : "them"
+        switch target(ended) {
+        case .folder(let id?) where !id.isEmpty: tap = "Tap to open the folder \(ended.count == 1 ? "it’s" : "they’re") in."
+        case .phone: tap = "Tap to see \(them) on this phone."
+        default: tap = "Tap to see \(them) in Files."
+        }
+        if ended.allSatisfy(\.upload) { return ("\(ended.count) \(ended.count == 1 ? "file" : "files") uploaded", tap) }
+        if ended.count == 1 { return ("Kept on this phone", tap) }
+        return ("\(ended.count) transfers finished", tap)
     }
 
     /* Where a tap goes, as on Android. */

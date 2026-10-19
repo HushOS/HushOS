@@ -118,8 +118,13 @@ final class AppModel {
                 return
             }
         }
+        // A session still stored but refused: coming back on screen doesn't ask about it again.
+        declinedToken = SharedKeychain.session?.token
         state = .signedOut
     }
+
+    /* The stored session `start` last found ended, so `checkAccount` only follows a new one. */
+    private var declinedToken: String?
 
     func signIn(email: String, password: String) async throws {
         removedNotice = false
@@ -160,12 +165,23 @@ final class AppModel {
 
     /*
      * Back on screen: someone may have signed in from the Files sheet meanwhile (another
-     * account, or the session ended). The drive this model shows is that account's no longer,
-     * so it starts again from the keychain: the new account's drive and Files location, or
-     * sign-in.
+     * account, the same one after its session ended, or anyone while the app showed sign-in).
+     * The drive this model shows is not that session's, so it starts again from the keychain:
+     * the new session's drive and Files location, or sign-in.
      */
     func checkAccount() async {
-        guard state == .signedIn, let owner, AccountOwner.signedIn != owner else { return }
+        let session = SharedKeychain.session
+        switch state {
+        case .signedIn:
+            guard let owner else { return }
+            let sameSession = session.map(AccountOwner.init) == owner && session?.token == vault?.api.session.token
+            guard !sameSession else { return }
+        case .signedOut:
+            // Signed in from the Files sheet: the app follows rather than asking for the password again.
+            guard let session, session.token != declinedToken, wiping == nil else { return }
+        case .checking, .deleted:
+            return
+        }
         user = nil
         vault = nil
         self.owner = nil

@@ -118,18 +118,22 @@ struct SharedView: View {
         .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
     }
 
+    /* The app's field (as the tag sheet's "Find or add a tag"), with Open beside it at the same height, not inside it. */
     private var pasteField: some View {
         HStack(spacing: Alpine.Space.s2) {
-            Image(systemName: "doc.on.clipboard").foregroundStyle(Alpine.inkMuted)
-            TextField("Paste a HushOS link", text: $linkText)
-                .textInputAutocapitalization(.never).autocorrectionDisabled().foregroundStyle(Alpine.ink)
-                .onSubmit(openPasted)
+            HStack(spacing: Alpine.Space.s2) {
+                Image(systemName: "link").foregroundStyle(Alpine.inkMuted).accessibilityHidden(true)
+                TextField("Paste a HushOS link", text: $linkText)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    .submitLabel(.go).foregroundStyle(Alpine.ink)
+                    .onSubmit(openPasted)
+            }
+            .padding(.horizontal, 14).frame(height: Theme.control)
+            .background(Alpine.surface, in: Capsule())
+            .highContrastEdge(Capsule())
             Button("Open", action: openPasted).buttonStyle(PrimaryCapsuleStyle())
                 .disabled(linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(.leading, Alpine.Space.s4).padding(.trailing, 4).padding(.vertical, 4)
-        .background(Alpine.surface, in: Capsule())
-        .highContrastEdge(Capsule())
     }
 
     /* A pasted link opens here only if it is this server's; another server's says so plainly. */
@@ -148,13 +152,13 @@ struct SharedView: View {
 
     @ViewBuilder private var sharedWithMe: some View {
         if let failure = store.mountsError, store.mounts.isEmpty {
-            EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "Couldn’t load what’s shared", message: "Check your connection and try again.") {
+            EmptyStateView(title: "Couldn’t load what’s shared", message: "Check your connection and try again.") {
                 Button("Try again") { Task { await load() } }.buttonStyle(PrimaryCapsuleStyle())
             }
             .bareRow(top: Alpine.Space.s8)
             .accessibilityHint(failure)
         } else if store.mountsLoaded && store.mounts.isEmpty {
-            EmptyStateView(symbol: "person.2", title: "Nothing shared with you yet", message: "When someone shares a folder or file with you, it shows up here.")
+            EmptyStateView(title: "Nothing shared with you yet", message: "When someone shares a folder or file with you, it shows up here.")
                 .bareRow(top: Alpine.Space.s8)
         } else if !store.mountsLoaded {
             ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
@@ -246,13 +250,13 @@ struct SharedView: View {
         let people = mine.filter { $0.share != nil }
         let links = mine.filter { $0.link != nil }
         if let mineError, mine.isEmpty {
-            EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "Couldn’t load what’s shared", message: "Check your connection and try again.") {
+            EmptyStateView(title: "Couldn’t load what’s shared", message: "Check your connection and try again.") {
                 Button("Try again") { Task { await load() } }.buttonStyle(PrimaryCapsuleStyle())
             }
             .bareRow(top: Alpine.Space.s8)
             .accessibilityHint(mineError)
         } else if mineLoaded && mine.isEmpty {
-            EmptyStateView(symbol: "person.2", title: "You haven’t shared anything yet", message: "Choose Share on any folder or file to let someone open it.")
+            EmptyStateView(title: "You haven’t shared anything yet", message: "Choose Share on any folder or file to let someone open it.")
                 .bareRow(top: Alpine.Space.s8)
         } else if !mineLoaded {
             ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
@@ -360,7 +364,9 @@ struct SharedView: View {
                 mine = try await store.vault.sharedByMe()
                 mineError = nil
             } catch {
-                mineError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                // Left before it answered: what was shown stays.
+                guard let words = ErrorWords.say(error) else { return }
+                mineError = words
             }
             mineLoaded = true
         } else {
@@ -495,8 +501,6 @@ struct LinkBrowserView: View {
         Group {
             Section {
                 VStack(spacing: Alpine.Space.s3) {
-                    Image(systemName: "lock").font(.title2).foregroundStyle(Alpine.onTint)
-                        .frame(width: 64, height: 64).background(Alpine.tint, in: Circle())
                     Text("This link has a password").font(Theme.Text.title).foregroundStyle(Alpine.ink)
                     Text("Whoever shared it set one. Ask them if you don’t have it.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
                         .multilineTextAlignment(.center)
@@ -520,10 +524,10 @@ struct LinkBrowserView: View {
     @ViewBuilder private func problemView(_ problem: Problem) -> some View {
         switch problem {
         case .gone:
-            EmptyStateView(symbol: "link", title: "This link no longer works",
+            EmptyStateView(title: "This link no longer works",
                            message: "Whoever shared it turned it off, or it reached its end date. Ask them for a new link.")
         case .incomplete:
-            EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "This link is incomplete",
+            EmptyStateView(title: "This link is incomplete",
                            message: "The end of the link is missing, usually because it was cut off while copying. Paste the whole link.") {
                 // The same paste field as Shared's: the whole link opens here, in place of the broken one.
                 HStack(spacing: Alpine.Space.s2) {
@@ -540,7 +544,7 @@ struct LinkBrowserView: View {
                 .highContrastEdge(Capsule())
             }
         case .failed:
-            EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "This link couldn’t be opened",
+            EmptyStateView(title: "This link couldn’t be opened",
                            message: "Check your connection and try again. If it keeps happening, ask for a new link.") {
                 Button("Try again") { self.problem = nil; Task { await start() } }.buttonStyle(PrimaryCapsuleStyle())
             }
@@ -610,8 +614,9 @@ struct LinkBrowserView: View {
         linkVault = made
         do {
             if try await made.needsPassword() { needsPassword = true } else { await open() }
-        } catch {
+        } catch where !ErrorWords.isCancellation(error) {
             problem = classify(error)
+        } catch {
         }
     }
 
@@ -623,19 +628,19 @@ struct LinkBrowserView: View {
             needsPassword = false
             wrongPassword = false
             if opened.isFolder { await list(opened) } else { loaded = true }
-        } catch {
+        } catch where !ErrorWords.isCancellation(error) {
             if needsPassword {
                 wrongPassword = true
                 password = ""
             } else {
                 problem = classify(error)
             }
-        }
+        } catch {}
     }
 
     private func list(_ folder: Opened) async {
         guard let linkVault else { return }
-        do { children = try await linkVault.children(of: folder.id) } catch { problem = classify(error) }
+        do { children = try await linkVault.children(of: folder.id) } catch where !ErrorWords.isCancellation(error) { problem = classify(error) } catch { return }
         loaded = true
     }
 
@@ -654,7 +659,7 @@ struct LinkBrowserView: View {
             downloading = item.id
             defer { downloading = nil }
             do { try await linkVault.download(item, to: file) } catch {
-                store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.")
+                if !ErrorWords.isCancellation(error) { store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.") }
                 return nil
             }
         }
@@ -766,7 +771,7 @@ struct ReportSheet: View {
             do {
                 done = try await submit(category, reason.trimmingCharacters(in: .whitespacesAndNewlines), email.isEmpty ? nil : email)
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
         }

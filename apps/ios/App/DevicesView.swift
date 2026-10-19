@@ -141,6 +141,7 @@ struct DevicesView: View {
         } catch {
             // A lost session goes where every other one goes: the removed check, then sign-in.
             if endsSession(error) { store.report(error); return }
+            if ErrorWords.isCancellation(error) { return }
             problem = "Your devices couldn’t be loaded. Check your connection, then try again."
         }
     }
@@ -161,7 +162,7 @@ struct DevicesView: View {
                     await load()
                 } catch {
                     if endsSession(error) { store.report(error) } else {
-                        store.notify((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                        if let words = ErrorWords.say(error) { store.notify(words) }
                     }
                 }
             }
@@ -175,7 +176,7 @@ struct DevicesView: View {
             await load()
         } catch {
             if endsSession(error) { store.report(error) } else {
-                store.notify((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                if let words = ErrorWords.say(error) { store.notify(words) }
             }
         }
     }
@@ -187,7 +188,7 @@ struct DevicesView: View {
             await load()
         } catch {
             if endsSession(error) { store.report(error) } else {
-                store.notify((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                if let words = ErrorWords.say(error) { store.notify(words) }
             }
         }
     }

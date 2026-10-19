@@ -285,7 +285,7 @@ public enum TrustState: Sendable, Equatable {
     /* Runs the load; anything it throws is a failure the marks show, not an absence of marks. */
     public static func load(_ body: @Sendable () async throws -> TrustedSigners) async -> TrustState {
         do { return .loaded(try await body()) } catch {
-            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return .failed(ErrorWords.say(error) ?? ErrorWords.generic)
         }
     }
 

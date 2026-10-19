@@ -149,24 +149,17 @@ struct OfflineCapsule: View {
 }
 
 /* A centred empty, error or offline state: a quiet mark, a short title, one line, then actions. */
+/*
+ * An empty, error or waiting state: a short title, one line, then the actions. No icon tile
+ * (DESIGN.md: no icon tiles for decoration); Android's is the same.
+ */
 struct EmptyStateView<Actions: View>: View {
-    var symbol: String? = nil
-    var danger = false
     let title: String
     var message: String? = nil
     @ViewBuilder var actions: () -> Actions
 
     var body: some View {
         VStack(spacing: Alpine.Space.s2) {
-            if let symbol {
-                Image(systemName: symbol)
-                    .font(.title2)
-                    .foregroundStyle(danger ? Alpine.danger : Alpine.onTint)
-                    .frame(width: 56, height: 56)
-                    .background(danger ? Alpine.dangerSoft : Alpine.tint, in: Circle())
-                    .padding(.bottom, Alpine.Space.s2)
-                    .accessibilityHidden(true)
-            }
             Text(title).font(.title3.weight(.bold)).foregroundStyle(Alpine.ink).multilineTextAlignment(.center)
             if let message {
                 Text(message).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
@@ -181,8 +174,8 @@ struct EmptyStateView<Actions: View>: View {
 }
 
 extension EmptyStateView where Actions == EmptyView {
-    init(symbol: String? = nil, danger: Bool = false, title: String, message: String? = nil) {
-        self.init(symbol: symbol, danger: danger, title: title, message: message) { EmptyView() }
+    init(title: String, message: String? = nil) {
+        self.init(title: title, message: message) { EmptyView() }
     }
 }
 

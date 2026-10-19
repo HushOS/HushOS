@@ -86,6 +86,7 @@ public enum Auth {
         do {
             (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         } catch {
+            if ErrorWords.isCancellation(error) { throw CancellationError() }
             throw AuthError.message(AuthError.unreachable)
         }
         let http = response as? HTTPURLResponse

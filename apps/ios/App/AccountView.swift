@@ -205,7 +205,7 @@ struct AccountView: View {
                     model.setUser(try await Auth.updateName(name))
                     store.notify("Name saved")
                 } catch {
-                    store.notify((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+                    if let words = ErrorWords.say(error) { store.notify(words) }
                 }
             }
         }
@@ -648,7 +648,7 @@ struct ChangePasswordSheet: View {
                 dismiss()
                 store.notify("Password changed. Other devices are signed out.")
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
         }
@@ -828,7 +828,7 @@ struct RecoveryPhraseSheet: View {
             }
             .task {
                 do { phrase = try await store.vault.recoveryPhrase() } catch {
-                    self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    if let words = ErrorWords.say(error) { self.error = words }
                 }
                 if let key = try? await Auth.recoveryKey() { confirmed = key.confirmed; version = key.envelope.recoveryVersion }
             }
@@ -911,7 +911,7 @@ struct ResetKeysSheet: View {
                 if let email = model.user?.email { try await model.signIn(email: email, password: password) }
                 phrase = made
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
         }
@@ -982,7 +982,7 @@ struct ReplaceKeysSheet: View {
                 await store.refreshSigners()
                 await store.refreshSharing()
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
         }
@@ -1039,7 +1039,7 @@ struct DeleteAccountSheet: View {
                 dismiss()
                 await model.deleted()
             } catch {
-                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if let words = ErrorWords.say(error) { self.error = words }
             }
             pending = false
         }

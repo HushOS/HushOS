@@ -21,7 +21,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     private let gate = FilesGate<Vault>(
         owner: { FilesDomainOwner.shared.read() },
         session: { SharedKeychain.session },
-        changed: { TemporaryCopies.claim($0) },
+        changed: { owner in
+            TemporaryCopies.claim(owner)
+            // Someone is signed in again (from the Files sheet or the app): the next refusal may ask again.
+            if owner != nil { SignInPrompt.reset() }
+        },
         make: { Vault(api: DriveAPI(session: $0), session: $0) }
     )
 
@@ -41,16 +45,18 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         switch error {
         case let refused as NSFileProviderError:
             // The gate's refusal (signed out, or another account's location) reaches Files as it is.
+            if refused.code == .notAuthenticated { SignInPrompt.ask() }
             return refused
         case DriveAPIError.notAuthenticated:
+            SignInPrompt.ask()
             return NSFileProviderError(.notAuthenticated)
         case DriveAPIError.transport:
             return NSFileProviderError(.serverUnreachable)
         case is CancellationError:
             return CocoaError(.userCancelled)
         case let failure as CoreError:
-            // Files accepts only Cocoa and FileProvider errors; the message survives in userInfo.
-            return CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: failure.localizedDescription])
+            // Files accepts only Cocoa and FileProvider errors; the core's sentence survives in userInfo, never its type's description.
+            return CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: ErrorWords.say(failure) ?? ErrorWords.generic])
         case DriveAPIError.notFound(let message):
             // Only a node the server no longer has is "no such item"; Files removes those locally.
             return message == "This item no longer exists."
@@ -63,7 +69,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         case DriveAPIError.server(_, let message):
             return CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: message])
         default:
-            return CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
+            // Files shows this text: HushOS's own words, or plain ones, never the error's own description.
+            return CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: ErrorWords.say(error) ?? ErrorWords.generic])
         }
     }
 
@@ -277,4 +284,28 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         _ = try requireVault()
         return FileProviderEnumerator(container: containerItemIdentifier, gate: gate)
     }
+}
+
+/*
+ * Files offers the Sign in sheet (FileProviderUIController) only when listing a location fails
+ * with `.notAuthenticated`. A replicated location lists from what it cached, so a session that
+ * ended showed only a dead-end "You need to authenticate" alert when a file was opened. The first
+ * refusal asks Files for the working set's changes, which fail the same way and put the location
+ * into its signed-out state, where Files offers the sheet; once is enough until someone signs in.
+ */
+enum SignInPrompt {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var asked = false
+
+    static func ask() {
+        let first = lock.withLock { () -> Bool in
+            defer { asked = true }
+            return !asked
+        }
+        guard first, let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: FilesDomain.identifier, displayName: "HushOS"))
+        else { return }
+        manager.signalEnumerator(for: .workingSet) { _ in }
+    }
+
+    static func reset() { lock.withLock { asked = false } }
 }

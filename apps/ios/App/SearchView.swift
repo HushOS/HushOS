@@ -131,7 +131,6 @@ struct SearchView: View {
     /* What search covers, honestly: every folder once the catalogue is built, otherwise the ones opened here. */
     private var noResults: some View {
         EmptyStateView(
-            symbol: "magnifyingglass",
             title: "No results for “\(query.trimmingCharacters(in: .whitespaces))”",
             message: store.catalogueReady
                 ? "Search looks at names, tags and file types in every folder. Check the spelling, or try fewer words."

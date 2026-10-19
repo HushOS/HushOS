@@ -119,7 +119,7 @@ private struct FolderPicker: View {
             case nil:
                 ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
             case let .failure(error):
-                Text((error as? LocalizedError)?.errorDescription ?? "Couldn’t reach HushOS. Check your connection, then try again.")
+                Text(ErrorWords.say(error, otherwise: AuthError.unreachable) ?? AuthError.unreachable)
                     .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).frame(maxWidth: .infinity).multilineTextAlignment(.center)
                     .listRowBackground(Color.clear)
             case let .success(list) where list.isEmpty:
@@ -160,7 +160,7 @@ private struct FolderPicker: View {
             }
         }
         .task(id: here.id) {
-            do { folders = .success(try await model.folders(in: here.id)) } catch { folders = .failure(error) }
+            do { folders = .success(try await model.folders(in: here.id)) } catch where !ErrorWords.isCancellation(error) { folders = .failure(error) } catch {}
         }
     }
 }

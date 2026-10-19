@@ -66,7 +66,7 @@ struct HomeView: View {
             List {
                 if firstRun {
                     Section {
-                        EmptyStateView(symbol: "doc.badge.plus", title: "Nothing here yet", message: "Files you add or change show up here.") {
+                        EmptyStateView(title: "Nothing here yet", message: "Files you add or change show up here.") {
                             VStack(spacing: Alpine.Space.s2) {
                                 Button { showingImporter = true } label: { Label("Upload files", systemImage: "doc.badge.plus").frame(maxWidth: .infinity) }
                                     .buttonStyle(PrimaryCapsuleStyle())
@@ -303,7 +303,7 @@ struct TrashView: View {
     var body: some View {
         List { Section { Group {
             if loaded && store.trash.isEmpty {
-                EmptyStateView(symbol: "trash", title: "Trash is empty", message: "Items you move to the Trash stay here for 30 days.")
+                EmptyStateView(title: "Trash is empty", message: "Items you move to the Trash stay here for 30 days.")
                     .bareRow(top: Alpine.Space.s12)
             }
             ForEach(store.trash, id: \.item.id) { entry in
@@ -648,7 +648,7 @@ struct OnThisPhoneView: View {
                     .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
             }
             if entries.isEmpty && keptFolders.isEmpty {
-                EmptyStateView(symbol: "iphone", title: "Nothing on this phone yet",
+                EmptyStateView(title: "Nothing on this phone yet",
                                message: "Choose Keep on this phone on any file or folder to open it without a connection.")
                     .bareRow(top: Alpine.Space.s20)
             } else {

@@ -316,15 +316,15 @@ struct FolderView: View {
     @ViewBuilder private var problemState: some View {
         switch store.folderProblems[folderId] {
         case .failed:
-            EmptyStateView(symbol: "exclamationmark.triangle", danger: true, title: "This folder couldn’t be opened",
+            EmptyStateView(title: "This folder couldn’t be opened",
                            message: "Something went wrong while it was loading. Nothing in it has changed.") {
                 Button("Try again") { Task { await store.refresh(folder: folderId) } }.buttonStyle(PrimaryCapsuleStyle())
             }
         case .notOnPhone:
-            EmptyStateView(symbol: "icloud.slash", title: "Not opened on this phone yet",
+            EmptyStateView(title: "Not opened on this phone yet",
                            message: "“\(title)” hasn’t been opened here before, so there’s nothing to show offline. It opens when you’re back online.")
         case .family(let words):
-            EmptyStateView(symbol: "exclamationmark.triangle", title: "This folder couldn’t be opened", message: words) {
+            EmptyStateView(title: "This folder couldn’t be opened", message: words) {
                 Button("Try again") { Task { await store.reopenFamilyFolder(folderId) } }.buttonStyle(PrimaryCapsuleStyle())
             }
         case nil:
@@ -334,14 +334,14 @@ struct FolderView: View {
 
     @ViewBuilder private var emptyState: some View {
         if searching {
-            EmptyStateView(symbol: "magnifyingglass", title: "No results for “\(query)”",
+            EmptyStateView(title: "No results for “\(query)”",
                            message: "Search looks in “\(title)” and the folders inside it. Check the spelling, or try fewer words.")
         } else if let tag = filteredOutTag {
             EmptyStateView(title: "Nothing tagged \(tag.name)", message: "Nothing in this folder carries this tag.")
         } else if readOnly {
-            EmptyStateView(symbol: "folder", title: "Nothing here yet")
+            EmptyStateView(title: "Nothing here yet")
         } else {
-            EmptyStateView(symbol: "folder.badge.plus", title: "Nothing here yet",
+            EmptyStateView(title: "Nothing here yet",
                            message: "Use + to add files, or save to HushOS from the Files app.") {
                 Button("Add files") { showingImporter = true }.buttonStyle(PrimaryCapsuleStyle())
             }
