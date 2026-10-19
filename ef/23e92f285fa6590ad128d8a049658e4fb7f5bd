@@ -1,0 +1,21 @@
+apps/web/src/components/drive/rich-text.tsx
+  s_c56e31c87cddde::t_19aa2af9bd0f6e 7,13,250-252,267-268,415-419,421,479-570,589-590,606-608,610,638,640-648
+e2e/preview.spec.ts
+  s_c56e31c87cddde::t_c45ac4dfac545a 34-35,37,56,101,114-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ef23e92f285fa6590ad128d8a049658e4fb7f5bd",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
