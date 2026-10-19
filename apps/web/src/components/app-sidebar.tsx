@@ -403,11 +403,7 @@ function FamilyHeader({ userId, pathname }: { userId: string; pathname: string }
             <SidebarMenuItem>
                 <SidebarMenuButton
                     render={<Link to="/app/family" />}
-                    isActive={
-                        pathname === '/app/family' ||
-                        pathname === '/app/family/' ||
-                        pathname.startsWith('/app/families/')
-                    }
+                    isActive={pathname === '/app/family' || pathname === '/app/family/'}
                     tooltip={family.name}
                     className={cn(item, collapsed)}
                 >

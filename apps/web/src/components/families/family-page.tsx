@@ -48,13 +48,18 @@ import { leaveBlocker } from '@/lib/family-leave';
 import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
 
-/* Notices said once, though the app-wide pass and this page's own sync may both report one. */
-export function distinctNotices(notices: readonly GroupNotice[]) {
-    const seen = new Set<string>();
+/*
+ * The app-wide pass's notices with this page's own. Each reports separate events (whichever
+ * runs first deletes the unreadable rows it counts, so two "changes lost" are four changes),
+ * except a reset of the family's saved check: both may meet the same unreadable record if they
+ * run at once, and it is one fact about the family, so it is said once.
+ */
+export function withPageNotices(notices: readonly GroupNotice[]) {
+    const reset = new Set<string>();
     return notices.filter((notice) => {
-        const key = JSON.stringify(notice);
-        if (seen.has(key)) return false;
-        seen.add(key);
+        if (notice.kind !== 'record-reset') return true;
+        if (reset.has(notice.groupId)) return false;
+        reset.add(notice.groupId);
         return true;
     });
 }
@@ -251,7 +256,7 @@ export function FamilyPage({
                 )}
                 {(sync.data || appNotices.length > 0) && (
                     <NoticeList
-                        notices={distinctNotices([
+                        notices={withPageNotices([
                             ...appNotices,
                             ...(sync.data?.notices ?? []),
                             ...(foreign.data ?? []),

@@ -673,15 +673,16 @@ function Business() {
  * per account), and leads to Account → Family (/app/family), where the family is made; signed
  * out, it signs up first and lands there. Someone already in a family opens theirs instead.
  * Nothing shows until that is known, so the button never offers what the server would refuse;
- * if the account or its families can't be read, it opens /app/families, which goes to the
- * right one of the two.
+ * if the families can't be read, it opens /app/family, which shows whichever is true. A
+ * session cookie that turns out to have expired (no account behind it) is treated as signed out.
  */
 function FamilyAction({ hasSession }: { hasSession: boolean }) {
     const session = useQuery({ ...sessionQueryOptions, enabled: hasSession });
     const userId = session.data?.id;
     const families = useQuery({ ...familiesQueryOptions(userId ?? ''), enabled: Boolean(userId) });
     const className = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
-    if (!hasSession)
+    const signedOut = !hasSession || (session.isSuccess && !session.data);
+    if (signedOut)
         return (
             <Link
                 to="/register"
@@ -693,7 +694,7 @@ function FamilyAction({ hasSession }: { hasSession: boolean }) {
         );
     if (session.isError || families.isError)
         return (
-            <Link to="/app/families" className={className}>
+            <Link to="/app/family" className={className}>
                 Family
             </Link>
         );

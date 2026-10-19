@@ -1781,6 +1781,26 @@ describe('family checkout on a tier', () => {
     });
 });
 
+describe('where Polar sends a family’s payer back', () => {
+    // The family page is Account → Family, /app/family (docs/families-shared-pool.md 7.2). A
+    // return to another page (an old address, or one without the checkout id) would leave the
+    // payer without "Finishing your payment…", or on a redirect that might not keep it.
+    test('checkout returns to /app/family with the checkout id, and the portal to /app/family', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        expect(polar.checkouts.at(-1)).toMatchObject({
+            success_url: 'http://localhost:5173/app/family?checkout_id={CHECKOUT_ID}',
+            return_url: 'http://localhost:5173/app/family',
+        });
+        const { payer, groupId: paid } = await familyOnPlan({ members: 1 });
+        await billing.createGroupPortalSession(payer, paid);
+        expect(polar.sessions.at(-1)).toMatchObject({
+            return_url: 'http://localhost:5173/app/family',
+        });
+    });
+});
+
 describe('family checkout and webhooks', () => {
     test('checkout makes one team customer owned by the payer, and the plan reaches the family through a delivery', async () => {
         const organizer = await createTestAccount();
