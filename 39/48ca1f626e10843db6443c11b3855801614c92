@@ -1,0 +1,35 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Attempt.kt
+  s_c56e31c87cddde::t_44c0584c956929 1-25
+apps/android/app/src/main/kotlin/com/hushos/app/data/Problems.kt
+  s_c56e31c87cddde::t_42d23970ce73c0 4-6,8,13,18,20-22,24,26-32,34,38-49,51
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_c56e31c87cddde::t_7e42fe01e36b4c 50,225-226,253-254,275-276,290-291,323
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_cc14ca342262b9 14,47,380,444,452,504-506,528-538,540-541,626,877,890,918,1051,1067-1073,1100-1102,1140,1166,1224-1228,1835-1843
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c56e31c87cddde::t_80c3ba6ca36833 127,133
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_c56e31c87cddde::t_66e71dbcbc81bf 261,388,657,994,1053,1063,1073,1121,1141
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SaveToHushOS.kt
+  s_c56e31c87cddde::t_63141cc2b349a8 168-169,175
+apps/android/app/src/test/kotlin/com/hushos/app/data/AttemptTest.kt
+  s_c56e31c87cddde::t_29647c44fbe546 1-75
+apps/android/app/src/test/kotlin/com/hushos/app/data/ProblemsTest.kt
+  s_c56e31c87cddde::t_d4dadce1a37ea2 4,7,13-15,18,20-26,36-40,42-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3948ca1f626e10843db6443c11b3855801614c92",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
