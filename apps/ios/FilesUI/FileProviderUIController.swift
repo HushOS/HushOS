@@ -11,8 +11,21 @@ import UIKit
  * involved and need not be running.
  */
 final class FileProviderUIController: FPUIActionExtensionViewController {
+    /*
+     * Each request ends once: the check below and a sign-in in the sheet can both finish it. Files
+     * may hand this controller another request later, so every prepare starts a new one.
+     */
+    private var ended = false
+
+    private func complete() {
+        guard !ended else { return }
+        ended = true
+        extensionContext.completeRequest()
+    }
+
     override func prepare(forError error: Error) {
-        show(SignInView(onDone: { [weak self] in self?.extensionContext.completeRequest() },
+        ended = false
+        show(SignInView(onDone: { [weak self] in self?.complete() },
                         onCancel: { [weak self] in self?.cancel() }))
         // Files keeps its "Authentication Required" page (and its Authenticate button) after a sign-in
         // until the folder is opened again. Signed in already (from this sheet, or in the app): the
@@ -22,16 +35,21 @@ final class FileProviderUIController: FPUIActionExtensionViewController {
                   FilesDomainOwner.admit(recorded: FilesDomainOwner.shared.read(), session: session) != nil,
                   case .signedIn = try? await Auth.checkSession(session)
             else { return }
+            // A sign-in in the sheet meanwhile owns the location now: only the session checked is registered.
+            guard let self, !self.ended, SharedKeychain.session == session else { return }
             await FilesDomain.register(for: AccountOwner(session))
-            self?.extensionContext.completeRequest()
+            self.complete()
         }
     }
 
     override func prepare(forAction actionIdentifier: String, itemIdentifiers: [NSFileProviderItemIdentifier]) {
+        ended = false
         cancel()
     }
 
     private func cancel() {
+        guard !ended else { return }
+        ended = true
         extensionContext.cancelRequest(withError: NSError(domain: FPUIErrorDomain, code: Int(FPUIExtensionErrorCode.userCancelled.rawValue)))
     }
 

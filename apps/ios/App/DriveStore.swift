@@ -261,6 +261,8 @@ final class DriveStore {
     func adopt(_ next: Vault) async {
         guard next !== vault else { return }
         vault = next
+        // A new session for this account (signed in again, here or from the Files sheet): the old one's end is no longer news.
+        if error == Self.sessionEnded { error = nil }
         // The new session's vault has its own area ledger: families are checked again under it.
         familyVerdicts = [:]
         familiesSyncedAt = nil
@@ -1577,6 +1579,7 @@ final class DriveStore {
             if endsSession(error) { self.error = Self.sessionEnded; break error_ }
             // No network: say so at the top rather than interrupting; kept files still open.
             if case DriveAPIError.transport = error { offline = true; break error_ }
+            if case AuthError.message(let text) = error, text == AuthError.unreachable { offline = true; break error_ }
             // The core's own sentence (a family folder's write rules among them), never an error's own description.
             let message = ErrorWords.say(error) ?? ErrorWords.generic
             // The same failure from every list and every sync would put the alert back the moment

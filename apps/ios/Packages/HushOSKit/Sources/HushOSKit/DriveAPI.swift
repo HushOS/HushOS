@@ -62,9 +62,10 @@ public final class DriveAPI: Sendable {
     private let http: URLSession
 
     /*
-     * A request that got no answer: the network's (`transport`, the offline line), unless it was
-     * cancelled because whoever waited for it went away, which stays a cancellation and is never
-     * shown (a tab switched mid-load once marked every file "Couldn't check").
+     * A request that got no answer: the network's (`transport`, the offline line, retried by the
+     * queue), unless the task waiting for it was cancelled, which stays a cancellation and is never
+     * shown (a tab switched mid-load once marked every file "Couldn't check"). A request the
+     * system cancelled under a running task is no answer, not a cancellation (`ErrorWords`).
      */
     static func noAnswer(_ error: Error) -> Error {
         ErrorWords.isCancellation(error) ? CancellationError() : DriveAPIError.transport(error.localizedDescription)

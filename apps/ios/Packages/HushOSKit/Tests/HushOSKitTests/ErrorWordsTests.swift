@@ -55,12 +55,57 @@ struct ErrorWordsTests {
     }
 
     @Test func noCancellationIsEverSaid() {
-        let cancellations: [Error] = [
-            CancellationError(), URLError(.cancelled), CocoaError(.userCancelled),
-            NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled),
-        ]
-        for error in cancellations {
+        for error: Error in [CancellationError(), CocoaError(.userCancelled)] {
             #expect(ErrorWords.say(error) == nil, "\(error) was put on screen")
+        }
+        // A URL request cancelled with the task waiting for it: the screen went away.
+        for error: Error in [URLError(.cancelled), NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)] {
+            #expect(ErrorWords.isCancellation(error, taskCancelled: true), "\(error) under a cancelled task was taken for a failure")
+        }
+    }
+
+    /*
+     * URLSession says "cancelled" too when the system ends a request or a session is torn down.
+     * With the task still running that is no answer: retried by the queue, said to the person,
+     * never swallowed as if the screen had gone away (a failed upload would look finished).
+     */
+    @Test func aRequestTheSystemCancelledIsNoAnswerAndIsRetried() async throws {
+        let api = api(SystemCancelProtocol.self)
+        do {
+            _ = try await api.workspace()
+            Issue.record("a cancelled request answered")
+        } catch {
+            guard case DriveAPIError.transport = error else { Issue.record("came back as \(type(of: error)), which nothing retries or reports"); return }
+            #expect(!ErrorWords.isCancellation(error))
+            #expect(Resumable.retryable(error))
+            #expect(ErrorWords.say(error) == AuthError.unreachable)
+        }
+        for error: Error in [URLError(.cancelled), NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)] {
+            #expect(!ErrorWords.isCancellation(error, taskCancelled: false))
+            #expect(ErrorWords.say(error) == AuthError.unreachable)
+        }
+        // The queue's loop tries again, and the second try lands.
+        var tries = 0
+        let landed = try await Resumable.run(online: { true }, sleep: { _ in }) { () async throws -> Int in
+            tries += 1
+            if tries == 1 { _ = try await api.workspace() }
+            return tries
+        }
+        #expect(landed == 2)
+    }
+
+    @Test func aFamilyReadIsCancelledOnlyWhenItsTaskIs() async throws {
+        let hanging = GroupsAPI(drive: api(HangingProtocol.self))
+        let request = Task { try await hanging.listGroups() }
+        try await Task.sleep(for: .milliseconds(200))
+        request.cancel()
+        guard case .failure(let error) = await request.result else { Issue.record("a hanging read answered"); return }
+        #expect(error is CancellationError, "a cancelled family read came back as \(type(of: error))")
+        do {
+            _ = try await GroupsAPI(drive: api(SystemCancelProtocol.self)).listGroups()
+            Issue.record("a cancelled read answered")
+        } catch {
+            #expect((error as? GroupsAPIError)?.status == 0, "a read the system cancelled came back as \(type(of: error)), not no answer")
         }
     }
 
@@ -109,6 +154,14 @@ final class HangingProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {}
+    override func stopLoading() {}
+}
+
+/* The system ends the request ("cancelled") while the task waiting for it is still running. */
+final class SystemCancelProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.cancelled)) }
     override func stopLoading() {}
 }
 

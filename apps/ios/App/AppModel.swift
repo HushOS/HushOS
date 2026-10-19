@@ -120,6 +120,7 @@ final class AppModel {
         }
         // A session still stored but refused: coming back on screen doesn't ask about it again.
         declinedToken = SharedKeychain.session?.token
+        if let ended = SharedKeychain.session { lastOwner = AccountOwner(ended) }
         state = .signedOut
     }
 
@@ -151,6 +152,7 @@ final class AppModel {
 
     private func signedIn(_ user: SessionUser) {
         sessionCheck = .none
+        lastOwner = nil
         // The queue opens its own vault from the keychain until the drive hands it the new one.
         BackgroundTransfers.shared.vault = nil
         self.user = user
@@ -164,23 +166,27 @@ final class AppModel {
     }
 
     /*
-     * Back on screen: someone may have signed in from the Files sheet meanwhile (another
-     * account, the same one after its session ended, or anyone while the app showed sign-in).
-     * The drive this model shows is not that session's, so it starts again from the keychain:
-     * the new session's drive and Files location, or sign-in.
+     * Back on screen: someone may have signed in from the Files sheet meanwhile (the same
+     * account after its session ended, another account, or anyone while the app showed
+     * sign-in), or the session went. `SessionChange` decides; the same account's new session
+     * is adopted in place, another account's start stops the last one's queue and notices.
      */
     func checkAccount() async {
-        let session = SharedKeychain.session
-        switch state {
-        case .signedIn:
-            guard let owner else { return }
-            let sameSession = session.map(AccountOwner.init) == owner && session?.token == vault?.api.session.token
-            guard !sameSession else { return }
-        case .signedOut:
-            // Signed in from the Files sheet: the app follows rather than asking for the password again.
-            guard let session, session.token != declinedToken, wiping == nil else { return }
-        case .checking, .deleted:
+        guard state == .signedIn || state == .signedOut, wiping == nil else { return }
+        let shown = state == .signedIn ? vault?.api.session : nil
+        switch SessionChange.decide(shown: shown, last: owner ?? lastOwner, stored: SharedKeychain.session, declined: declinedToken) {
+        case .none:
             return
+        case .adopt:
+            // The drive takes the new session (DriveStore.adopt, through MainView) and keeps what it shows.
+            vault = Vault.fromKeychain()
+            if let owner { await FilesDomain.register(for: owner) }
+            return
+        case .another:
+            await BackgroundTransfers.shared.cancelAll()
+            TransferNotices.shared.clear()
+        case .restart:
+            break
         }
         user = nil
         vault = nil
@@ -188,6 +194,9 @@ final class AppModel {
         state = .checking
         await start()
     }
+
+    /* The account shown before the app went to sign-in (a session that ended), whose queue and notices may still be here. */
+    private var lastOwner: AccountOwner?
 
     func signOut() async {
         await BackgroundTransfers.shared.cancelAll()
@@ -199,6 +208,7 @@ final class AppModel {
         // The families' sync and its ledger keys go with the session.
         FamilySync.forget()
         lastEmail = ""
+        lastOwner = nil
         user = nil
         vault = nil
         owner = nil
@@ -230,6 +240,7 @@ final class AppModel {
      */
     func sessionLost() {
         if let email = user?.email, !email.isEmpty { lastEmail = email }
+        lastOwner = owner
         let ended = SharedKeychain.session
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         user = nil
@@ -293,6 +304,7 @@ final class AppModel {
         TransferNotices.shared.clear()
         // The old session's sync and the ledger keys it held leave memory.
         FamilySync.forget()
+        lastOwner = nil
         user = nil
         vault = nil
         owner = nil

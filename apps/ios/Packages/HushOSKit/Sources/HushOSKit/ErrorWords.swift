@@ -23,13 +23,19 @@ public protocol WordedError: LocalizedError {}
 public enum ErrorWords {
     public static let generic = "Something went wrong. Try again."
 
-    /* Work stopped because whoever waited for it went away, not because anything failed. */
-    public static func isCancellation(_ error: Error) -> Bool {
+    /*
+     * Work stopped because whoever waited for it went away, not because anything failed: a
+     * `CancellationError`, a person's own cancel, or a URL request cancelled while the task
+     * that waits for it is cancelled. URLSession also says "cancelled" when the system ends a
+     * request or a session is torn down; with the task still running that is a failure (no
+     * answer, retried or reported), never a cancellation, or a failed upload looks finished.
+     */
+    public static func isCancellation(_ error: Error, taskCancelled: Bool = Task.isCancelled) -> Bool {
         if error is CancellationError { return true }
-        if let error = error as? URLError { return error.code == .cancelled }
         let ns = error as NSError
-        return (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled)
-            || (ns.domain == NSCocoaErrorDomain && ns.code == NSUserCancelledError)
+        if ns.domain == NSCocoaErrorDomain && ns.code == NSUserCancelledError { return true }
+        let urlCancelled = (error as? URLError)?.code == .cancelled || (ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled)
+        return urlCancelled && taskCancelled
     }
 
     /* The words for `error`, or nil when it is a cancellation and nothing should be said. */

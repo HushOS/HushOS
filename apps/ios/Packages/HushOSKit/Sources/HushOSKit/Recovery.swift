@@ -213,9 +213,8 @@ extension Auth {
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
-        } catch let error as URLError where error.code == .cancelled {
-            throw CancellationError()
         } catch {
+            if ErrorWords.isCancellation(error) { throw CancellationError() }
             throw AuthError.message("We couldn’t reach HushOS. Check your connection, then try again.")
         }
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]

@@ -907,9 +907,12 @@ struct ResetKeysSheet: View {
         Task {
             do {
                 let made = try await Auth.rotateKeys(password: password)
-                // Every session ended with the reset; sign in again under the new key.
-                if let email = model.user?.email { try await model.signIn(email: email, password: password) }
+                // The rotation happened: the new phrase is shown whatever follows, since the old one no longer opens the
+                // account and this is the only time the new one is shown.
                 phrase = made
+                // Every session ended with the reset; sign in again under the new key. If that fails, the session alert
+                // asks for it later; the phrase stays on screen.
+                if let email = model.user?.email { try? await model.signIn(email: email, password: password) }
             } catch {
                 if let words = ErrorWords.say(error) { self.error = words }
             }

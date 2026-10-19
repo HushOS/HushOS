@@ -135,7 +135,7 @@ extension Vault {
             try await trash(nodeId)
         } catch {
             // The copy landed: said as such, never as a move that failed and changed nothing.
-            let why = FamilyWords.core(error) ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            let why = ErrorWords.say(error, otherwise: "Try again.") ?? "Try again."
             throw DriveAPIError.server(409, "Copied, but the original couldn’t be moved to the Trash. \(why)")
         }
         return (copied, true)

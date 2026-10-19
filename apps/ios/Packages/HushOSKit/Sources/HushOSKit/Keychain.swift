@@ -85,14 +85,24 @@ public enum SharedKeychain {
         return try? JSONDecoder().decode(type, from: data)
     }
 
+    /*
+     * Replaced in place, never deleted and added again: the app and its extensions read the same
+     * items, and a reader between a delete and an add found no session (the Files extension then
+     * refused as signed out). An item that isn't there yet is added; one another process added
+     * meanwhile is updated.
+     */
     public static func write<T: Encodable>(_ account: String, _ value: T) throws {
         let data = try JSONEncoder().encode(value)
         let base = query(account)
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let changes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        var status = SecItemUpdate(base as CFDictionary, changes as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(base.merging(changes) { $1 } as CFDictionary, nil)
+            if status == errSecDuplicateItem { status = SecItemUpdate(base as CFDictionary, changes as CFDictionary) }
+        }
         if status != errSecSuccess { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
     }
 
