@@ -273,6 +273,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
             when (end) {
                 is JobEnd.Done -> {
+                    // Stopped while the last step was under way: it landed all the same, so it's said, and the job is
+                    // cancelled so WorkManager doesn't run it again (a duplicate, or a same-name failure).
+                    if (end.stopped) WorkManager.getInstance(applicationContext).cancelWorkById(this@UploadWorker.id)
                     file.parentFile?.deleteRecursively()
                     TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
                     Result.success()
@@ -327,9 +330,13 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 null
             }
             when (end) {
-                is JobEnd.Done -> end.value ?: run {
-                    TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
-                    Result.success()
+                is JobEnd.Done -> {
+                    // Kept all the same: said, and not run again.
+                    if (end.stopped) WorkManager.getInstance(applicationContext).cancelWorkById(this@KeepWorker.id)
+                    end.value ?: run {
+                        TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
+                        Result.success()
+                    }
                 }
                 JobEnd.Stopped -> Result.retry()
                 is JobEnd.Failed -> outcome(end.error)

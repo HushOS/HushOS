@@ -45,17 +45,23 @@ class JobEndTest {
         assertEquals(JobEnd.Stopped, end)
     }
 
+    /*
+     * Stopped while the last step (completing the upload) was in flight: the file is on the server. Calling that a stop
+     * would leave it unannounced after a Cancel, or upload it again when WorkManager reran the job. It is Done, marked
+     * so the worker cancels its own job.
+     */
     @Test
-    fun workThatEndsAfterTheStopDoesNotCountAsDone() {
+    fun workThatLandsWhileTheStopArrivesIsDoneAndMarkedStopped() {
         var stopped = false
         val end = stoppable({ stopped }) { _ -> stopped = true; "node" }
-        assertEquals(JobEnd.Stopped, end)
+        assertEquals(JobEnd.Done("node", stopped = true), end)
+        assertEquals(JobEnd.Done("node", stopped = false), stoppable({ false }) { _ -> "node" })
     }
 
     @Test
     fun anUnstoppedJobFinishesOrFailsAsBefore() {
         val upload = Upload(stopAfter = null)
-        assertEquals(JobEnd.Done(Unit), stoppable({ false }) { checkStop -> upload.run(checkStop) })
+        assertEquals(JobEnd.Done(Unit, stopped = false), stoppable({ false }) { checkStop -> upload.run(checkStop) })
         assertTrue(upload.completed)
         val refused = ApiError(500, "boom")
         assertEquals(JobEnd.Failed(refused), stoppable({ false }) { _ -> throw refused })
