@@ -1,0 +1,29 @@
+apps/web/src/components/drive/office-viewer.tsx
+  s_c56e31c87cddde::t_a1d9ef5c524d98 14,221-223,267
+apps/web/src/lib/groups/outbox.ts
+  s_c56e31c87cddde::t_2b08c3de8f3230 457-462,595,597,761,770,811
+apps/web/src/lib/groups/removal.test.ts
+  s_c56e31c87cddde::t_bc4208e5d703ca 256-261
+apps/web/src/lib/groups/removal.ts
+  s_c56e31c87cddde::t_aa17949dc7499f 218-222
+apps/web/src/lib/office.ts
+  s_c56e31c87cddde::t_517fa40aeab43c 95-108
+e2e/preview.spec.ts
+  s_c56e31c87cddde::t_1b3db140bd33c9 119-121,128-137,148-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c687f96df7839008f7c50bc6c0b35b2472d075d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
