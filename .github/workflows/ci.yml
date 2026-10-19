@@ -66,14 +66,19 @@ jobs:
                       case "$file" in
                           crates/* | Cargo.toml | Cargo.lock | rust-toolchain* | packages/crypto/* | .github/workflows/ci.yml) rust=true ;;
                       esac
-                      # What the browser keeps on the device: sign-in, unlock, device keys and the
-                      # sealed stash. Storage APIs differ most in WebKit (#108 passed on Chromium
+                      # What the browser keeps on the device: sign-in, unlock, device keys, the
+                      # sealed stash, the tree mirror and upload journal, and the WebKit jobs themselves. Storage APIs differ most in WebKit (#108 passed on Chromium
                       # and broke device removal there), so these run WebKit without `full-ci`.
                       case "$file" in
-                          packages/auth/src/* | packages/crypto/src/device* | packages/crypto/src/stash* | \
-                              apps/web/src/lib/auth* | apps/web/src/lib/session* | apps/web/src/lib/sign-out* | \
-                              apps/web/src/lib/stash* | e2e/devices.spec.ts | e2e/saved-unlock.spec.ts | \
-                              e2e/sealed-copy.spec.ts | e2e/recover.spec.ts) webkit=true ;;
+                          packages/auth/src/client* | packages/auth/src/store* | packages/auth/src/device-storage* | \
+                              packages/auth/src/with-storage-events* | packages/auth/src/worker* | \
+                              packages/crypto/src/device.ts | packages/crypto/src/device-identity.ts | \
+                              packages/crypto/src/stash* | packages/drive/src/mirror* | packages/drive/src/journal* | \
+                              apps/web/src/lib/auth-client* | apps/web/src/lib/auth.ts | apps/web/src/lib/auth.worker.ts | \
+                              apps/web/src/lib/session* | apps/web/src/lib/sign-out* | apps/web/src/lib/stash* | \
+                              apps/web/src/lib/save-copy* | apps/web/src/lib/rollback-marks* | \
+                              apps/web/src/lib/groups/store* | e2e/devices.spec.ts | e2e/saved-unlock.spec.ts | \
+                              e2e/sealed-copy.spec.ts | e2e/recover.spec.ts | .github/workflows/ci.yml) webkit=true ;;
                       esac
                   done <<< "$files"
                   echo "browser=$browser" >> "$GITHUB_OUTPUT"
