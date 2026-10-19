@@ -58,6 +58,7 @@ test('without billing a family member’s own files keep their own allowance, wh
         used: 0n,
         reserved: 0n,
         free: 3000n,
+        shown: null,
         pool: null,
     });
     expect(await getStorageAllowance(organizer.userId)).toMatchObject({
