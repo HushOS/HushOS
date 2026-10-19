@@ -1,0 +1,33 @@
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_03b12347e6e216 106,148,418-419,431-433
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_1f6a73878a76b9 1561-1563,1757-1758
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_09623c0e32ce64 20,1051-1053,1057,1059
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_ac723a8d303f2e 5,798-803,806-807
+packages/db/src/drive.pool-none.test.ts
+  s_c56e31c87cddde::t_e7d851652aebeb 61
+packages/db/src/drive.pool.test.ts
+  s_c56e31c87cddde::t_a5a77deff4d8b2 46-51,371,392-396,398,401-402,405-411,414-415,417,420,484,489-492,506,508,510,512,523,540,544,546,552-553,557-559,561,603-648,697,781,807,863-866,872,887,895-898,904,914,921,923,964-967,969-970,977-978,982,991-993,996-997,999,1001,1003-1005
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_e88d9e527db963 5,1288-1294,1297
+packages/db/src/pool.ts
+  s_c56e31c87cddde::t_e9beb9d0855acd 66-75,77-81,95-119,122-131,133-137,209,214-222,226,230,233-244,252-253,329,341-342,362-363,389-395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ce0cd28b45d696f6d90e810d55cd76c89d555157",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
