@@ -1780,7 +1780,16 @@ describe('queued rows and stashed copies', () => {
 
 /* A copy's bytes in memory, in uneven parts, with a recognisable pattern. */
 function memoryCopy(size: number, name = 'copy.bin') {
-    const content = Uint8Array.from({ length: size }, (_, i) => (i * 31 + 11) & 0xff);
+    // The pattern repeats every 256 bytes, so it is written once and doubled: built byte by
+    // byte through Uint8Array.from, 48 MB took over a second here and 14 s on a loaded CI runner.
+    const content = new Uint8Array(size);
+    for (let i = 0; i < Math.min(256, size); i++) content[i] = (i * 31 + 11) & 0xff;
+    for (let filled = 256; filled < size; filled *= 2)
+        content.copyWithin(filled, 0, Math.min(filled, size - filled));
+    // A chunk is a whole number of patterns, so every chunk would read the same: each one's
+    // first four bytes carry its index, and a chunk swapped or read twice shows.
+    for (let start = 0; start + 4 <= size; start += CHUNK)
+        new DataView(content.buffer).setUint32(start, start / CHUNK + 1, false);
     const cut = [0, 1000, CHUNK + 7, size].filter(
         (at, i, all) => at <= size && all.indexOf(at) === i,
     );
@@ -1826,7 +1835,7 @@ describe('uploads from memory', () => {
         // The plaintext never became a Blob or a File on the way.
         expect(blobs.mock.calls.length).toBe(0);
         expect(files.mock.calls.length).toBe(0);
-    }, 20_000);
+    });
 
     test('a lock drops the bytes the worker held, and the copy comes back from its stash', async () => {
         const stash = fakeStash();
@@ -1853,7 +1862,7 @@ describe('uploads from memory', () => {
         await settle(2_000);
         expect(opened).toHaveBeenCalledTimes(1);
         expect(h.item(id!).status).toBe('done');
-    }, 20_000);
+    });
 });
 
 describe('in-memory bytes after the upload stops', () => {
@@ -1871,7 +1880,7 @@ describe('in-memory bytes after the upload stops', () => {
         await settle(10);
         expect(h.sources.size).toBe(0);
         expect(h.released).toHaveLength(1);
-    }, 20_000);
+    });
 
     test('a cancelled copy lets the worker drop its bytes', async () => {
         let hold: (() => void) | null = null;
@@ -1888,7 +1897,7 @@ describe('in-memory bytes after the upload stops', () => {
         await h.manager.cancel(id!);
         void hold;
         expect(h.sources.size).toBe(0);
-    }, 20_000);
+    });
 
     test('carries the copy’s own thumbnail into the sealed object', async () => {
         const h = harness();
@@ -1896,7 +1905,7 @@ describe('in-memory bytes after the upload stops', () => {
         h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
         await settle(1_000);
         expect(h.preparedThumbnails.map((t) => (t ? [...t] : null))).toEqual([[1, 2, 3]]);
-    }, 20_000);
+    });
 
     test('after a lock it never saw, a paused copy reopens from its stash instead of failing', async () => {
         const stash = fakeStash();
@@ -1919,7 +1928,7 @@ describe('in-memory bytes after the upload stops', () => {
         expect(opened).toHaveBeenCalledTimes(1);
         // Reattached from the stash's bytes, which were in memory, never a Blob.
         expect(h.calls.filter((call) => call === 'driveSourceAttach')).toHaveLength(2);
-    }, 20_000);
+    });
 
     test('after a lock it never saw, a copy with no stash is reported lost, not failed at every retry', async () => {
         const h = harness();
@@ -1934,7 +1943,7 @@ describe('in-memory bytes after the upload stops', () => {
         await settle(500);
         expect(h.item(id!).status).toBe('failed');
         expect(h.item(id!).error).toMatch(/did not finish/);
-    }, 20_000);
+    });
 
     test('a lock that cuts the move to the worker short, with no stash, reports the copy lost', async () => {
         const h = harness({ attachLocks: true });
@@ -1946,7 +1955,7 @@ describe('in-memory bytes after the upload stops', () => {
         await settle(300);
         expect(h.item(id!).status).toBe('failed');
         expect(h.item(id!).error).toMatch(/did not finish/);
-    }, 20_000);
+    });
 });
 
 describe('in-memory bytes and the person’s own actions', () => {
@@ -1979,7 +1988,7 @@ describe('in-memory bytes and the person’s own actions', () => {
         await h.manager.retry(copy!);
         await settle(3_000);
         expect(h.item(copy!).status).toBe('done');
-    }, 20_000);
+    });
 
     test('a copy cancelled while its bytes move to the worker leaves none there', async () => {
         let arrive: () => void = () => {};
@@ -1992,7 +2001,7 @@ describe('in-memory bytes and the person’s own actions', () => {
         arrive();
         await settle(100);
         expect(h.sources.size).toBe(0);
-    }, 20_000);
+    });
 
     test('removing a failed copy with a part still encrypting touches nothing more', async () => {
         // No stash: a part that wrongly carried on would end in lost(), on a row already gone.
@@ -2017,5 +2026,5 @@ describe('in-memory bytes and the person’s own actions', () => {
         // Nothing more happens to the removed copy: no lost event, no server abort.
         expect(events.slice(before)).toEqual([]);
         expect(h.server.aborted).toEqual([]);
-    }, 20_000);
+    });
 });
