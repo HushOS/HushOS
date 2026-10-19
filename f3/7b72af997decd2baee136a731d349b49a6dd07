@@ -1,0 +1,35 @@
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_f99a5e22518285 66,102,147,406-408,419-420
+packages/auth/src/api.ts
+  s_c56e31c87cddde::t_27e3d47cfbab66 55-57
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_a408c3fc82a3e5 1564-1565,1568,1757-1758
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_d1dcadcfb59bb5 2404,2407,2603,2605,2609
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_34bb4f0a4baca7 20,1051-1061,1068
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_b5486d09242799 3-5,774-776
+packages/db/src/drive.pool.test.ts
+  s_c56e31c87cddde::t_a483f4891cefc9 46-47,154,157-171,173-228,230-233,296-308,396,400-402,512-585,695-745
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_67dec33390ed48 5,1287-1296,1447,2014-2018,2020,2185
+packages/db/src/pool.ts
+  s_c56e31c87cddde::t_5f14d69dd54ef4 38-48,51,53,58-94,105,119,143-144,152-154,176,185-186,203,205,207,258,265-266,288,290-292,302-305,310,313,341,349-351,361
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f37b72af997decd2baee136a731d349b49a6dd07",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
