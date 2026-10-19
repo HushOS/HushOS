@@ -1,5 +1,5 @@
 import { stashLost } from '@hushos/crypto/stash';
-import { StashGone, type UploadStash } from '@hushos/drive/transfers';
+import { type MemoryFile, StashGone, type UploadStash } from '@hushos/drive/transfers';
 import { authClient } from '@/lib/auth-client';
 
 /*
@@ -146,12 +146,17 @@ export function createSealedStash(options: {
             } catch (error) {
                 throw stashLost(error) ? new StashGone((error as Error).message) : error;
             }
-            const opened = new File(parts as BlobPart[], file.name, {
+            // The bytes stay in memory, never a Blob, which the browser could page to disk.
+            const size = parts.reduce((total, part) => total + part.byteLength, 0);
+            if (size !== file.size) throw new StashGone('The stashed bytes are not the file.');
+            const opened: MemoryFile = {
+                kind: 'memory',
+                name: file.name,
+                size,
                 type: file.type,
                 lastModified: file.lastModified,
-            });
-            if (opened.size !== file.size)
-                throw new StashGone('The stashed bytes are not the file.');
+                parts,
+            };
             return opened;
         },
         async remove(name) {

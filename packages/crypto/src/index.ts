@@ -25,6 +25,7 @@ export {
     type DownloadChunkProgress,
     type UploadPartProgress,
     type UploadPartResult,
+    type UploadBytes,
 } from './session';
 export type {
     AreaRootRotationInput,

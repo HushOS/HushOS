@@ -12,6 +12,7 @@ import {
     VERSION_MOVED,
     type TransferManagerOptions,
     type UploadStash,
+    type MemoryFile,
     StashGone,
 } from './transfers';
 
@@ -67,21 +68,41 @@ type Journal = ReturnType<typeof createMemoryJournal>;
 /* The app's stash, in memory: bytes by name, plus what was removed and swept. */
 function fakeStash() {
     const files = new Map<string, File>();
+    /* Stashes of real bytes, reopened as memory files (a fresh copy each time), not Files. */
+    const bytes = new Map<string, Uint8Array>();
     const removed: string[] = [];
-    const stash: UploadStash & { files: Map<string, File>; removed: string[] } = {
+    const stash: UploadStash & {
+        files: Map<string, File>;
+        bytes: Map<string, Uint8Array>;
+        removed: string[];
+    } = {
         files,
+        bytes,
         removed,
         async open(name, file) {
+            const held = bytes.get(name);
+            if (held) {
+                const opened: MemoryFile = {
+                    kind: 'memory',
+                    name: file.name,
+                    size: held.byteLength,
+                    type: file.type,
+                    lastModified: file.lastModified,
+                    parts: [held.slice()],
+                };
+                return opened;
+            }
             const stored = files.get(name);
             if (!stored) throw new StashGone('gone');
             return fakeFile(file.size, file.name, file.lastModified);
         },
         async remove(name) {
             files.delete(name);
+            bytes.delete(name);
             removed.push(name);
         },
         async sweep(keep) {
-            for (const name of Array.from(files.keys()))
+            for (const name of [...files.keys(), ...bytes.keys()])
                 if (!keep.has(name)) await this.remove(name);
         },
     };
@@ -106,6 +127,11 @@ function harness(
         onEvent?: TransferManagerOptions['onEvent'];
         /* The worker refuses a node under this parent epoch: a key change has not reached it. */
         keyChangePendingAt?: (parentKeyEpoch: number) => boolean;
+        /* The worker dies mid-attach: the parts are moved, then the call fails with a lock. */
+        attachLocks?: boolean;
+        /* Held until it resolves: the attach, and the encrypt of a chunk index, still on their way. */
+        attachHold?: () => Promise<void>;
+        encryptHold?: (index: number) => Promise<void> | undefined;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -119,12 +145,54 @@ function harness(
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
     const digestOf = options.digest ?? ((file: File, index: number) => `d-${file.name}-${index}`);
+    /* Attached in-memory bytes, as the worker holds them, and what each read chunk held. */
+    const sources = new Map<string, Uint8Array[]>();
+    const readChunks = new Map<string, Uint8Array>();
+    const released: string[] = [];
+    const preparedThumbnails: (Uint8Array | null)[] = [];
+    const readSource = (sourceId: string, index: number) => {
+        const parts = sources.get(sourceId);
+        if (!parts) throw new Error('This upload’s bytes are no longer on this device.');
+        const joined = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+        let at = 0;
+        for (const part of parts) {
+            joined.set(part, at);
+            at += part.byteLength;
+        }
+        return joined.slice(index * CHUNK, (index + 1) * CHUNK);
+    };
+    const digestOfInput = (file: CryptoRequests['driveUploadEncrypt']['file'], index: number) => {
+        if (file instanceof Blob || !('source' in file)) return digestOf(file as File, index);
+        const chunk = readSource(file.source, index);
+        readChunks.set(`${file.source}:${index}`, chunk);
+        // Enough of the bytes to tell chunks apart, cheaply; the test compares them in full.
+        const at = (i: number) => chunk[Math.min(i, chunk.length - 1)] ?? 0;
+        return `d-mem-${index}-${chunk.length}-${at(0)}-${at(4096)}-${at(chunk.length - 1)}`;
+    };
     const rpc: Rpc = async <K extends keyof CryptoRequests>(
         operation: K,
         input: CryptoRequests[K],
+        rpcOptions?: { transfer?: Transferable[] },
     ): Promise<CryptoResults[K]> => {
         calls.push(operation);
         switch (operation) {
+            case 'driveSourceAttach': {
+                const { sourceId, parts } = input as CryptoRequests['driveSourceAttach'];
+                // As postMessage does: what is listed for transfer moves, and is detached here.
+                const moved = structuredClone(parts, { transfer: rpcOptions?.transfer ?? [] });
+                if (options.attachLocks)
+                    throw new Error('Your account was locked. Please try again.');
+                sources.set(sourceId, moved);
+                await options.attachHold?.();
+                return {
+                    size: moved.reduce((total, part) => total + part.byteLength, 0),
+                } as CryptoResults[K];
+            }
+            case 'driveSourceRelease': {
+                const { sourceId } = input as CryptoRequests['driveSourceRelease'];
+                released.push(sourceId);
+                return { released: sources.delete(sourceId) } as CryptoResults[K];
+            }
             case 'driveCreateNodes':
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes)
                     if (options.keyChangePendingAt?.(n.parentKeyEpoch))
@@ -146,6 +214,10 @@ function harness(
             case 'driveUploadReopen': {
                 const { plaintextSize } = input as CryptoRequests['driveUploadPrepare'];
                 if (operation === 'driveUploadPrepare')
+                    preparedThumbnails.push(
+                        (input as CryptoRequests['driveUploadPrepare']).thumbnail ?? null,
+                    );
+                if (operation === 'driveUploadPrepare')
                     signed.push({
                         operation,
                         signAs: (input as CryptoRequests['driveUploadPrepare']).signAs,
@@ -162,12 +234,13 @@ function harness(
             }
             case 'driveUploadDigest': {
                 const { file, index } = input as CryptoRequests['driveUploadDigest'];
-                return { digest: digestOf(file as File, index) } as CryptoResults[K];
+                return { digest: digestOfInput(file, index) } as CryptoResults[K];
             }
             case 'driveUploadEncrypt': {
                 const { file, index } = input as CryptoRequests['driveUploadEncrypt'];
+                await options.encryptHold?.(index);
                 return {
-                    digest: digestOf(file as File, index),
+                    digest: digestOfInput(file, index),
                     bytes: CHUNK + 16,
                 } as CryptoResults[K];
             }
@@ -375,6 +448,12 @@ function harness(
         journal,
         published,
         peak: () => peakInFlight,
+        sources,
+        readChunks,
+        released,
+        preparedThumbnails,
+        /* An explicit lock ends the worker: everything it held goes, unseen by the engine. */
+        lockWorker: () => sources.clear(),
         state: () => manager.getState(),
         item: (id: string) => manager.getState().uploads.find((u) => u.id === id)!,
     };
@@ -1697,4 +1776,246 @@ describe('queued rows and stashed copies', () => {
         expect(second.item(stashed!).status).toBe('failed');
         expect(second.calls).not.toContain('driveUploadPrepare');
     });
+});
+
+/* A copy's bytes in memory, in uneven parts, with a recognisable pattern. */
+function memoryCopy(size: number, name = 'copy.bin') {
+    const content = Uint8Array.from({ length: size }, (_, i) => (i * 31 + 11) & 0xff);
+    const cut = [0, 1000, CHUNK + 7, size].filter(
+        (at, i, all) => at <= size && all.indexOf(at) === i,
+    );
+    const parts = cut.slice(1).map((end, i) => content.slice(cut[i], end));
+    const file: MemoryFile = {
+        kind: 'memory',
+        name,
+        size,
+        type: 'application/octet-stream',
+        lastModified: 2_000,
+        parts,
+        thumbnail: new Uint8Array([1, 2, 3]),
+    };
+    return { content, file };
+}
+
+describe('uploads from memory', () => {
+    test('send exactly the bytes, never as a Blob, and move them to the worker rather than copy', async () => {
+        const blobs = vi.spyOn(globalThis, 'Blob');
+        const files = vi.spyOn(globalThis, 'File');
+        const h = harness();
+        // Five chunks, so later parts are read after the first wave (three in flight) has
+        // already moved the bytes: they must read the worker's copy, not move them again.
+        const size = 4 * CHUNK + 5;
+        const { content, file } = memoryCopy(size);
+        const parts = [...file.parts];
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(3_000);
+        expect(h.item(id!).status).toBe('done');
+        // Byte for byte: the chunks the worker read, in order, are the copy.
+        const sourceId = [...h.readChunks.keys()][0]!.split(':')[0]!;
+        const sent = new Uint8Array(size);
+        for (let index = 0; index < 5; index++)
+            sent.set(h.readChunks.get(`${sourceId}:${index}`)!, index * CHUNK);
+        // Compared natively, without printing 40 MB on a mismatch.
+        expect(Buffer.compare(sent, content)).toBe(0);
+        // Moved once: the page's buffers are detached, and attached a single time.
+        expect(h.calls.filter((call) => call === 'driveSourceAttach')).toHaveLength(1);
+        expect(parts.every((part) => part.byteLength === 0)).toBe(true);
+        // And let go of in the worker once the upload is done.
+        expect(h.released).toEqual([sourceId]);
+        expect(h.sources.size).toBe(0);
+        // The plaintext never became a Blob or a File on the way.
+        expect(blobs.mock.calls.length).toBe(0);
+        expect(files.mock.calls.length).toBe(0);
+    }, 20_000);
+
+    test('a lock drops the bytes the worker held, and the copy comes back from its stash', async () => {
+        const stash = fakeStash();
+        const { file } = memoryCopy(3 * CHUNK);
+        stash.files.set('copy-1', fakeFile(3 * CHUNK, 'copy.bin', 2_000));
+        let fail = false;
+        const h = harness({
+            stash,
+            send: async (_objectId, index) => {
+                if (fail) throw new Error('Your account was locked. Please try again.');
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        const [id] = h.manager.enqueue([
+            { file, parent: node('root', null), origin: 'copy', stash: 'copy-1' },
+        ]);
+        fail = true;
+        await settle(500);
+        expect(h.item(id!).status).toBe('paused');
+        // What was moved to the worker is not asked for again: the page has nothing to move.
+        const opened = vi.spyOn(stash, 'open');
+        fail = false;
+        await h.manager.resume(id!);
+        await settle(2_000);
+        expect(opened).toHaveBeenCalledTimes(1);
+        expect(h.item(id!).status).toBe('done');
+    }, 20_000);
+});
+
+describe('in-memory bytes after the upload stops', () => {
+    const permanent = async () =>
+        ({ ok: false, status: 400, retryable: false, message: 'Refused.' }) as UploadPartResult;
+
+    test('a failed copy removed from the list lets the worker drop its bytes', async () => {
+        const h = harness({ send: permanent });
+        const { file } = memoryCopy(CHUNK);
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(500);
+        expect(h.item(id!).status).toBe('failed');
+        expect(h.sources.size).toBe(1);
+        h.manager.remove(id!);
+        await settle(10);
+        expect(h.sources.size).toBe(0);
+        expect(h.released).toHaveLength(1);
+    }, 20_000);
+
+    test('a cancelled copy lets the worker drop its bytes', async () => {
+        let hold: (() => void) | null = null;
+        const h = harness({
+            send: (_objectId, index) =>
+                new Promise((resolve) => {
+                    hold = () => resolve({ ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 });
+                }),
+        });
+        const { file } = memoryCopy(CHUNK);
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(100);
+        expect(h.sources.size).toBe(1);
+        await h.manager.cancel(id!);
+        void hold;
+        expect(h.sources.size).toBe(0);
+    }, 20_000);
+
+    test('carries the copy’s own thumbnail into the sealed object', async () => {
+        const h = harness();
+        const { file } = memoryCopy(CHUNK);
+        h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(1_000);
+        expect(h.preparedThumbnails.map((t) => (t ? [...t] : null))).toEqual([[1, 2, 3]]);
+    }, 20_000);
+
+    test('after a lock it never saw, a paused copy reopens from its stash instead of failing', async () => {
+        const stash = fakeStash();
+        const { content, file } = memoryCopy(6 * CHUNK);
+        stash.bytes.set('copy-1', content.slice());
+        const h = harness({ stash });
+        const [id] = h.manager.enqueue([
+            { file, parent: node('root', null), origin: 'copy', stash: 'copy-1' },
+        ]);
+        await settle(150);
+        await h.manager.pause(id!);
+        await settle(100);
+        expect(h.item(id!).partsDone).toBeLessThan(6);
+        // Locked while paused: the worker and its copy of the bytes are gone.
+        h.lockWorker();
+        const opened = vi.spyOn(stash, 'open');
+        await h.manager.resume(id!);
+        await settle(3_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(opened).toHaveBeenCalledTimes(1);
+        // Reattached from the stash's bytes, which were in memory, never a Blob.
+        expect(h.calls.filter((call) => call === 'driveSourceAttach')).toHaveLength(2);
+    }, 20_000);
+
+    test('after a lock it never saw, a copy with no stash is reported lost, not failed at every retry', async () => {
+        const h = harness();
+        const { file } = memoryCopy(6 * CHUNK);
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(150);
+        await h.manager.pause(id!);
+        await settle(100);
+        expect(h.item(id!).partsDone).toBeLessThan(6);
+        h.lockWorker();
+        await h.manager.resume(id!);
+        await settle(500);
+        expect(h.item(id!).status).toBe('failed');
+        expect(h.item(id!).error).toMatch(/did not finish/);
+    }, 20_000);
+
+    test('a lock that cuts the move to the worker short, with no stash, reports the copy lost', async () => {
+        const h = harness({ attachLocks: true });
+        const { file } = memoryCopy(CHUNK);
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(300);
+        expect(h.item(id!).status).toBe('paused');
+        await h.manager.resume(id!);
+        await settle(300);
+        expect(h.item(id!).status).toBe('failed');
+        expect(h.item(id!).error).toMatch(/did not finish/);
+    }, 20_000);
+});
+
+describe('in-memory bytes and the person’s own actions', () => {
+    test('Retry brings back a failed copy whose bytes a lock took, from its sealed stash', async () => {
+        const stash = fakeStash();
+        const { content, file } = memoryCopy(2 * CHUNK);
+        stash.bytes.set('copy-1', content.slice());
+        let mode: 'fail' | 'lock' | 'ok' = 'fail';
+        const h = harness({
+            stash,
+            send: async (_objectId, index) => {
+                if (mode === 'lock') throw new Error('Your account was locked. Please try again.');
+                if (mode === 'fail')
+                    return { ok: false, status: 400, retryable: false, message: 'Refused.' };
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        const [copy] = h.manager.enqueue([
+            { file, parent: node('root', null), origin: 'copy', stash: 'copy-1' },
+        ]);
+        await settle(500);
+        expect(h.item(copy!).status).toBe('failed');
+        // Another upload meets the lock: the engine notices, and the worker's bytes are gone.
+        mode = 'lock';
+        h.manager.enqueue([{ file: fakeFile(CHUNK, 'other.bin'), parent: node('root', null) }]);
+        await settle(500);
+        h.lockWorker();
+        expect(h.item(copy!).status).toBe('failed');
+        mode = 'ok';
+        await h.manager.retry(copy!);
+        await settle(3_000);
+        expect(h.item(copy!).status).toBe('done');
+    }, 20_000);
+
+    test('a copy cancelled while its bytes move to the worker leaves none there', async () => {
+        let arrive: () => void = () => {};
+        const h = harness({ attachHold: () => new Promise((resolve) => (arrive = resolve)) });
+        const { file } = memoryCopy(CHUNK);
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(100);
+        expect(h.calls).toContain('driveSourceAttach');
+        await h.manager.cancel(id!);
+        arrive();
+        await settle(100);
+        expect(h.sources.size).toBe(0);
+    }, 20_000);
+
+    test('removing a failed copy with a part still encrypting touches nothing more', async () => {
+        // No stash: a part that wrongly carried on would end in lost(), on a row already gone.
+        const { file } = memoryCopy(3 * CHUNK);
+        let encrypted: () => void = () => {};
+        const events: string[] = [];
+        const h = harness({
+            // The first part is refused for good; the last is still being encrypted meanwhile.
+            send: async () => ({ ok: false, status: 400, retryable: false, message: 'Refused.' }),
+            encryptHold: (index) =>
+                index === 2 ? new Promise((resolve) => (encrypted = resolve)) : undefined,
+            onEvent: (event) => void events.push(event.type),
+        });
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(300);
+        expect(h.item(id!).status).toBe('failed');
+        const before = events.length;
+        h.manager.remove(id!);
+        await settle(10);
+        encrypted();
+        await settle(300);
+        // Nothing more happens to the removed copy: no lost event, no server abort.
+        expect(events.slice(before)).toEqual([]);
+        expect(h.server.aborted).toEqual([]);
+    }, 20_000);
 });
