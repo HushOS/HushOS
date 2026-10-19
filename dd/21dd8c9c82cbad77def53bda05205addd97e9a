@@ -1,0 +1,21 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/LandedJobs.kt
+  s_c56e31c87cddde::t_a191efe20b5fd4 15-19,22-26
+apps/android/app/src/test/kotlin/com/hushos/app/data/LandedJobsTest.kt
+  s_c56e31c87cddde::t_4bfa026c8c3c6b 28-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dd21dd8c9c82cbad77def53bda05205addd97e9a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
