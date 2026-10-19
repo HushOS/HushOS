@@ -84,7 +84,7 @@ export default function SecurityNotice({
     when = 'Today, 14:02 UTC',
     count = '2',
     accountUrl = 'http://localhost:5173/app/account#devices',
-    logoUrl = '/static/hushos-logo-dark.png',
+    logoUrl = '/static/hushos-logo-square.png',
 }: {
     kind?: SecurityNoticeKind;
     when?: string;
@@ -107,7 +107,6 @@ export default function SecurityNotice({
                         .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
                         .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
                         .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
-                        .email-logo { background-color: #3a3a3a !important; }
                         .email-cell { border-color: #262b3a !important; }
                         .email-heading, .email-value { color: #e4e8f4 !important; }
                         .email-muted { color: #9aa3be !important; }
@@ -117,7 +116,6 @@ export default function SecurityNotice({
                     [data-ogsc] .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
                     [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
                     [data-ogsc] .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
-                    [data-ogsc] .email-logo { background-color: #3a3a3a !important; }
                     [data-ogsc] .email-cell { border-color: #262b3a !important; }
                     [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #e4e8f4 !important; }
                     [data-ogsc] .email-muted { color: #9aa3be !important; }
@@ -156,31 +154,18 @@ export default function SecurityNotice({
                     >
                         <Row>
                             <Column style={{ width: '34px', verticalAlign: 'middle' }}>
-                                <table role="presentation" cellPadding={0} cellSpacing={0}>
-                                    <tbody>
-                                        <tr>
-                                            <td
-                                                className="email-logo"
-                                                style={{
-                                                    width: '26px',
-                                                    height: '26px',
-                                                    backgroundColor: '#000000',
-                                                    borderRadius: '8px',
-                                                    textAlign: 'center',
-                                                    verticalAlign: 'middle',
-                                                }}
-                                            >
-                                                <Img
-                                                    src={logoUrl}
-                                                    alt=""
-                                                    width="11"
-                                                    height="16"
-                                                    style={{ display: 'block', margin: '0 auto' }}
-                                                />
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
+                                {/*
+                                 * The black square and its mark are one image: Gmail on iOS repaints
+                                 * CSS colours in the dark but never images, so a square drawn in CSS
+                                 * behind the mark turned white under it.
+                                 */}
+                                <Img
+                                    src={logoUrl}
+                                    alt=""
+                                    width="26"
+                                    height="26"
+                                    style={{ display: 'block' }}
+                                />
                             </Column>
                             <Column style={{ verticalAlign: 'middle' }}>
                                 <Text

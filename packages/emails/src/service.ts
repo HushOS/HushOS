@@ -123,7 +123,7 @@ export async function sendVerificationEmail(
     adapter ??= createEmailAdapter();
     const values = {
         verificationUrl,
-        logoUrl: new URL('/email/hushos-logo-dark.png', verificationUrl).href,
+        logoUrl: new URL('/email/hushos-logo-square.png', verificationUrl).href,
     };
     const template = verifyEmail[purpose];
     await adapter.send({
@@ -150,7 +150,7 @@ export async function sendShareEmail(
         granterName: input.granterName,
         granterEmail: input.granterEmail,
         sharedUrl: input.sharedUrl,
-        logoUrl: new URL('/email/hushos-logo-dark.png', input.sharedUrl).href,
+        logoUrl: new URL('/email/hushos-logo-square.png', input.sharedUrl).href,
     };
     const template = shareNotice[input.role];
     await adapter.send({
@@ -183,7 +183,7 @@ export async function sendSecurityNotice(
         when: input.when,
         count: String(input.count ?? 1),
         accountUrl: input.accountUrl,
-        logoUrl: new URL('/email/hushos-logo-dark.png', input.accountUrl).href,
+        logoUrl: new URL('/email/hushos-logo-square.png', input.accountUrl).href,
     };
     const template = securityNotice[input.kind];
     await adapter.send({
@@ -210,7 +210,7 @@ export async function sendGroupInvitation(
         inviterEmail: input.inviterEmail,
         groupName: input.groupName,
         joinUrl: input.joinUrl,
-        logoUrl: new URL('/email/hushos-logo-dark.png', input.joinUrl).href,
+        logoUrl: new URL('/email/hushos-logo-square.png', input.joinUrl).href,
     };
     await adapter.send({
         to,
