@@ -216,37 +216,54 @@ async function endedSince(subscriptionId: string, pooledAt: Date): Promise<Revok
 const seconds = (ms: number) => BigInt(Math.floor(ms / 1000));
 
 /*
- * The unused part of one order, before tax, rounded down to the minor unit.
- * An order pays from its period's start (a change order from when it was made)
- * to the period's end. What was used ran until the plan was revoked; an order
- * paid after its owner was pooled (a renewal that slipped past the revoke) paid
- * for nothing they used, and is refunded whole. Its base is the order's net
- * amount (after discounts, before tax) less what it has refunded already.
+ * What the person actually paid on an order, before tax: its net amount (after
+ * discounts), less any customer balance Polar applied to it (`applied_balance_amount`
+ * is negative when a credit paid part of it, as a downgrade's credit does at the next
+ * renewal). Polar caps a refund at net plus applied balance less what it refunded.
  */
-export function unusedAmount(input: {
-    order: { netAmount: number; refundedAmount: number; createdAt: Date; change: boolean };
+export function paidOf(order: { net_amount: number; applied_balance_amount?: number | null }) {
+    return Math.min(order.net_amount, order.net_amount + (order.applied_balance_amount ?? 0));
+}
+
+/*
+ * The unused share of one order, as a fraction of the seconds it paid for. An
+ * order pays from its period's start (a change order from when it was made) to the
+ * period's end. What was used ran until the plan was revoked; an order paid after
+ * its owner was pooled (a renewal that slipped past the revoke) paid for nothing
+ * they used, and its whole span is unused.
+ */
+export function unusedShare(input: {
+    order: { createdAt: Date; change: boolean };
     periodStart: Date;
     periodEnd: Date;
     revokedAt: Date;
     pooledAt: Date;
 }) {
     const { order } = input;
-    const base = order.netAmount - order.refundedAmount;
-    if (base <= 0) return 0;
     const spanStart = order.change ? order.createdAt : input.periodStart;
     const end = input.periodEnd.getTime();
     const total = seconds(end - spanStart.getTime());
-    if (total <= 0n) return 0;
+    if (total <= 0n) return { unused: 0n, total: 1n };
     const from =
         order.createdAt.getTime() >= input.pooledAt.getTime()
             ? spanStart.getTime()
             : Math.max(input.revokedAt.getTime(), spanStart.getTime());
     const unused = seconds(Math.max(0, end - from));
-    const amount = (BigInt(base) * (unused < total ? unused : total)) / total;
-    return Number(amount);
+    return { unused: unused < total ? unused : total, total };
 }
 
-/* The orders that paid for the revoked plan's last period, every one of them. */
+/* `amount × unused / total`, rounded down (toward minus infinity for a credit). */
+function shareOf(amount: number, share: { unused: bigint; total: bigint }) {
+    const product = BigInt(amount) * share.unused;
+    const quotient = product / share.total;
+    return Number(product < 0n && quotient * share.total !== product ? quotient - 1n : quotient);
+}
+
+/*
+ * The orders of the revoked plan's last period: the checkout or renewal that paid
+ * for it, every change order made inside it (an upgrade's charge, a downgrade's
+ * credit), paid or not when they credit.
+ */
 async function periodOrders(ending: billingRepository.PlanEnding) {
     const periodStart = ending.periodStart!.getTime();
     const periodEnd = ending.periodEnd!.getTime();
@@ -256,7 +273,8 @@ async function periodOrders(ending: billingRepository.PlanEnding) {
         limit: 100,
     });
     return page.items.filter((order) => {
-        if (!order.paid || !PERIOD_REASONS.has(order.billing_reason)) return false;
+        if (!PERIOD_REASONS.has(order.billing_reason)) return false;
+        if (!order.paid && order.net_amount >= 0) return false;
         const at = Date.parse(order.created_at);
         if (Number.isNaN(at) || at >= periodEnd) return false;
         return order.billing_reason === 'subscription_update'
@@ -268,28 +286,40 @@ async function periodOrders(ending: billingRepository.PlanEnding) {
 export const refundKey = (ending: billingRepository.PlanEnding, orderId: string) =>
     `${ending.userId}:${ending.groupId}:${ending.admittedAt.toISOString()}:${orderId}`;
 
-type RefundOutcome = 'settled' | 'pending' | 'failed';
+/* `owed`: listed for operators and not tried again within a day of the last try. */
+type RefundOutcome = 'settled' | 'pending' | 'failed' | 'owed';
+
+const RANK: Record<RefundOutcome, number> = { settled: 0, pending: 1, owed: 2, failed: 3 };
+const worse = (a: RefundOutcome, b: RefundOutcome) => (RANK[a] >= RANK[b] ? a : b);
+
+/* An owed refund is tried again at most this often (the daily reconcile's pace). */
+const OWED_RETRY_MS = 23 * 60 * 60 * 1000;
+
+const isLive = (refund: models.Refund) =>
+    refund.status === 'pending' || refund.status === 'succeeded';
 
 /*
- * One order's refund, at most once. The amount is computed once, from the stored
- * revocation time, and kept. Before any call the order's refunds at Polar are
- * listed: one with HushOS's key that is pending or succeeded is this refund (a
- * retried job, a webhook replay, a reconcile, a call whose answer was lost); a
- * failed or cancelled one is not, and the refund is asked for again. Refunds
- * without the key made since (an operator's, by hand) count against it.
+ * Every order of the period refunded, at most once each. Orders that paid nothing
+ * (free, 100%-off, or a downgrade's credit) are settled as `none` before anything is
+ * listed. For the rest, the order's refunds at Polar are listed first, and the
+ * amounts computed together: each order's unused share of what was paid less the
+ * order's other live refunds (pending or succeeded, made by anyone), then a
+ * downgrade's credit for the unused days netted against them, newest order first.
+ * An amount is recomputed from each listing until Polar is first asked for it;
+ * from then it is fixed, and any other live refund that appears on the order later,
+ * whoever made it, counts against it.
  */
-async function refundOrder(
-    ending: billingRepository.PlanEnding,
-    order: models.Order,
-): Promise<RefundOutcome> {
-    const key = refundKey(ending, order.id);
-    let row = await billingRepository.getPlanRefund(order.id);
-    if (row && (row.status === 'succeeded' || row.status === 'none')) return 'settled';
-    if (!row) {
-        const amount = unusedAmount({
+async function refundPeriod(ending: billingRepository.PlanEnding): Promise<RefundOutcome> {
+    const orders = await periodOrders(ending);
+    const rows = new Map(
+        (await billingRepository.listPlanRefunds(ending.subscriptionId)).map((row) => [
+            row.orderId,
+            row,
+        ]),
+    );
+    const share = (order: models.Order) =>
+        unusedShare({
             order: {
-                netAmount: order.net_amount,
-                refundedAmount: order.refunded_amount,
                 createdAt: new Date(order.created_at),
                 change: order.billing_reason === 'subscription_update',
             },
@@ -298,16 +328,101 @@ async function refundOrder(
             revokedAt: ending.revokedAt!,
             pooledAt: ending.pooledAt,
         });
-        await billingRepository.notePlanRefund({
-            orderId: order.id,
-            subscriptionId: ending.subscriptionId,
-            refundKey: key,
-            amount,
-            currency: order.currency,
-        });
-        row = (await billingRepository.getPlanRefund(order.id))!;
+    const paying = orders.filter((order) => paidOf(order) > 0);
+    // A downgrade's credit for the days left, which the refund must not pay out again.
+    const credit = orders
+        .filter((order) => order.net_amount < 0)
+        .reduce((sum, order) => sum - shareOf(order.net_amount, share(order)), 0);
+    for (const order of orders)
+        if (paidOf(order) <= 0 && !rows.has(order.id))
+            await billingRepository.notePlanRefund({
+                orderId: order.id,
+                subscriptionId: ending.subscriptionId,
+                refundKey: refundKey(ending, order.id),
+                amount: 0,
+                currency: order.currency,
+                countedRefundIds: [],
+                status: 'none',
+            });
+    const listings = new Map<string, models.Refund[] | null>();
+    for (const order of paying) {
+        const row = rows.get(order.id);
+        if (row && (row.status === 'succeeded' || row.status === 'none')) continue;
+        try {
+            listings.set(
+                order.id,
+                (await polar().refunds.list({ order_id: order.id, limit: 100 })).items,
+            );
+        } catch (error) {
+            log.warn({
+                message: 'An order’s refunds could not be listed',
+                billing: { user: ending.userId, order: order.id, status: statusOf(error) },
+            });
+            listings.set(order.id, null);
+        }
     }
-    const failed = async (reason: string, status: number | null) => {
+    // Amounts: each order's unused share of what was paid less other live refunds (by the
+    // listing, or Polar's own refunded total while it can't be listed), then the credit.
+    let left = credit;
+    const amounts = new Map<string, { amount: number; counted: string[] | null }>();
+    for (const order of [...paying].sort(
+        (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
+    )) {
+        const key = refundKey(ending, order.id);
+        const listed = listings.get(order.id) ?? null;
+        const others = listed?.filter(
+            (refund) => isLive(refund) && refund.metadata?.[REFUND_METADATA_KEY] !== key,
+        );
+        const refunded = others
+            ? others.reduce((sum, refund) => sum + refund.amount, 0)
+            : order.refunded_amount;
+        let amount = shareOf(Math.max(0, paidOf(order) - refunded), share(order));
+        const cut = Math.min(amount, left);
+        amount -= cut;
+        left -= cut;
+        amounts.set(order.id, { amount, counted: others ? others.map((r) => r.id) : null });
+    }
+    let outcome: RefundOutcome = 'settled';
+    for (const order of paying) {
+        const computed = amounts.get(order.id)!;
+        if (!rows.has(order.id))
+            await billingRepository.notePlanRefund({
+                orderId: order.id,
+                subscriptionId: ending.subscriptionId,
+                refundKey: refundKey(ending, order.id),
+                amount: computed.amount,
+                currency: order.currency,
+                countedRefundIds: computed.counted,
+            });
+        else if (computed.counted)
+            await billingRepository.revisePlanRefund(order.id, {
+                amount: computed.amount,
+                countedRefundIds: computed.counted,
+            });
+        const row = (await billingRepository.getPlanRefund(order.id))!;
+        outcome = worse(
+            outcome,
+            await refundOrder(ending, order, row, listings.get(order.id) ?? null),
+        );
+    }
+    return outcome;
+}
+
+/*
+ * One order's refund, given its row and the order's refunds as just listed (null
+ * when they couldn't be). One with HushOS's key that is pending or succeeded is this
+ * refund (a retried job, a webhook replay, a reconcile, a call whose answer was
+ * lost); a failed or cancelled one is not, and the refund is asked for again.
+ */
+async function refundOrder(
+    ending: billingRepository.PlanEnding,
+    order: models.Order,
+    row: billingRepository.PlanRefund,
+    listed: models.Refund[] | null,
+): Promise<RefundOutcome> {
+    if (row.status === 'succeeded' || row.status === 'none') return 'settled';
+    const key = row.refundKey;
+    const failed = async (reason: string, status: number | null): Promise<RefundOutcome> => {
         const failures = await billingRepository.failPlanRefund(
             order.id,
             REFUND_FAILURES_BEFORE_OWED,
@@ -323,23 +438,24 @@ async function refundOrder(
                 status,
             },
         };
-        if (failures >= REFUND_FAILURES_BEFORE_OWED)
+        if (failures >= REFUND_FAILURES_BEFORE_OWED) {
             log.error({ message: 'Refund owed: Polar has not refunded it', ...fields });
-        else log.warn({ message: 'Refund not made; tried again', ...fields });
-        return 'failed' as const;
+            return 'owed';
+        }
+        log.warn({ message: 'Refund not made; tried again', ...fields });
+        return 'failed';
     };
-    let refunds: models.Refund[];
-    try {
-        refunds = (await polar().refunds.list({ order_id: order.id, limit: 100 })).items;
-    } catch (error) {
-        return failed('list', statusOf(error));
-    }
-    const ours = refunds.filter((refund) => refund.metadata?.[REFUND_METADATA_KEY] === key);
+    // Owed already: tried again once a day, not at every delivery or retry.
+    if (
+        row.failures >= REFUND_FAILURES_BEFORE_OWED &&
+        row.attemptedAt &&
+        Date.now() - row.attemptedAt.getTime() < OWED_RETRY_MS
+    )
+        return 'owed';
+    if (!listed) return failed('list', null);
+    const ours = listed.filter((refund) => refund.metadata?.[REFUND_METADATA_KEY] === key);
     const done = ours.find((refund) => refund.status === 'succeeded');
     const waiting = ours.find((refund) => refund.status === 'pending');
-    // One HushOS counted as on its way has failed at Polar since: a failed try, so it is owed
-    // and counts toward Refunds owed, and it is asked for again below.
-    if (!done && !waiting && row.status === 'pending') await failed('refund-failed', null);
     if (done || waiting) {
         const held = (done ?? waiting)!;
         await billingRepository.settlePlanRefund(order.id, {
@@ -348,18 +464,26 @@ async function refundOrder(
         });
         return held.status === 'succeeded' ? 'settled' : 'pending';
     }
-    // Refunded by someone else since HushOS computed it (an operator in Polar's dashboard).
-    const byHand = refunds
+    // One HushOS counted as on its way has failed at Polar since: a failed try, so it counts
+    // toward Refunds owed, and it is asked for again below.
+    if (row.status === 'pending') {
+        const result = await failed('refund-failed', null);
+        if (result === 'owed') return result;
+    }
+    // Live refunds the amount didn't allow for: an operator's by hand, or one Polar recorded
+    // without HushOS's key after a call that errored. Whoever made them, they count.
+    const counted = new Set(row.countedRefundIds ?? []);
+    const since = listed
         .filter(
             (refund) =>
+                isLive(refund) &&
                 refund.metadata?.[REFUND_METADATA_KEY] !== key &&
-                (refund.status === 'succeeded' || refund.status === 'pending') &&
-                Date.parse(refund.created_at) >= row.createdAt.getTime(),
+                !counted.has(refund.id),
         )
         .reduce((sum, refund) => sum + refund.amount, 0);
-    const owed = row.amount - byHand;
+    const owed = row.amount - since;
     if (owed <= 0) {
-        if (byHand > 0)
+        if (since > 0)
             log.info({
                 message: 'Refund made outside HushOS; nothing left to refund',
                 billing: { user: ending.userId, order: order.id },
@@ -367,6 +491,7 @@ async function refundOrder(
         await billingRepository.settlePlanRefund(order.id, { status: 'none' });
         return 'settled';
     }
+    await billingRepository.markPlanRefundAttempt(order.id, new Date());
     let refund: models.Refund;
     try {
         refund = await polar().refunds.create({
@@ -395,17 +520,50 @@ async function refundOrder(
     return failed(refund.status, null);
 }
 
+/* Thrown when the job's run was given up on by pg-boss (its signal) or another run holds it. */
+export class PlanEndingBusyError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'PlanEndingBusyError';
+    }
+}
+
 /*
  * `billing.end-personal-plan` for one person: every live personal plan of theirs
  * is ended while they are pooled, and every ending not yet settled is worked:
  * revoked (the instant stored the first time), the local entitlement revoked
  * (reconcileCustomer), and each order of the period refunded. Throws while a
  * revoke or a refund has failed, so pg-boss retries with backoff; returns while
- * only refunds still pending at Polar remain (the daily reconcile checks them).
- * Someone who left the family before their plan was revoked keeps it.
+ * only refunds still pending at Polar, or owed (five failures in a row, tried
+ * again daily), remain: the daily reconcile queues those again. Someone who left
+ * the family before their plan was revoked keeps it.
+ *
+ * One run per person at a time (withPlanEndingLock): a second run, such as
+ * pg-boss's retry of one it gave up on while it still runs, throws without asking
+ * Polar for anything. A run whose job signal fires stops between steps.
  */
-export async function endPersonalPlans(job: EndPersonalPlanJob) {
-    if (!billingEnabled()) return { settled: 0, pending: 0 };
+export async function endPersonalPlans(
+    job: EndPersonalPlanJob,
+    options: { signal?: AbortSignal } = {},
+) {
+    if (!billingEnabled()) return { settled: 0, pending: 0, owed: 0 };
+    const run = await billingRepository.withPlanEndingLock(job.userId, () =>
+        endPlansHeld(job, options.signal),
+    );
+    // Another run for this person is still at it (pg-boss took it for dead): this one is
+    // retried later rather than asking Polar for the same refunds alongside it.
+    if (!run.held)
+        throw new PlanEndingBusyError(
+            'Another run is ending this person’s plan; tried again later.',
+        );
+    return run.value;
+}
+
+async function endPlansHeld(job: EndPersonalPlanJob, signal: AbortSignal | undefined) {
+    const stop = () => {
+        if (signal?.aborted)
+            throw new PlanEndingBusyError('The job ran out of time; its retry carries on.');
+    };
     const { userId } = job;
     const family = await billingRepository.getPooledFamily(userId);
     // The mirror is read again at the end when it is out of date (a plan Polar ended unheard).
@@ -429,9 +587,11 @@ export async function endPersonalPlans(job: EndPersonalPlanJob) {
     }
     let settled = 0;
     let pending = 0;
+    let owed = 0;
     let failed = 0;
     let revokedAny = false;
     for (let ending of await billingRepository.listOpenPlanEndings(userId)) {
+        stop();
         if (!ending.revokedAt) {
             const stillPooled = family?.groupId === ending.groupId;
             // Left the family since: their plan stays theirs, unless an earlier try's revoke
@@ -464,13 +624,10 @@ export async function endPersonalPlans(job: EndPersonalPlanJob) {
                 billing: { user: userId, subscription: ending.subscriptionId },
             });
         }
-        let outcome: RefundOutcome = 'settled';
+        stop();
+        let outcome: RefundOutcome;
         try {
-            for (const order of await periodOrders(ending)) {
-                const result = await refundOrder(ending, order);
-                if (result === 'failed') outcome = 'failed';
-                else if (result === 'pending' && outcome === 'settled') outcome = 'pending';
-            }
+            outcome = await refundPeriod(ending);
         } catch (error) {
             log.warn({
                 message: 'A personal plan’s orders could not be read for its refund',
@@ -482,6 +639,7 @@ export async function endPersonalPlans(job: EndPersonalPlanJob) {
             await billingRepository.closePlanEnding(ending.subscriptionId, 'settled');
             settled += 1;
         } else if (outcome === 'pending') pending += 1;
+        else if (outcome === 'owed') owed += 1;
         else failed += 1;
     }
     // The plan has ended: its entitlement goes now, not at the next delivery.
@@ -489,8 +647,9 @@ export async function endPersonalPlans(job: EndPersonalPlanJob) {
         const { reconcileCustomer } = await import('./server');
         await reconcileCustomer(userId);
     }
+    // A failure is retried by pg-boss with backoff; a refund owed waits for the daily reconcile.
     if (failed) throw new Error('A personal plan’s refund has not been made yet.');
-    return { settled, pending };
+    return { settled, pending, owed };
 }
 
 /*

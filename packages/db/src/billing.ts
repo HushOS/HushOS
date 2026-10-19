@@ -960,8 +960,8 @@ export async function getPlanRefund(orderId: string) {
 
 /*
  * Written before Polar is asked, with the key and amount, so the operators' list can
- * name a refund that never lands. The amount is HushOS's latest computation; a row
- * already settled keeps its status.
+ * name a refund that never lands. Made once; `revisePlanRefund` brings the amount up
+ * to date until it is first asked for.
  */
 export async function notePlanRefund(input: {
     orderId: string;
@@ -969,14 +969,66 @@ export async function notePlanRefund(input: {
     refundKey: string;
     amount: number;
     currency: string;
+    countedRefundIds: string[] | null;
+    status?: 'requested' | 'none';
 }) {
     await db
         .insert(personalPlanRefunds)
-        .values({ ...input, status: 'requested' })
-        .onConflictDoUpdate({
-            target: personalPlanRefunds.orderId,
-            set: { amount: input.amount, currency: input.currency, updatedAt: new Date() },
-        });
+        .values({ ...input, status: input.status ?? 'requested' })
+        .onConflictDoNothing();
+}
+
+/*
+ * The amount recomputed from a fresh listing of the order's refunds, only while
+ * HushOS has never asked Polar for it: once asked, the amount is fixed.
+ */
+export async function revisePlanRefund(
+    orderId: string,
+    input: { amount: number; countedRefundIds: string[] },
+) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ ...input, updatedAt: new Date() })
+        .where(
+            and(eq(personalPlanRefunds.orderId, orderId), isNull(personalPlanRefunds.attemptedAt)),
+        );
+}
+
+/* Stamped just before Polar is asked, so a crash mid-call leaves the amount fixed. */
+export async function markPlanRefundAttempt(orderId: string, at: Date) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ attemptedAt: at, updatedAt: at })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
+/*
+ * Runs `work` holding one person's plan-ending lock (a session advisory lock on a
+ * connection of its own, held across Polar's calls), or returns null when another
+ * run holds it: two runs of the job for one person (pg-boss retrying one it took
+ * for dead while it still runs) never ask Polar for the same refund at once. The
+ * lock goes with the connection if the process dies.
+ */
+const PLAN_ENDING_LOCK_SPACE = 0x706c616e;
+export async function withPlanEndingLock<T>(userId: string, work: () => Promise<T>) {
+    const client = await db.$client.connect();
+    try {
+        const { rows } = await client.query<{ ok: boolean }>(
+            'select pg_try_advisory_lock($1::int, hashtext($2)) as ok',
+            [PLAN_ENDING_LOCK_SPACE, userId],
+        );
+        if (!rows[0]?.ok) return { held: false as const };
+        try {
+            return { held: true as const, value: await work() };
+        } finally {
+            await client.query('select pg_advisory_unlock($1::int, hashtext($2))', [
+                PLAN_ENDING_LOCK_SPACE,
+                userId,
+            ]);
+        }
+    } finally {
+        client.release();
+    }
 }
 
 /*

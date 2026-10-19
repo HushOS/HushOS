@@ -274,7 +274,8 @@ export const personalPlanEndings = pgTable(
  * documents no idempotency key): written with its amount before Polar is asked,
  * so the operators' list can name it, and matched against the order's refunds
  * at Polar before every call. `failures` counts failed tries in a row; at five
- * the refund is listed under Refunds owed (`owed_since`) until it lands.
+ * the refund is listed under Refunds owed (`owed_since`) until it lands, and is
+ * tried again at most once a day.
  */
 export const personalPlanRefunds = pgTable(
     'personal_plan_refunds',
@@ -292,6 +293,17 @@ export const personalPlanRefunds = pgTable(
          */
         status: text().notNull(),
         providerRefundId: text('provider_refund_id'),
+        /*
+         * When HushOS last asked Polar for it. Until the first ask the amount is recomputed
+         * from each listing of the order's refunds; from then on it is fixed.
+         */
+        attemptedAt: timestamp('attempted_at', { withTimezone: true }),
+        /*
+         * The order's other refunds (pending or succeeded, without this key) the amount
+         * already allowed for. Any other refund that appears later, whoever made it (an
+         * operator by hand, a refund Polar recorded without the key), counts against it.
+         */
+        countedRefundIds: text('counted_refund_ids').array(),
         failures: integer().notNull().default(0),
         owedSince: timestamp('owed_since', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

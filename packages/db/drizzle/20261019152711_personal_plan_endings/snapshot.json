@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "78e42092-c75e-4648-aaef-36b809d5ad29",
+    "id": "1d5daa5b-daf1-4562-aa75-7d3e19009925",
     "prevIds": ["79d87a46-916c-4807-ac98-6e3cae82a737"],
     "ddl": [
         {
@@ -7723,6 +7723,32 @@
             "generated": null,
             "identity": null,
             "name": "provider_refund_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_refunds"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "attempted_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_refunds"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 1,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "counted_refund_ids",
             "entityType": "columns",
             "schema": "public",
             "table": "personal_plan_refunds"

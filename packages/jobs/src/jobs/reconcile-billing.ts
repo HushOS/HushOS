@@ -93,8 +93,13 @@ export async function reissueGroupCut(
 export async function endPersonalPlan(job: Job<JobPayloads[typeof queues.billingEndPersonalPlan]>) {
     const event = createLogger({ job: { id: job.id, queue: job.name } });
     try {
-        const result = await endPersonalPlans(job.data);
-        event.set({ outcome: 'done', settled: result.settled, pending: result.pending });
+        const result = await endPersonalPlans(job.data, { signal: job.signal });
+        event.set({
+            outcome: 'done',
+            settled: result.settled,
+            pending: result.pending,
+            owed: result.owed,
+        });
     } catch (error) {
         event.set({ failure: sanitizeFailure(error) });
         throw error;

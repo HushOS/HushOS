@@ -26,6 +26,8 @@ CREATE TABLE "personal_plan_refunds" (
 	"currency" text NOT NULL,
 	"status" text NOT NULL,
 	"provider_refund_id" text,
+	"attempted_at" timestamp with time zone,
+	"counted_refund_ids" text[],
 	"failures" integer DEFAULT 0 NOT NULL,
 	"owed_since" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,

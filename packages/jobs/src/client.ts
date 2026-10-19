@@ -120,13 +120,15 @@ export async function ensureQueues(boss: PgBoss) {
      * A pooled member's personal plan, revoked at Polar and its unused days refunded
      * (docs/families-shared-pool.md 5.1), sent with the user id as `singletonKey`: one
      * queued and one active per person. Every step is idempotent (the revoke time is
-     * stored once, refunds are matched by their key), so a retry is harmless; a failure
-     * is retried for as long as it takes, backing off to six hours, and a refund that
-     * failed five times in a row is listed for operators meanwhile.
+     * stored once, refunds are matched by their key, and one person's runs hold a lock),
+     * so a retry is harmless. A failure is retried ten times, backing off from a minute
+     * to six hours (about a day in all); a refund that failed five times in a row is
+     * listed for operators, and the daily reconcile queues the job again for as long as
+     * anything is owed, so an owed refund is tried at most once a day.
      */
     await boss.createQueue(queues.billingEndPersonalPlan, {
         policy: 'stately',
-        retryLimit: 100_000,
+        retryLimit: 10,
         retryDelay: 60,
         retryBackoff: true,
         retryDelayMax: 6 * 60 * 60,
