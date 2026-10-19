@@ -1,0 +1,23 @@
+apps/web/src/components/consent-field.tsx
+  s_c56e31c87cddde::t_c625760a508b80 31
+apps/web/src/components/recovery-phrase.tsx
+  s_c56e31c87cddde::t_fabbff0ed0b128 213
+apps/web/src/routes/_authenticated/app/recovery-key.tsx
+  s_c56e31c87cddde::t_b0ba0d3ddc16e7 119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "957a90be958dc3c7331b5091f0c0d0c23ed630af",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
