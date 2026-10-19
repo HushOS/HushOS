@@ -349,17 +349,22 @@ type OrderState = {
 };
 
 /*
- * Polar's refusals that mean it won't refund this order at all (its source,
- * `polar/refund/service.py`): refunds blocked on the order or the organisation, a
- * disputed charge, no payment it can find. Neither Polar nor Stripe documents an age
- * limit on card refunds, so no window is assumed: an order Polar refuses is set aside
- * (`blocked`) and what it would have carried moves to the next order, or to operators.
+ * Polar's refusal that means a charge is disputed (`RefundDisputedPayment`, its
+ * source `polar/refund/service.py`). If the customer wins the dispute the chargeback
+ * returns the whole charge, so that order's share is dropped (listed for operators),
+ * never moved to another order. Every other refusal (`RefundsBlocked`, which an
+ * organisation or order flag lifted later clears; `RefundUnknownPayment`, a payment
+ * record not there yet; a 500, which is how Stripe's refusal of a charge too old to
+ * refund reaches HushOS through Polar) is a failure: tried again, owed after five.
  */
-const REFUSED_FOR_GOOD = new Set([
-    'RefundsBlocked',
-    'RefundDisputedPayment',
-    'RefundUnknownPayment',
-]);
+const DISPUTED = 'RefundDisputedPayment';
+
+/*
+ * An earlier order (one the customer's balance came from, outside the period) that
+ * has failed this many times in a row is given up: listed as owed, never asked again,
+ * and its share never moved (an unsure ask may still land).
+ */
+const EARLIER_GIVE_UP_AFTER = REFUND_FAILURES_BEFORE_OWED;
 
 /* An order as this run reads it at Polar (OrderState), its refunds listed first. */
 async function readOrder(
@@ -368,7 +373,7 @@ async function readOrder(
     row: billingRepository.PlanRefund | null,
 ): Promise<OrderState & { readable: boolean }> {
     const key = refundKey(ending, order.id);
-    const most = row?.status === 'blocked' ? 0 : paidOf(order);
+    const most = row?.status === 'disputed' ? 0 : paidOf(order);
     if (most <= 0)
         return {
             order,
@@ -446,23 +451,26 @@ async function earlierOrders(
  * What is owed in all is the sum of every order's unused share, signed: a
  * checkout or renewal, an upgrade's charge (paid by card or from the customer's
  * balance), a downgrade's credit (negative). Each order's share is of its net
- * amount less the others' live refunds on it. That total is then placed on the
- * orders, at most what Polar will refund on each (net amount less any balance that
- * paid it, less live refunds): each its own share first, then the difference (a
- * credit taken off, an unrefundable order's share added), newest order first.
+ * amount less the others' live refunds on it; a disputed order's share is dropped.
  *
- * What the period's orders can't carry was paid from the customer's balance, which
- * came from an earlier card payment (a downgrade's proration credit, a top-up): it
- * is refunded on the customer's earlier card-paid orders, newest first, each at most
- * what Polar will refund on it. Balance not yet spent is never touched: Polar has no
- * way to clear it, so paying it out by card would pay it twice. What no order can
- * carry, or Polar refuses for good, is listed for operators.
+ * Placing it: first whatever HushOS already has back, on any order, the period's or
+ * an earlier one, so nothing is placed beyond what is owed less that. Then what is
+ * left: each period order up to its own share, the period's orders newest first, and
+ * then (what the customer's balance paid, which came from an earlier card payment: a
+ * downgrade's proration credit, a top-up) the customer's earlier card-paid orders in
+ * the same currency, newest first. Every order takes at most what Polar will refund
+ * on it (net amount plus any balance applied, less live refunds). Balance not yet
+ * spent is never touched: Polar has no way to clear it, so paying it out by card
+ * would pay it twice. A disputed earlier order keeps what it would have carried out
+ * of every other order (dropped); one given up on (EARLIER_GIVE_UP_AFTER failures)
+ * keeps its share as owed and is never asked again. What no order can carry, and
+ * what a dispute dropped, is listed for operators.
  *
  * Orders Polar refunds nothing on (free, 100%-off, paid from balance, a credit)
  * are settled as `none` without listing their refunds. An order whose refunds, or
  * anyone's, are still pending stays open, so a refund that later fails or is
- * cancelled, HushOS's or anyone's, is owed again at the next run. An order Polar
- * refuses for good (REFUSED_FOR_GOOD) is set aside and the amounts placed again.
+ * cancelled, HushOS's or anyone's, is owed again at the next run. A dispute, or
+ * Polar saying an order is refunded whole already, places the amounts again.
  */
 async function refundPeriod(
     ending: billingRepository.PlanEnding,
@@ -470,7 +478,7 @@ async function refundPeriod(
 ): Promise<RefundOutcome> {
     for (let pass = 0; pass < 4; pass++) {
         const outcome = await refundPass(ending, hold);
-        if (outcome !== 'blocked') return outcome;
+        if (outcome !== 'recount') return outcome;
     }
     return 'failed';
 }
@@ -478,7 +486,7 @@ async function refundPeriod(
 async function refundPass(
     ending: billingRepository.PlanEnding,
     hold: Hold,
-): Promise<RefundOutcome | 'blocked'> {
+): Promise<RefundOutcome | 'recount'> {
     const orders = await periodOrders(ending);
     const rows = new Map(
         (await billingRepository.listPlanRefunds(ending.subscriptionId)).map((row) => [
@@ -521,34 +529,25 @@ async function refundPass(
             shareOf(state.order.net_amount - Math.max(0, state.others), share(state.order)),
         ]),
     );
+    // A disputed order's share is dropped, never moved: a lost dispute returns the whole charge.
+    let dropped = 0;
+    for (const state of states)
+        if (state.row?.status === 'disputed') dropped += Math.max(0, shares.get(state.order.id)!);
     const owedInAll = Math.max(
         0,
-        [...shares.values()].reduce((sum, value) => sum + value, 0),
+        [...shares.values()].reduce((sum, value) => sum + value, 0) - dropped,
     );
-    // Placed on the orders Polar can refund: each its own share first, as far as Polar takes it;
-    // then the difference from what is owed in all (a credit taken off, or the share of an order
-    // Polar can't refund on added) newest order first, within what Polar takes.
-    const targets = new Map<string, number>();
-    for (const state of states)
-        targets.set(state.order.id, Math.min(Math.max(0, shares.get(state.order.id)!), state.cap));
-    let left = owedInAll - [...targets.values()].reduce((sum, value) => sum + value, 0);
-    for (const state of [...states].sort(
-        (a, b) => Date.parse(b.order.created_at) - Date.parse(a.order.created_at),
-    )) {
-        if (left === 0) break;
-        const now = targets.get(state.order.id)!;
-        const next = Math.min(state.cap, Math.max(0, now + left));
-        targets.set(state.order.id, next);
-        left -= next - now;
-    }
-    // What the period couldn't carry was paid from balance: refunded on the customer's earlier
-    // card-paid orders, newest first. Read whenever some is left, or HushOS already placed some
-    // there (its rows for orders outside the period), so what it refunded there still counts.
+    // What the customer's balance paid may be on their earlier card orders: read them whenever
+    // the period can't carry everything, or HushOS already refunded on one (its rows outside the
+    // period), so what it has back there counts before anything new is placed.
     const currency = states[0]?.order.currency ?? null;
+    const periodRoom = states.reduce((sum, state) => sum + state.cap, 0);
     const placedEarlier = [...rows.values()].some(
         (row) => !orders.some((order) => order.id === row.orderId),
     );
-    if (readable && currency && (left > 0 || placedEarlier)) {
+    const earlierStates: OrderState[] = [];
+    let unread: models.Order[] = [];
+    if (readable && currency && (owedInAll > periodRoom || placedEarlier)) {
         let earlier: models.Order[] = [];
         try {
             earlier = await earlierOrders(ending, orders, currency);
@@ -559,30 +558,75 @@ async function refundPass(
                 billing: { user: ending.userId, status: statusOf(error) },
             });
         }
-        const read: OrderState[] = [];
+        // Those HushOS refunded on before are read now, so what it has back there counts first;
+        // the rest only as far as they're needed, newest first.
         for (const order of earlier) {
-            const row = rows.get(order.id) ?? null;
-            // Only those HushOS has refunded on before, and as many as it needs besides.
-            if (!row && left <= 0) continue;
-            const state = await readOrder(ending, order, row);
+            if (!rows.has(order.id)) {
+                unread.push(order);
+                continue;
+            }
+            const state = await readOrder(ending, order, rows.get(order.id)!);
             readable &&= state.readable;
-            read.push(state);
-            // What HushOS already has back on it counts first, whatever is left now.
-            const kept = Math.min(state.ours, state.cap);
-            targets.set(order.id, kept);
-            left -= kept;
+            earlierStates.push(state);
         }
-        for (const state of read) {
-            if (left <= 0) break;
-            const now = targets.get(state.order.id)!;
-            const more = Math.min(state.cap - now, left);
-            if (more <= 0) continue;
-            targets.set(state.order.id, now + more);
-            left -= more;
-        }
-        states.push(...read);
     }
-    // What no order can carry, or Polar refuses for good: operators see it and decide.
+    // First what HushOS already has back, wherever it is: never more than owed less that.
+    const targets = new Map<string, number>();
+    for (const state of [...states, ...earlierStates]) targets.set(state.order.id, state.ours);
+    const ours = [...targets.values()].reduce((sum, value) => sum + value, 0);
+    let left = owedInAll - ours;
+    if (left < 0)
+        log.warn({
+            message: 'More has been refunded on an ended personal plan than it now owes',
+            billing: { user: ending.userId, subscription: ending.subscriptionId, over: -left },
+        });
+    const room = (state: OrderState) =>
+        state.row?.status === 'disputed'
+            ? 0
+            : Math.max(0, state.cap - targets.get(state.order.id)!);
+    const give = (state: OrderState, amount: number) => {
+        const more = Math.min(room(state), Math.max(0, amount), Math.max(0, left));
+        targets.set(state.order.id, targets.get(state.order.id)! + more);
+        left -= more;
+    };
+    // Then what is left: each period order up to its own share, then the period's orders newest
+    // first, then the customer's earlier card orders newest first (balance the period spent).
+    for (const state of states)
+        give(
+            state,
+            Math.min(Math.max(0, shares.get(state.order.id)!), state.cap) -
+                targets.get(state.order.id)!,
+        );
+    const newest = (a: OrderState, b: OrderState) =>
+        Date.parse(b.order.created_at) - Date.parse(a.order.created_at);
+    for (const state of [...states].sort(newest)) give(state, left);
+    // Earlier orders not read yet join, newest first, while anything is left to place.
+    for (const order of unread) {
+        if (left <= 0) break;
+        const state = await readOrder(ending, order, null);
+        readable &&= state.readable;
+        earlierStates.push(state);
+        targets.set(order.id, state.ours);
+        left -= state.ours;
+    }
+    for (const state of [...earlierStates].sort(newest)) {
+        if (left <= 0) break;
+        // A disputed earlier order keeps what it would have carried out of every other order:
+        // dropped, never moved, since a lost dispute returns the whole charge.
+        if (state.row?.status === 'disputed') {
+            const held = Math.min(
+                Math.max(0, paidOf(state.order) - state.others - state.ours),
+                left,
+            );
+            dropped += held;
+            left -= held;
+            continue;
+        }
+        give(state, left);
+    }
+    states.push(...earlierStates);
+    left = Math.max(0, left) + dropped;
+    // What no order can carry, or a dispute dropped: operators see it and decide.
     if (readable) {
         const unrefundable = Math.max(0, left);
         if (unrefundable > 0)
@@ -616,15 +660,17 @@ async function refundPass(
                 amount: target,
                 currency: state.order.currency,
             });
-        else if (state.listed && state.row.status !== 'blocked')
+        else if (state.listed && state.row.status !== 'disputed')
             await billingRepository.setPlanRefundAmount(state.order.id, target);
         const row = (await billingRepository.getPlanRefund(state.order.id))!;
-        if (row.status === 'blocked') continue;
+        if (row.status === 'disputed') continue;
+        const earlier = earlierStates.includes(state);
         const result = readable
-            ? await refundOrder(ending, state, row, target, hold)
+            ? await refundOrder(ending, state, row, target, hold, earlier)
             : await failRefund(ending, row, 'list', null);
-        // Polar won't refund on this order at all: set aside, and the amounts placed again.
-        if (result === 'blocked') return 'blocked';
+        // A dispute zeroes the order's share, and Polar refunded whole already means its refunds
+        // changed under us: either way the amounts are placed again from a fresh read.
+        if (result === 'disputed' || result === 'recount') return 'recount';
         outcome = worse(outcome, result);
     }
     return outcome;
@@ -674,7 +720,8 @@ async function refundOrder(
     row: billingRepository.PlanRefund,
     target: number,
     hold: Hold,
-): Promise<RefundOutcome | 'blocked'> {
+    earlier = false,
+): Promise<RefundOutcome | 'disputed' | 'recount'> {
     const key = row.refundKey;
     const listed = state.listed ?? [];
     // One HushOS counted as on its way has failed or been cancelled at Polar since: a failed
@@ -710,6 +757,9 @@ async function refundOrder(
         return 'settled';
     }
     if (failedBefore === 'owed') return 'owed';
+    // An earlier order given up on (EARLIER_GIVE_UP_AFTER failures, most likely Stripe refusing a
+    // charge too old to refund): listed as owed and never asked again.
+    if (earlier && row.failures >= EARLIER_GIVE_UP_AFTER) return 'owed';
     // Owed already: asked again once a day, not at every delivery or retry.
     if (
         row.failures >= REFUND_FAILURES_BEFORE_OWED &&
@@ -727,24 +777,27 @@ async function refundOrder(
             order_id: row.orderId,
             amount: owed,
             reason: 'customer_request',
-            comment: 'Moved to a HushOS family plan',
+            // On an earlier order the refund returns credit from the customer's balance, which
+            // paid the ended plan: said so, since it lands against an older payment.
+            comment: earlier
+                ? 'Returns balance credit that paid a HushOS plan, ended when its owner joined a family'
+                : 'Moved to a HushOS family plan',
             revoke_benefits: false,
             metadata: { [REFUND_METADATA_KEY]: key },
         });
     } catch (error) {
         // Refunded whole already, by whoever: nothing is left to give back.
-        if (statusOf(error) === 403 && errorName(error) === 'RefundedAlready') {
-            await billingRepository.settlePlanRefund(row.orderId, { status: 'none' });
-            return 'settled';
-        }
-        // Polar won't refund on this order at all: the amount goes to another order, or operators.
-        if (REFUSED_FOR_GOOD.has(errorName(error) ?? '')) {
+        // Refunded whole already, by whoever: the order's refunds changed under this run, so the
+        // amounts are placed again from a fresh listing.
+        if (statusOf(error) === 403 && errorName(error) === 'RefundedAlready') return 'recount';
+        // Disputed: the order's share is dropped for good, never moved (DISPUTED).
+        if (errorName(error) === DISPUTED) {
             log.warn({
-                message: 'Polar refuses any refund on this order; its share moves on',
-                billing: { user: ending.userId, order: row.orderId, reason: errorName(error) },
+                message: 'A refund refused: the charge is disputed; its share is dropped',
+                billing: { user: ending.userId, order: row.orderId },
             });
-            await billingRepository.blockPlanRefund(row.orderId);
-            return 'blocked';
+            await billingRepository.markPlanRefundDisputed(row.orderId);
+            return 'disputed';
         }
         // No answer, or a 5xx: Polar may have made it, or make it late.
         const status = statusOf(error);

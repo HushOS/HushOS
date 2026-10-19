@@ -308,7 +308,7 @@ export const personalPlanRefunds = pgTable(
          * `requested` (written, Polar not yet known to hold it), `pending` and
          * `succeeded` (Polar's refund, matched by key), `failed` (Polar's refund
          * failed or the call was refused; tried again), `none` (nothing to refund),
-         * `blocked` (Polar refuses any refund on the order: its share goes elsewhere).
+         * `disputed` (the charge is disputed: its share is dropped, never moved).
          */
         status: text().notNull(),
         providerRefundId: text('provider_refund_id'),
@@ -340,7 +340,7 @@ export const personalPlanRefunds = pgTable(
         }).onDelete('cascade'),
         check(
             'personal_plan_refunds_valid',
-            sql`${table.status} in ('requested', 'pending', 'succeeded', 'failed', 'none', 'blocked') and ${table.amount} >= 0 and ${table.failures} >= 0`,
+            sql`${table.status} in ('requested', 'pending', 'succeeded', 'failed', 'none', 'disputed') and ${table.amount} >= 0 and ${table.failures} >= 0`,
         ),
     ],
 );

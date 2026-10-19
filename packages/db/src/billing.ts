@@ -1123,11 +1123,11 @@ export async function settlePlanRefund(
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
-/* Polar refuses any refund on this order (refunds blocked, a dispute): set aside for good. */
-export async function blockPlanRefund(orderId: string) {
+/* The order's charge is disputed: its share is dropped for good, never moved. */
+export async function markPlanRefundDisputed(orderId: string) {
     await db
         .update(personalPlanRefunds)
-        .set({ status: 'blocked', amount: 0, unsureUntil: null, updatedAt: new Date() })
+        .set({ status: 'disputed', amount: 0, unsureUntil: null, updatedAt: new Date() })
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
