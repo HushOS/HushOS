@@ -36,8 +36,20 @@ test.beforeAll(async ({ browser }) => {
         writeFileSync(path, lines());
         return path;
     });
-    await page.locator('input[type=file]').first().setInputFiles(files);
-    await expect(page.locator('[data-node-id]')).toHaveCount(2, { timeout: 90_000 });
+    // Past the colouring threshold (512 KB): offered Colour anyway.
+    const big = join(dir, 'big.ts');
+    writeFileSync(
+        big,
+        Array.from(
+            { length: 12_000 },
+            (_, n) => `export const value${n}: number = ${n} * 2; // line ${n}`,
+        ).join('\n'),
+    );
+    await page
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles([...files, big]);
+    await expect(page.locator('[data-node-id]')).toHaveCount(3, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.close();
@@ -103,3 +115,28 @@ for (const name of ['gutter.ts', 'gutter.txt']) {
         await expect(dialog(page)).toHaveCount(0);
     });
 }
+
+test('Colour anyway holds when the window comes back, which refreshes the folder', async () => {
+    await row(page, 'big.ts').locator('button').first().dblclick(grip);
+    const colour = dialog(page).getByRole('button', { name: 'Colour anyway' });
+    await colour.click({ timeout: 60_000 });
+    await expect(dialog(page).locator('output', { hasText: 'Coloured.' })).toHaveCount(1, {
+        timeout: 120_000,
+    });
+    // The tab hidden and shown again, as switching away and back does: the listing refetches and
+    // hands the viewer a new copy of the same file, which once reopened it uncoloured.
+    await page.evaluate(() => {
+        for (const state of ['hidden', 'visible']) {
+            Object.defineProperty(document, 'visibilityState', {
+                configurable: true,
+                get: () => state,
+            });
+            document.dispatchEvent(new Event('visibilitychange'));
+        }
+        window.dispatchEvent(new Event('focus'));
+    });
+    await page.waitForTimeout(3_000);
+    await expect(colour).toHaveCount(0);
+    await expect(dialog(page).locator('.rt-source .line').first()).toBeVisible();
+    await page.keyboard.press('Escape');
+});

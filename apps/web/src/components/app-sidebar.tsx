@@ -284,12 +284,11 @@ function OwnMeter({ label }: { label: string | null }) {
 }
 
 /*
- * The meter in the icon rail: a ring in the places' 40px square, its words in the tooltip and
+ * The meter in the icon rail: a short bar in the places' 40px square, its words in the tooltip and
  * the button's name (aria-label, never a second text node: the page holds one storage reading,
  * and only one of the two meters is shown at a time). Pressing it opens the sidebar, where the
  * whole meter is.
  */
-const RING = 2 * Math.PI * 7;
 function CollapsedMeter({
     used,
     nearlyFull,
@@ -310,25 +309,16 @@ function CollapsedMeter({
                     onClick={() => setOpen(true)}
                     className={cn(item, collapsed)}
                 >
-                    <svg viewBox="0 0 20 20" aria-hidden="true" className="-rotate-90">
-                        <circle
-                            cx="10"
-                            cy="10"
-                            r="7"
-                            fill="none"
-                            strokeWidth="2.5"
-                            className="stroke-rule"
-                        />
-                        <circle
-                            cx="10"
-                            cy="10"
-                            r="7"
-                            fill="none"
-                            strokeWidth="2.5"
-                            strokeLinecap="round"
-                            strokeDasharray={RING}
-                            strokeDashoffset={RING * (1 - Math.min(1, Math.max(0, used)))}
-                            className={nearlyFull ? 'stroke-destructive' : 'stroke-primary'}
+                    {/* A short bar, as the open meter draws it: still, so it never reads as loading. */}
+                    <svg viewBox="0 0 20 20" aria-hidden="true">
+                        <rect x="1" y="8" width="18" height="4" rx="2" className="fill-field" />
+                        <rect
+                            x="1"
+                            y="8"
+                            width={Math.max(used > 0 ? 4 : 0, 18 * Math.min(1, Math.max(0, used)))}
+                            height="4"
+                            rx="2"
+                            className={nearlyFull ? 'fill-destructive' : 'fill-primary'}
                         />
                     </svg>
                 </SidebarMenuButton>

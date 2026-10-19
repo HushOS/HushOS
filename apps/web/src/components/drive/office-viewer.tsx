@@ -217,6 +217,21 @@ function SheetView({
             </div>
         );
     const { cells, width, moreRows, moreCols } = sheet.clipped;
+    // A delimited file's first row names its columns: a header, not data row 1. A workbook's
+    // rows are numbered from 1 as the spreadsheet itself numbers them.
+    const header = source !== null && cells.length > 0 ? cells[0]! : null;
+    const body = header ? cells.slice(1) : cells;
+    const totalRows = body.length + moreRows;
+    const count = (n: number) => n.toLocaleString('en-GB');
+    const clipped =
+        moreRows > 0 || moreCols > 0
+            ? [
+                  moreRows > 0 && `${count(body.length)} of ${count(totalRows)} rows`,
+                  moreCols > 0 && `${count(width)} of ${count(width + moreCols)} columns`,
+              ]
+                  .filter(Boolean)
+                  .join(' and ')
+            : null;
     return (
         <div
             data-viewer-body
@@ -224,11 +239,45 @@ function SheetView({
             className="flex min-h-0 flex-1 flex-col p-3 outline-none sm:p-6"
             data-office="sheet"
         >
-            <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-card shadow-sm">
+            {/* Clipped to its rounded corners: the sticky row numbers would otherwise paint over them. */}
+            <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-card shadow-sm [clip-path:inset(0_round_var(--radius-xl))]">
+                {clipped && (
+                    // Said before the table, where it is read first: only part of the file is here.
+                    <p
+                        data-sheet-clipped
+                        className="shrink-0 border-b border-rule px-4 py-2 text-[13px] text-muted-foreground"
+                    >
+                        Showing {clipped}. Download it to see them all.
+                    </p>
+                )}
                 <div className="min-h-0 flex-1 overflow-auto">
-                    <table className="border-collapse text-[13px] tabular-nums">
+                    <table className="min-w-full border-collapse text-[13px] tabular-nums">
+                        {header && (
+                            <thead className="sticky top-0 z-10">
+                                <tr>
+                                    <td
+                                        aria-hidden="true"
+                                        className="sticky left-0 z-10 w-10 border-r border-b border-rule bg-muted"
+                                    />
+                                    {Array.from({ length: width }, (_, c) => (
+                                        <th
+                                            key={c}
+                                            scope="col"
+                                            className="max-w-64 truncate border-r border-b border-rule bg-card px-3 py-1.5 text-left font-semibold whitespace-nowrap"
+                                        >
+                                            {header[c] ?? ''}
+                                        </th>
+                                    ))}
+                                    {/* The grid runs on to the card's edge. */}
+                                    <td
+                                        aria-hidden="true"
+                                        className="w-full border-b border-rule bg-card"
+                                    />
+                                </tr>
+                            </thead>
+                        )}
                         <tbody>
-                            {cells.map((row, r) => (
+                            {body.map((row, r) => (
                                 <tr key={r}>
                                     <th
                                         scope="row"
@@ -244,18 +293,15 @@ function SheetView({
                                             {row[c] ?? ''}
                                         </td>
                                     ))}
+                                    <td
+                                        aria-hidden="true"
+                                        className="w-full border-b border-rule"
+                                    />
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 </div>
-                {(moreRows > 0 || moreCols > 0) && (
-                    <p className="shrink-0 border-t border-rule px-4 py-2 text-[13px] text-muted-foreground">
-                        Showing the first {cells.length} rows and {width} columns
-                        {moreRows ? `; ${moreRows} more rows` : ''}
-                        {moreCols ? `; ${moreCols} more columns` : ''}. Download it for the rest.
-                    </p>
-                )}
                 {sheets.length > 1 && (
                     <div
                         role="tablist"

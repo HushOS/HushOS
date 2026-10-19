@@ -2,7 +2,7 @@ import { contentSize, tagsOf, type DriveNode } from '@hushos/drive/client';
 import { integrityIssues, type IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
@@ -121,6 +121,28 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
             <dd className="min-w-0 tabular-nums wrap-anywhere">{children}</dd>
         </>
     );
+}
+
+const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/*
+ * A person's words with any address in them breaking where it reads well: between words, then
+ * before the @, and inside the part before it only when that alone is wider than the column,
+ * never first at the hyphens a generated address is full of.
+ */
+function PersonWords({ text }: { text: string }) {
+    const parts = text.split(/(\(?[^\s()]+@[^\s()]+\)?)/);
+    return parts.map((part, index) => {
+        const at = index % 2 === 1 ? part.lastIndexOf('@') : -1;
+        if (at < 0) return part;
+        return (
+            <Fragment key={index}>
+                <span className="inline-block max-w-full wrap-anywhere">{part.slice(0, at)}</span>
+                <wbr />
+                <span className="inline-block max-w-full wrap-anywhere">{part.slice(at)}</span>
+            </Fragment>
+        );
+    });
 }
 
 /* A technical fact, read character by character and often copied: mono, and selectable. */
@@ -405,7 +427,23 @@ export function ItemDetails({
                 )}
                 {rekeyed.writtenBy && unverified.length === 0 && (
                     <Fact label="Written by">
-                        <span data-written-by>{rekeyed.writtenBy}</span>
+                        <span data-written-by>
+                            <PersonWords text={rekeyed.writtenBy} />
+                        </span>
+                    </Fact>
+                )}
+                {/* Who locked it again, as a fact beside the others rather than a line under them. */}
+                {rekeyed.replacedBy.length > 0 && (
+                    <Fact label="Keys replaced by">
+                        <span data-keys-replaced className="flex flex-col">
+                            {rekeyed.replacedBy.map((line) => (
+                                <span key={line}>
+                                    <PersonWords
+                                        text={capitalised(line.replace(/^Keys replaced by /, ''))}
+                                    />
+                                </span>
+                            ))}
+                        </span>
                     </Fact>
                 )}
                 {verifiedBy && (
@@ -457,11 +495,6 @@ export function ItemDetails({
                 )}
             </dl>
             <SavedFromLinkLine node={node} />
-            {rekeyed.replacedBy.map((line) => (
-                <p key={line} data-keys-replaced className="text-[13px] text-muted-foreground">
-                    {line}
-                </p>
-            ))}
             {dropped.map((line) => (
                 <p key={line} data-origin-dropped className="text-[13px] text-muted-foreground">
                     {line}
@@ -577,8 +610,9 @@ export function DetailsPanel({
                     bar.offsetHeight -
                     (parseFloat(style.paddingTop) || 0);
             }
-            // 12px below it, as beside and above it.
-            const room = Math.floor(bottom - top - 12 - below);
+            // 12px below it, as beside and above it; 20px above the floating bar, so its shadow
+            // and the panel's never meet.
+            const room = Math.floor(bottom - top - (bar ? 20 : 12) - below);
             element.style.maxHeight = `${Math.max(room, 160)}px`;
         };
         fitRef.current = fit;

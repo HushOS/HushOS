@@ -64,6 +64,27 @@
 .rt-code .rt-plain {
     white-space: pre;
 }
+/*
+ * On a phone, code wraps to the screen instead of running off it, and the line numbers go
+ * (a wrapped line would no longer sit beside its number). Not where a line is marked: there
+ * the number is the point.
+ */
+@media (max-width: 639px) {
+    .rt-code:not([data-marked]) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .rt-code:not([data-marked]) .rt-gutter {
+        display: none;
+    }
+    .rt-code:not([data-marked]) .rt-source {
+        padding: 1rem;
+    }
+    .rt-code:not([data-marked]) pre,
+    .rt-code:not([data-marked]) .rt-plain {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+}
 .shiki span {
     color: light-dark(var(--shiki-light), var(--shiki-dark));
     font-style: light-dark(
@@ -165,10 +186,37 @@
     list-style: none;
     margin-left: -1.5rem;
 }
+/*
+ * A task's box where a bullet would be, its words in line with the bullets' words. Drawn here
+ * rather than by the browser: the box is read-only (disabled), and a ticked one must still read
+ * as ticked, not greyed out.
+ */
 .rt-markdown input[type='checkbox'] {
-    margin-right: 0.5rem;
-    accent-color: var(--primary);
+    appearance: none;
+    display: inline-grid;
+    place-content: center;
+    width: 0.875rem;
+    height: 0.875rem;
+    /* With the space after it in the markup, the words start where the bullets' words do. */
+    margin: -0.125em 0.375rem 0 0;
+    /* Middle, not a baseline offset: the tick inside would move a baseline, so ticked and empty boxes sat apart. */
+    vertical-align: middle;
+    border: 1.5px solid var(--field);
+    border-radius: 4px;
+    background: var(--card);
     pointer-events: none;
+}
+.rt-markdown input[type='checkbox']:checked {
+    border-color: var(--primary);
+    background: var(--primary);
+}
+.rt-markdown input[type='checkbox']:checked::before {
+    content: '';
+    width: 0.45rem;
+    height: 0.25rem;
+    border-bottom: 2px solid var(--primary-foreground);
+    border-left: 2px solid var(--primary-foreground);
+    transform: translateY(-1px) rotate(-45deg);
 }
 .rt-markdown blockquote {
     border-left: 2px solid var(--rule);
@@ -252,8 +300,13 @@
     font-size: 0.8125rem;
     line-height: 1.25rem;
 }
-.jv-row[data-active] {
-    background: var(--muted);
+/* The active row is the one highlight: tinted, and ringed while the keyboard drives the tree. */
+.jv-row[data-active],
+.jv-row[data-active]:hover {
+    background: var(--accent);
+}
+.jv-row {
+    outline: none;
 }
 .jv:focus-visible .jv-row[data-active] {
     outline: 2px solid var(--ring);

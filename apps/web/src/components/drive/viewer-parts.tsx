@@ -124,7 +124,7 @@ export function LargeFile({
  * The bar form. Its status line is one <output> that stays in the page while
  * the bar does and only changes its words, so a screen reader hears the work
  * start and finish; after the opt-in, focus moves to it, since the button that
- * had focus is gone.
+ * had focus is gone. Once the work is done the bar is no longer seen.
  */
 export function LargeFileBar({
     kind,
@@ -148,7 +148,14 @@ export function LargeFileBar({
         if (chosen) status.current?.focus({ preventScroll: true });
     }, [chosen]);
     return (
-        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule px-4 py-2.5 text-[13px] text-muted-foreground sm:px-6">
+        // Done, the bar leaves the page's look and keeps its status for a screen reader: the
+        // colour itself says it is coloured, and a bar saying so would only take a row.
+        <div
+            className={cn(
+                'flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule px-4 py-2.5 text-[13px] text-muted-foreground sm:px-6',
+                stage === 'done' && 'sr-only',
+            )}
+        >
             {stage === 'offer' && (
                 <>
                     <p className="min-w-0 flex-1 basis-64">
