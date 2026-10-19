@@ -1,0 +1,31 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c56e31c87cddde::t_4ded7cb284625d 30-32,43,45-46
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_c56e31c87cddde::t_5bc24eb0008d5d 178-181,214
+apps/android/app/src/main/kotlin/com/hushos/app/data/RecoveryWords.kt
+  s_c56e31c87cddde::t_dd6d03e9317b9d 15-17,21-23,26-29,31,34-35,38-55,68,70-74,76-77
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_7a96931a476410 931-934
+apps/android/app/src/main/kotlin/com/hushos/app/ui/PickerSignIn.kt
+  s_c56e31c87cddde::t_486ea0b0a189e1 49-52,69-73
+apps/android/app/src/test/kotlin/com/hushos/app/data/RecoveryWordsTest.kt
+  s_c56e31c87cddde::t_7ea157570f1559 5,12,14-18,32-52,54-65
+apps/android/app/src/test/kotlin/com/hushos/app/ui/PickerReturnTest.kt
+  s_c56e31c87cddde::t_6c0b2ef3b92739 57-65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e54a359f035b22c0d77119242aebd3eca11417be",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
