@@ -25,6 +25,14 @@ class LandedJobsTest {
         assertFalse(landed.take("keep-a"))
     }
 
+    /* A full disk (here, a mark's folder that can't be made) must not throw out of the worker's cleanup. */
+    @Test
+    fun aMarkThatCantBeWrittenSaysSoInsteadOfThrowing() {
+        val blocked = File(dir, "not-a-folder").also { it.writeText("") }
+        assertFalse(LandedJobs(blocked).mark("job"))
+        assertFalse(LandedJobs(blocked).take("job"))
+    }
+
     @Test
     fun aMarkNobodyTakesIsSweptAfterADay() {
         val landed = LandedJobs(dir)

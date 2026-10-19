@@ -12,10 +12,18 @@ import java.io.File
  * keep in the chain) has no mark and runs as usual.
  */
 class LandedJobs(private val dir: File) {
-    /* The work of `id` landed: a rerun of it must do nothing. */
-    fun mark(id: String) {
+    /*
+     * The work of `id` landed: a rerun of it must do nothing. False when the mark couldn't be written (a full disk):
+     * never thrown, so the worker's cleanup and notice still happen; the rerun then uploads again, which is acceptable.
+     */
+    fun mark(id: String): Boolean = runCatching {
         dir.mkdirs()
         File(dir, id).writeText("")
+    }.isSuccess
+
+    /* mark, with a failure logged (by type only) rather than thrown. */
+    fun markOrLog(id: String) {
+        if (!mark(id)) android.util.Log.w("HushOS", "couldn't mark transfer $id as landed; a rerun may send it again")
     }
 
     /* Whether `id` already landed; the mark is used up, so a later, new run of the same id isn't skipped. */
