@@ -100,12 +100,18 @@ if [[ "$signers" != "$expected" ]]; then
     exit 1
 fi
 # Read it all first: head closing the pipe early would kill aapt2, and pipefail the script.
-badging=$("$BUILD_TOOLS/aapt2" dump badging "$BUILT")
-badging=${badging%%$'\n'*}
+dump=$("$BUILD_TOOLS/aapt2" dump badging "$BUILT")
+badging=${dump%%$'\n'*}
 wanted="package: name='com.hushos.app' versionCode='$BUILD' versionName='$VERSION'"
 if [[ "$badging" != "$wanted"* ]]; then
     echo "The APK says: $badging" >&2
     echo "Expected:     $wanted" >&2
+    exit 1
+fi
+# The notes say 64-bit phones only: stop if the APK's native code no longer matches that.
+abis=$(sed -n "s/^native-code: //p" <<< "$dump")
+if [[ "$abis" != "'arm64-v8a' 'x86_64'" ]]; then
+    echo "The APK's native code is $abis, not 'arm64-v8a' 'x86_64': update the notes' 64-bit line." >&2
     exit 1
 fi
 
@@ -126,6 +132,7 @@ cat > "$WORK/section.md" << EOF
 - **APK**, for phones without Google Play: [$NAME]($DOWNLOAD/$NAME), version $VERSION (build $BUILD).
     - SHA-256: \`$DIGEST\` ([$NAME.sha256]($DOWNLOAD/$NAME.sha256))
     - Signing certificate SHA-256: \`$UPLOAD_CERT_SHA256\`
+    - Runs on 64-bit phones only (arm64-v8a and x86_64), which is nearly every phone from the last several years.
 
 Check it before installing: \`shasum -a 256 -c $NAME.sha256\`, then \`apksigner verify --print-certs $NAME\` (Android SDK build-tools) must show the certificate SHA-256 digest \`$expected\` and no other: the certificate above, without colons.
 
