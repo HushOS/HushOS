@@ -345,6 +345,46 @@ function AdminPage() {
                             </p>
                         </>
                     )}
+                    {data.unrefundable.length > 0 && (
+                        <>
+                            <h2
+                                id="unrefundable"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Not refundable through Polar
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Account</th>
+                                        <th className={cn(th, 'text-right')}>Before tax</th>
+                                        <th className={th}>Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.unrefundable.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.subscriptionId}</td>
+                                            <td className={td}>{row.userId}</td>
+                                            <td className={cn(td, 'text-right tabular-nums')}>
+                                                {formatMoney(row.amount, row.currency)}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {formatWhen(row.since)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                The part of an ended personal plan’s unused days that Polar won’t
+                                refund on its orders, usually because the customer’s balance paid
+                                them. HushOS refunded the rest; refund this by hand if you decide
+                                to.
+                            </p>
+                        </>
+                    )}
                 </>
             )}
         </OperatorPage>

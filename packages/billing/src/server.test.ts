@@ -212,6 +212,14 @@ const polar = {
     }[],
     /* How many refund calls fail (503) before Polar takes one again. */
     refundFailures: 0,
+    /* How many refund calls Polar refuses outright (422) before it takes one. */
+    refundRefusals: 0,
+    /*
+     * The next refund call times out and Polar makes nothing yet; it makes it later, when the
+     * test calls `lateRefund` (Polar committing a timed-out request after the fact).
+     */
+    refundLandsLate: false,
+    lateRefund: null as (() => void) | null,
     /* The next refund call is made at Polar but its answer is lost (a timeout). */
     refundAnswerLost: false,
     /*
@@ -779,6 +787,10 @@ const fakeClient = {
                 polar.refundFailures -= 1;
                 throw new PolarClientError(503, { error: 'ServiceUnavailable' });
             }
+            if (polar.refundRefusals > 0) {
+                polar.refundRefusals -= 1;
+                throw new PolarClientError(422, { error: 'HTTPValidationError' });
+            }
             const order = polar.orders.find((candidate) => candidate.id === body.order_id);
             if (!order) throw notFound();
             const left =
@@ -788,6 +800,21 @@ const fakeClient = {
             if (left <= 0) throw new PolarClientError(403, { error: 'RefundedAlready' });
             if (body.amount < 1 || body.amount > left)
                 throw new PolarClientError(422, { error: 'HTTPValidationError' });
+            if (polar.refundLandsLate) {
+                polar.refundLandsLate = false;
+                polar.lateRefund = () => {
+                    polar.refunds.push({
+                        id: `refund_${polar.refunds.length + 1}`,
+                        order_id: order.id,
+                        amount: body.amount,
+                        status: 'succeeded',
+                        metadata: body.metadata ?? {},
+                        created_at: new Date().toISOString(),
+                    });
+                    order.refunded_amount = (order.refunded_amount ?? 0) + body.amount;
+                };
+                throw new Error('The request timed out.');
+            }
             const refund = {
                 id: `refund_${polar.refunds.length + 1}`,
                 order_id: order.id,
@@ -914,6 +941,9 @@ beforeEach(async () => {
     polar.refunds = [];
     polar.refundFailures = 0;
     polar.refundAnswerLost = false;
+    polar.refundRefusals = 0;
+    polar.refundLandsLate = false;
+    polar.lateRefund = null;
     polar.refundErrorsAfterStripe = false;
     polar.refundLatencyMs = 0;
     polar.onRefundList = null;
@@ -4002,7 +4032,8 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         await expect(billing.endPersonalPlans(job)).rejects.toThrow();
         expect(callsTo('subscriptions.revoke')).toHaveLength(1);
         polar.ordersFail = false;
-        polar.refundFailures = 5;
+        // Refused outright five times (an outage would hold the next ask back; see below).
+        polar.refundRefusals = 5;
         vi.useFakeTimers({ toFake: ['Date'] });
         try {
             // Every retry an hour after the last: an hour less would be 498 by the first.
@@ -4177,6 +4208,14 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         await billing.endPersonalPlans(job);
         expect(refundsMade()).toEqual([['order_cycle', 199]]);
         expect(await billingRepository.listRefundsOwed()).toEqual([]);
+        // The 300 Polar won't take is in front of operators, not lost quietly.
+        expect(await billingRepository.listUnrefundable()).toEqual([
+            expect.objectContaining({
+                subscriptionId: 'sub_personal',
+                amount: 300,
+                currency: 'usd',
+            }),
+        ]);
     });
 
     test('a mid-period downgrade’s credit is netted against the refund', async () => {
@@ -4281,31 +4320,40 @@ describe('a personal plan ends when its owner’s files join a family', () => {
     });
 
     test('a run that stalled past its lease, which another run took, asks Polar for nothing more', async () => {
-        const { job, now } = await pooledSubscriber();
-        vi.useFakeTimers({ toFake: ['Date'] });
-        try {
-            vi.setSystemTime(now);
-            // The first run revokes, then stalls in its refunds listing.
-            let resume = () => {};
-            let stalled = () => {};
-            const reached = new Promise<void>((resolve) => (stalled = resolve));
-            polar.onRefundList = () =>
-                new Promise<void>((resolve) => {
-                    resume = resolve;
-                    stalled();
-                });
-            const first = billing.endPersonalPlans(job);
-            await reached;
-            // Past its lease (pg-boss's ten minutes, say), a retry takes the ending and refunds.
-            vi.setSystemTime(now + billing.PLAN_ENDING_LEASE_MS + 60_000);
-            await billing.endPersonalPlans(job);
-            expect(refundsMade()).toEqual([['order_cycle', 499]]);
-            // The first resumes with its stale listing: it must not ask for 499 again.
-            resume();
-            await expect(first).rejects.toMatchObject({ name: 'PlanEndingBusyError' });
-        } finally {
-            vi.useRealTimers();
-        }
+        const { job } = await pooledSubscriber();
+        // The first run revokes, then stalls in its refunds listing.
+        let resume = () => {};
+        let stalled = () => {};
+        const reached = new Promise<void>((resolve) => (stalled = resolve));
+        polar.onRefundList = () =>
+            new Promise<void>((resolve) => {
+                resume = resolve;
+                stalled();
+            });
+        const first = billing.endPersonalPlans(job);
+        await reached;
+        // Its lease runs out on the database's clock (pg-boss's ten minutes, say): a retry
+        // takes the ending and refunds.
+        await rawSql("update personal_plan_endings set lease_until = now() - interval '1 second'");
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        // The first resumes with its stale listing: it must not ask for 499 again.
+        resume();
+        await expect(first).rejects.toMatchObject({ name: 'PlanEndingBusyError' });
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a refund that timed out and lands at Polar later is not asked for twice', async () => {
+        const { job } = await pooledSubscriber();
+        polar.refundLandsLate = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        // pg-boss retries a minute later: nothing is listed yet, and nothing is asked.
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        // Two minutes after the timeout, Polar commits it; the next run finds it by its key.
+        polar.lateRefund?.();
+        await billing.endPersonalPlans(job);
         expect(callsTo('refunds.create')).toHaveLength(1);
         expect(refundsMade()).toEqual([['order_cycle', 499]]);
     });

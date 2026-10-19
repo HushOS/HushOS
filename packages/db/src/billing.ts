@@ -984,39 +984,89 @@ export async function setPlanRefundAmount(orderId: string, amount: number) {
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
-/* Stamped just before Polar is asked: the first ask once, the last every time. */
-export async function markPlanRefundAttempt(orderId: string, at: Date) {
+/* Stamped just before Polar is asked, on the database's clock: the first ask once, the last every time. */
+export async function markPlanRefundAttempt(orderId: string) {
     await db
         .update(personalPlanRefunds)
         .set({
-            firstAttemptedAt: sql`coalesce(${personalPlanRefunds.firstAttemptedAt}, ${at.toISOString()}::timestamptz)`,
-            lastAttemptedAt: at,
-            updatedAt: at,
+            firstAttemptedAt: sql`coalesce(${personalPlanRefunds.firstAttemptedAt}, now())`,
+            lastAttemptedAt: sql`now()`,
+            updatedAt: sql`now()`,
         })
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
 /*
- * Takes the ending for `owner` until `now + ms` (the app's clock), when nobody holds
+ * An ask whose outcome is unknown (a timeout, a 5xx): nothing is asked again for `ms`
+ * after it, on the database's clock, since Polar may still make that refund.
+ */
+export async function markPlanRefundUnsure(orderId: string, ms: number) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ unsureUntil: sql`now() + make_interval(secs => ${ms / 1000})` })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
+/* Whether an unknown outcome still holds the next ask back (markPlanRefundUnsure). */
+export async function planRefundUnsure(orderId: string) {
+    const [row] = await db
+        .select({ unsure: sql<boolean>`${personalPlanRefunds.unsureUntil} > now()` })
+        .from(personalPlanRefunds)
+        .where(eq(personalPlanRefunds.orderId, orderId));
+    return row?.unsure === true;
+}
+
+/*
+ * What Polar won't refund of an ending's unused part, as the last run computed it
+ * (null once nothing is): listed for operators.
+ */
+export async function setPlanUnrefundable(
+    subscriptionId: string,
+    amount: number | null,
+    currency: string | null,
+) {
+    await db
+        .update(personalPlanEndings)
+        .set({ unrefundableAmount: amount, unrefundableCurrency: currency, updatedAt: new Date() })
+        .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+}
+
+/* Endings whose unused part Polar won't fully refund: the operators' list. Ids only. */
+export async function listUnrefundable() {
+    return db
+        .select({
+            subscriptionId: personalPlanEndings.subscriptionId,
+            userId: personalPlanEndings.userId,
+            groupId: personalPlanEndings.groupId,
+            amount: personalPlanEndings.unrefundableAmount,
+            currency: personalPlanEndings.unrefundableCurrency,
+            since: personalPlanEndings.updatedAt,
+        })
+        .from(personalPlanEndings)
+        .where(sql`${personalPlanEndings.unrefundableAmount} > 0`)
+        .orderBy(desc(personalPlanEndings.updatedAt));
+}
+
+/*
+ * Takes the ending for `owner` for `ms` (the database's clock, as claimPlanChange
+ * does, so worker hosts whose clocks differ can't take it early), when nobody holds
  * it, its holder's time ran out, or `owner` holds it already: true when taken. Two
  * runs for one person never work one ending at once, and a run that stalled past its
  * lease finds it gone (renewPlanEndingLease) before it asks Polar for anything more.
- * Plain rows and the app's clock, so it holds behind a transaction-mode pooler and
- * survives a dropped connection.
+ * Plain rows, so it holds behind a transaction-mode pooler and survives a dropped
+ * connection.
  */
-export async function takePlanEndingLease(
-    subscriptionId: string,
-    owner: string,
-    now: Date,
-    ms: number,
-) {
+export async function takePlanEndingLease(subscriptionId: string, owner: string, ms: number) {
     const rows = await db
         .update(personalPlanEndings)
-        .set({ leaseOwner: owner, leaseUntil: new Date(now.getTime() + ms) })
+        .set({
+            leaseOwner: owner,
+            leaseUntil: sql`now() + make_interval(secs => ${ms / 1000})`,
+        })
         .where(
             and(
                 eq(personalPlanEndings.subscriptionId, subscriptionId),
-                sql`(${personalPlanEndings.leaseUntil} is null or ${personalPlanEndings.leaseUntil} <= ${now.toISOString()}::timestamptz or ${personalPlanEndings.leaseOwner} = ${owner})`,
+                sql`(${personalPlanEndings.leaseUntil} is null or ${personalPlanEndings.leaseUntil} <= now() or ${personalPlanEndings.leaseOwner} = ${owner})`,
             ),
         )
         .returning({ subscriptionId: personalPlanEndings.subscriptionId });
@@ -1024,20 +1074,15 @@ export async function takePlanEndingLease(
 }
 
 /* Extends the lease only while `owner` still holds it and it hasn't run out: false otherwise. */
-export async function renewPlanEndingLease(
-    subscriptionId: string,
-    owner: string,
-    now: Date,
-    ms: number,
-) {
+export async function renewPlanEndingLease(subscriptionId: string, owner: string, ms: number) {
     const rows = await db
         .update(personalPlanEndings)
-        .set({ leaseUntil: new Date(now.getTime() + ms) })
+        .set({ leaseUntil: sql`now() + make_interval(secs => ${ms / 1000})` })
         .where(
             and(
                 eq(personalPlanEndings.subscriptionId, subscriptionId),
                 eq(personalPlanEndings.leaseOwner, owner),
-                sql`${personalPlanEndings.leaseUntil} > ${now.toISOString()}::timestamptz`,
+                sql`${personalPlanEndings.leaseUntil} > now()`,
             ),
         )
         .returning({ subscriptionId: personalPlanEndings.subscriptionId });
@@ -1072,6 +1117,7 @@ export async function settlePlanRefund(
             providerRefundId: input.providerRefundId ?? null,
             failures: 0,
             owedSince: null,
+            unsureUntil: null,
             updatedAt: new Date(),
         })
         .where(eq(personalPlanRefunds.orderId, orderId));

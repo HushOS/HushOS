@@ -287,16 +287,32 @@ async function periodOrders(ending: billingRepository.PlanEnding) {
 export const refundKey = (ending: billingRepository.PlanEnding, orderId: string) =>
     `${ending.userId}:${ending.groupId}:${ending.admittedAt.toISOString()}:${orderId}`;
 
-/* `owed`: listed for operators and not tried again within a day of the last try. */
-type RefundOutcome = 'settled' | 'pending' | 'failed' | 'owed';
+/*
+ * `owed`: listed for operators and not tried again within a day of the last try.
+ * `waiting`: an ask whose outcome is unknown holds the next one back (UNSURE_MS); retried.
+ */
+type RefundOutcome = 'settled' | 'pending' | 'failed' | 'owed' | 'waiting';
 
-const RANK: Record<RefundOutcome, number> = { settled: 0, pending: 1, owed: 2, failed: 3 };
+const RANK: Record<RefundOutcome, number> = {
+    settled: 0,
+    pending: 1,
+    owed: 2,
+    waiting: 3,
+    failed: 4,
+};
+
+/*
+ * After an ask that timed out or got a 5xx, nothing is asked again for this long (the
+ * database's clock): Polar can commit a refund late, and it takes no idempotency key.
+ * The order's refunds are listed first every time, so one that landed is found.
+ */
+const UNSURE_MS = 10 * 60 * 1000;
 const worse = (a: RefundOutcome, b: RefundOutcome) => (RANK[a] >= RANK[b] ? a : b);
 
 /* An owed refund is tried again at most this often (the daily reconcile's pace). */
 const OWED_RETRY_MS = 23 * 60 * 60 * 1000;
 
-/* How long a run holds an ending, renewed between steps: well past Polar's 15 s timeouts. */
+/* How long a run holds an ending (the database's clock), renewed between steps: well past Polar's 15 s timeouts. */
 export const PLAN_ENDING_LEASE_MS = 2 * 60 * 1000;
 
 /*
@@ -447,11 +463,28 @@ async function refundPeriod(
         targets.set(state.order.id, next);
         left -= next - now;
     }
-    if (left > 0)
-        log.warn({
-            message: 'Part of a personal plan’s unused days can’t be refunded: Polar won’t take it',
-            billing: { user: ending.userId, subscription: ending.subscriptionId, amount: left },
-        });
+    // Polar won't take it back on the period's orders: operators see it and decide.
+    if (readable) {
+        const currency = states[0]?.order.currency ?? null;
+        if (left > 0)
+            log.warn({
+                message:
+                    'Part of a personal plan’s unused days can’t be refunded: Polar won’t take it',
+                billing: {
+                    user: ending.userId,
+                    group: ending.groupId,
+                    admittedAt: ending.admittedAt.toISOString(),
+                    subscription: ending.subscriptionId,
+                    amount: left,
+                    currency,
+                },
+            });
+        await billingRepository.setPlanUnrefundable(
+            ending.subscriptionId,
+            left > 0 ? left : null,
+            left > 0 ? currency : null,
+        );
+    }
     let outcome: RefundOutcome = 'settled';
     for (const state of states) {
         if (paidOf(state.order) <= 0) continue;
@@ -563,8 +596,10 @@ async function refundOrder(
         Date.now() - row.lastAttemptedAt.getTime() < OWED_RETRY_MS
     )
         return 'owed';
+    // An earlier ask whose outcome is unknown may still land: not asked again for a while.
+    if (await billingRepository.planRefundUnsure(row.orderId)) return 'waiting';
     await hold.check();
-    await billingRepository.markPlanRefundAttempt(row.orderId, new Date());
+    await billingRepository.markPlanRefundAttempt(row.orderId);
     let refund: models.Refund;
     try {
         refund = await polar().refunds.create({
@@ -581,7 +616,11 @@ async function refundOrder(
             await billingRepository.settlePlanRefund(row.orderId, { status: 'none' });
             return 'settled';
         }
-        return failRefund(ending, row, errorName(error) ?? 'create', statusOf(error));
+        // No answer, or a 5xx: Polar may have made it, or make it late.
+        const status = statusOf(error);
+        if (status === null || status >= 500)
+            await billingRepository.markPlanRefundUnsure(row.orderId, UNSURE_MS);
+        return failRefund(ending, row, errorName(error) ?? 'create', status);
     }
     if (refund.status === 'succeeded' && !state.pending) {
         await billingRepository.settlePlanRefund(row.orderId, {
@@ -618,8 +657,8 @@ export class PlanEndingBusyError extends Error {
  * again daily), remain: the daily reconcile queues those again. Someone who left
  * the family before their plan was revoked keeps it.
  *
- * Each ending is worked under a lease on its row (PLAN_ENDING_LEASE_MS, the app's
- * clock), taken with a conditional update and renewed between steps; the lease and
+ * Each ending is worked under a lease on its row (PLAN_ENDING_LEASE_MS, the
+ * database's clock), taken with a conditional update and renewed between steps; the lease and
  * the job's signal are checked right before every refund is asked for. A second run
  * (pg-boss's retry of one it took for dead) can't take an ending another holds, and
  * a run that stalled past its lease, which another then took, asks Polar for nothing
@@ -670,7 +709,6 @@ export async function endPersonalPlans(
             !(await billingRepository.takePlanEndingLease(
                 subscriptionId,
                 owner,
-                new Date(),
                 PLAN_ENDING_LEASE_MS,
             ))
         ) {
@@ -684,7 +722,6 @@ export async function endPersonalPlans(
                     !(await billingRepository.renewPlanEndingLease(
                         subscriptionId,
                         owner,
-                        new Date(),
                         PLAN_ENDING_LEASE_MS,
                     ))
                 )

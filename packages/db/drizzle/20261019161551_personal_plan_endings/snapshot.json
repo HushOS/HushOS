@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "2920d56f-9da9-49f8-b1bb-e816183c1cd9",
+    "id": "f9c68a22-a429-4a98-842a-8e497d65d181",
     "prevIds": ["79d87a46-916c-4807-ac98-6e3cae82a737"],
     "ddl": [
         {
@@ -7611,6 +7611,32 @@
             "table": "personal_plan_endings"
         },
         {
+            "type": "bigint",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "unrefundable_amount",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_endings"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "unrefundable_currency",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_endings"
+        },
+        {
             "type": "text",
             "typeSchema": null,
             "notNull": false,
@@ -7775,6 +7801,19 @@
             "generated": null,
             "identity": null,
             "name": "last_attempted_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_refunds"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "unsure_until",
             "entityType": "columns",
             "schema": "public",
             "table": "personal_plan_refunds"

@@ -254,7 +254,13 @@ export const personalPlanEndings = pgTable(
          */
         outcome: text(),
         /*
-         * The run working this ending and until when (the app's clock): taken with a
+         * What of the period's unused part Polar won't refund on its orders (beyond what it
+         * takes back on each), as the last run computed it: shown to operators, who decide.
+         */
+        unrefundableAmount: bigint('unrefundable_amount', { mode: 'number' }),
+        unrefundableCurrency: text('unrefundable_currency'),
+        /*
+         * The run working this ending and until when (the database's clock): taken with a
          * conditional update, renewed between steps and checked right before every refund
          * is asked for, so a run that lost it (stalled past it while pg-boss retried) asks
          * Polar for nothing more.
@@ -313,6 +319,12 @@ export const personalPlanRefunds = pgTable(
         firstAttemptedAt: timestamp('first_attempted_at', { withTimezone: true }),
         /* When it last asked: an owed refund is asked again at most daily. */
         lastAttemptedAt: timestamp('last_attempted_at', { withTimezone: true }),
+        /*
+         * After an ask that timed out or got a 5xx, Polar may still make the refund late, and
+         * it has no idempotency key: nothing is asked again before this (the database's clock),
+         * though the order's refunds are listed first every time.
+         */
+        unsureUntil: timestamp('unsure_until', { withTimezone: true }),
         failures: integer().notNull().default(0),
         owedSince: timestamp('owed_since', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
