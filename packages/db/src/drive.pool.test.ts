@@ -423,12 +423,12 @@ describe('pool usage', () => {
         });
         expect(await upload(ana, 500n)).toBe('over-quota');
         // The plan goes live: the pool, not her own allowance.
-        await apply(groupId, [plan(1000n)]);
+        await apply(groupId, [plan(2n * GIB)]);
         expect(await upload(ana, 500n)).toBe('ok');
         expect(await drive.getStorage(ana.workspaceId)).toMatchObject({
-            allowance: 1000n,
+            allowance: 2n * GIB,
             reserved: 500n,
-            free: 500n,
+            free: 2n * GIB - 500n,
             pool: { groupId },
         });
         expect((await auth.getStorageAllowance(ana.userId))?.pool).toEqual({
@@ -437,7 +437,7 @@ describe('pool usage', () => {
         });
         // Past the period end and the grace days: back on her own 100 bytes, over it with the
         // 500 reserved, and the folders read an empty pool.
-        await apply(groupId, [lapsed(1000n)]);
+        await apply(groupId, [lapsed(2n * GIB)]);
         expect(await drive.getStorage(ana.workspaceId)).toMatchObject({
             allowance: 100n,
             reserved: 500n,
@@ -451,19 +451,19 @@ describe('pool usage', () => {
 
     test('a personal plan doesn’t keep its owner out of the pool: pooled at once, and the plan adds nothing', async () => {
         const organizer = await person(100n);
-        await entitle(organizer.workspaceId, 'polar', 3000n);
+        await entitle(organizer.workspaceId, 'polar', 3n * GIB);
         const ana = await person();
         const { groupId } = await family({ organizer, members: [ana], quota: null });
         await setBytes(organizer.workspaceId, 50n);
         // No family plan: Free's base and Pro.
-        expect((await drive.getStorage(organizer.workspaceId))?.allowance).toBe(3100n);
+        expect((await drive.getStorage(organizer.workspaceId))?.allowance).toBe(3n * GIB + 100n);
         // The family plan goes live: their files draw from the pool at once (owner decision 2),
-        // and Pro's 3000, until billing ends it, adds nothing.
-        await apply(groupId, [plan(1000n)]);
+        // and Pro's 3 GiB, until billing ends it, adds nothing.
+        await apply(groupId, [plan(2n * GIB)]);
         expect(await drive.getStorage(organizer.workspaceId)).toMatchObject({
-            allowance: 1000n,
+            allowance: 2n * GIB,
             used: 50n,
-            free: 950n,
+            free: 2n * GIB - 50n,
             pool: { groupId },
         });
         expect(await poolUsage(db, groupId)).toEqual({ used: 50n, reserved: 0n });
@@ -471,12 +471,14 @@ describe('pool usage', () => {
             groupId,
             name: 'The Family',
         });
-        expect(await upload(organizer, 951n)).toBe('over-quota');
-        expect(await upload(organizer, 950n)).toBe('ok');
+        // What a pooled member may spend is the free space to the whole GiB below (1 GiB here),
+        // so one byte more is refused, though Pro would hold it.
+        expect(await upload(organizer, GIB + 1n)).toBe('over-quota');
+        expect(await upload(organizer, GIB)).toBe('ok');
         // The family plan lapses: their own allowance again, with whatever it still holds.
-        await apply(groupId, [lapsed(1000n)]);
+        await apply(groupId, [lapsed(2n * GIB)]);
         expect(await drive.getStorage(organizer.workspaceId)).toMatchObject({
-            allowance: 3100n,
+            allowance: 3n * GIB + 100n,
             pool: null,
         });
     });
@@ -535,17 +537,51 @@ describe('what one member sees', () => {
             await prepareBegin(maya.userId, maya.workspaceId, maya.root, 200n * GIB)
         ).begin();
         expect(refused).toEqual({ status: 'over-quota', free: 89n * GIB });
-        // The server still checks to the byte: exactly what is free fits, one byte more doesn't.
-        const exact =
-            100n * GIB - (3n * GIB + 5n) - (2n * GIB + 7n) - (5n * GIB + 500n * MIB + 12n);
-        const free = exact - 300n * MIB;
-        expect(await upload(maya, free + 1n)).toBe('over-quota');
-        expect(await upload(maya, free)).toBe('ok');
+        // What may be spent is the same rounded-down figure: 89 GiB fits, one byte more doesn't,
+        // though the exact free space is 89 GiB and about 224 MiB.
+        expect(await upload(maya, 89n * GIB + 1n)).toBe('over-quota');
+        expect(await upload(maya, 89n * GIB)).toBe('ok');
         expect(await auth.getStorageAllowance(maya.userId)).toMatchObject({
             usedBytes: String(11n * GIB),
             availableBytes: '0',
             reservedBytes: '0',
         });
+    });
+
+    test('probing upload sizes can’t tell apart two usages within the same GB', async () => {
+        const maya = await person();
+        const sam = await person();
+        const { areaIds } = await family({ organizer: maya, members: [sam], quota: 100n * GIB });
+        await setBytes(areaIds[0]!, 3n * GIB);
+        // Sam stores 11 GiB and 100 MiB, or 11 GiB and 900 MiB. Maya asks about the sizes around
+        // what may be spent and around each usage's exact free space.
+        const exactFree = (samBytes: bigint) => 100n * GIB - 3n * GIB - samBytes;
+        const sizes = [85n * GIB - 1n, 85n * GIB, 85n * GIB + 1n, 86n * GIB];
+        for (const samBytes of [11n * GIB + 100n * MIB, 11n * GIB + 900n * MIB])
+            for (const d of [-1n, 0n, 1n]) sizes.push(exactFree(samBytes) + d);
+        // Every answer upload begin gives, each accepted one then cancelled (her counters set back).
+        async function probe(samBytes: bigint) {
+            await setBytes(sam.workspaceId, samBytes);
+            const out: string[] = [];
+            for (const size of sizes) {
+                const result = await (
+                    await prepareBegin(maya.userId, maya.workspaceId, maya.root, size)
+                ).begin();
+                out.push(result.status === 'over-quota' ? `refused:${result.free}` : result.status);
+                await setBytes(maya.workspaceId, 0n, 0n);
+            }
+            return out;
+        }
+        const near = await probe(11n * GIB + 100n * MIB);
+        const far = await probe(11n * GIB + 900n * MIB);
+        expect(near).toEqual(far);
+        // 85 GiB may be spent in both (100 - 3 - 12, rounded down): it fits, a byte more doesn't.
+        expect(near.slice(0, 4)).toEqual([
+            'ok',
+            'ok',
+            `refused:${85n * GIB}`,
+            `refused:${85n * GIB}`,
+        ]);
     });
 
     test('an empty pool reads 0 used; anything up to 1 GB reads as 1 GB', async () => {
@@ -588,26 +624,27 @@ describe('what one member sees', () => {
 describe('copies', () => {
     test('a copy in a member’s own files spends the pool, not their own allowance', async () => {
         const maya = await person();
-        const sam = await person(10_000n);
-        const { groupId } = await family({ organizer: maya, members: [sam], quota: 1000n });
-        const source = await stored(sam, 400n);
-        // 400 used, 600 free: one copy fits, the second (400 more against 200) doesn't, though
+        const sam = await person(10n * GIB);
+        const { groupId } = await family({ organizer: maya, members: [sam], quota: 2n * GIB });
+        const source = await stored(sam, 700n * MIB);
+        // 700 MiB used leaves 1 GiB to spend: one copy fits; the second, against what then rounds
+        // down to nothing, doesn't, though
         // Sam's own 10,000 would hold both.
         expect(await copy(sam, source)).toBe('ok');
         expect(await copy(sam, source)).toBe('over-quota');
-        expect(await poolUsage(db, groupId)).toEqual({ used: 800n, reserved: 0n });
+        expect(await poolUsage(db, groupId)).toEqual({ used: 1400n * MIB, reserved: 0n });
     });
 });
 
 describe('races', () => {
     test('two members’ uploads into their own files that each fit alone: exactly one is reserved', async () => {
         const organizer = await person();
-        const ana = await person(10_000n);
-        const sam = await person(10_000n);
-        const { groupId } = await family({ organizer, members: [ana, sam], quota: 1000n });
+        const ana = await person(10n * GIB);
+        const sam = await person(10n * GIB);
+        const { groupId } = await family({ organizer, members: [ana, sam], quota: 2n * GIB });
         const begins = [
-            await prepareUpload(ana.userId, ana.workspaceId, ana.root, 600n),
-            await prepareUpload(sam.userId, sam.workspaceId, sam.root, 600n),
+            await prepareUpload(ana.userId, ana.workspaceId, ana.root, 1200n * MIB),
+            await prepareUpload(sam.userId, sam.workspaceId, sam.root, 1200n * MIB),
         ];
         // The pool row, held here, queues both behind it; let go, they race for it.
         const { results } = await holding(
@@ -621,19 +658,19 @@ describe('races', () => {
         );
         expect((await results).sort()).toEqual(['ok', 'over-quota']);
         const usage = await poolUsage(db, groupId);
-        expect(usage.reserved).toBe(600n);
-        expect(usage.used + usage.reserved).toBeLessThanOrEqual(1000n);
+        expect(usage.reserved).toBe(1200n * MIB);
+        expect(usage.used + usage.reserved).toBeLessThanOrEqual(2n * GIB);
     });
 
     test('an upload into a member’s own files and one into a family folder spend the same pool', async () => {
         const organizer = await person();
-        const ana = await person(10_000n);
-        const { groupId, areaIds } = await family({ organizer, members: [ana], quota: 1000n });
+        const ana = await person(10n * GIB);
+        const { groupId, areaIds } = await family({ organizer, members: [ana], quota: 2n * GIB });
         await holdArea(areaIds[0]!, organizer.userId);
         const areaRoot = await rootOf(areaIds[0]!, organizer.userId);
         const begins = [
-            await prepareUpload(ana.userId, ana.workspaceId, ana.root, 600n),
-            await prepareUpload(organizer.userId, areaIds[0]!, areaRoot, 600n),
+            await prepareUpload(ana.userId, ana.workspaceId, ana.root, 1200n * MIB),
+            await prepareUpload(organizer.userId, areaIds[0]!, areaRoot, 1200n * MIB),
         ];
         const { results } = await holding(
             'select group_id from group_storage where group_id = $1 for update',
@@ -645,13 +682,13 @@ describe('races', () => {
             },
         );
         expect((await results).sort()).toEqual(['ok', 'over-quota']);
-        expect((await poolUsage(db, groupId)).reserved).toBe(600n);
+        expect((await poolUsage(db, groupId)).reserved).toBe(1200n * MIB);
     });
 
     test('a leave waits for an upload that holds the pool; the leaver’s own allowance then counts it', async () => {
         const organizer = await person();
         const ana = await person(100n);
-        const { groupId } = await family({ organizer, members: [ana], quota: 1000n });
+        const { groupId } = await family({ organizer, members: [ana], quota: 2n * GIB });
         const begin = await prepareUpload(ana.userId, ana.workspaceId, ana.root, 500n);
         // Ana's storage row, held here, stops her upload after it took the pool's lock.
         const { uploading, leaving } = await holding(
@@ -686,7 +723,7 @@ describe('races', () => {
     test('an upload that waited on a leave reads the membership again and lands on the leaver’s own allowance', async () => {
         const organizer = await person();
         const ana = await person(100n);
-        const { groupId } = await family({ organizer, members: [ana], quota: 1000n });
+        const { groupId } = await family({ organizer, members: [ana], quota: 2n * GIB });
         const begin = await prepareUpload(ana.userId, ana.workspaceId, ana.root, 500n);
         // Ana's membership row, held here, stops the leave after it took the pool's lock.
         const { uploading, leaving } = await holding(
@@ -702,7 +739,7 @@ describe('races', () => {
             },
         );
         expect(await leaving).toEqual({ status: 'left' });
-        // Not the pool's 1000 free: her own 100, which 500 doesn't fit.
+        // Not the pool's 2 GiB: her own 100, which 500 doesn't fit.
         expect(await uploading).toBe('over-quota');
         expect(await own(ana.workspaceId)).toEqual({ used: 0n, reserved: 0n });
         expect(await poolUsage(db, groupId)).toEqual({ used: 0n, reserved: 0n });
@@ -711,7 +748,7 @@ describe('races', () => {
     test('an upload that waited on a removal reads the membership again and lands on the removed member’s own allowance', async () => {
         const organizer = await person();
         const ana = await person(100n);
-        const { groupId } = await family({ organizer, members: [ana], quota: 1000n });
+        const { groupId } = await family({ organizer, members: [ana], quota: 2n * GIB });
         const begin = await prepareUpload(ana.userId, ana.workspaceId, ana.root, 500n);
         const call = await removal(groupId, organizer.userId, ana.userId);
         // Ana's membership row, held here, stops the removal after it took the pool's lock.

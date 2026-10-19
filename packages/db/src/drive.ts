@@ -1285,14 +1285,18 @@ async function freeBytes(tx: Tx, workspaceId: string) {
 }
 
 /*
- * The free space a refusal names. A pool's is rounded down to a whole GiB, as
- * the account's figures are (pool.ts shownPoolFree): to the byte it would give
- * away other members' usage. The check itself used the exact figure.
+ * The free space a reservation is checked against, and that a refusal names.
+ * A pool's is its exact free space rounded down to a whole GiB (pool.ts
+ * shownPoolFree), the figure members already see: checked to the byte, the
+ * answers to a run of upload begins (each cancelled once it got through)
+ * would find the exact free space in about 30 tries, and with it another
+ * member's exact usage (docs/families-shared-pool.md 3.6). It costs up to
+ * 1 GiB of the pool. A workspace's own allowance is checked to the byte.
  */
-function refusedFree(storage: StorageFigures) {
-    if (storage.pool) return shownPoolFree(storage.free);
-    return storage.free > 0n ? storage.free : 0n;
+function spendable(storage: StorageFigures) {
+    return storage.pool ? shownPoolFree(storage.free) : storage.free;
 }
+const named = (free: bigint) => (free > 0n ? free : 0n);
 
 async function adjustStorage(tx: Tx, workspaceId: string, used: bigint, reserved: bigint) {
     await tx
@@ -1443,8 +1447,8 @@ async function beginUploadOnce(input: UploadBegin) {
             return { status: 'bad-signature' as const };
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
-        if (storage.free < input.object.ciphertextSize)
-            return { status: 'over-quota' as const, free: refusedFree(storage) };
+        if (spendable(storage) < input.object.ciphertextSize)
+            return { status: 'over-quota' as const, free: named(spendable(storage)) };
         await adjustStorage(tx, input.workspaceId, 0n, input.object.ciphertextSize);
         if (!input.node.existing) {
             const [node] = await tx
@@ -2181,8 +2185,8 @@ async function copyFileOnce(input: CopyFile) {
         const cost = version.ciphertextSize;
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
-        if (storage.free < cost)
-            return { status: 'over-quota' as const, free: refusedFree(storage) };
+        if (spendable(storage) < cost)
+            return { status: 'over-quota' as const, free: named(spendable(storage)) };
         const now = new Date();
         const [node] = await tx
             .insert(driveNodes)
