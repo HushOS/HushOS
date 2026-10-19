@@ -349,3 +349,63 @@ export async function lockPool(tx: Tx, groupId: string) {
         .where(eq(groupStorage.groupId, groupId))
         .for('update');
 }
+
+/*
+ * The family whose pool `userId`'s own files draw from right now, or null: billing on, an
+ * active family membership, and that family's plan live (3.1). With the family's name and
+ * the membership's admission time, which name the membership a personal plan's ending is
+ * keyed to (docs/families-shared-pool.md 5.1).
+ */
+export async function pooledFamilyOf(tx: Conn, userId: string, at = new Date()) {
+    if (billingEnv.BILLING_PROVIDER === 'none') return null;
+    const [row] = await tx
+        .select({
+            groupId: groupMemberships.groupId,
+            admittedAt: groupMemberships.admittedAt,
+            name: groups.name,
+            expiresAt: groupStorage.expiresAt,
+        })
+        .from(groupMemberships)
+        .innerJoin(groups, eq(groups.id, groupMemberships.groupId))
+        .innerJoin(groupStorage, eq(groupStorage.groupId, groupMemberships.groupId))
+        .where(
+            and(
+                eq(groupMemberships.userId, userId),
+                eq(groupMemberships.groupKind, 'family'),
+                eq(groupMemberships.state, 'active'),
+            ),
+        )
+        .limit(1);
+    if (!row || !row.admittedAt || !planLive(row, at)) return null;
+    return { groupId: row.groupId, name: row.name, admittedAt: row.admittedAt };
+}
+
+/*
+ * Each active member's own files (their personal workspace's stored bytes: My files with its
+ * Trash and older versions), and the family folders' total, for the family's managers (3.9).
+ * Exact here; billing rounds them before anything leaves the server.
+ */
+export async function memberUsage(tx: Conn, groupId: string) {
+    const members = await tx
+        .select({ userId: groupMemberships.userId, usedBytes: workspaceStorage.usedBytes })
+        .from(groupMemberships)
+        .innerJoin(personalWorkspaces, eq(personalWorkspaces.userId, groupMemberships.userId))
+        .innerJoin(
+            workspaceStorage,
+            eq(workspaceStorage.workspaceId, personalWorkspaces.workspaceId),
+        )
+        .where(
+            and(
+                eq(groupMemberships.groupId, groupId),
+                eq(groupMemberships.groupKind, 'family'),
+                eq(groupMemberships.state, 'active'),
+            ),
+        );
+    const folders = await tx.execute<{ used: string }>(sql`
+        select coalesce(sum(s.used_bytes), 0)::text as used
+        from ${workspaceStorage} s
+        join ${workspaces} w on w.id = s.workspace_id
+        where w.group_id = ${groupId}
+    `);
+    return { members, foldersBytes: BigInt(folders.rows[0]?.used ?? '0') };
+}

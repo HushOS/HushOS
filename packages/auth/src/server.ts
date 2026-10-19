@@ -1041,9 +1041,10 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const [overview, stuck] = await Promise.all([
+    const [overview, stuck, owed] = await Promise.all([
         adminRepository.getOverview(),
         billingRepository.listGivenUpReissues(),
+        billingRepository.listRefundsOwed(),
     ]);
     return {
         ...overview,
@@ -1057,6 +1058,20 @@ export async function getAdminOverview(sessionToken: string | null) {
             subscriptionId: row.subscriptionId,
             wanted: row.wanted,
             reason: row.reason,
+            since: row.since?.toISOString() ?? null,
+        })),
+        /*
+         * Refunds of a personal plan ended because its owner joined a family's pool
+         * (docs/families-shared-pool.md 5.1) that failed five times in a row: refunded in
+         * Polar's dashboard by hand, the row goes at the next try. Ids only; no names.
+         */
+        refundsOwed: owed.map((row) => ({
+            orderId: row.orderId,
+            subscriptionId: row.subscriptionId,
+            userId: row.userId,
+            amount: row.amount,
+            currency: row.currency,
+            failures: row.failures,
             since: row.since?.toISOString() ?? null,
         })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },

@@ -1,4 +1,10 @@
-import { reconcileCustomer, reconcileGroup, reissueCut } from '@hushos/billing/server';
+import {
+    endPersonalPlans,
+    reconcileCustomer,
+    reconcileGroup,
+    reconcilePlanEndings,
+    reissueCut,
+} from '@hushos/billing/server';
 import { billingRepository } from '@hushos/db';
 import { createLogger, sanitizeFailure } from '@hushos/logging';
 import type { Job } from 'pg-boss';
@@ -35,7 +41,20 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
                 if (error instanceof Error) event.error(error);
             }
         }
-        event.set({ reconciled, failed, durationMs: Math.round(performance.now() - started) });
+        // Pooled members' personal plans still live, and endings with a refund pending or owed.
+        let endings = 0;
+        try {
+            endings = await reconcilePlanEndings();
+        } catch (error) {
+            failed += 1;
+            if (error instanceof Error) event.error(error);
+        }
+        event.set({
+            reconciled,
+            failed,
+            endingsQueued: endings,
+            durationMs: Math.round(performance.now() - started),
+        });
         if (failed) throw new Error('Some customers could not be reconciled.');
     } catch (error) {
         // Listing the customers can fail too; that run must not read as a quiet success.
@@ -58,6 +77,24 @@ export async function reissueGroupCut(
     try {
         await reissueCut(job.data.groupId);
         event.set({ outcome: 'reissued' });
+    } catch (error) {
+        event.set({ failure: sanitizeFailure(error) });
+        throw error;
+    } finally {
+        event.emit();
+    }
+}
+
+/*
+ * One person's personal plan ended because their files joined a family's pool:
+ * revoked at Polar and the unused days refunded. A failure throws, so pg-boss
+ * retries with backoff; refunds still pending at Polar wait for the daily reconcile.
+ */
+export async function endPersonalPlan(job: Job<JobPayloads[typeof queues.billingEndPersonalPlan]>) {
+    const event = createLogger({ job: { id: job.id, queue: job.name } });
+    try {
+        const result = await endPersonalPlans(job.data);
+        event.set({ outcome: 'done', settled: result.settled, pending: result.pending });
     } catch (error) {
         event.set({ failure: sanitizeFailure(error) });
         throw error;

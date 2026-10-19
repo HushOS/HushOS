@@ -7,6 +7,7 @@ import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms } from './api';
+import { queuePlanEnding } from './endings';
 import { groupIdOf, reconcileGroup } from './groups';
 import {
     BillingError,
@@ -28,8 +29,17 @@ export {
     billingEnabled,
     parseMinorUnits,
     readFamilyProduct,
+    type BillingErrorCode,
     type BillingUser,
 } from './provider';
+export {
+    endPersonalPlans,
+    queuePlanEnding,
+    reconcilePlanEndings,
+    REFUND_FAILURES_BEFORE_OWED,
+    setEndPersonalPlanQueue,
+    type EndPersonalPlanJob,
+} from './endings';
 export {
     changeGroupPlan,
     createGroupPortalSession,
@@ -77,18 +87,52 @@ export async function listCatalogue(): Promise<Catalogue> {
 
 export async function getSummary(user: BillingUser): Promise<BillingSummary> {
     if (!billingEnabled())
-        return { enabled: false, hasCustomer: false, subscription: null, intendedPlan: null };
-    const [summary, intent, plans] = await Promise.all([
+        return {
+            enabled: false,
+            hasCustomer: false,
+            subscription: null,
+            intendedPlan: null,
+            family: null,
+        };
+    const [summary, intent, plans, pooled] = await Promise.all([
         billingRepository.getBillingSummary(user.id),
         billingRepository.getPendingIntent(user.id),
         listCatalogue().then((catalogue) => catalogue.plans),
+        billingRepository.getPooledFamily(user.id),
     ]);
     const live = summary.subscription && !summary.subscription.endedAt;
+    // A pooled person is offered no personal plan, so none is carried to checkout either.
     const intendedPlan =
-        !live && intent?.planProductId && plans.some((plan) => plan.id === intent.planProductId)
+        !pooled &&
+        !live &&
+        intent?.planProductId &&
+        plans.some((plan) => plan.id === intent.planProductId)
             ? intent.planProductId
             : null;
-    return { enabled: true, ...summary, intendedPlan };
+    const family = pooled
+        ? {
+              name: pooled.name,
+              planName:
+                  (await billingRepository.getLiveGroupSubscription(pooled.groupId))?.productName ??
+                  null,
+          }
+        : null;
+    return { enabled: true, ...summary, intendedPlan, family };
+}
+
+/*
+ * While a person's own files draw from a family's pool, no personal plan can be
+ * bought or resumed (docs/families-shared-pool.md 3.3): their storage is the
+ * family's, and billing ends any personal plan they have (5.1).
+ */
+async function refuseWhilePooled(user: BillingUser) {
+    const family = await billingRepository.getPooledFamily(user.id);
+    if (family)
+        throw new BillingError(
+            `Your storage comes from ${family.name}’s plan. Leave the family to choose a plan of your own.`,
+            409,
+            { code: 'in-family' },
+        );
 }
 
 async function currentSubscription(user: BillingUser) {
@@ -106,6 +150,7 @@ export async function startCheckout(
     address?: string,
     currency?: string,
 ) {
+    await refuseWhilePooled(user);
     const plan = (await listCatalogue()).plans.find((candidate) => candidate.id === productId);
     if (!plan) throw new BillingError('That plan is not available.', 404);
     // The currency the person saw on the pricing page; Polar would otherwise pick one
@@ -460,7 +505,8 @@ export function cancelAtPeriodEnd(
     });
 }
 
-export function resume(user: BillingUser) {
+export async function resume(user: BillingUser) {
+    await refuseWhilePooled(user);
     return updateCurrent(user, { cancel_at_period_end: false });
 }
 
@@ -555,6 +601,8 @@ export async function reconcileCustomer(userId: string) {
         subscriptions,
         graceMs: billingEnv.BILLING_GRACE_DAYS * 24 * 60 * 60 * 1000,
     });
+    // A live personal plan of someone whose files draw from a family's pool is ended (5.1).
+    if (subscriptions.some((subscription) => !subscription.endedAt)) await queuePlanEnding(userId);
 }
 
 /*
@@ -653,6 +701,16 @@ export async function handleWebhook(request: Request): Promise<Response> {
                 event.data as Parameters<typeof recordAffiliateEarning>[0],
             );
             if (userId) await rewardPaidReferral(userId);
+            // A personal order paid while its owner's files draw from a family's pool (a
+            // renewal that slipped past the revoke, a checkout that raced the admission):
+            // the plan is ended and the order refunded by the same job (5.1).
+            if (userId && (await billingRepository.getPooledFamily(userId))) {
+                log.error({
+                    message: 'A personal order was paid while its owner is in a family’s pool',
+                    billing: { user: userId, order: (event.data as { id?: string }).id },
+                });
+                await queuePlanEnding(userId, { force: true });
+            }
         }
         await billingRepository.markWebhookProcessed(id);
     }

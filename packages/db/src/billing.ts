@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
-import { poolUsage, takePoolLock } from './pool';
+import { memberUsage, poolUsage, pooledFamilyOf, takePoolLock } from './pool';
 
 export { shownPoolUsed, wholeGibUp } from './pool';
 import {
@@ -10,8 +10,11 @@ import {
     billingWebhookEvents,
     groupBillingCustomers,
     groupBillingSubscriptions,
+    groupMemberships,
     groupStorage,
     groups,
+    personalPlanEndings,
+    personalPlanRefunds,
     personalWorkspaces,
     storageEntitlements,
 } from './schema';
@@ -821,4 +824,225 @@ export async function getLastEndedGroupSubscription(groupId: string) {
         .orderBy(desc(groupBillingSubscriptions.endedAt))
         .limit(1);
     return row?.endedAt ? { productName: row.productName, endedAt: row.endedAt } : null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Ending a pooled member's personal plan (docs/families-shared-pool.md 5.1)  */
+/* ------------------------------------------------------------------------- */
+
+/* The family `userId`'s own files draw from now (pool.ts pooledFamilyOf), or null. */
+export async function getPooledFamily(userId: string) {
+    return pooledFamilyOf(db, userId);
+}
+
+/* Each active member's own stored bytes and the family folders' total, exact (pool.ts memberUsage). */
+export async function getMemberUsage(groupId: string) {
+    return memberUsage(db, groupId);
+}
+
+/*
+ * People whose own files draw from a family's live pool while the mirror still
+ * holds a live personal subscription of theirs: every one of them is owed the
+ * end of that plan. One family's, or every family's (the daily reconcile).
+ */
+export async function listPooledWithPersonalPlan(groupId?: string) {
+    const rows = await db
+        .selectDistinct({ userId: groupMemberships.userId })
+        .from(groupMemberships)
+        .innerJoin(groupStorage, eq(groupStorage.groupId, groupMemberships.groupId))
+        .innerJoin(billingSubscriptions, eq(billingSubscriptions.userId, groupMemberships.userId))
+        .where(
+            and(
+                groupId ? eq(groupMemberships.groupId, groupId) : undefined,
+                eq(groupMemberships.groupKind, 'family'),
+                eq(groupMemberships.state, 'active'),
+                sql`${groupStorage.expiresAt} > ${new Date().toISOString()}::timestamptz`,
+                isNull(billingSubscriptions.endedAt),
+                inArray(billingSubscriptions.status, [...LIVE_STATUSES]),
+            ),
+        );
+    return rows.map((row) => row.userId);
+}
+
+export type PlanEnding = typeof personalPlanEndings.$inferSelect;
+export type PlanRefund = typeof personalPlanRefunds.$inferSelect;
+
+/*
+ * The ending of one personal subscription, made the first time it is asked for. A
+ * later call never moves it to another membership; it only keeps the earliest time
+ * HushOS saw its owner pooled.
+ */
+export async function ensurePlanEnding(input: {
+    subscriptionId: string;
+    userId: string;
+    groupId: string;
+    admittedAt: Date;
+    pooledAt: Date;
+}) {
+    const [row] = await db
+        .insert(personalPlanEndings)
+        .values(input)
+        .onConflictDoUpdate({
+            target: personalPlanEndings.subscriptionId,
+            // A plan left alone because its owner left before it was revoked (`dropped`) is
+            // theirs until they are pooled again: then it is ended for the new membership.
+            set: {
+                groupId: sql`case when ${personalPlanEndings.outcome} = 'dropped' then excluded.group_id else ${personalPlanEndings.groupId} end`,
+                admittedAt: sql`case when ${personalPlanEndings.outcome} = 'dropped' then excluded.admitted_at else ${personalPlanEndings.admittedAt} end`,
+                pooledAt: sql`case when ${personalPlanEndings.outcome} = 'dropped' then excluded.pooled_at else least(${personalPlanEndings.pooledAt}, excluded.pooled_at) end`,
+                outcome: sql`case when ${personalPlanEndings.outcome} = 'dropped' then null else ${personalPlanEndings.outcome} end`,
+                updatedAt: new Date(),
+            },
+        })
+        .returning();
+    return row!;
+}
+
+/* Endings with work left for this person, oldest first. */
+export async function listOpenPlanEndings(userId: string) {
+    return db
+        .select()
+        .from(personalPlanEndings)
+        .where(and(eq(personalPlanEndings.userId, userId), isNull(personalPlanEndings.outcome)))
+        .orderBy(personalPlanEndings.createdAt);
+}
+
+/* People with an ending not yet settled: the daily reconcile queues each again. */
+export async function listUsersWithOpenPlanEndings() {
+    const rows = await db
+        .selectDistinct({ userId: personalPlanEndings.userId })
+        .from(personalPlanEndings)
+        .where(isNull(personalPlanEndings.outcome));
+    return rows.map((row) => row.userId);
+}
+
+/*
+ * Stores when Polar ended the plan and the period it was in, the first time only:
+ * a retry an hour later prorates from the same instant. Returns the row as stored.
+ */
+export async function recordPlanRevoked(
+    subscriptionId: string,
+    input: { revokedAt: Date; periodStart: Date; periodEnd: Date },
+) {
+    await db
+        .update(personalPlanEndings)
+        .set({ ...input, updatedAt: new Date() })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                isNull(personalPlanEndings.revokedAt),
+            ),
+        );
+    const [row] = await db
+        .select()
+        .from(personalPlanEndings)
+        .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+    return row!;
+}
+
+export async function closePlanEnding(
+    subscriptionId: string,
+    outcome: 'settled' | 'dropped' | 'ended',
+) {
+    await db
+        .update(personalPlanEndings)
+        .set({ outcome, updatedAt: new Date() })
+        .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+}
+
+export async function getPlanRefund(orderId: string) {
+    const [row] = await db
+        .select()
+        .from(personalPlanRefunds)
+        .where(eq(personalPlanRefunds.orderId, orderId));
+    return row ?? null;
+}
+
+/*
+ * Written before Polar is asked, with the key and amount, so the operators' list can
+ * name a refund that never lands. The amount is HushOS's latest computation; a row
+ * already settled keeps its status.
+ */
+export async function notePlanRefund(input: {
+    orderId: string;
+    subscriptionId: string;
+    refundKey: string;
+    amount: number;
+    currency: string;
+}) {
+    await db
+        .insert(personalPlanRefunds)
+        .values({ ...input, status: 'requested' })
+        .onConflictDoUpdate({
+            target: personalPlanRefunds.orderId,
+            set: { amount: input.amount, currency: input.currency, updatedAt: new Date() },
+        });
+}
+
+/*
+ * What Polar holds for the refund now: `pending` or `succeeded` clears the count of
+ * failures (and the Refunds owed listing); `none` for nothing to refund.
+ */
+export async function settlePlanRefund(
+    orderId: string,
+    input: { status: 'pending' | 'succeeded' | 'none'; providerRefundId?: string | null },
+) {
+    await db
+        .update(personalPlanRefunds)
+        .set({
+            status: input.status,
+            providerRefundId: input.providerRefundId ?? null,
+            failures: 0,
+            owedSince: null,
+            updatedAt: new Date(),
+        })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
+/*
+ * A try that failed (Polar refused, could not be reached, or its refund failed): one
+ * more in a row. At `owedAfter` in a row it is listed under Refunds owed, from then
+ * until it lands. Returns the count.
+ */
+export async function failPlanRefund(orderId: string, owedAfter: number) {
+    const now = new Date();
+    const [row] = await db
+        .update(personalPlanRefunds)
+        .set({
+            status: 'failed',
+            failures: sql`${personalPlanRefunds.failures} + 1`,
+            owedSince: sql`case when ${personalPlanRefunds.failures} + 1 >= ${owedAfter} then coalesce(${personalPlanRefunds.owedSince}, ${now.toISOString()}::timestamptz) else ${personalPlanRefunds.owedSince} end`,
+            updatedAt: now,
+        })
+        .where(eq(personalPlanRefunds.orderId, orderId))
+        .returning({ failures: personalPlanRefunds.failures });
+    return row?.failures ?? 0;
+}
+
+export async function listPlanRefunds(subscriptionId: string) {
+    return db
+        .select()
+        .from(personalPlanRefunds)
+        .where(eq(personalPlanRefunds.subscriptionId, subscriptionId));
+}
+
+/* Refunds HushOS has failed to make several times in a row: the operators' list. Ids only. */
+export async function listRefundsOwed() {
+    return db
+        .select({
+            orderId: personalPlanRefunds.orderId,
+            subscriptionId: personalPlanRefunds.subscriptionId,
+            userId: personalPlanEndings.userId,
+            amount: personalPlanRefunds.amount,
+            currency: personalPlanRefunds.currency,
+            failures: personalPlanRefunds.failures,
+            since: personalPlanRefunds.owedSince,
+        })
+        .from(personalPlanRefunds)
+        .innerJoin(
+            personalPlanEndings,
+            eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
+        )
+        .where(isNotNull(personalPlanRefunds.owedSince))
+        .orderBy(personalPlanRefunds.owedSince);
 }

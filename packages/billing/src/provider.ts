@@ -27,14 +27,23 @@ export const PROVIDER = 'polar';
 export type BillingUser = { id: string; name: string; email: string };
 const CATALOGUE_TTL_MS = 60_000;
 
+/*
+ * A refusal the pages tell apart without matching on its words: `in-family`, a
+ * personal plan asked for while the person's storage comes from a family's
+ * (docs/families-shared-pool.md 3.3).
+ */
+export type BillingErrorCode = 'in-family';
+
 export class BillingError extends Error {
+    readonly code: BillingErrorCode | undefined;
     constructor(
         message: string,
         readonly status: 400 | 401 | 402 | 403 | 404 | 409 | 429 | 503 = 400,
-        options?: { cause?: unknown },
+        options?: { cause?: unknown; code?: BillingErrorCode },
     ) {
         super(message, options);
         this.name = 'BillingError';
+        this.code = options?.code;
     }
 }
 

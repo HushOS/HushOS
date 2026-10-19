@@ -570,6 +570,50 @@ describe('admission with billing on', () => {
         expect((await groupsRepository.getGroupRow(fam.groupId))?.seatLimit).toBe(2);
         expect((await driveRepository.getStorage(fam.areaId))?.allowance).toBe(1024n ** 4n);
     });
+
+    test('a newcomer who pays for a personal plan has its end queued once they are let in, not before', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 2);
+        const newcomer = await kit.member();
+        const jobs: { userId: string; groupId: string }[] = [];
+        billing.setEndPersonalPlanQueue(async (job) => {
+            jobs.push(job);
+        });
+        try {
+            // Their own Pro, as HushOS's mirror of Polar holds it.
+            await billingRepository.applyCustomerState({
+                userId: newcomer.userId,
+                provider: 'polar',
+                customerId: 'cus_newcomer',
+                subscriptions: [
+                    {
+                        id: 'sub_newcomer',
+                        productId: 'pro',
+                        productName: 'Pro (monthly)',
+                        status: 'active',
+                        recurringInterval: 'month',
+                        amount: 1000,
+                        currency: 'usd',
+                        quotaBytes: 500n * 1024n ** 3n,
+                        currentPeriodEnd: new Date(Date.now() + 10 * DAY),
+                        cancelAtPeriodEnd: false,
+                        endedAt: null,
+                    },
+                ],
+                graceMs: 0,
+            });
+            const call = await admission(fam, newcomer);
+            // Accepted and waiting: not pooled, so nothing ends.
+            await billing.reconcileGroup(fam.groupId);
+            expect(jobs).toEqual([]);
+            await groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call);
+            expect(jobs).toEqual([
+                expect.objectContaining({ userId: newcomer.userId, groupId: fam.groupId }),
+            ]);
+        } finally {
+            billing.setEndPersonalPlanQueue(undefined);
+        }
+    });
 });
 
 /* A new family folder's call (route 21): its roster row, root, self-grant and the creator's grant. */
