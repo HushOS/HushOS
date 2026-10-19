@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { SearchIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { authClient } from '@/lib/auth-client';
-import { useAuthView, useSigningOutCover } from '@/lib/auth-view';
+import { useAuthView, useSigningOut } from '@/lib/auth-view';
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
 import { UserMenu } from '@/components/user-menu';
@@ -264,11 +264,26 @@ function AppLayout() {
 }
 
 /*
- * Signing out from the palette leaves no busy control on screen: the page dims and takes no
- * clicks while the device is cleared, then the sign-in page replaces it.
+ * While signing out the page takes no keys: a shortcut would act on what is leaving. Signing out
+ * from the palette or a Drive that didn't open leaves no busy control on screen, so the page also
+ * dims and takes no clicks until the sign-in page replaces it.
  */
 function SigningOutCover() {
-    if (!useSigningOutCover()) return null;
+    const { held, dim } = useSigningOut();
+    useEffect(() => {
+        if (!held) return;
+        const swallow = (event: KeyboardEvent) => {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        };
+        for (const type of ['keydown', 'keypress', 'keyup'] as const)
+            window.addEventListener(type, swallow, { capture: true });
+        return () => {
+            for (const type of ['keydown', 'keypress', 'keyup'] as const)
+                window.removeEventListener(type, swallow, { capture: true });
+        };
+    }, [held]);
+    if (!dim) return null;
     return (
         <div className="fixed inset-0 z-50 bg-scrim transition-opacity duration-150 starting:opacity-0">
             <output className="sr-only">Signing out</output>

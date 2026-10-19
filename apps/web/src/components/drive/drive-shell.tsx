@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { LockKeyholeIcon } from 'lucide-react';
 import { useRouter } from '@tanstack/react-router';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
@@ -165,12 +166,15 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     // The same query the runtime holds open: no second request, no second open.
     const opened = useQuery({ ...driveOpenQueryOptions(user.id), enabled: unlocked });
     const router = useRouter();
+    const [signOutFailed, setSignOutFailed] = useState(false);
     async function signOut() {
+        setSignOutFailed(false);
         try {
             await leaveApp(router, { dim: true });
         } catch {
-            // Locked here and still signed in: the screen now says so and offers unlock.
+            // Locked here and still signed in: the locked screen says so beside Unlock.
             cue('error');
+            setSignOutFailed(true);
         }
     }
 
@@ -187,6 +191,14 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                 <p className="mt-1.5 text-[15px] text-muted-foreground">
                     Enter your password to open your files on this browser.
                 </p>
+                {signOutFailed && (
+                    <Alert variant="destructive" className="mt-5 text-left">
+                        <AlertDescription>
+                            Signing out didn’t finish. Check your connection and try again from your
+                            account menu.
+                        </AlertDescription>
+                    </Alert>
+                )}
                 <UnlockDevice user={user} className="mt-5 w-full" />
             </Centered>
         );
@@ -201,6 +213,13 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                 <p className="mt-1.5 text-[15px] text-muted-foreground">
                     {driveError(opened.error)}
                 </p>
+                {signOutFailed && (
+                    <Alert variant="destructive" className="mt-5 text-left">
+                        <AlertDescription>
+                            Signing out didn’t finish. Check your connection and try again.
+                        </AlertDescription>
+                    </Alert>
+                )}
                 <div className="mt-5 flex gap-2">
                     <Button onClick={() => void opened.refetch()}>Try again</Button>
                     <Button variant="ghost" onClick={() => void signOut()}>

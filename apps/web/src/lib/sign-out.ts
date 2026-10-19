@@ -53,12 +53,17 @@ export async function signOut() {
     }
 }
 
+/* Past this, a sign-out that has not finished is said to have failed, and can be tried again. */
+export const SIGN_OUT_TIMEOUT_MS = 15_000;
+
 /*
  * Signing out from inside the app. The screen holds still while it works: the view is held
  * at what it showed, the device is wiped and locked under it, and the sign-in page replaces
- * it in one step. Only then go what the old page drew from: the open workspace, decrypted
- * thumbnails and previews, and the query cache. A failure lets the view go, so the screen
- * shows what is true (locked here, still signed in), and is thrown for the caller to say.
+ * it in one step. Then, with the page gone (or the navigation failed), go what it drew from:
+ * the open workspace, decrypted thumbnails and previews, and the query cache; and the device
+ * is wiped once more, since a pull the feed had on its way can have written the tree back
+ * before close() stopped it. A failed or stalled logout never leaves: the view goes, so the
+ * screen shows what is true (locked here, still signed in), and the failure is thrown.
  */
 export async function leaveApp(
     router: ReturnType<typeof useRouter>,
@@ -67,42 +72,44 @@ export async function leaveApp(
     const release = holdAuthView({ dim });
     const { queryClient } = router.options.context;
     try {
-        await signOut();
+        await withTimeout(signOut(), SIGN_OUT_TIMEOUT_MS);
         forgetSession(queryClient, false);
-        await router.navigate({ to: '/login' });
+        try {
+            await router.navigate({ to: '/login' });
+        } finally {
+            await forgetOpened();
+            queryClient.clear();
+        }
     } finally {
         release();
     }
-    try {
-        await forgetOpened();
-    } finally {
-        queryClient.clear();
-    }
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Signing out took too long.')), ms);
+    });
+    return Promise.race([work, stalled]).finally(() => clearTimeout(timer));
 }
 
 /*
- * What an unlocked Drive holds in memory beside the worker's keys, which the lock wiped. Every
- * part is let go whatever another does; the first failure is thrown once all have run.
+ * What an unlocked Drive holds in memory beside the worker's keys, which the lock wiped, then
+ * the device's copies again. Each part runs whatever another does, and failures are logged,
+ * not thrown: the person has already left, and the sign-in page is no place to say so.
  */
 async function forgetOpened() {
-    const [{ driveClient, closeSpaces }, { forgetThumbnails }, { forgetPreviews }] =
-        await Promise.all([
-            import('@/lib/drive'),
-            import('@/lib/thumbnails'),
-            import('@/lib/previews'),
-        ]);
-    const failures: unknown[] = [];
-    for (const forget of [
-        () => driveClient.close(),
-        closeSpaces,
-        forgetThumbnails,
-        forgetPreviews,
-    ]) {
-        try {
-            forget();
-        } catch (error) {
-            failures.push(error);
-        }
-    }
-    if (failures.length) throw failures[0];
+    const drive = import('@/lib/drive');
+    const parts = [
+        drive.then(({ driveClient }) => driveClient.close()),
+        drive.then(({ closeSpaces }) => closeSpaces()),
+        import('@/lib/thumbnails').then(({ forgetThumbnails }) => forgetThumbnails()),
+        import('@/lib/previews').then(({ forgetPreviews }) => forgetPreviews()),
+    ];
+    const results = await Promise.allSettled(parts);
+    // Only now that nothing open can pull the feed into it.
+    results.push(...(await Promise.allSettled([clearDevice()])));
+    for (const result of results)
+        if (result.status === 'rejected')
+            console.error('Part of signing out could not be cleared here.', result.reason);
 }

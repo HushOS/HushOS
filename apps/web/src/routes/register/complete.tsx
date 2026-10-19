@@ -113,6 +113,8 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
             } catch (cause) {
                 cue('error');
                 setError(authError(cause));
+            } finally {
+                // Unmounted by now, unless the navigation came back here.
                 setPending(false);
             }
         },

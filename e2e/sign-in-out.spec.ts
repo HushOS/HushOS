@@ -9,16 +9,20 @@ import { hydrated, landedOnHome, newFolder, newPage, PASSWORD, registerAccount }
  * since the bad state lasted only as long as a request.
  */
 
-type Frame = { path: string; email: string | null; rows: number; locked: boolean };
+type Frame = { app: boolean; email: string | null; rows: number; locked: boolean };
 
-/* Records, every frame, the path, the email field's value and the Drive rows on screen. */
+/*
+ * Records, every frame, whether the app is on screen (its account menu), the email field's
+ * value and the Drive rows. The app's own DOM, not the address: the router changes the address
+ * before the next page is drawn, and a redraw after that would otherwise go unseen.
+ */
 function watch(page: Page) {
     return page.evaluate(() => {
         const frames: Frame[] = [];
         (window as unknown as { __frames: typeof frames }).__frames = frames;
         const tick = () => {
             frames.push({
-                path: location.pathname,
+                app: document.querySelector('button[aria-label="Account menu"]') !== null,
                 email: document.querySelector<HTMLInputElement>('#email')?.value ?? null,
                 rows: document.querySelectorAll('[data-node-id]').length,
                 locked: document.body.innerText.includes('HushOS is locked here'),
@@ -46,9 +50,9 @@ test('signing out and back in never redraws the page being left', async ({ brows
     await page.getByRole('alertdialog').getByRole('button', { name: 'Sign out' }).click();
     await expect(page).toHaveURL(/\/login/, { timeout: 60_000 });
     await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
-    const leaving = (await frames(page)).filter((frame) => frame.path.startsWith('/app'));
+    const leaving = (await frames(page)).filter((frame) => frame.app);
     expect(leaving.length).toBeGreaterThan(0);
-    // Until the address changed, the folder stayed as it was: never locked, never emptied.
+    // As long as the app was on screen, the folder stayed as it was: never locked, never emptied.
     expect(leaving.filter((frame) => frame.locked || frame.rows !== 1)).toEqual([]);
 
     await page.waitForLoadState('networkidle');

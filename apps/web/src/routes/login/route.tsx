@@ -121,6 +121,9 @@ function LoginPage() {
             } catch (error) {
                 cue('error');
                 setError(authError(error, { signIn: true }));
+            } finally {
+                // Unmounted by now, unless the app sent this page back to itself (a session the
+                // browser did not keep): then the form, still filled in, can be used again.
                 setPending(false);
             }
         },

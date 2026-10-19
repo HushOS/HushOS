@@ -18,9 +18,8 @@
                 "no-restricted-properties": [
                     "error",
                     {
-                        "object": "authClient",
                         "property": "store",
-                        "message": "Draw auth state with useAuthView from lib/auth-view: a sign-out holds it, so the page being left never redraws as locked. For an action about to use keys, read unlockedNow()."
+                        "message": "No .store reads in components or routes, so the auth client's store is caught under any name. Draw auth state with useAuthView from lib/auth-view: a sign-out holds it, so the page being left never redraws as locked. For an action about to use keys, read unlockedNow()."
                     }
                 ]
             }

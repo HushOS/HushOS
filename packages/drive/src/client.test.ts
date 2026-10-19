@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { DriveApi, NodeView, ServedIdentity } from './api';
 import { createDriveClient, type Rpc, type SharingLedger } from './client';
+import type { TreeMirror } from './mirror';
 import { integrityIssues } from './trust';
 
 /*
@@ -937,5 +938,68 @@ describe('a lock in the middle of sealing again', () => {
         // The share to B never went through: g1 is still owed it, and so is the whole re-seal.
         expect(done).toEqual([]);
         expect(pendingAll).toBe(true);
+    });
+});
+
+/*
+ * Signing out clears the tree mirrored on this device, then closes the client. A pull of the
+ * feed already on its way (the app's poll, or the catalogue being built) must not write the
+ * tree back once the client is closed: the folder shape, sizes and times would outlive the
+ * sign-out on disk.
+ */
+describe('a pull of the feed on its way when the client closes', () => {
+    function mirrored() {
+        const applied: number[] = [];
+        let cursor = 0;
+        const mirror: TreeMirror = {
+            cursor: async () => cursor,
+            apply: async (_ws, _changes, next) => {
+                applied.push(next);
+                cursor = next;
+            },
+            rows: async () => [],
+            clear: async () => {
+                cursor = 0;
+            },
+            workspaces: async () => [],
+        };
+        return { mirror, applied };
+    }
+
+    test('writes nothing after close()', async () => {
+        const h = harness();
+        const { mirror, applied } = mirrored();
+        let answer!: (page: Awaited<ReturnType<DriveApi['changes']>>) => void;
+        const api = {
+            ...h.api,
+            changes: () => new Promise((resolve) => (answer = resolve)),
+        } as unknown as DriveApi;
+        const client = createDriveClient(h.rpc, api, { signers: async () => ({}), mirror });
+        const building = client.buildCatalogue(WS);
+        await expect.poll(() => answer).toBeDefined();
+        client.close();
+        answer({
+            changes: [{ kind: 'node', seq: 1, node: node(A, ROOT) }],
+            nextCursor: 1,
+            hasMore: false,
+        } as unknown as Awaited<ReturnType<DriveApi['changes']>>);
+        await building;
+        expect(applied).toEqual([]);
+    });
+
+    test('still writes when nothing closed it', async () => {
+        const h = harness();
+        const { mirror, applied } = mirrored();
+        const api = {
+            ...h.api,
+            changes: async () => ({
+                changes: [{ kind: 'node', seq: 1, node: node(A, ROOT) }],
+                nextCursor: 1,
+                hasMore: false,
+            }),
+        } as unknown as DriveApi;
+        const client = createDriveClient(h.rpc, api, { signers: async () => ({}), mirror });
+        await client.buildCatalogue(WS);
+        expect(applied).toEqual([1]);
     });
 });

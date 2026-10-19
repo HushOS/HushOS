@@ -22,9 +22,19 @@ export function useAuthView<T>(select: (state: AuthState) => T): T {
     return held ? select(held) : live;
 }
 
-/* Whether the app is dimmed while a sign-out that left no busy control on screen works. */
-export function useSigningOutCover() {
-    return useStore(view, (state) => state.held !== null && state.dim);
+/*
+ * Whether a sign-out is under way, and whether it dims the app (it left no busy control on
+ * screen). While one is, the page takes no keys: its shortcuts would act on what is leaving.
+ */
+export function useSigningOut() {
+    const held = useStore(view, (state) => state.held !== null);
+    const dim = useStore(view, (state) => state.dim);
+    return { held, dim: held && dim };
+}
+
+/* Whether a sign-out holds the view now: background work for the page stops polling. */
+export function isLeaving() {
+    return view.getState().held !== null;
 }
 
 /* Who is unlocked here this moment, for an action about to use keys: never held. */
