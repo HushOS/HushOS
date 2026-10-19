@@ -83,9 +83,10 @@ struct NodeMenu: View {
         let role = store.role(of: item)
         let mine = role == .owner
         let canEdit = role != .viewer
-        // A family folder, read only in this version: open it, send a copy, and Info. No Share or links, nothing that writes or keeps.
+        // A family folder's item: open it, send a copy, copy it, Info; while this device may write there, rename, move and
+        // trash too. Never Share, links, tags, Report, Keep, Save a copy or earlier versions (the web hides them there too).
         let family = store.isFamily(item)
-        if let select, !family {
+        if let select, !family || canEdit {
             Section { Button("Select", systemImage: "checkmark.circle", action: select) }
         }
         Section {
@@ -150,22 +151,20 @@ struct NodeMenu: View {
             }
             if !mine && !family { Button("Save a copy to my files", systemImage: "plus.square.on.square") { Task { await store.saveCopy(item) } } }
         }
-        if !family {
-            Section {
-                if canEdit {
-                    Button("Rename", systemImage: "pencil") { Rename.ask(item, store: store) }
-                    Button("Move", systemImage: "folder") { action = .move([item]) }
-                }
-                Button("Copy", systemImage: "doc.on.doc") {
-                    store.copy([item])
-                    // In a folder the paste bar says it; elsewhere (Home, Search) nothing would.
-                    if select == nil { store.notify("Copied “\(item.name)”. Open a folder to paste.") }
-                }
-                if mine { Button("Tags", systemImage: "tag") { action = .tags(item) } }
+        Section {
+            if canEdit {
+                Button("Rename", systemImage: "pencil") { Rename.ask(item, store: store) }
+                Button("Move", systemImage: "folder") { action = .move([item]) }
             }
+            Button("Copy", systemImage: "doc.on.doc") {
+                store.copy([item])
+                // In a folder the paste bar says it; elsewhere (Home, Search) nothing would.
+                if select == nil { store.notify("Copied “\(item.name)”. Open a folder to paste.") }
+            }
+            if mine { Button("Tags", systemImage: "tag") { action = .tags(item) } }
         }
         Section {
-            if !item.isFolder && canEdit { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }
+            if !item.isFolder && canEdit && !family { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }
             Button("Info", systemImage: "info.circle") { action = .info(item) }
         }
         if !mine && !family {

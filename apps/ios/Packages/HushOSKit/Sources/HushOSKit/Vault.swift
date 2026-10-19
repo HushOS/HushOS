@@ -127,11 +127,13 @@ public actor Vault {
     /*
      * The family write rules and keys (the core's `AreaLedger`, one per unlocked session in this
      * process): every family folder node opens through it, so a family folder is read only under
-     * a member list the core accepted (FamilySync). This app version writes nothing there.
+     * a member list the core accepted (FamilySync), and every write there takes its keys from it.
      */
     public nonisolated let areaLedger = AreaLedger()
     /* Every family folder route 25 named this session, lowercased: refused by the personal key path whatever the ledger holds. */
     var familyWorkspaces: Set<String> = []
+    /* The family's sync, for the forms family records are signed again with (weak: it holds this vault). */
+    weak var familyJudge: (any FamilyJudge)?
 
     public init(api: DriveAPI, session: SharedKeychain.Session) {
         self.api = api
@@ -404,10 +406,13 @@ public actor Vault {
      */
     @discardableResult
     public func open(_ node: NodeView) throws -> Opened {
-        if let done = opened[node.ref] { return done }
+        let family = areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased())
+        // A family folder row served differently (a walk re-keyed it, its root moved to the next key) opens through the ledger
+        // again, so what the ledger holds of its path is what the server serves now, never what this process saw first.
+        if let done = opened[node.ref], !family || done.node == node { return done }
         try node.checkEnvelopeSuite()
         let key: Data
-        if areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased()) {
+        if family {
             // A family shown differently or refused since: the ledger holds its keys back until it is accepted again.
             key = try areaLedger.openListedNode(workspaceId: node.workspaceId, node: node.servedKey())
         } else {

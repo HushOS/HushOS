@@ -220,10 +220,14 @@ final class DriveStore {
         }
         var why: String?
         let ok = await perform(in: upload.folder, failed: { why = $0 }) {
-            _ = try await vault.upload(
-                fileURL: upload.url, name: upload.name, mime: upload.mime, in: upload.folder, replacing: upload.replacing,
-                thumbnail: Thumbnails.make(for: upload.url, mime: upload.mime)
-            ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+            do {
+                _ = try await vault.upload(
+                    fileURL: upload.url, name: upload.name, mime: upload.mime, in: upload.folder, replacing: upload.replacing,
+                    thumbnail: Thumbnails.make(for: upload.url, mime: upload.mime)
+                ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+            } catch is UploadLanded {
+                // On the server; only its row couldn't be looked up. Done, never a failure offering to send it again.
+            }
         }
         finish(ticket, failed: !ok, message: why)
         if ok {
@@ -426,8 +430,8 @@ final class DriveStore {
     /* Whose an item is and what this account may do with it: its own, or someone else's it can edit or only view. */
     enum Role { case owner, editor, viewer }
     func role(of item: Opened) -> Role {
-        // Family folders are read only in this version: their writes go through the area ledger (iOS 2).
-        if isFamily(item) { return .viewer }
+        // A family folder's item is never anyone's own (no Share, links or tags); it is changed only while this device may write there.
+        if isFamily(item) { return familyWritable(item) ? .editor : .viewer }
         if isOwn(item) { return .owner }
         // Shares are per workspace in practice; the widest one this account holds there decides.
         let roles = mounts.filter { $0.share.workspaceId == item.node.workspaceId }.map(\.share.role)
@@ -789,23 +793,27 @@ final class DriveStore {
         let cut = clip.cut
         // What is already here stays as it is; only the rest comes over.
         let items = clip.items.filter { $0.node.parentId != folder }
-        for (index, item) in items.enumerated() {
-            let targetWorkspace = (try? await vault.workspaceId(of: folder)) ?? item.node.workspaceId
-            if cut && targetWorkspace == item.node.workspaceId {
+        for item in items {
+            let across = (try? await vault.movesAcross(item.id, to: folder)) ?? false
+            if cut && !across {
                 await move(item, to: folder)
             } else {
-                _ = index
                 let ticket = begin(.copy, item.name)
                 var why: String?
-                if targetWorkspace == item.node.workspaceId {
+                if !across {
                     let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copy(item.id, to: folder) }
                     finish(ticket, failed: !ok, message: why)
+                } else if cut {
+                    // Across spaces (a family folder, someone's share, one's own files) the object is fetched and uploaded again,
+                    // then the original goes to the Trash; the server moves and copies within one workspace only.
+                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.relocate(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                    finish(ticket, failed: !ok, message: why)
+                    recents.removeAll { $0.id == item.id }
                 } else {
-                    // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                    // Signed by what the original verified as: someone's share is vouched for only from a checked contact.
+                    // Signed by what the original verified as: someone's share is vouched for only from a checked contact, a family
+                    // folder's file only as its member list judges it.
                     let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                     finish(ticket, failed: !ok, message: why)
-                    if ok && cut { await trash(item) }
                 }
             }
         }
@@ -1149,20 +1157,24 @@ final class DriveStore {
      * when every move stayed inside one drive.
      */
     func move(_ items: [Opened], to folder: String, named folderName: String) async {
-        let targetWorkspace = (try? await vault.workspaceId(of: folder)) ?? myWorkspace
         var moved: [Opened] = []
         var across = false
         for item in items where item.node.parentId != folder {
-            if targetWorkspace == nil || targetWorkspace == item.node.workspaceId {
+            if !((try? await vault.movesAcross(item.id, to: folder)) ?? false) {
                 let ok = await perform(in: item.node.parentId) { _ = try await vault.move(item.id, to: folder) }
                 if ok { moved.append(item) }
             } else {
+                // Across spaces (a family folder and one's own files, either way, or someone's share): uploaded again, original trashed.
                 across = true
                 let ticket = begin(.copy, item.name)
                 var why: String?
-                let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.relocate(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                 finish(ticket, failed: !ok, message: why)
-                if ok, await perform(in: item.node.parentId, { try await vault.trash(item.id) }) { moved.append(item) }
+                if ok {
+                    moved.append(item)
+                    recents.removeAll { $0.id == item.id }
+                    if let from = item.node.parentId { await refresh(folder: from) }
+                }
             }
         }
         await refresh(folder: folder)
@@ -1457,6 +1469,14 @@ final class DriveStore {
         defer { releaseBackground() }
         for item in items {
             let mime = item.file.type?.preferredMIMEType
+            // A family folder's uploads go through the queue too: sealed with the area ledger's keys, and a key change
+            // the folder hasn't reached yet is waited out there ("Finishing a key change…"), not failed.
+            if let groupId = familyGroup(ofFolder: folder), let workspace = (try? await vault.workspaceId(of: folder)), familyFolderWritable(folder) {
+                BackgroundTransfers.shared.upload(fileURL: item.file.url, name: item.name, mime: mime, folderId: folder, replacingId: item.replacing?.id,
+                                                  family: .init(groupId: groupId, workspaceId: workspace),
+                                                  replacingVersionId: item.replacing?.node.currentVersion?.id)
+                continue
+            }
             if await ownDrive(folder) {
                 // Where Save to HushOS and the quick actions add next.
                 Places.used(folder, name: folder == rootId ? "Files" : known(folder)?.name ?? "Files")
@@ -1538,7 +1558,8 @@ final class DriveStore {
             if endsSession(error) { self.error = Self.sessionEnded; break error_ }
             // No network: say so at the top rather than interrupting; kept files still open.
             if case DriveAPIError.transport = error { offline = true; break error_ }
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            // The core's own sentence (a family folder's write rules among them), never its type's description.
+            let message = FamilyWords.core(error) ?? (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             // The same failure from every list and every sync would put the alert back the moment
             // it is dismissed and lock the person out of the app (Account, Sign out): once a minute is enough.
             if let last = lastReported, last.message == message, Date().timeIntervalSince(last.at) < 60 { break error_ }

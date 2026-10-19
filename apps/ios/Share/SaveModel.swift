@@ -242,7 +242,10 @@ final class SaveModel {
         while !open.isEmpty, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(300))
             for note in open where uploads.landed(note.id).count == note.sealed.partCount {
-                if (try? await vault.finishUpload(note.sealed, etags: uploads.landed(note.id))) != nil {
+                // Landed even when its row doesn't open in this process (UploadLanded): finished either way.
+                let finished: Bool
+                do { _ = try await vault.finishUpload(note.sealed, etags: uploads.landed(note.id)); finished = true } catch is UploadLanded { finished = true } catch { finished = false }
+                if finished {
                     try? FileManager.default.removeItem(at: ShareHandoff.directory(note.id))
                     open.removeAll { $0.id == note.id }
                 }

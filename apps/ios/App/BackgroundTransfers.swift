@@ -19,6 +19,16 @@ import UIKit
  * offline cannot be sealed yet (the server allocates its node), so it waits for
  * the app to run with a network: in the foreground, or when iOS grants the
  * background task below. Once sealed, iOS's own session waits for a network.
+ *
+ * An upload into a family folder is sealed with the area ledger's keys (the family checked in
+ * this process first, which a background launch does from its device record). A key change the
+ * folder hasn't reached yet (the ledger's KEY_CHANGE_PENDING, the server's 409 `rotating`) is a
+ * wait, not a failure: the row says "Finishing a key change…" and the upload is looked up and
+ * sealed again (5 s, doubling to a minute), in a task of its own so the rest of the queue keeps
+ * moving, until it goes or half an hour from when it began waiting (kept in the record) has
+ * passed. Its plaintext stays until it lands: a key change that reaches the folder while the
+ * parts are in flight makes the server refuse the completion, and the upload is sealed afresh
+ * from the file, waiting as before, rather than lost.
  */
 @MainActor
 @Observable
@@ -57,6 +67,14 @@ final class BackgroundTransfers {
         var groupName: String?
         /* Whose transfer it is: it runs only while that account is signed in, and is dropped once another is (TransferOwnership). */
         var owner: AccountOwner?
+        /* An upload into a family folder: which family and folder, and since when it has waited out a key change there. */
+        typealias Family = FamilyUpload.Family
+        var family: Family?
+        var keyChangeSince: Date?
+        /* The version a replacement set out to replace, as queued: someone else's newer one is never overwritten. */
+        var replacingVersionId: String?
+        /* A family replacement that went live whose name record is still to be signed again (FamilyUploads). */
+        var published: Vault.Published?
 
         var total: Int { sealed?.partCount ?? plan?.chunkCount ?? 0 }
         var landed: Int { kind == .upload ? etags.count : fetched.count }
@@ -85,11 +103,12 @@ final class BackgroundTransfers {
     private var pumpAgain = false
     private var retryScheduled = false
     private var networkToken: UUID?
+    /* Family uploads being sealed (or waiting out a key change) in a task of their own, a few at a time. */
+    private var sealing: [UUID: Task<Void, Never>] = [:]
+    private static let sealingAtOnce = 2
 
     private init() {
-        let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
-            ?? FileManager.default.temporaryDirectory
-        root = group.appendingPathComponent("transfers", isDirectory: true)
+        root = Unbacked.transfers
         // Plaintext waiting to be sealed and the records naming it: on this phone only, never in a backup.
         Unbacked.folder(root)
         relay.root = root
@@ -135,15 +154,20 @@ final class BackgroundTransfers {
     // MARK: - Queueing
 
     /* Queues a file for upload into `folderId`; the file is copied into the queue, so the picker's copy can go. */
-    func upload(fileURL: URL, name: String, mime: String?, folderId: String, replacingId: String?) {
+    func upload(fileURL: URL, name: String, mime: String?, folderId: String, replacingId: String?, family: Record.Family? = nil,
+                replacingVersionId: String? = nil) {
         var record = Record(id: UUID(), kind: .upload, name: name, folderId: folderId, mime: mime, replacingId: replacingId)
         record.owner = AccountOwner.signedIn
+        record.family = family
+        record.replacingVersionId = replacingVersionId
         let directory = folder(record.id)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let content = directory.appendingPathComponent("content")
         if (try? FileManager.default.moveItem(at: fileURL, to: content)) == nil {
             try? FileManager.default.copyItem(at: fileURL, to: content)
         }
+        // A moved file keeps the class it was made with: the plaintext takes the queue folder's.
+        Unbacked.protectFile(content)
         records.append(record)
         update(record.id) { $0.size = (try? FileManager.default.attributesOfItem(atPath: content.path)[.size] as? Int64) ?? nil }
         save()
@@ -210,9 +234,13 @@ final class BackgroundTransfers {
     /* Stops a transfer: its tasks go, an upload the server began is aborted, its files are removed. */
     func cancel(_ id: UUID) async {
         guard let record = records.first(where: { $0.id == id }) else { return }
+        sealing.removeValue(forKey: id)?.cancel()
         for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
         // Aborted only under the session of the account that began it; another account's session never names its upload.
-        if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
+        if let upload = record.familyUpload, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
+            // HushOSKit's discard: the server's half aborted, the folder (the plaintext included) removed.
+            await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault)).discard(upload, in: folder(id))
+        } else if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
             await vault.abortUpload(sealed)
         }
         try? FileManager.default.removeItem(at: folder(id))
@@ -289,6 +317,10 @@ final class BackgroundTransfers {
                 switch (record.kind, record.state) {
                 case (.upload, .waiting):
                     guard NetworkWatch.shared.online else { continue }
+                    if record.family != nil {
+                        sealFamily(record, vault)
+                        continue
+                    }
                     try await seal(record, vault)
                 case (.keep, .waiting):
                     guard NetworkWatch.shared.online else { continue }
@@ -298,6 +330,10 @@ final class BackgroundTransfers {
                     start(id, skipping: running)
                 case (.upload, .finishing):
                     guard let sealed = record.sealed else { continue }
+                    if record.family != nil {
+                        finishFamily(record, vault)
+                        continue
+                    }
                     _ = try await vault.finishUpload(sealed, etags: record.etags)
                     land(id)
                 case (.keep, .finishing):
@@ -307,12 +343,19 @@ final class BackgroundTransfers {
                 default:
                     continue
                 }
+            } catch is UploadLanded {
+                // The server completed it; only its row didn't open in this process.
+                land(id)
             } catch {
                 fail(id, error)
             }
         }
         save()
-        // Something could not start for a reason that passes (the server or its storage down): look again shortly.
+        scheduleRetry()
+    }
+
+    /* Something could not start for a reason that passes (the server or its storage down): look again shortly. */
+    private func scheduleRetry() {
         if records.contains(where: { ($0.state == .waiting || $0.state == .finishing) && $0.failures > 0 }), !retryScheduled {
             retryScheduled = true
             Task {
@@ -336,6 +379,80 @@ final class BackgroundTransfers {
         try? FileManager.default.removeItem(at: content)
         update(record.id) { $0.sealed = sealed; $0.state = .sending }
         start(record.id, skipping: [])
+    }
+
+    /*
+     * A family folder's upload, sealed or finished off the pass, a couple at a time: every
+     * decision (the family opened in this process, the key-change wait, what a completion's answer
+     * means) is HushOSKit's `FamilyUploads`; this only applies its step to the record and the
+     * session. A record cancelled meanwhile has its begun upload aborted.
+     */
+    private func sealFamily(_ record: Record, _ vault: Vault) {
+        guard var upload = record.familyUpload, sealing[record.id] == nil, sealing.count < Self.sealingAtOnce else { return }
+        let id = record.id
+        let directory = folder(id)
+        sealing[id] = Task { @MainActor in
+            defer { sealing[id] = nil }
+            let thumbnail = Thumbnails.make(for: FamilyUpload.content(in: directory), mime: upload.mime)
+            let step = await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault))
+                .seal(&upload, in: directory, thumbnail: thumbnail) { began in
+                    Task { @MainActor in
+                        guard BackgroundTransfers.shared.record(id)?.keyChangeSince == nil else { return }
+                        BackgroundTransfers.shared.update(id) { $0.keyChangeSince = began }
+                        BackgroundTransfers.shared.save()
+                    }
+                }
+            guard self.record(id) != nil, !Task.isCancelled else {
+                if let sealed = upload.sealed { await vault.abortUpload(sealed) }
+                return
+            }
+            apply(step, upload, to: id)
+            // A slot is free: the next family upload waiting for one goes.
+            Task { await BackgroundTransfers.shared.pump() }
+        }
+    }
+
+    /* A family upload's completion, from the stored record (after a background launch too). */
+    private func finishFamily(_ record: Record, _ vault: Vault) {
+        guard var upload = record.familyUpload, sealing[record.id] == nil else { return }
+        let id = record.id
+        let directory = folder(id)
+        sealing[id] = Task { @MainActor in
+            defer { sealing[id] = nil }
+            let step = await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault)).finish(&upload, in: directory)
+            guard self.record(id) != nil, !Task.isCancelled else { return }
+            apply(step, upload, to: id)
+        }
+    }
+
+    /* What a family upload's step means for its row and its parts. */
+    private func apply(_ step: FamilyUploadStep, _ upload: FamilyUpload, to id: UUID) {
+        update(id) { $0.take(upload) }
+        switch step {
+        case .send:
+            update(id) { $0.state = .sending; $0.expired = []; $0.failures = 0 }
+            save()
+            start(id, skipping: [])
+        case .landed:
+            land(id)
+        case .reseal:
+            // Sealed again from the kept file, waiting out the key change as before; none of the old parts goes (their
+            // tasks are stopped, and a late callback names the old upload, so its ETag is dropped).
+            update(id) { $0.state = .waiting; $0.expired = []; $0.failures = 0 }
+            save()
+            Task {
+                for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
+                await pump()
+            }
+        case .retry:
+            // Nothing changed (no answer, or a landed version's name still to sign): the row stays as it is, looked at again.
+            update(id) { $0.failures += 1 }
+            save()
+            scheduleRetry()
+        case .failed(let error):
+            fail(id, error)
+            save()
+        }
     }
 
     private func plan(_ record: Record, _ vault: Vault) async throws {
@@ -362,8 +479,9 @@ final class BackgroundTransfers {
         guard let record = records.first(where: { $0.id == id }), runnable(record) else { return }
         let directory = folder(id)
         for piece in 0 ..< record.total {
-            let description = "\(id.uuidString)|\(piece)"
-            if running.contains(description) { continue }
+            // An upload's parts name the server's upload too: a part of an upload since sealed again is told apart.
+            let description = Self.describe(id, piece, upload: record.sealed?.uploadId)
+            if running.contains(description) || running.contains("\(id.uuidString)|\(piece)") { continue }
             let task: URLSessionTask
             if let sealed = record.sealed {
                 let part = piece + 1
@@ -396,6 +514,8 @@ final class BackgroundTransfers {
         if let (id, _) = Self.parse(description), !records.contains(where: { $0.id == id }) { adoptHandoffs(force: id) }
         guard let (id, piece) = Self.parse(description), let record = records.first(where: { $0.id == id }) else { return }
         inFlight[id]?[piece] = nil
+        // A part of an upload this record no longer is (aborted and sealed again): its ETag belongs to no upload here.
+        if let upload = Self.upload(in: description), upload != record.sealed?.uploadId { return }
         if record.kind == .upload {
             let part = piece + 1
             if !failed, (200 ..< 300).contains(status), let etag {
@@ -545,6 +665,8 @@ final class BackgroundTransfers {
 
     private func land(_ id: UUID) {
         update(id) { $0.state = .done }
+        // Saved at once: a background launch is suspended soon after, and a record left `finishing` would be finished again.
+        save()
         if let record = record(id) { ended(record, reason: nil) }
         try? FileManager.default.removeItem(at: folder(id))
         onLanded?()
@@ -602,7 +724,7 @@ final class BackgroundTransfers {
     func retry(_ id: UUID) {
         guard let record = records.first(where: { $0.id == id }), canRetry(record) else { return }
         update(id) {
-            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil
+            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil; $0.keyChangeSince = nil; $0.published = nil
         }
         save()
         Task { await pump() }
@@ -635,10 +757,38 @@ final class BackgroundTransfers {
         return vault
     }
 
+    /* `<record>|<piece>`, and for an upload's part `|<server upload id>` after it (Save to HushOS's parts name only the first two). */
+    nonisolated static func describe(_ id: UUID, _ piece: Int, upload: String?) -> String {
+        upload.map { "\(id.uuidString)|\(piece)|\($0)" } ?? "\(id.uuidString)|\(piece)"
+    }
+
     nonisolated static func parse(_ description: String) -> (UUID, Int)? {
         let parts = description.split(separator: "|")
-        guard parts.count == 2, let id = UUID(uuidString: String(parts[0])), let piece = Int(parts[1]) else { return nil }
+        guard parts.count == 2 || parts.count == 3, let id = UUID(uuidString: String(parts[0])), let piece = Int(parts[1]) else { return nil }
         return (id, piece)
+    }
+
+    nonisolated static func upload(in description: String) -> String? {
+        let parts = description.split(separator: "|")
+        return parts.count == 3 ? String(parts[2]) : nil
+    }
+
+    /*
+     * This account is not in the family any more (its sync wiped it): every upload queued into the
+     * family's folders fails at once, its tasks stopped and its folder, plaintext included, removed.
+     * The server's half is left: it refuses a member it no longer has, and its expiry releases it.
+     */
+    func endFamily(_ groupId: String) {
+        let gone = records.filter { $0.family?.groupId.lowercased() == groupId.lowercased() && [.waiting, .sending, .finishing].contains($0.state) }
+        guard !gone.isEmpty else { return }
+        for record in gone {
+            sealing.removeValue(forKey: record.id)?.cancel()
+            inFlight[record.id] = nil
+            update(record.id) { $0.state = .failed; $0.message = FamilyWords.notInFamily; $0.sealed = nil; $0.etags = [:] }
+            drop(record.id)
+            if let current = self.record(record.id) { ended(current, reason: FamilyWords.notInFamily) }
+        }
+        save()
     }
 }
 
@@ -690,5 +840,21 @@ private final class SessionRelay: NSObject, URLSessionDataDelegate, URLSessionDo
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         let identifier = session.configuration.identifier
         Task { @MainActor in BackgroundTransfers.shared.sessionEventsDone(identifier) }
+    }
+}
+
+/* The queue's record as HushOSKit's family upload, and back. */
+extension BackgroundTransfers.Record {
+    var familyUpload: FamilyUpload? {
+        guard let family, let folderId else { return nil }
+        return FamilyUpload(family: family, folderId: folderId, name: name, mime: mime, replacingId: replacingId, replacingVersionId: replacingVersionId,
+                            sealed: sealed, etags: etags, keyChangeSince: keyChangeSince, published: published)
+    }
+
+    mutating func take(_ upload: FamilyUpload) {
+        sealed = upload.sealed
+        etags = upload.etags
+        keyChangeSince = upload.keyChangeSince
+        published = upload.published
     }
 }

@@ -92,8 +92,10 @@ struct FolderView: View {
 
     private var selectedItems: [Opened] { children.filter { selection.contains($0.id) } }
 
-    /* A family folder: read only in this version, so nothing here adds, pastes or selects for changes. */
-    private var readOnly: Bool { store.isFamilyFolder(folderId) }
+    /* A family folder, which checks its family again while it is on screen. */
+    private var family: Bool { store.isFamilyFolder(folderId) }
+    /* A family folder this device may not write in now (its keys not checked at the latest version): nothing here adds, pastes or selects for changes. */
+    private var readOnly: Bool { family && !store.familyFolderWritable(folderId) }
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -235,14 +237,14 @@ struct FolderView: View {
         }
         .task {
             // A family folder checks its family again while browsing when the last check is a few minutes old.
-            if readOnly { await store.refreshFamilyIfStale(folder: folderId, maxAge: 180) }
+            if family { await store.refreshFamilyIfStale(folder: folderId, maxAge: 180) }
             if store.folders[folderId] == nil { await store.refresh(folder: folderId) }
             if store.tags.tags.isEmpty { await store.refreshTags() }
             loaded = true
         }
         // Back in the foreground, a family folder checks its family again (at most once a minute).
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, readOnly else { return }
+            guard phase == .active, family else { return }
             Task { await store.refreshFamilyIfStale(folder: folderId, maxAge: 60) }
         }
         // Rows dropped from under an open folder (a sign-in, a failed change) load again rather than leave a skeleton.
@@ -575,9 +577,12 @@ private struct SelectBar: View {
     @Binding var moving: Bool
     let done: () -> Void
 
+    /* A family folder's items are never shared or tagged (the web hides both there). */
+    private var family: Bool { items.contains { store.isFamily($0) } }
+
     var body: some View {
         HStack(spacing: 0) {
-            slot("Share", "person.badge.plus", disabled: items.count != 1) {
+            slot("Share", "person.badge.plus", disabled: items.count != 1 || family) {
                 if let item = items.first { action = .share(item) }
                 done()
             }
@@ -594,7 +599,7 @@ private struct SelectBar: View {
                 Button("Rename", systemImage: "pencil") { if let one { Rename.ask(one, store: store) }; done() }
                     .disabled(one == nil)
                 Button("Tags", systemImage: "tag") { if let one { action = .tags(one) }; done() }
-                    .disabled(one == nil)
+                    .disabled(one == nil || family)
             } label: {
                 label("More", "ellipsis")
             }

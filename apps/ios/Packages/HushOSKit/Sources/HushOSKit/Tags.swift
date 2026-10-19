@@ -200,6 +200,8 @@ extension Vault {
                 return registry
             } catch DriveAPIError.server(409, _) where attempt == 0 {
                 attempt += 1
+            } catch DriveAPIError.stale where attempt == 0 {
+                attempt += 1
             }
         }
     }

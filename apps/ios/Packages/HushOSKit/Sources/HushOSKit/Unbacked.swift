@@ -23,6 +23,9 @@ public enum Unbacked {
     /* Loose files that once sat at the top of the group, unmarked after any atomic write; moved into `local` once. */
     static let looseFiles = ["files-parents.json", "account-owner", "mirror.sqlite", "mirror.sqlite-wal", "mirror.sqlite-shm"]
 
+    /* The upload and keep queue's folder: its records, each upload's plaintext and sealed parts, each keep's chunks. */
+    public static var transfers: URL { group.appendingPathComponent("transfers", isDirectory: true) }
+
     /* The lists the app and its extensions share, as JSON: the group's defaults are a plist that backups take. */
     static var state: URL { group.appendingPathComponent("state", isDirectory: true) }
 
@@ -54,6 +57,12 @@ public enum Unbacked {
      * unreadable from boot until the first unlock, and readable after it.
      */
     public static let protection = FileProtectionType.completeUntilFirstUserAuthentication
+
+    /*
+     * A file moved into one of these folders keeps the class it was made with (a move carries its
+     * attributes): the queue's plaintext, moved in from a picker's copy, is given the folder's class.
+     */
+    public static func protectFile(_ url: URL) { protect(url) }
 
     /* Sets the class on one item; files made in a folder later take the folder's class. */
     static func protect(_ url: URL) {
