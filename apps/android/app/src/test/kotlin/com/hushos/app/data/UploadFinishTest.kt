@@ -62,12 +62,23 @@ class UploadFinishTest {
         assertEquals(listOf(1_000L, 2_000L, 4_000L), server.waits)
     }
 
+    /*
+     * A conflict (the file changed while it uploaded, say after a key replacement) keeps the bytes reserved "for attach
+     * or abort", and Android never attaches: unaborted, the retry was refused as out of room for a day.
+     */
     @Test
-    fun answersThatLeaveNothingToAbortAreNotAborted() {
-        // Gone, or already settled by the server (cancelled, expired, a conflict whose room it released).
-        for (answer in listOf(ApiError(404, "This upload no longer exists."), ApiError(409, "This file changed while it was uploading."))) {
-            val server = Server(answer)
-            failsWith(server)
+    fun aConflictedUploadIsAbortedSoTheRetryHasRoom() {
+        val server = Server(ApiError(409, "This file changed while it was uploading."))
+        failsWith(server)
+        assertEquals(1, server.aborts)
+        assertEquals(1, server.completes)
+    }
+
+    @Test
+    fun aTimeoutOrTooManyRequestsIsNeverTakenAsDefinite() {
+        for (answer in listOf(ApiError(408, "Request timeout"), ApiError(429, "Too many requests"), ApiError(500, "Internal"))) {
+            val server = Server(answer, "node")
+            assertEquals("node", server.finish())
             assertEquals("aborted after ${answer.status}", 0, server.aborts)
         }
     }
