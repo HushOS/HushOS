@@ -30,6 +30,7 @@ import {
     ensureGroupSeat,
     familyHasPlan,
     paysForGroup,
+    queuePlanEnding,
     type SeatResult,
 } from '@hushos/billing/server';
 import { authRepository, groupsRepository, madeFor } from '@hushos/db';
@@ -1995,7 +1996,7 @@ export async function admit(
     await membershipOf(groupId, userId, 'members');
     if (await groupsRepository.waitingButInFamily(groupId, targetId)) throw newcomerInFamily();
     if (!(await groupsRepository.admissionFitsNow(groupId, targetId))) throw poolFull();
-    return writeChain(
+    const answer = await writeChain(
         groupId,
         userId,
         { ...call, seals: call.keySeal ? [call.keySeal, ...(call.seals ?? [])] : call.seals },
@@ -2014,6 +2015,11 @@ export async function admit(
             },
         },
     );
+    // Once committed: a newcomer pooled with a personal plan of their own has it ended, the
+    // unused days refunded (docs/families-shared-pool.md 5.1). Queued only; never fails the
+    // admission, and the daily reconcile catches one that couldn't be queued.
+    if (billingEnabled()) await queuePlanEnding(targetId);
+    return answer;
 }
 
 /* Route 18: a member's roles; taking `members` carries the succession, seals and rotations. */

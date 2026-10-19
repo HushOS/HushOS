@@ -5,6 +5,7 @@ import { OperatorPage, OperatorTable, td, th } from '@/components/operator';
 import { buttonVariants } from '@/components/ui/button';
 import { adminOverviewQueryOptions } from '@/lib/admin';
 import { formatBytes, formatWhen } from '@/lib/drive';
+import { formatMoney } from '@/lib/format';
 import { useBillingEnabled } from '@/lib/queries';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
@@ -184,6 +185,12 @@ function AdminPage() {
                                 anchor: '#stuck-plan-changes',
                             },
                             {
+                                label: 'Refunds owed',
+                                value: count(data.refundsOwed.length),
+                                tone: data.refundsOwed.length > 0 ? 'danger' : undefined,
+                                anchor: '#refunds-owed',
+                            },
+                            {
                                 label: 'On hold',
                                 value: count(data.reports.held),
                                 to: { to: '/app/admin/reports', search: { status: 'held' } },
@@ -291,6 +298,90 @@ function AdminPage() {
                                 HushOS can’t make these plan changes itself. Set the change on the
                                 subscription in Polar’s dashboard; the row goes once the plan is as
                                 it should be.
+                            </p>
+                        </>
+                    )}
+                    {data.refundsOwed.length > 0 && (
+                        <>
+                            <h2
+                                id="refunds-owed"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Refunds owed
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Polar order</th>
+                                        <th className={th}>Account</th>
+                                        <th className={cn(th, 'text-right')}>Before tax</th>
+                                        <th className={cn(th, 'text-right')}>Failed tries</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.refundsOwed.map((row) => (
+                                        <tr key={row.orderId} className="hover:bg-muted">
+                                            <td className={td}>{row.orderId}</td>
+                                            <td className={td}>{row.userId}</td>
+                                            <td className={cn(td, 'text-right tabular-nums')}>
+                                                {formatMoney(row.amount, row.currency)}
+                                            </td>
+                                            <td className={cn(td, 'text-right tabular-nums')}>
+                                                {count(row.failures)}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                The unused part of a personal plan that ended when its owner’s files
+                                joined a family. HushOS keeps trying; to settle one now, refund the
+                                order in Polar’s dashboard for the amount shown (Polar adds the
+                                tax), and the row goes at the next try.
+                            </p>
+                        </>
+                    )}
+                    {data.unrefundable.length > 0 && (
+                        <>
+                            <h2
+                                id="unrefundable"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Not refundable through Polar
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Account</th>
+                                        <th className={cn(th, 'text-right')}>Before tax</th>
+                                        <th className={th}>Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.unrefundable.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.subscriptionId}</td>
+                                            <td className={td}>{row.userId}</td>
+                                            <td className={cn(td, 'text-right tabular-nums')}>
+                                                {formatMoney(row.amount, row.currency)}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {formatWhen(row.since)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                The part of an ended personal plan’s unused days that Polar won’t
+                                refund on its orders, usually because the customer’s balance paid
+                                them. HushOS refunded the rest; refund this by hand if you decide
+                                to.
                             </p>
                         </>
                     )}

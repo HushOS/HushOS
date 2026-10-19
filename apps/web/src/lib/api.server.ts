@@ -99,8 +99,11 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
                     useLogger().error(new Error('Billing request failed.'));
                 }
                 // A refused refresh is told apart, so the page can wait instead of failing.
-                return error.status === 429
-                    ? status(429, { message: error.message, code: 'rate-limited' as const })
+                if (error.status === 429)
+                    return status(429, { message: error.message, code: 'rate-limited' as const });
+                // `in-family`: a personal plan refused while the person's storage is a family's.
+                return error instanceof billing.BillingError && error.code
+                    ? status(error.status, { message: error.message, code: error.code })
                     : status(error.status, { message: error.message });
             }
             if (error instanceof ValidationError || error instanceof ParseError)
@@ -634,6 +637,14 @@ billing.setCutRetryQueue((groupId, startAfterSeconds) =>
         { groupId },
         { startAfterSeconds, singletonKey: groupId },
     ),
+);
+
+/*
+ * A pooled member's personal plan is ended by the worker (docs/families-shared-pool.md 5.1):
+ * an admission, a webhook or a family's plan going live queues it, one job per person.
+ */
+billing.setEndPersonalPlanQueue((data) =>
+    enqueue(queues.billingEndPersonalPlan, data, { singletonKey: data.userId }),
 );
 
 /* The routes' own GROUPS_ENABLED check, behind the edge's. */

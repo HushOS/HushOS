@@ -68,6 +68,26 @@ export type FamilyPlanGlance = {
     hasPlan: boolean;
     planName: string | null;
     storage: { usedBytes: string; quotaBytes: string } | null;
+    /* Absent with billing off. */
+    usage?: FamilyUsage;
+};
+
+/*
+ * Who stores what in the family's pool (docs/families-shared-pool.md 3.9). Every
+ * figure but the caller's own is rounded on the server, so no other member's
+ * exact usage reaches the browser.
+ */
+export type FamilyUsage = {
+    /* The caller's own files (My files, its Trash and older versions), exact; null if not a member. */
+    ownBytes: string | null;
+    /* Every family folder together, in whole GiB rounded up. */
+    foldersBytes: string;
+    /*
+     * For the organizer and every `members` or `billing` holder only (null for anyone
+     * else): each active member's own files in whole GiB, rounded up, largest first;
+     * "0" is anything under 1 GiB ("Under 1 GB"). Never names, counts or contents.
+     */
+    members: { userId: string; ownBytesRounded: string }[] | null;
 };
 
 export type FamilyBillingDetail = {
@@ -116,6 +136,8 @@ export type FamilyBillingDetail = {
      * folders keep their own allowance.
      */
     storage: { usedBytes: string; quotaBytes: string } | null;
+    /* Absent with billing off. */
+    usage?: FamilyUsage;
     seats: { used: number; limit: number };
     /*
      * What one more place costs now, before tax and any discount: the rest of
@@ -146,6 +168,11 @@ export type BillingSummary = {
     subscription: BillingSubscription | null;
     /* A plan chosen at signup and not yet taken to checkout. */
     intendedPlan: string | null;
+    /*
+     * The family whose plan this person's storage comes from, while their own
+     * files draw from its pool; no personal plan can be bought meanwhile.
+     */
+    family: { name: string; planName: string | null } | null;
 };
 
 /* Referrals: a person's invite, and what it has earned. */

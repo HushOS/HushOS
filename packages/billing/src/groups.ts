@@ -6,7 +6,8 @@ import { groupsEnv } from '@hushos/env/groups';
 import { log } from '@hushos/logging';
 import type { models } from '@polar-sh/sdk/2026-10';
 import type { PolarClientError } from '@polar-sh/sdk';
-import type { GroupBillingSummary } from './api';
+import type { FamilyUsage, GroupBillingSummary } from './api';
+import { queuePlanEnding } from './endings';
 import {
     BillingError,
     PROVIDER,
@@ -355,6 +356,11 @@ export async function reconcileGroup(groupId: string) {
         complete: true,
         keepIds: unresolved,
     });
+    // Everyone whose files now draw from a live pool with a personal plan still live has that
+    // plan ended (docs/families-shared-pool.md 5.1): the organizer's first purchase, a family's
+    // lapsed plan bought again, a checkout that raced an admission.
+    for (const userId of await billingRepository.listPooledWithPersonalPlan(groupId))
+        await queuePlanEnding(userId);
     const liveCount =
         subscriptions.filter((s) => !s.endedAt && LIVE.has(s.status)).length + unresolved.length;
     if (liveCount > 1)
@@ -938,7 +944,18 @@ export async function startGroupCheckout(
         throw new BillingError('That plan is not priced in that currency.', 400);
     if (await billingRepository.getLiveGroupSubscription(groupId))
         throw new BillingError('This family already has a plan.', 409);
-    const floor = Math.max(plan.includedMembers, await groupsRepository.seatsUsed(groupId));
+    const seats = await groupsRepository.seatsUsed(groupId);
+    // Everyone's own files draw from the pool once the plan is live, so a first plan (or one
+    // bought again) smaller than what they store is refused, as a downgrade is (3.2, 5.2).
+    // Checked exactly, said in whole GiB rounded up, as the downgrade guard says it.
+    const { used } = await billingRepository.getPoolUsage(groupId);
+    const room = BigInt(plan.quotaBytes);
+    if (used > room)
+        throw new BillingError(
+            `${seats > 1 ? 'Your family stores' : 'Your files take'} ${spaceOf(billingRepository.wholeGibUp(used))}, more than ${tierName(plan)}’s ${spaceOf(room)}. Choose a bigger plan or free at least ${spaceOf(billingRepository.wholeGibUp(used - room))}.`,
+            409,
+        );
+    const floor = Math.max(plan.includedMembers, seats);
     const units = input.units ?? floor;
     if (units < floor)
         throw new BillingError(
@@ -1721,6 +1738,59 @@ export async function syncGroup(user: BillingUser, groupId: string) {
     return getGroupBilling(user, groupId);
 }
 
+const GIB = 1n << 30n;
+
+/*
+ * One member's own files as a manager sees them (3.9, decision 6): whole GiB,
+ * rounded up, and "0" for anything under 1 GiB, which the page reads "Under 1
+ * GB". Rounded here, so the exact bytes never reach another member's browser.
+ */
+export function roundedOwnBytes(bytes: bigint) {
+    return bytes < GIB ? 0n : billingRepository.wholeGibUp(bytes);
+}
+
+/*
+ * What the caller may see of who stores what (3.9): their own files exactly; the
+ * family folders' total in whole GiB, rounded up; and, for every `members` or
+ * `billing` holder (the organizer holds both), each member's own files rounded (roundedOwnBytes),
+ * largest first. Anyone not an active member (a payer who left) sees neither theirs
+ * nor anyone's.
+ */
+async function usageFor(groupId: string, userId: string): Promise<FamilyUsage> {
+    const [found, usage] = await Promise.all([
+        groupsRepository.getGroupFor(groupId, userId),
+        billingRepository.getMemberUsage(groupId),
+    ]);
+    const active = found?.membership.state === 'active';
+    // The organizer holds both roles from the start; whoever holds either now manages.
+    const manages =
+        active &&
+        (found.membership.roles.includes('members') || found.membership.roles.includes('billing'));
+    const own = usage.members.find((member) => member.userId === userId);
+    return {
+        ownBytes: active && own ? own.usedBytes.toString() : null,
+        foldersBytes: billingRepository.wholeGibUp(usage.foldersBytes).toString(),
+        members: manages
+            ? usage.members
+                  .map((member) => ({
+                      userId: member.userId,
+                      rounded: roundedOwnBytes(member.usedBytes),
+                  }))
+                  .sort((a, b) =>
+                      a.rounded === b.rounded
+                          ? a.userId.localeCompare(b.userId)
+                          : a.rounded > b.rounded
+                            ? -1
+                            : 1,
+                  )
+                  .map((member) => ({
+                      userId: member.userId,
+                      ownBytesRounded: member.rounded.toString(),
+                  }))
+            : null,
+    };
+}
+
 export async function getGroupBilling(
     user: BillingUser,
     groupId: string,
@@ -1745,10 +1815,11 @@ export async function getGroupBilling(
                   nextPlace: null,
               }
             : { enabled: false, view, hasPlan: false, planName: null, storage: null };
-    const [live, pool, usage] = await Promise.all([
+    const [live, pool, usage, people] = await Promise.all([
         billingRepository.getLiveGroupSubscription(groupId),
         billingRepository.getGroupPool(groupId),
         billingRepository.getPoolUsage(groupId),
+        usageFor(groupId, user.id),
     ]);
     // The pool as Drive's free-space check reads it: its folders and every pooled member's own
     // files against the plan's quota, which is empty before a plan and past its period and grace.
@@ -1770,6 +1841,7 @@ export async function getGroupBilling(
             hasPlan: live !== null,
             planName: live?.productName ?? null,
             storage,
+            usage: people,
         };
     const [families, customer, used] = await Promise.all([
         getFamilyCatalogue(),
@@ -1816,6 +1888,7 @@ export async function getGroupBilling(
             ? { productName: lastPlan.productName, endedAt: lastPlan.endedAt.toISOString() }
             : null,
         storage,
+        usage: people,
         seats: { used, limit: live ? billingRepository.seatLimitOf(live) : UNPAID_GROUP_SEATS },
         nextPlace:
             live && price && live.currency

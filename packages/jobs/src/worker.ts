@@ -1,4 +1,4 @@
-import { billingEnabled, setCutRetryQueue } from '@hushos/billing/server';
+import { billingEnabled, setCutRetryQueue, setEndPersonalPlanQueue } from '@hushos/billing/server';
 import { LATEST_MIGRATION, missingTablePrivileges, schemaState } from '@hushos/db';
 import { initProcessLogger, log } from '@hushos/logging';
 import type { Job } from 'pg-boss';
@@ -18,7 +18,7 @@ import {
     reportsEvidence,
     reportsRequests,
 } from './jobs/drive';
-import { reconcileBilling, reissueGroupCut } from './jobs/reconcile-billing';
+import { endPersonalPlan, reconcileBilling, reissueGroupCut } from './jobs/reconcile-billing';
 
 /*
  * The background worker: one process, started with `bun run --cwd packages/jobs start`
@@ -98,6 +98,17 @@ if (billingEnabled()) {
                 ...(startAfterSeconds ? { startAfter: startAfterSeconds } : {}),
             },
         ),
+    );
+    // A pooled member's personal plan ends (docs/families-shared-pool.md 5.1): one job per person.
+    setEndPersonalPlanQueue((data) =>
+        boss.send(queues.billingEndPersonalPlan, data, { singletonKey: data.userId }),
+    );
+    await boss.work<JobPayloads[typeof queues.billingEndPersonalPlan]>(
+        queues.billingEndPersonalPlan,
+        { batchSize: 1, pollingIntervalSeconds: 30 },
+        async ([job]) => {
+            if (job) await endPersonalPlan(job);
+        },
     );
     for (const queue of [queues.billingReissuePending, queues.billingReissueCut] as const)
         await boss.work<JobPayloads[typeof queue]>(

@@ -12,6 +12,7 @@ export const queues = {
     reconcileBilling: 'billing.reconcile',
     billingReissueCut: 'billing.reissue-cut',
     billingReissuePending: 'billing.reissue-pending',
+    billingEndPersonalPlan: 'billing.end-personal-plan',
     driveExpireUploads: 'drive.expire-uploads',
     driveDeleteObjects: 'drive.delete-objects',
     driveReplicate: 'drive.replicate',
@@ -32,6 +33,12 @@ export type JobPayloads = {
     [queues.reconcileBilling]: Record<string, never>;
     [queues.billingReissueCut]: { groupId: string };
     [queues.billingReissuePending]: { groupId: string };
+    [queues.billingEndPersonalPlan]: {
+        userId: string;
+        groupId: string;
+        admittedAt: string;
+        seenAt: string;
+    };
     [queues.driveExpireUploads]: Record<string, never>;
     [queues.driveDeleteObjects]: Record<string, never>;
     [queues.driveReplicate]: Record<string, never>;
@@ -108,6 +115,25 @@ export async function ensureQueues(boss: PgBoss) {
         retryDelayMax: 6 * 60 * 60,
         expireInSeconds: 5 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
+    });
+    /*
+     * A pooled member's personal plan, revoked at Polar and its unused days refunded
+     * (docs/families-shared-pool.md 5.1), sent with the user id as `singletonKey`: one
+     * queued and one active per person. Every step is idempotent (the revoke time is
+     * stored once, refunds are matched by their key, and one person's runs hold a lock),
+     * so a retry is harmless. A failure is retried ten times, backing off from a minute
+     * to six hours (about a day in all); a refund that failed five times in a row is
+     * listed for operators, and the daily reconcile queues the job again for as long as
+     * anything is owed, so an owed refund is tried at most once a day.
+     */
+    await boss.createQueue(queues.billingEndPersonalPlan, {
+        policy: 'stately',
+        retryLimit: 10,
+        retryDelay: 60,
+        retryBackoff: true,
+        retryDelayMax: 6 * 60 * 60,
+        expireInSeconds: 10 * 60,
+        retentionSeconds: 30 * 24 * 60 * 60,
     });
     // Drive's sweeps are idempotent and bounded; one of each at a time is enough.
     for (const queue of [

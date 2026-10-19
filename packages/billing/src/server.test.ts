@@ -1,4 +1,5 @@
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
+import type { EndPersonalPlanJob } from './endings';
 import { PolarClientError } from '@polar-sh/sdk';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -191,10 +192,55 @@ const polar = {
         billing_reason?: string;
         refunded_amount?: number;
         net_amount?: number;
+        /* Sales tax on top of `net_amount`; never part of what HushOS refunds. */
+        tax_amount?: number;
+        /* Customer balance Polar applied: negative when a credit paid part of the order. */
+        applied_balance_amount?: number;
+        currency?: string;
         units?: number;
         /* Made, but not listed yet (Polar's listing lagging the change). */
         hidden?: boolean;
     }[],
+    /* Refunds Polar holds, as its refunds API lists them. */
+    refunds: [] as {
+        id: string;
+        order_id: string;
+        amount: number;
+        status: 'pending' | 'succeeded' | 'failed' | 'canceled';
+        metadata: Record<string, string | number | boolean>;
+        created_at: string;
+    }[],
+    /* How many refund calls fail (503) before Polar takes one again. */
+    refundFailures: 0,
+    /* How many refund calls Polar refuses outright (422) before it takes one. */
+    refundRefusals: 0,
+    /*
+     * The next refund call times out and Polar makes nothing yet; it makes it later, when the
+     * test calls `lateRefund` (Polar committing a timed-out request after the fact).
+     */
+    refundLandsLate: false,
+    lateRefund: null as (() => void) | null,
+    /* The next refund call is made at Polar but its answer is lost (a timeout). */
+    refundAnswerLost: false,
+    /*
+     * The next refund call errors after the card was refunded, and Polar records that
+     * refund without the metadata HushOS sent (a refund it learned of from Stripe).
+     */
+    refundErrorsAfterStripe: false,
+    /* Each refunds call waits this long, so two runs can interleave. */
+    refundLatencyMs: 0,
+    /* Awaited once inside the next refunds listing: a run that stalls there. */
+    onRefundList: null as (() => Promise<void>) | null,
+    /* The status Polar gives a new refund. */
+    refundStatus: 'succeeded' as 'pending' | 'succeeded' | 'failed',
+    /* The refunds API can't be read (a token without `refunds:read`). */
+    refundsUnreadable: false,
+    /* When Polar's clock says a revoke happened; now if null. */
+    revokeAt: null as string | null,
+    /* The next revoke is made at Polar but its answer is lost (a timeout). */
+    revokeAnswerLost: false,
+    /* How many revokes fail (503, nothing changed) before Polar takes one. */
+    revokeFailures: 0,
     /* The next product change's order is made but not listed yet. */
     ordersLag: false,
     /* Each family subscription's checkout order (kept apart so tests can index `orders`). */
@@ -531,6 +577,9 @@ const fakeClient = {
                         billing_reason: 'subscription_update',
                         refunded_amount: 0,
                         net_amount: order.status === 'pending' ? order.due_amount : 1000,
+                        // Polar adds sales tax on top of net; HushOS must never refund it.
+                        tax_amount: order.status === 'pending' ? 0 : 180,
+                        currency: 'usd',
                         ...order,
                         paid: ['paid', 'partially_refunded', 'refunded'].includes(order.status),
                     })),
@@ -680,14 +729,112 @@ const fakeClient = {
                 subscription.cancel_at_period_end = body.cancel_at_period_end;
             return structuredClone(subscription);
         },
+        // Ends it now; one already ended is refused as Polar refuses it (403).
         async revoke(id: string) {
             polar.calls.push(`subscriptions.revoke:${id}`);
             const subscription = polar.subscriptions.get(id);
-            if (subscription) {
-                subscription.status = 'canceled';
-                subscription.ended_at = new Date().toISOString();
+            if (!subscription) throw notFound();
+            if (polar.revokeFailures > 0) {
+                polar.revokeFailures -= 1;
+                throw new PolarClientError(503, { error: 'ServiceUnavailable' });
             }
-            return subscription;
+            if (subscription.ended_at)
+                throw new PolarClientError(403, {
+                    error: 'AlreadyCanceledSubscription',
+                    detail: 'This subscription is already revoked.',
+                });
+            subscription.status = 'canceled';
+            subscription.ended_at = polar.revokeAt ?? new Date().toISOString();
+            if (polar.revokeAnswerLost) {
+                polar.revokeAnswerLost = false;
+                throw new Error('The request timed out.');
+            }
+            return structuredClone(subscription);
+        },
+    },
+    /*
+     * Polar's refunds as the reviewer read Polar's code: at most the order's net amount
+     * plus the balance applied to it (negative when a credit paid part) less
+     * `refunded_amount`, which moves only when a refund succeeds, so pending refunds
+     * don't count against it; 403 RefundedAlready once nothing is left. No
+     * idempotency: the same call twice makes two refunds.
+     */
+    refunds: {
+        async list(query: { order_id?: string }) {
+            polar.calls.push(`refunds.list:${query.order_id}`);
+            if (polar.refundsUnreadable) throw new PolarClientError(403, { error: 'NotPermitted' });
+            // What Polar held when it answered; the answer may then be slow to arrive.
+            const items = polar.refunds
+                .filter((refund) => refund.order_id === query.order_id)
+                .map((refund) => ({ ...refund }));
+            const stall = polar.onRefundList;
+            polar.onRefundList = null;
+            await stall?.();
+            if (polar.refundLatencyMs)
+                await new Promise((r) => setTimeout(r, polar.refundLatencyMs));
+            return { items, pagination: { total_count: 0, max_page: 1 } };
+        },
+        async create(body: {
+            order_id: string;
+            amount: number;
+            metadata?: Record<string, string>;
+            revoke_benefits?: boolean;
+        }) {
+            polar.calls.push(`refunds.create:${body.order_id}:${body.amount}`);
+            if (polar.refundLatencyMs)
+                await new Promise((r) => setTimeout(r, polar.refundLatencyMs));
+            if (polar.refundFailures > 0) {
+                polar.refundFailures -= 1;
+                throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+            }
+            if (polar.refundRefusals > 0) {
+                polar.refundRefusals -= 1;
+                throw new PolarClientError(422, { error: 'HTTPValidationError' });
+            }
+            const order = polar.orders.find((candidate) => candidate.id === body.order_id);
+            if (!order) throw notFound();
+            const left =
+                (order.net_amount ?? 1000) +
+                Math.min(0, order.applied_balance_amount ?? 0) -
+                (order.refunded_amount ?? 0);
+            if (left <= 0) throw new PolarClientError(403, { error: 'RefundedAlready' });
+            if (body.amount < 1 || body.amount > left)
+                throw new PolarClientError(422, { error: 'HTTPValidationError' });
+            if (polar.refundLandsLate) {
+                polar.refundLandsLate = false;
+                polar.lateRefund = () => {
+                    polar.refunds.push({
+                        id: `refund_${polar.refunds.length + 1}`,
+                        order_id: order.id,
+                        amount: body.amount,
+                        status: 'succeeded',
+                        metadata: body.metadata ?? {},
+                        created_at: new Date().toISOString(),
+                    });
+                    order.refunded_amount = (order.refunded_amount ?? 0) + body.amount;
+                };
+                throw new Error('The request timed out.');
+            }
+            const refund = {
+                id: `refund_${polar.refunds.length + 1}`,
+                order_id: order.id,
+                amount: body.amount,
+                status: polar.refundStatus,
+                metadata: polar.refundErrorsAfterStripe ? {} : (body.metadata ?? {}),
+                created_at: new Date().toISOString(),
+            };
+            polar.refunds.push(refund);
+            if (refund.status === 'succeeded')
+                order.refunded_amount = (order.refunded_amount ?? 0) + refund.amount;
+            if (polar.refundErrorsAfterStripe) {
+                polar.refundErrorsAfterStripe = false;
+                throw new PolarClientError(500, { error: 'InternalServerError' });
+            }
+            if (polar.refundAnswerLost) {
+                polar.refundAnswerLost = false;
+                throw new Error('The request timed out.');
+            }
+            return { ...refund, tax_amount: 18, currency: order.currency ?? 'usd' };
         },
     },
 };
@@ -719,6 +866,8 @@ const rawSql = (text: string) => db.$client.query(text);
 
 const billing = await import('./server');
 const growth = await import('./growth');
+/* `billing.end-personal-plan` jobs sent, in order; tests run them as the worker would. */
+const endingJobs: EndPersonalPlanJob[] = [];
 
 function subscribe(userId: string, subscription: Partial<FakeSubscription> & { id: string }) {
     const full: FakeSubscription = {
@@ -789,6 +938,24 @@ beforeEach(async () => {
     polar.ordersLag = false;
     polar.checkoutOrders = [];
     polar.orders = [];
+    polar.refunds = [];
+    polar.refundFailures = 0;
+    polar.refundAnswerLost = false;
+    polar.refundRefusals = 0;
+    polar.refundLandsLate = false;
+    polar.lateRefund = null;
+    polar.refundErrorsAfterStripe = false;
+    polar.refundLatencyMs = 0;
+    polar.onRefundList = null;
+    polar.refundStatus = 'succeeded';
+    polar.refundsUnreadable = false;
+    polar.revokeAt = null;
+    polar.revokeAnswerLost = false;
+    polar.revokeFailures = 0;
+    endingJobs.length = 0;
+    billing.setEndPersonalPlanQueue(async (job) => {
+        endingJobs.push(job);
+    });
     billing.setCutRetryQueue(undefined);
     polar.calls = [];
 });
@@ -2324,11 +2491,17 @@ describe('family summary', () => {
             hasPlan: true,
             planName: 'Family (monthly)',
             storage: { usedBytes: (300n * GIB).toString(), quotaBytes: FAMILY_POOL.toString() },
+            // Their own files exactly, the folders rounded, and nobody else's.
+            usage: { ownBytes: '0', foldersBytes: (300n * GIB).toString(), members: null },
         };
         // Exactly these fields: no product, places, payer, status or amounts.
         expect(await billing.getGroupBilling(userOf(member), groupId)).toEqual(glance);
-        // A manager without `billing` (familyOnPlan's others hold `members`) gets the same.
-        expect(await billing.getGroupBilling(userOf(others[0]!), groupId)).toEqual(glance);
+        // A manager without `billing` (familyOnPlan's others hold `members`) gets the same,
+        // with each member's own files rounded (see 'who stores what').
+        expect(await billing.getGroupBilling(userOf(others[0]!), groupId)).toEqual({
+            ...glance,
+            usage: { ...glance.usage, members: expect.any(Array) },
+        });
         for (const who of [member, others[0]!])
             await expect(billing.syncGroup(userOf(who), groupId)).rejects.toMatchObject({
                 status: 403,
@@ -3713,5 +3886,748 @@ describe('family tiers', () => {
         expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
+    });
+});
+
+/* ------------------------------------------------------------------------- */
+/* A pooled member's personal plan (docs/families-shared-pool.md 5.1)         */
+/* ------------------------------------------------------------------------- */
+
+const HOUR = 60 * 60 * 1000;
+type FakeOrder = (typeof polar.orders)[number];
+
+/*
+ * A member of a family on a live plan who also pays for Pro: the subscription at
+ * Polar, its orders, and HushOS's mirror of it, then let in (what an admission
+ * does once it commits: queuePlanEnding). By default the period is 30 days, half
+ * used at `now` (whole seconds), with one renewal order of 999 before tax and
+ * 180 of tax on top. Polar's clock puts the revoke at `now`.
+ */
+async function pooledSubscriber(
+    options: {
+        periodStart?: number;
+        periodEnd?: number;
+        orders?: (now: number) => Partial<FakeOrder>[];
+    } = {},
+) {
+    const { payer, groupId } = await familyOnPlan();
+    const member = await createTestAccount();
+    const now = Math.floor(Date.now() / 1000) * 1000;
+    const subscription = subscribe(member.userId, {
+        id: 'sub_personal',
+        current_period_start: new Date(now + (options.periodStart ?? -15 * DAY)).toISOString(),
+        current_period_end: new Date(now + (options.periodEnd ?? 15 * DAY)).toISOString(),
+        amount: 999,
+    });
+    const orders = options.orders?.(now) ?? [
+        {
+            id: 'order_cycle',
+            created_at: subscription.current_period_start!,
+            billing_reason: 'subscription_cycle',
+            net_amount: 999,
+            tax_amount: 180,
+        },
+    ];
+    for (const order of orders)
+        polar.orders.push({
+            id: 'order_x',
+            subscription_id: subscription.id,
+            status: 'paid',
+            due_amount: 0,
+            created_at: new Date(now).toISOString(),
+            product_id: PRO,
+            currency: 'usd',
+            ...order,
+        });
+    await billing.reconcileCustomer(member.userId);
+    // Nothing is queued while they are not in the family.
+    expect(endingJobs).toEqual([]);
+    await setTestMember({ groupId, userId: member.userId, state: 'active' });
+    expect(await billing.queuePlanEnding(member.userId)).toBe(true);
+    polar.revokeAt = new Date(now).toISOString();
+    polar.calls = [];
+    return { member, groupId, payer, subscription, now, job: endingJobs[0]! };
+}
+
+const refundsMade = () => polar.refunds.map((refund) => [refund.order_id, refund.amount]);
+const callsTo = (prefix: string) => polar.calls.filter((call) => call.startsWith(prefix));
+
+/* Runs every job queued since `from`, as the worker would, one after another. */
+async function runQueued(from: number) {
+    for (const job of endingJobs.slice(from)) await billing.endPersonalPlans(job);
+}
+
+describe('a personal plan ends when its owner’s files join a family', () => {
+    test('revoked at once and the unused half refunded before tax, exactly once across a retry, a webhook replay and a reconcile', async () => {
+        const { member, groupId, job } = await pooledSubscriber();
+        expect(job).toMatchObject({ userId: member.userId, groupId });
+        // While pooled the plan adds nothing; it still counts in the mirror until it ends.
+        expect(await billingRepository.listLiveSubscriptionIds(member.userId)).toEqual([
+            'sub_personal',
+        ]);
+        await billing.endPersonalPlans(job);
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_personal']);
+        // Half of 999 before tax, rounded down: not 589 with its tax, not 500.
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        // Keyed by the membership and the order, at Polar.
+        const membership = await billingRepository.getPooledFamily(member.userId);
+        expect(polar.refunds[0]?.metadata).toEqual({
+            hushos_refund: `${member.userId}:${groupId}:${membership?.admittedAt.toISOString()}:order_cycle`,
+        });
+        expect(job.admittedAt).toBe(membership?.admittedAt.toISOString());
+        // The plan has ended here too: the mirror holds nothing live.
+        expect(await billingRepository.listLiveSubscriptionIds(member.userId)).toEqual([]);
+
+        // pg-boss runs the same job again: the worker died after Polar refunded, before the
+        // refund and the ending were marked done here, and (a restore from an older backup)
+        // without even the record that HushOS had asked. Only the key ties Polar's refund to it.
+        await rawSql(
+            "update personal_plan_refunds set status = 'requested', provider_refund_id = null, first_attempted_at = null, last_attempted_at = null",
+        );
+        await rawSql('update personal_plan_endings set outcome = null');
+        await billing.endPersonalPlans(job);
+        // Polar delivers the renewal's order.paid again, twice, the second a replay.
+        const mark = endingJobs.length;
+        const delivery = await signedWebhook({
+            type: 'order.paid',
+            data: { id: 'order_cycle', customer: { external_id: member.userId } },
+        });
+        const replay = delivery.clone();
+        expect((await billing.handleWebhook(delivery)).status).toBe(200);
+        expect((await billing.handleWebhook(replay)).status).toBe(200);
+        expect(
+            (
+                await billing.handleWebhook(
+                    await signedWebhook({
+                        type: 'order.paid',
+                        data: { id: 'order_cycle', customer: { external_id: member.userId } },
+                    }),
+                )
+            ).status,
+        ).toBe(200);
+        await runQueued(mark);
+        // And the daily reconcile.
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        await runQueued(daily);
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+    });
+
+    test('a refund whose answer was lost is found by its key, not made twice', async () => {
+        const { job } = await pooledSubscriber();
+        polar.refundAnswerLost = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        // Polar made it; the retry lists the order's refunds first and finds it.
+        await billing.endPersonalPlans(job);
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a failed refund is retried from the stored revoke time, listed as owed after five failures in a row, then tried daily', async () => {
+        const { member, job, now } = await pooledSubscriber();
+        // Revoked, then the orders can't be read: nothing computed yet.
+        polar.ordersFail = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+        polar.ordersFail = false;
+        // Refused outright five times (an outage would hold the next ask back; see below).
+        polar.refundRefusals = 5;
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            // Every retry an hour after the last: an hour less would be 498 by the first.
+            for (let attempt = 1; attempt <= 4; attempt++) {
+                vi.setSystemTime(now + attempt * HOUR);
+                await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+                expect(await billingRepository.listRefundsOwed()).toEqual([]);
+            }
+            // The fifth in a row: owed, listed, and no longer retried by pg-boss.
+            vi.setSystemTime(now + 5 * HOUR);
+            expect(await billing.endPersonalPlans(job)).toMatchObject({ owed: 1 });
+            expect(await billingRepository.listRefundsOwed()).toEqual([
+                expect.objectContaining({
+                    orderId: 'order_cycle',
+                    userId: member.userId,
+                    amount: 499,
+                    currency: 'usd',
+                    failures: 5,
+                }),
+            ]);
+            // A delivery an hour later doesn't ask Polar again: an owed refund waits a day.
+            vi.setSystemTime(now + 6 * HOUR);
+            await billing.endPersonalPlans(job);
+            expect(callsTo('refunds.create')).toHaveLength(5);
+            vi.setSystemTime(now + 29 * HOUR);
+            await billing.endPersonalPlans(job);
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        // Landed: off the operators' list.
+        expect(await billingRepository.listRefundsOwed()).toEqual([]);
+    });
+
+    test('a pending refund counts as made, and is made again when it later fails', async () => {
+        const { member, job } = await pooledSubscriber();
+        polar.refundStatus = 'pending';
+        await billing.endPersonalPlans(job);
+        // Waiting at Polar: not made again by a retry.
+        await billing.endPersonalPlans(job);
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        // Polar's refund then fails (the card can't take it back).
+        polar.refunds[0]!.status = 'failed';
+        polar.refundStatus = 'succeeded';
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily).map((queued) => queued.userId)).toEqual([member.userId]);
+        await runQueued(daily);
+        expect(polar.refunds.map((refund) => [refund.amount, refund.status])).toEqual([
+            [499, 'failed'],
+            [499, 'succeeded'],
+        ]);
+        // Settled: the next daily reconcile has nothing to queue.
+        const next = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(next)).toEqual([]);
+    });
+
+    test('tax is never part of the refund: the order’s net amount less what it refunded already', async () => {
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    // 1250 less a 250 discount, 200 of tax on top, 200 refunded as goodwill.
+                    net_amount: 1000,
+                    tax_amount: 200,
+                    refunded_amount: 200,
+                },
+            ],
+        });
+        polar.refunds.push({
+            id: 'refund_goodwill',
+            order_id: 'order_cycle',
+            amount: 200,
+            status: 'succeeded',
+            metadata: {},
+            created_at: new Date(Date.now() - DAY).toISOString(),
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([
+            ['order_cycle', 200],
+            ['order_cycle', 400],
+        ]);
+    });
+
+    test('an operator’s pending refund on the order is allowed for, not stacked on', async () => {
+        const { job } = await pooledSubscriber();
+        // Made by hand a day ago, still pending: not yet in the order's refunded total.
+        polar.refunds.push({
+            id: 'refund_by_hand',
+            order_id: 'order_cycle',
+            amount: 199,
+            status: 'pending',
+            metadata: {},
+            created_at: new Date(Date.now() - DAY).toISOString(),
+        });
+        await billing.endPersonalPlans(job);
+        // Half of 999 less 199: 400, not 499 on top of the 199.
+        expect(refundsMade()).toEqual([
+            ['order_cycle', 199],
+            ['order_cycle', 400],
+        ]);
+    });
+
+    test('an operator’s pending refund that later fails is owed again, though HushOS already asked for its own', async () => {
+        const { member, job } = await pooledSubscriber();
+        polar.refunds.push({
+            id: 'refund_by_hand',
+            order_id: 'order_cycle',
+            amount: 199,
+            status: 'pending',
+            metadata: {},
+            created_at: new Date(Date.now() - DAY).toISOString(),
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([
+            ['order_cycle', 199],
+            ['order_cycle', 400],
+        ]);
+        // Something is still pending on the order: it is read again, not settled.
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily).map((queued) => queued.userId)).toEqual([member.userId]);
+        // The operator's refund fails; the next run owes the 99 it no longer covers.
+        polar.refunds[0]!.status = 'failed';
+        await runQueued(daily);
+        expect(
+            polar.refunds
+                .filter((refund) => refund.status === 'succeeded')
+                .map((refund) => refund.amount),
+        ).toEqual([400, 99]);
+        const next = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(next)).toEqual([]);
+    });
+
+    test('an order paid partly from the customer’s balance refunds its unused share, within what Polar takes', async () => {
+        // 300 of the 999 came from credit (from an earlier period): the unused half, 499, is
+        // within the 699 Polar will refund on it.
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 999,
+                    applied_balance_amount: -300,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        expect(await billingRepository.listRefundsOwed()).toEqual([]);
+    });
+
+    test('a credit of most of the order leaves a refund Polar will take, not one refused for ever', async () => {
+        // 800 of credit: Polar takes at most 199 back on it, so 199, never 499 refused for ever.
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 999,
+                    applied_balance_amount: -800,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 199]]);
+        expect(await billingRepository.listRefundsOwed()).toEqual([]);
+        // The 300 Polar won't take is in front of operators, not lost quietly.
+        expect(await billingRepository.listUnrefundable()).toEqual([
+            expect.objectContaining({
+                subscriptionId: 'sub_personal',
+                amount: 300,
+                currency: 'usd',
+            }),
+        ]);
+    });
+
+    test('a mid-period downgrade’s credit is netted against the refund', async () => {
+        // 30 days, 15 used: the renewal paid 1000; a downgrade 10 days in credited 400 for the
+        // 20 days left, 300 of it for the 15 still unused. 500 less 300.
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+                {
+                    id: 'order_downgrade',
+                    created_at: new Date(now - 5 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: -400,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 200]]);
+        expect(callsTo('refunds.list:order_downgrade')).toEqual([]);
+    });
+
+    test('a downgrade then an upgrade paid from its credit: every unused share counts, signed', async () => {
+        // 30 days, revoked on day 15. Day 0 renewal 1000; day 10 a downgrade credits 400 to the
+        // balance (300 of it for days 10-30 still unused at day 15); day 12 an upgrade charges
+        // 360 for days 12-30, all of it from that balance (300 for the 15 days unused). Owed:
+        // 500 - 300 + 300 = 500, all on the renewal, the only order Polar refunds by card. The
+        // 40 left in the balance is what the days used were worth.
+        const { job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+                {
+                    id: 'order_downgrade',
+                    created_at: new Date(now - 5 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: -400,
+                },
+                {
+                    id: 'order_upgrade',
+                    created_at: new Date(now - 3 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: 360,
+                    applied_balance_amount: -360,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 500]]);
+        // Polar would refund nothing on the upgrade: its refunds are never even listed.
+        expect(callsTo('refunds.list:order_upgrade')).toEqual([]);
+    });
+
+    test('an order that charged nothing is settled without listing its refunds', async () => {
+        const { member, job } = await pooledSubscriber({
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 15 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    // A 100%-off code.
+                    net_amount: 0,
+                },
+            ],
+        });
+        // Even with a token that can't read refunds: there is nothing to ask about.
+        polar.refundsUnreadable = true;
+        await billing.endPersonalPlans(job);
+        expect(callsTo('refunds.')).toEqual([]);
+        expect(await billingRepository.listPlanRefunds('sub_personal')).toEqual([
+            expect.objectContaining({ orderId: 'order_cycle', amount: 0, status: 'none' }),
+        ]);
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily).map((queued) => queued.userId)).not.toContain(member.userId);
+    });
+
+    test('two runs at once (pg-boss retrying one it took for dead) refund once', async () => {
+        const { job } = await pooledSubscriber();
+        polar.refundLatencyMs = 20;
+        const runs = await Promise.allSettled([
+            billing.endPersonalPlans(job),
+            billing.endPersonalPlans(job),
+        ]);
+        // One did the work; the other stopped before asking Polar for anything.
+        expect(runs.map((run) => run.status).sort()).toEqual(['fulfilled', 'rejected']);
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+        expect(callsTo('refunds.list')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        // The retry pg-boss makes of the one that stopped finds it done.
+        polar.refundLatencyMs = 0;
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a run that stalled past its lease, which another run took, asks Polar for nothing more', async () => {
+        const { job } = await pooledSubscriber();
+        // The first run revokes, then stalls in its refunds listing.
+        let resume = () => {};
+        let stalled = () => {};
+        const reached = new Promise<void>((resolve) => (stalled = resolve));
+        polar.onRefundList = () =>
+            new Promise<void>((resolve) => {
+                resume = resolve;
+                stalled();
+            });
+        const first = billing.endPersonalPlans(job);
+        await reached;
+        // Its lease runs out on the database's clock (pg-boss's ten minutes, say): a retry
+        // takes the ending and refunds.
+        await rawSql("update personal_plan_endings set lease_until = now() - interval '1 second'");
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        // The first resumes with its stale listing: it must not ask for 499 again.
+        resume();
+        await expect(first).rejects.toMatchObject({ name: 'PlanEndingBusyError' });
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a refund that timed out and lands at Polar later is not asked for twice', async () => {
+        const { job } = await pooledSubscriber();
+        polar.refundLandsLate = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        // pg-boss retries a minute later: nothing is listed yet, and nothing is asked.
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        // Two minutes after the timeout, Polar commits it; the next run finds it by its key.
+        polar.lateRefund?.();
+        await billing.endPersonalPlans(job);
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a run whose job signal fired stops before asking Polar for anything', async () => {
+        const { job } = await pooledSubscriber();
+        const expired = new AbortController();
+        expired.abort();
+        await expect(
+            billing.endPersonalPlans(job, { signal: expired.signal }),
+        ).rejects.toMatchObject({ name: 'PlanEndingBusyError' });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(polar.refunds).toEqual([]);
+    });
+
+    test('a refund Polar errored on after the card was refunded is not made again', async () => {
+        const { job } = await pooledSubscriber();
+        // Stripe refunded it; Polar errored and recorded the refund without HushOS's key.
+        polar.refundErrorsAfterStripe = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        await billing.endPersonalPlans(job);
+        expect(callsTo('refunds.create')).toHaveLength(1);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a mid-period upgrade’s two orders are each prorated over what they paid for', async () => {
+        // 30 days, 20 used: the renewal paid for all 30, the upgrade for the last 20.
+        const { job } = await pooledSubscriber({
+            periodStart: -20 * DAY,
+            periodEnd: 10 * DAY,
+            orders: (now) => [
+                {
+                    id: 'order_cycle',
+                    created_at: new Date(now - 20 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+                {
+                    id: 'order_upgrade',
+                    created_at: new Date(now - 10 * DAY).toISOString(),
+                    billing_reason: 'subscription_update',
+                    net_amount: 600,
+                },
+                // The period before: paid for days already used. Not refunded.
+                {
+                    id: 'order_before',
+                    created_at: new Date(now - 50 * DAY).toISOString(),
+                    billing_reason: 'subscription_cycle',
+                    net_amount: 1000,
+                },
+            ],
+        });
+        await billing.endPersonalPlans(job);
+        expect(refundsMade().sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+            ['order_cycle', 333],
+            ['order_upgrade', 300],
+        ]);
+    });
+
+    test('already revoked at Polar on the first try: prorated from its ended_at, not from now', async () => {
+        const { job, now } = await pooledSubscriber();
+        // The revoke lands at Polar at `now`, but its answer is lost: no revoke time is stored.
+        polar.revokeAnswerLost = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            // The retry an hour later is told 403 AlreadyCanceledSubscription.
+            vi.setSystemTime(now + HOUR);
+            await billing.endPersonalPlans(job);
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(callsTo('subscriptions.revoke')).toHaveLength(2);
+        // From its ended_at: half of 999, 499; from the retry's now it would be 498.
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a plan that had already ended before its owner was pooled refunds nothing', async () => {
+        const { member, job, subscription, now } = await pooledSubscriber();
+        // It ended three days ago; the delivery that said so never came.
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date(now - 3 * DAY).toISOString();
+        await billing.endPersonalPlans(job);
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(callsTo('refunds.')).toEqual([]);
+        expect(polar.refunds).toEqual([]);
+        // Recorded as ended, here too: nothing is queued again.
+        expect(await billingRepository.listLiveSubscriptionIds(member.userId)).toEqual([]);
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily)).toEqual([]);
+    });
+
+    test('someone who leaves before their plan is revoked keeps it', async () => {
+        const { member, groupId, job, subscription } = await pooledSubscriber();
+        // The first try can't reach Polar; they leave before the retry.
+        polar.revokeFailures = 1;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        await setTestMember({ groupId, userId: member.userId, state: 'left' });
+        await billing.endPersonalPlans(job);
+        expect(subscription.ended_at).toBeNull();
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+        expect(polar.refunds).toEqual([]);
+        expect(await billingRepository.listLiveSubscriptionIds(member.userId)).toEqual([
+            'sub_personal',
+        ]);
+    });
+
+    test('someone whose revoke landed unheard before they left is still refunded', async () => {
+        const { member, groupId, job } = await pooledSubscriber();
+        // The revoke lands at Polar but its answer is lost; then they leave.
+        polar.revokeAnswerLost = true;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        await setTestMember({ groupId, userId: member.userId, state: 'left' });
+        await billing.endPersonalPlans(job);
+        // Their plan ended while they were pooled: the unused half is theirs all the same.
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('the daily reconcile finds a pooled member whose job was lost, and ends their plan', async () => {
+        const { member } = await pooledSubscriber();
+        endingJobs.length = 0;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.map((queued) => queued.userId)).toEqual([member.userId]);
+        await runQueued(0);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a personal renewal paid while its owner is pooled is ended and refunded whole', async () => {
+        const { member, subscription } = await pooledSubscriber();
+        // The job never ran. Polar renews the plan a moment later and says so.
+        const renewedAt = Date.now() + 5_000;
+        subscription.current_period_start = new Date(renewedAt).toISOString();
+        subscription.current_period_end = new Date(renewedAt + 30 * DAY).toISOString();
+        polar.orders.push({
+            id: 'order_renewal',
+            subscription_id: subscription.id,
+            status: 'paid',
+            due_amount: 0,
+            created_at: new Date(renewedAt).toISOString(),
+            product_id: PRO,
+            billing_reason: 'subscription_cycle',
+            net_amount: 999,
+            tax_amount: 180,
+            currency: 'usd',
+        });
+        polar.revokeAt = new Date(renewedAt + 60_000).toISOString();
+        const mark = endingJobs.length;
+        const delivery = await signedWebhook({
+            type: 'order.paid',
+            data: { id: 'order_renewal', customer: { external_id: member.userId } },
+        });
+        expect((await billing.handleWebhook(delivery)).status).toBe(200);
+        expect(endingJobs.slice(mark).map((queued) => queued.userId)).toContain(member.userId);
+        // The queue keeps the first job sent for a person (stately): the admission's.
+        await billing.endPersonalPlans(endingJobs[0]!);
+        // Paid after they were pooled: all of it back, not the prorated rest.
+        expect(refundsMade()).toEqual([['order_renewal', 999]]);
+        expect(await billingRepository.listPlanRefunds(subscription.id)).toEqual([
+            expect.objectContaining({ orderId: 'order_renewal', amount: 999, status: 'succeeded' }),
+        ]);
+    });
+
+    test('a family’s first plan going live queues the end of its organizer’s personal plan', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({
+            organizerId: organizer.userId,
+            pooled: true,
+        });
+        subscribe(organizer.userId, { id: 'sub_organizer' });
+        await billing.reconcileCustomer(organizer.userId);
+        // No plan yet: they keep their own.
+        expect(endingJobs).toEqual([]);
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        familySubscription(groupId, { units: 6 });
+        await billing.reconcileGroup(groupId);
+        expect(endingJobs.map((queued) => [queued.userId, queued.groupId])).toEqual([
+            [organizer.userId, groupId],
+        ]);
+    });
+});
+
+describe('a personal plan while pooled', () => {
+    test('checkout and resume are refused with in-family; after leaving, the ended plan is gone and checkout works', async () => {
+        const { member, groupId, job } = await pooledSubscriber();
+        const user = userOf(member);
+        const refusal = {
+            status: 409,
+            code: 'in-family',
+            message:
+                'Your storage comes from The Family’s plan. Leave the family to choose a plan of your own.',
+        };
+        // Before the job ends it (a plan still live) and after.
+        await expect(billing.startCheckout(user, MAX)).rejects.toMatchObject(refusal);
+        await expect(billing.resume(user)).rejects.toMatchObject(refusal);
+        expect(await billing.getSummary(user)).toMatchObject({
+            family: { name: 'The Family', planName: 'Family (monthly)' },
+        });
+        await billing.endPersonalPlans(job);
+        await expect(billing.startCheckout(user, PRO)).rejects.toMatchObject(refusal);
+        await expect(billing.resume(user)).rejects.toMatchObject(refusal);
+        expect(callsTo('checkouts.create')).toEqual([]);
+        expect(callsTo('subscriptions.update')).toEqual([]);
+        // Leaving: their own allowance again, the free base only (the ended Pro doesn't return).
+        await setTestMember({ groupId, userId: member.userId, state: 'left' });
+        expect((await authRepository.getStorageAllowance(member.userId))?.quotaBytes).toBe(
+            GIB.toString(),
+        );
+        expect((await billing.getSummary(user)).family).toBeNull();
+        expect(await billing.startCheckout(user, PRO)).toMatchObject({
+            url: 'https://polar.test/checkout',
+        });
+    });
+});
+
+describe('who stores what in a family', () => {
+    test('managers see each member’s own files in whole GiB rounded up; a member sees only their own', async () => {
+        const { payer, groupId, areaIds, others } = await familyOnPlan({ members: 1 });
+        const plain = await createTestAccount();
+        await setTestMember({ groupId, userId: plain.userId, state: 'active' });
+        const workspaceOf = async (userId: string) =>
+            (await authRepository.getStorageAllowance(userId))!.workspaceId;
+        await setTestUsedBytes(await workspaceOf(payer.id), GIB + 1n);
+        await setTestUsedBytes(await workspaceOf(others[0]!.userId), 512n * 1024n * 1024n);
+        await setTestUsedBytes(await workspaceOf(plain.userId), GIB);
+        await setTestUsedBytes(areaIds[0]!, 3n * GIB + 5n);
+        const members = [
+            { userId: payer.id, ownBytesRounded: (2n * GIB).toString() },
+            { userId: plain.userId, ownBytesRounded: GIB.toString() },
+            // Under 1 GiB: "0", read as "Under 1 GB".
+            { userId: others[0]!.userId, ownBytesRounded: '0' },
+        ];
+        // The payer (billing) and a `members` holder: everyone, largest first, never exact.
+        expect((await billing.getGroupBilling(payer, groupId)).usage).toEqual({
+            ownBytes: (GIB + 1n).toString(),
+            foldersBytes: (4n * GIB).toString(),
+            members,
+        });
+        expect((await billing.getGroupBilling(userOf(others[0]!), groupId)).usage?.members).toEqual(
+            members,
+        );
+        // A member without either role: their own figure, and nobody else's in any form.
+        const glance = await billing.getGroupBilling(userOf(plain), groupId);
+        expect(glance.usage).toEqual({
+            ownBytes: GIB.toString(),
+            foldersBytes: (4n * GIB).toString(),
+            members: null,
+        });
+        const body = JSON.stringify(glance);
+        expect(body).not.toContain((GIB + 1n).toString());
+        expect(body).not.toContain(String(512n * 1024n * 1024n));
+        expect(body).not.toContain(payer.id);
+    });
+});
+
+describe('a family’s first plan', () => {
+    test('is refused when the organizer’s own files are more than its pool', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({
+            organizerId: organizer.userId,
+            pooled: true,
+        });
+        await setTestUsedBytes(organizer.workspaceId, 950n * GIB);
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: PLUS }),
+        ).rejects.toMatchObject({
+            status: 409,
+            message:
+                'Your files take 950 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 150 GB.',
+        });
+        expect(callsTo('checkouts.create')).toEqual([]);
+        await setTestUsedBytes(organizer.workspaceId, 700n * GIB);
+        expect(
+            await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PLUS }),
+        ).toMatchObject({ url: 'https://polar.test/checkout' });
     });
 });

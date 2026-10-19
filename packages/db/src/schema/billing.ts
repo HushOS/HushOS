@@ -3,6 +3,7 @@ import {
     bigint,
     boolean,
     check,
+    foreignKey,
     index,
     integer,
     pgTable,
@@ -221,6 +222,124 @@ export const groupBillingSubscriptions = pgTable(
         check(
             'group_billing_subscriptions_counts_valid',
             sql`${table.units} >= 0 and ${table.paidUnits} >= 0 and (${table.pendingUnits} is null or ${table.pendingUnits} >= 0) and (${table.intendedUnits} is null or ${table.intendedUnits} >= 1) and ${table.includedMembers} >= 1 and ${table.quotaBytes} >= 0`,
+        ),
+    ],
+);
+
+/*
+ * A personal plan HushOS ends because its owner's files joined a family's pool
+ * (docs/families-shared-pool.md 5.1): one row per personal subscription, which is
+ * ended once. `pooled_at` is when HushOS first saw its owner pooled with it live;
+ * `revoked_at` the moment Polar ended it, stored the first time a revoke succeeds
+ * (or read from Polar's `ended_at` when it was already ended), with the period it
+ * was in, so every retry prorates from the same instant. No foreign keys: a refund
+ * still owed outlives the account and the family, by ids only.
+ */
+export const personalPlanEndings = pgTable(
+    'personal_plan_endings',
+    {
+        subscriptionId: text('subscription_id').primaryKey(),
+        userId: uuid('user_id').notNull(),
+        // The membership that pooled them: the family and when they were let in.
+        groupId: uuid('group_id').notNull(),
+        admittedAt: timestamp('admitted_at', { withTimezone: true }).notNull(),
+        pooledAt: timestamp('pooled_at', { withTimezone: true }).notNull(),
+        revokedAt: timestamp('revoked_at', { withTimezone: true }),
+        periodStart: timestamp('period_start', { withTimezone: true }),
+        periodEnd: timestamp('period_end', { withTimezone: true }),
+        /*
+         * Null while work remains; `settled` once every order of the period is refunded
+         * (or owed nothing), `dropped` when its owner left the family before it was
+         * revoked, `ended` when Polar had ended it before they were pooled.
+         */
+        outcome: text(),
+        /*
+         * What of the period's unused part Polar won't refund on its orders (beyond what it
+         * takes back on each), as the last run computed it: shown to operators, who decide.
+         */
+        unrefundableAmount: bigint('unrefundable_amount', { mode: 'number' }),
+        unrefundableCurrency: text('unrefundable_currency'),
+        /*
+         * The run working this ending and until when (the database's clock): taken with a
+         * conditional update, renewed between steps and checked right before every refund
+         * is asked for, so a run that lost it (stalled past it while pg-boss retried) asks
+         * Polar for nothing more.
+         */
+        leaseOwner: text('lease_owner'),
+        leaseUntil: timestamp('lease_until', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => [
+        index('personal_plan_endings_user_idx').on(table.userId),
+        index('personal_plan_endings_open_idx')
+            .on(table.userId)
+            .where(sql`${table.outcome} is null`),
+        check(
+            'personal_plan_endings_outcome_valid',
+            sql`${table.outcome} is null or ${table.outcome} in ('settled', 'dropped', 'ended')`,
+        ),
+    ],
+);
+
+/*
+ * One refund per order of the ended plan's period, keyed by HushOS's own
+ * `refund_key` (also the refund's `hushos_refund` metadata at Polar, which
+ * documents no idempotency key): written with its amount before Polar is asked,
+ * so the operators' list can name it, and matched against the order's refunds
+ * at Polar before every call. `failures` counts failed tries in a row; at five
+ * the refund is listed under Refunds owed (`owed_since`) until it lands, and is
+ * tried again at most once a day.
+ */
+export const personalPlanRefunds = pgTable(
+    'personal_plan_refunds',
+    {
+        orderId: text('order_id').primaryKey(),
+        subscriptionId: text('subscription_id').notNull(),
+        refundKey: text('refund_key').notNull().unique(),
+        /*
+         * What HushOS means to have refunded on the order in all, minor units, before tax
+         * (Polar adds the matching tax itself): recomputed from the order's refunds at every
+         * run, so a refund that fails later is owed again.
+         */
+        amount: bigint('amount', { mode: 'number' }).notNull(),
+        currency: text().notNull(),
+        /*
+         * `requested` (written, Polar not yet known to hold it), `pending` and
+         * `succeeded` (Polar's refund, matched by key), `failed` (Polar's refund
+         * failed or the call was refused; tried again), `none` (nothing to refund).
+         */
+        status: text().notNull(),
+        providerRefundId: text('provider_refund_id'),
+        /*
+         * When HushOS first asked Polar for it: a live refund without the key that appears
+         * on the order from then on (one Polar recorded without the metadata after a call
+         * that errored, or an operator's) counts as this refund.
+         */
+        firstAttemptedAt: timestamp('first_attempted_at', { withTimezone: true }),
+        /* When it last asked: an owed refund is asked again at most daily. */
+        lastAttemptedAt: timestamp('last_attempted_at', { withTimezone: true }),
+        /*
+         * After an ask that timed out or got a 5xx, Polar may still make the refund late, and
+         * it has no idempotency key: nothing is asked again before this (the database's clock),
+         * though the order's refunds are listed first every time.
+         */
+        unsureUntil: timestamp('unsure_until', { withTimezone: true }),
+        failures: integer().notNull().default(0),
+        owedSince: timestamp('owed_since', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => [
+        index('personal_plan_refunds_subscription_idx').on(table.subscriptionId),
+        foreignKey({
+            name: 'personal_plan_refunds_subscription_fk',
+            columns: [table.subscriptionId],
+            foreignColumns: [personalPlanEndings.subscriptionId],
+        }).onDelete('cascade'),
+        check(
+            'personal_plan_refunds_valid',
+            sql`${table.status} in ('requested', 'pending', 'succeeded', 'failed', 'none') and ${table.amount} >= 0 and ${table.failures} >= 0`,
         ),
     ],
 );
