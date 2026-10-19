@@ -402,11 +402,12 @@ describe('pool usage', () => {
             shown: { used: 4n * GIB, free: 6n * GIB },
             pool: { groupId },
         });
-        // A folder: the pool less the three members' parts less the folders' own 81 bytes.
+        // A folder: the pool less the three members' parts less the folders' part, which is
+        // everyone's, counted in whole GiB too (a writer there doesn't learn its exact bytes).
         expect(await drive.getStorage(areaIds[0]!)).toMatchObject({
             used: 780n,
             reserved: 4n,
-            free: 7n * GIB - 81n,
+            free: 6n * GIB,
         });
         // The account's figures are the pool's as it counts them (see 'what one member sees').
         expect(await auth.getStorageAllowance(sam.userId)).toEqual({
@@ -615,7 +616,7 @@ describe('what one member sees', () => {
         // would cross a whole GiB at a different size of Maya's own files in each case (900 MiB
         // and 100 MiB); she steps her own files across both, a byte at a time.
         const sizes: bigint[] = [];
-        for (const edge of [100n * MIB, 900n * MIB]) sizes.push(edge - 1n, edge, edge + 1n);
+        for (const edge of [100n * MIB, 900n * MIB, GIB]) sizes.push(edge - 1n, edge, edge + 1n);
         // Everything she or a payer can read: her figures, what an upload is refused with, the
         // family's total (the summary and the downgrade and first-purchase guards), whether a
         // newcomer of 85 GiB less a few bytes would fit (pool-full).
@@ -644,6 +645,57 @@ describe('what one member sees', () => {
         expect(await observe(11n * GIB + 100n * MIB)).toEqual(
             await observe(11n * GIB + 900n * MIB),
         );
+    });
+
+    test('a payer stepping the family folders byte by byte can’t tell a member’s usage within a GB', async () => {
+        const maya = await person();
+        const sam = await person();
+        const { groupId, areaIds } = await family({
+            organizer: maya,
+            members: [sam],
+            quota: 100n * GIB,
+        });
+        await holdArea(areaIds[0]!, maya.userId);
+        const folderRoot = await rootOf(areaIds[0]!, maya.userId);
+        await setBytes(maya.workspaceId, 2n * GIB);
+        // Maya pays and manages; she steps the folders' bytes across where the exact total would
+        // cross a GiB with Sam at 100 MiB or 900 MiB over 11 GiB, and around whole GiB.
+        const sizes: bigint[] = [];
+        for (const edge of [3n * GIB + 100n * MIB, 3n * GIB + 900n * MIB, 4n * GIB])
+            sizes.push(edge - 1n, edge, edge + 1n);
+        // What the downgrade and first-purchase guards and the summary compare (the family's
+        // total), and what an upload into the folder is refused with.
+        async function observe(samBytes: bigint) {
+            await setBytes(sam.workspaceId, samBytes);
+            const out: unknown[] = [];
+            for (const folders of sizes) {
+                await setBytes(areaIds[0]!, folders);
+                const refused = await (
+                    await prepareBegin(maya.userId, areaIds[0]!, folderRoot, 200n * GIB)
+                ).begin();
+                await setBytes(areaIds[0]!, folders);
+                out.push([
+                    folders,
+                    (await billing.getPoolUsage(groupId)).used,
+                    refused.status === 'over-quota' ? refused.free : refused.status,
+                ]);
+            }
+            return out;
+        }
+        expect(await observe(11n * GIB + 100n * MIB)).toEqual(
+            await observe(11n * GIB + 900n * MIB),
+        );
+        // Someone else's upload into the folder, 100 MiB or 300 MiB in flight: a writer there is
+        // refused with the same figure, so it doesn't show the folders' exact bytes either.
+        async function inFlight(reserved: bigint) {
+            await setBytes(areaIds[0]!, 3n * GIB, reserved);
+            const result = await (
+                await prepareBegin(maya.userId, areaIds[0]!, folderRoot, 200n * GIB)
+            ).begin();
+            await setBytes(areaIds[0]!, 3n * GIB, reserved);
+            return result;
+        }
+        expect(await inFlight(100n * MIB)).toEqual(await inFlight(300n * MIB));
     });
 
     test('an empty pool reads 0 used; anything up to 1 GB reads as 1 GB', async () => {

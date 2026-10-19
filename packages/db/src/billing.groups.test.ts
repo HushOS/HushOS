@@ -105,15 +105,16 @@ describe('the pool', () => {
             areas: 2,
             pooled: true,
         });
-        await apply(groupId, [plan({ quotaBytes: 100n })]);
-        await setBytes(areaIds[0]!, 60n, 0n);
-        await setBytes(areaIds[1]!, 0n, 30n);
+        await apply(groupId, [plan({ quotaBytes: 10n * GIB })]);
+        await setBytes(areaIds[0]!, 6n * GIB, 0n);
+        await setBytes(areaIds[1]!, 0n, 3n * GIB);
+        // The folders are one part of the pool, counted together in whole GiB.
         for (const areaId of areaIds)
             expect(await getStorage(areaId)).toMatchObject({
-                allowance: 100n,
-                used: 60n,
-                reserved: 30n,
-                free: 10n,
+                allowance: 10n * GIB,
+                used: 6n * GIB,
+                reserved: 3n * GIB,
+                free: GIB,
             });
     });
 
@@ -124,8 +125,8 @@ describe('the pool', () => {
             areas: 2,
             pooled: true,
         });
-        await apply(groupId, [plan({ quotaBytes: 100n })]);
-        await setBytes(areaIds[0]!, 60n, 30n);
+        await apply(groupId, [plan({ quotaBytes: 10n * GIB })]);
+        await setBytes(areaIds[0]!, 6n * GIB, 3n * GIB);
         // Deleted, not yet purged: its files are still stored, so deleting a full folder frees
         // no room to fill another.
         await db
@@ -133,14 +134,18 @@ describe('the pool', () => {
             .set({ deletedAt: sql`now() - make_interval(days => 31)` })
             .where(eq(workspaces.id, areaIds[0]!));
         expect(await getStorage(areaIds[1]!)).toMatchObject({
-            allowance: 100n,
-            used: 60n,
-            reserved: 30n,
-            free: 10n,
+            allowance: 10n * GIB,
+            used: 6n * GIB,
+            reserved: 3n * GIB,
+            free: GIB,
         });
         // Purged: its bytes leave the pool with its files.
         expect(await purgeDeletedAreas(30)).toBe(1);
-        expect(await getStorage(areaIds[1]!)).toMatchObject({ used: 0n, reserved: 0n, free: 100n });
+        expect(await getStorage(areaIds[1]!)).toMatchObject({
+            used: 0n,
+            reserved: 0n,
+            free: 10n * GIB,
+        });
     });
 
     test('an area’s own base allowance is not added to the pool', async () => {

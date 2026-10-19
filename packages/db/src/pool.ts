@@ -214,8 +214,9 @@ async function ownFigures(
 /*
  * The pool's figures for one of its workspaces. `free` is what that workspace may
  * still take: the pool less every other part as it counts (whole GiB, uploads in
- * flight included) less this part's own exact bytes. Its own bytes are known to
- * whoever writes there; the others' move it only a GiB at a time. `shown` is what
+ * flight included) less this part's own bytes, exact for a member's own files
+ * (known to whoever writes there) and in whole GiB for the family folders (whose
+ * bytes are every member's). The others' move it only a GiB at a time. `shown` is what
  * a member reads: what is stored, counted part by part, and what is free with
  * uploads in flight counted the same way, so an upload moves either figure only
  * when its part crosses a whole GiB.
@@ -234,11 +235,15 @@ async function poolFigures(
         workspace.isArea ? part.workspaceId === null : part.workspaceId === workspace.id,
     ) ?? { used: 0n, reserved: 0n };
     const others = usage.countedReserved - counted(own, true);
+    // A family folder's part is everyone's uploads, not the writer's own: counted in whole
+    // GiB too, so a refusal's `free` doesn't give away the folders' exact total, others'
+    // uploads in flight included. Up to a GiB of the folders' room is the price.
+    const mine = workspace.isArea ? counted(own, true) : own.used + own.reserved;
     return {
         allowance,
         used: usage.used,
         reserved: usage.reserved,
-        free: allowance - others - own.used - own.reserved,
+        free: allowance - others - mine,
         shown: { used: usage.counted, free: allowance - usage.countedReserved },
         pool: { groupId },
     };
