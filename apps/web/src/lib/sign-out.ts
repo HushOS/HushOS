@@ -1,5 +1,8 @@
+import type { useRouter } from '@tanstack/react-router';
 import { authClient } from '@/lib/auth-client';
+import { holdAuthView } from '@/lib/auth-view';
 import { forgetReturn } from '@/lib/return-to';
+import { forgetSession } from '@/lib/session';
 
 /*
  * What Drive kept on this device between visits, which would otherwise outlive
@@ -48,4 +51,45 @@ export async function signOut() {
     } finally {
         await authClient.logout();
     }
+}
+
+/*
+ * Signing out from inside the app. The screen holds still while it works: the view is held
+ * at what it showed, the device is wiped and locked under it, and the sign-in page replaces
+ * it in one step. Only then go what the old page drew from: the open workspace, decrypted
+ * thumbnails and previews, and the query cache. A failure lets the view go, so the screen
+ * shows what is true (locked here, still signed in), and is thrown for the caller to say.
+ */
+export async function leaveApp(
+    router: ReturnType<typeof useRouter>,
+    { dim = false }: { dim?: boolean } = {},
+) {
+    const release = holdAuthView({ dim });
+    const { queryClient } = router.options.context;
+    try {
+        await signOut();
+        forgetSession(queryClient, false);
+        await router.navigate({ to: '/login' });
+    } finally {
+        release();
+    }
+    try {
+        await forgetOpened();
+    } finally {
+        queryClient.clear();
+    }
+}
+
+/* What an unlocked Drive holds in memory beside the worker's keys, which the lock wiped. */
+async function forgetOpened() {
+    const [{ driveClient, closeSpaces }, { forgetThumbnails }, { forgetPreviews }] =
+        await Promise.all([
+            import('@/lib/drive'),
+            import('@/lib/thumbnails'),
+            import('@/lib/previews'),
+        ]);
+    driveClient.close();
+    closeSpaces();
+    forgetThumbnails();
+    forgetPreviews();
 }

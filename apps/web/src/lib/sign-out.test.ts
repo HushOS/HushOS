@@ -20,6 +20,7 @@ vi.mock('@/lib/drive', () => ({ driveClient: { forgetMirror: stores.mirror } }))
 vi.mock('@/lib/groups/store', () => ({ deleteGroupDevice: stores.groups }));
 vi.mock('@/lib/auth-client', () => ({ authClient: { logout: vi.fn() } }));
 vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
+vi.mock('@/lib/session', () => ({ forgetSession: vi.fn() }));
 
 const { clearDevice, forgetDevice } = await import('./sign-out');
 

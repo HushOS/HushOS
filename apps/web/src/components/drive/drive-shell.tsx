@@ -1,14 +1,13 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useStore } from 'zustand';
 import { LockKeyholeIcon } from 'lucide-react';
 import { useRouter } from '@tanstack/react-router';
-import { forgetSession } from '@/lib/session';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { backfillOwnConsent, bindContactsToQueries } from '@/lib/contacts';
 import {
     closeSpaces,
@@ -26,7 +25,8 @@ import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
-import { signOut as signOutOfBrowser } from '@/lib/sign-out';
+import { leaveApp } from '@/lib/sign-out';
+import { cue } from '@/lib/sounds';
 
 /*
  * Every Drive page needs the account key unlocked on this device and
@@ -52,7 +52,7 @@ export function useDrive() {
  * any of that again.
  */
 export function DriveRuntime({ user }: { user: SessionUser }) {
-    const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
+    const unlockedUser = useAuthView((state) => state.unlockedUserId);
     const unlocked = unlockedUser === user.id;
     // A lock wipes every key in the worker. Forget the open workspace and the cached
     // listings with it, so unlocking unwraps everything again instead of trusting
@@ -143,10 +143,10 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
 }
 
 export function DriveShell({ user, children }: { user: SessionUser; children: ReactNode }) {
-    const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
-    const restoring = useStore(authClient.store, (state) => state.restoring);
+    const unlockedUser = useAuthView((state) => state.unlockedUserId);
+    const restoring = useAuthView((state) => state.restoring);
     const unlocked = unlockedUser === user.id;
-    const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
+    const lockRevision = useAuthView((state) => state.lockRevision);
     // Saved device access is tried before anything is called locked, so a refresh
     // shows "opening" and then the folder, never a flash of the unlock form. A
     // query, so the attempt is made once per account, credential and lock, and
@@ -167,11 +167,10 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     const router = useRouter();
     async function signOut() {
         try {
-            await signOutOfBrowser();
-        } finally {
-            forgetSession(router.options.context.queryClient, false);
-            await router.navigate({ to: '/login' });
-            router.options.context.queryClient.clear();
+            await leaveApp(router, { dim: true });
+        } catch {
+            // Locked here and still signed in: the screen now says so and offers unlock.
+            cue('error');
         }
     }
 

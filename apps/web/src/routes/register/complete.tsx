@@ -106,14 +106,13 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
             setError('');
             try {
                 await authClient.register(enrollment.email, value.name, value.password);
-                form.reset();
+                // Kept, and busy, until the recovery step replaces the form.
                 cue('success');
                 router.options.context.queryClient.clear();
                 await router.navigate({ to: '/setup/recovery-key', replace: true });
             } catch (cause) {
                 cue('error');
                 setError(authError(cause));
-            } finally {
                 setPending(false);
             }
         },

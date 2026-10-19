@@ -32,7 +32,6 @@ import {
     TextQuoteIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { useStore } from 'zustand';
 import { operator, organise, workspace } from '@/components/app-sidebar';
 import { openDeviceDialog } from '@/components/device-control';
 import { Highlight } from '@/components/drive/highlight';
@@ -63,16 +62,15 @@ import {
     CommandShortcut,
 } from '@/components/ui/command';
 import { toast } from '@/components/ui/toast';
-import { authClient } from '@/lib/auth-client';
+import { useAuthView } from '@/lib/auth-view';
 import { driveClient, driveError, useCatalogueState } from '@/lib/drive';
 import { downloadNodes } from '@/lib/downloads';
 import { useOpenNode } from '@/lib/open-node';
 import { setPaletteOpen, setPaletteQuery, usePaletteState } from '@/lib/palette';
 import { useBillingEnabled } from '@/lib/queries';
-import { forgetSession } from '@/lib/session';
 import { cue } from '@/lib/sounds';
 import { emptyTrashAll } from '@/lib/trash';
-import { signOut as signOutOfBrowser } from '@/lib/sign-out';
+import { leaveApp } from '@/lib/sign-out';
 
 function Keys({ id }: { id: string }) {
     const shortcut = shortcuts.find((entry) => entry.id === id);
@@ -137,7 +135,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     const queryClient = useQueryClient();
     const billing = useBillingEnabled();
     const { theme, setTheme } = useTheme();
-    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
+    const unlocked = useAuthView((state) => state.unlockedUserId) === user.id;
     const [confirm, setConfirm] = useState<'empty-trash' | null>(null);
     const [showingWords, setShowingWords] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -177,10 +175,8 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     }
     async function signOut() {
         try {
-            await signOutOfBrowser();
-            forgetSession(queryClient, false);
-            await router.navigate({ to: '/login' });
-            queryClient.clear();
+            // The palette has closed, so the page dims while the device is cleared.
+            await leaveApp(router, { dim: true });
         } catch {
             cue('error');
             toast.add({ type: 'error', title: 'Could not sign out. Please try again.' });

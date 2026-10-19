@@ -100,7 +100,7 @@ export function EmailStep({
                 const email = value.email.trim();
                 await authClient.requestEmail(email, purpose, signup);
                 rememberSent({ email, purpose, intent: signup });
-                form.reset();
+                // Kept, and busy, until the check-your-email page replaces the form.
                 cue('success');
                 await router.navigate({
                     to: purpose === 'register' ? '/register/check-email' : '/recover/check-email',
