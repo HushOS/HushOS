@@ -59,8 +59,14 @@ export function registration(workspaceId = randomUUID()) {
     };
 }
 
-/* A registered account (a version 1 identity with random keys) and its personal workspace id. */
-export async function registered(email = `${randomUUID()}@hushos.test`) {
+/*
+ * A registered account (a version 1 identity with random keys) and its personal workspace id,
+ * random unless a test needs it to sort a certain way.
+ */
+export async function registered(
+    email = `${randomUUID()}@hushos.test`,
+    workspaceId: ReturnType<typeof randomUUID> = randomUUID(),
+) {
     const verification = randomUUID();
     const enrollment = randomUUID();
     await auth.createEnrollment({
@@ -78,7 +84,6 @@ export async function registered(email = `${randomUUID()}@hushos.test`) {
         ))
     )
         throw new Error('Enrollment did not verify.');
-    const workspaceId = randomUUID();
     const result = await auth.registerAccount({
         enrollmentTokenHash: sha256(enrollment),
         ...registration(workspaceId),

@@ -179,6 +179,8 @@ export async function moveAcross(
 
 async function refuseLarge(node: DriveNode): Promise<void> {
     if (node.kind === 'file') {
+        if (!node.currentVersion)
+            throw new Error(`“${node.name}” has no content yet, so it can’t move.`);
         const size = contentSize(node);
         // No size: its version envelope didn't open here, so nothing can be read or moved.
         if (size === null)

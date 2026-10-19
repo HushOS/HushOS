@@ -27,7 +27,6 @@ const groups = await import('./groups');
 const { poolUsage } = await import('./pool');
 const {
     accountIdentities,
-    personalWorkspaces,
     driveNodes,
     driveObjectDeletions,
     driveUploads,
@@ -460,22 +459,30 @@ describe('moves within one pool', () => {
 describe('a move racing its mover’s account deletion', () => {
     test('completion and deletion queue on the family folder; neither deadlocks', async () => {
         const ana = await person();
-        // Ben deletes his account, so he is a registered account with a live session.
-        const { user } = await registered();
+        // Ben deletes his account, so he is a registered account with a live session. His
+        // workspace's id sorts before the family folder's (fixed, below): locking the two in id
+        // order would take his workspace first, the reverse of what deleting his account takes,
+        // and deadlock every time.
+        const benSpace = '00000000-0000-4000-8000-000000000001' as const;
+        const areaId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+        const { user } = await registered(undefined, benSpace);
         await db.delete(accountIdentities).where(eq(accountIdentities.userId, user.id));
         await createTestIdentity(user.id);
-        const [personal] = await db
-            .select({ workspaceId: personalWorkspaces.workspaceId })
-            .from(personalWorkspaces)
-            .where(eq(personalWorkspaces.userId, user.id));
-        const benSpace = personal!.workspaceId;
         const token = await signedIn(user.id);
-        const { groupId, areaIds } = await createTestFamily({
+        const { groupId } = await createTestFamily({
             organizerId: ana.userId,
             members: [{ userId: user.id }],
-            areas: 6,
+            areas: 0,
             pooled: true,
         });
+        await db.insert(workspaces).values({
+            id: areaId,
+            ownerKind: 'group',
+            groupId,
+            areaKind: 'shared',
+            idSeed: randomBytes(16).toString('base64url'),
+        });
+        await db.insert(workspaceStorage).values({ workspaceId: areaId, baseQuotaBytes: 0n });
         await billing.applyGroupState({
             groupId,
             provider: 'polar',
@@ -483,10 +490,6 @@ describe('a move racing its mover’s account deletion', () => {
             subscriptions: [plan(4n * GIB)],
             graceMs: 3 * DAY,
         });
-        // A folder whose id sorts after his own workspace's: locking the two in id order would
-        // take his workspace first, the reverse of what deleting his account takes.
-        const areaId = areaIds.find((id) => id > benSpace);
-        if (!areaId) throw new Error('No family folder sorts after the account; run again.');
         await hold(areaId, user.id);
         const mine: Place = { workspaceId: benSpace, root: await rootOf(benSpace, user.id) };
         const area: Place = { workspaceId: areaId, root: await rootOf(areaId, user.id) };
