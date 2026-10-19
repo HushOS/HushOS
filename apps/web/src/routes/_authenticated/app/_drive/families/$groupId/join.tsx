@@ -105,7 +105,7 @@ function JoinFamily() {
         cue('success');
         toast.add({ type: 'success', title: `You’re in ${family}` });
         await afterFamilyChange(queryClient, userId);
-        await navigate({ to: '/app/families/$groupId', params: { groupId }, replace: true });
+        await navigate({ to: '/app/family', replace: true });
     }
 
     /* Each answer from join.ts, as a step. */
@@ -116,11 +116,7 @@ function JoinFamily() {
                 return void joined();
             case 'member':
                 // This device already holds the family: nothing to join.
-                return void navigate({
-                    to: '/app/families/$groupId',
-                    params: { groupId },
-                    replace: true,
-                });
+                return void navigate({ to: '/app/family', replace: true });
             case 'waiting':
                 return setStep((current) =>
                     current.kind === 'waiting' ? current : { kind: 'waiting', n: Date.now() },
@@ -251,8 +247,8 @@ function JoinFamily() {
                         : 'You haven’t accepted an invitation to it, or it has ended.'
                 }
             >
-                <Link to="/app/families" className="text-sm font-semibold text-primary underline">
-                    Families
+                <Link to="/app/family" className="text-sm font-semibold text-primary underline">
+                    Family
                 </Link>
             </EmptyState>
         );
@@ -260,7 +256,7 @@ function JoinFamily() {
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader
-                back={<Link to="/app/families">Families</Link>}
+                back={<Link to="/app/family">Family</Link>}
                 title={`Join ${family}`}
                 description={`Do this with ${themFull} on a call or in person. It takes a minute.`}
             />

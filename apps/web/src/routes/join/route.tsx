@@ -268,21 +268,13 @@ function OpenInvitation({
             {yours ? (
                 <AuthNote tone="info">
                     {joinInFamilyCopy(yours.name, invitation.name, invitation.expiresAt)}{' '}
-                    <Link
-                        to="/app/families/$groupId"
-                        params={{ groupId: yours.groupId }}
-                        className={authLink}
-                    >
+                    <Link to="/app/family" className={authLink}>
                         Open {yours.name}
                     </Link>
                 </AuthNote>
             ) : error !== null && code === 'already-member' ? (
                 <AuthNote tone="info" title="You’re already in this family">
-                    <Link
-                        to="/app/families/$groupId"
-                        params={{ groupId: invitation.groupId }}
-                        className={authLink}
-                    >
+                    <Link to="/app/family" className={authLink}>
                         Open {invitation.name}
                     </Link>
                 </AuthNote>

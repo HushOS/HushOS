@@ -9,6 +9,7 @@ import {
     ReplaceSharingKeysDialog,
 } from '@/components/account-dialogs';
 import { AccountDevices } from '@/components/account-devices';
+import { AccountFamily } from '@/components/account-family';
 import { CopyValue } from '@/components/copy-value';
 import { openDeviceDialog } from '@/components/device-control';
 import { PageHeader } from '@/components/page-header';
@@ -31,7 +32,7 @@ export const Route = createFileRoute('/_authenticated/app/account')({
 
 /*
  * Account: somewhere people come rarely and want to leave quickly. Name and
- * password, the recovery phrase, the devices signed in, what this browser does, and, folded away,
+ * password, the recovery phrase, your family (or making one), the devices signed in, what this browser does, and, folded away,
  * the heavy things: replacing sharing keys, rotating the account key, the
  * account ID, deleting the
  * account. Each of those asks once, in a dialog.
@@ -102,6 +103,8 @@ function AccountPage() {
                         <span className="text-muted-foreground">24 words</span>
                     </Setting>
                 </SettingsGroup>
+
+                <AccountFamily userId={user.id} />
 
                 <AccountDevices />
 

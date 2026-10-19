@@ -1,6 +1,6 @@
 import type { GroupRole } from '@hushos/crypto';
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
 import { familiesSyncAllKey, familySynced } from '@/lib/families-keys';
@@ -28,9 +28,11 @@ import { syncAll, syncGroup, type SyncResult } from '@/lib/groups/sync';
 
 /* The shell's part (keys, capabilities, route 2's list), here for the families pages. */
 export {
+    activeFamily,
     capabilitiesQueryOptions,
     familiesQueryOptions,
     familyKeys,
+    rolesLine,
     useGroupsEnabled,
 } from '@/lib/families-shell';
 
@@ -85,12 +87,6 @@ export function useUnlocked(userId: string) {
     return useStore(authClient.store, (state) => state.unlockedUserId === userId);
 }
 
-const signatureOf = (groups: readonly GroupSummary[]) =>
-    groups
-        .map((group) => `${group.id}:${group.state}:${group.rosterVersion}`)
-        .sort()
-        .join('|');
-
 export type FamiliesSync = {
     results: Map<string, SyncResult | { status: 'failed'; error: string }>;
     notices: GroupNotice[];
@@ -100,8 +96,9 @@ export type FamiliesSync = {
  * The app-wide pass: what the outbox holds is sent again, then every family is
  * synced. The Drive runtime runs it once the account is unlocked and Drive is
  * open, on servers that serve families, loading this module only then
- * (components/drive/drive-shell.tsx, under the same query key); the Families
- * page reads the same query.
+ * (components/drive/drive-shell.tsx, under the same query key). It empties the
+ * outbox before any family page syncs, so Account → Family (/app/family)
+ * reads the same query, never starting it, and shows its notices.
  */
 export async function syncFamilies(
     userId: string,
@@ -168,28 +165,6 @@ export const familiesSyncQueryOptions = (userId: string) =>
         refetchOnWindowFocus: true,
         retry: false,
     });
-
-/*
- * Every family synced, after the outbox is sent again: the runtime's pass, run
- * again whenever route 2's versions move, so a member list that moved on the
- * server syncs again by itself.
- */
-export function useFamiliesSync(userId: string, groups: readonly GroupSummary[] | undefined) {
-    const unlocked = useUnlocked(userId);
-    const signature = groups ? signatureOf(groups) : null;
-    const query = useQuery({
-        ...familiesSyncQueryOptions(userId),
-        enabled: unlocked && signature !== null,
-    });
-    const seen = useRef(signature);
-    const { refetch } = query;
-    useEffect(() => {
-        if (signature !== null && seen.current !== null && seen.current !== signature)
-            void refetch();
-        seen.current = signature;
-    }, [signature, refetch]);
-    return query;
-}
 
 /*
  * One family synced (after the outbox), keyed by its state and member list
@@ -266,16 +241,6 @@ export function useFamilySync(
 /* After any change: route 2, the family and its sync read again. */
 export function afterFamilyChange(queryClient: QueryClient, userId: string) {
     return queryClient.invalidateQueries({ queryKey: familyKeys.user(userId) });
-}
-
-/* How a member reads in a list: the roles in words, never colour alone. */
-export function rolesLine(roles: readonly string[]) {
-    const organizer = roles.includes('billing');
-    const manages = roles.includes('members');
-    if (organizer && manages) return 'Organizer · Manages the family';
-    if (organizer) return 'Organizer';
-    if (manages) return 'Manages the family';
-    return 'Member';
 }
 
 export function canManage(roles: readonly string[] | undefined) {

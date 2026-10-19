@@ -38,11 +38,11 @@ import {
     TagIcon,
     Trash2Icon,
     ContactIcon,
-    UsersIcon,
+    FoldersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { familyBillingQueryOptions } from '@/lib/family-billing';
-import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
+import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
 
 export type NavItem = {
     to:
@@ -52,7 +52,6 @@ export type NavItem = {
         | '/app/shared'
         | '/app/account'
         | '/app/people'
-        | '/app/families'
         | '/app/tags'
         | '/app/billing'
         | '/app/recovery-key'
@@ -64,8 +63,6 @@ export type NavItem = {
     icon: typeof FolderIcon;
     active: (pathname: string) => boolean;
     billing?: boolean;
-    /* Shown only when the server serves families (`/drive/capabilities`). */
-    groups?: boolean;
 };
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -94,13 +91,6 @@ export const organise: NavItem[] = [
         label: 'People you share with',
         icon: ContactIcon,
         active: under('/app/people'),
-    },
-    {
-        to: '/app/families',
-        label: 'Families',
-        icon: UsersIcon,
-        active: (pathname) => pathname === '/app/families' || pathname === '/app/families/',
-        groups: true,
     },
 ];
 export const operator: NavItem[] = [
@@ -394,54 +384,61 @@ function NavGroup({
 }
 
 /*
- * Each family the account is in, as one row under My files (decision D1), named after the
- * family. A row opens the family's folders (its space); one you accepted but are not in yet
- * opens the join screen. The row stays lit on the family's own page too.
+ * The account's family (one at most, docs/families-shared-pool.md 7.1): its
+ * name and avatar head the sidebar, under the brand, leading to Account →
+ * Family (/app/family); that slot is where the switcher goes when companies
+ * arrive. Someone in no family, or only waiting to join, has none.
  */
-function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) {
+function useYourFamily(userId: string) {
     const enabled = useGroupsEnabled();
-    const { data: families } = useQuery({ ...familiesQueryOptions(userId), enabled });
-    if (!enabled || !families || families.length === 0) return null;
+    const { data } = useQuery({ ...familiesQueryOptions(userId), enabled });
+    return enabled ? activeFamily(data) : undefined;
+}
+
+function FamilyHeader({ userId, pathname }: { userId: string; pathname: string }) {
+    const family = useYourFamily(userId);
+    if (!family) return null;
+    return (
+        <SidebarMenu data-family-header>
+            <SidebarMenuItem>
+                <SidebarMenuButton
+                    render={<Link to="/app/family" />}
+                    isActive={pathname === '/app/family' || pathname === '/app/family/'}
+                    tooltip={family.name}
+                    className={cn(item, collapsed)}
+                >
+                    {/* Collapsed, the avatar stays and the name goes (the last span). */}
+                    <PersonAvatar
+                        name={family.name}
+                        seed={family.id}
+                        size={20}
+                        className="-mx-px"
+                    />
+                    <span className="truncate font-semibold">{family.name}</span>
+                </SidebarMenuButton>
+            </SidebarMenuItem>
+        </SidebarMenu>
+    );
+}
+
+/* Family folders, beside My files (which stays private to you): the family's space. */
+function FamilyFolders({ userId, pathname }: { userId: string; pathname: string }) {
+    const family = useYourFamily(userId);
+    if (!family) return null;
+    const space = `/app/s/${family.id}`;
     return (
         <SidebarMenu className="mt-0.5 gap-0.5">
-            {families.map((family) => {
-                const page = `/app/families/${family.id}`;
-                const space = `/app/s/${family.id}`;
-                return (
-                    <SidebarMenuItem key={family.id}>
-                        <SidebarMenuButton
-                            render={
-                                family.state === 'accepted' ? (
-                                    <Link
-                                        to="/app/families/$groupId/join"
-                                        params={{ groupId: family.id }}
-                                    />
-                                ) : (
-                                    <Link to="/app/s/$groupId" params={{ groupId: family.id }} />
-                                )
-                            }
-                            isActive={[page, space].some(
-                                (base) => pathname === base || pathname.startsWith(`${base}/`),
-                            )}
-                            tooltip={family.name}
-                            className={cn(item, collapsed)}
-                        >
-                            {/*
-                             * The family's avatar, as on the Families page, so two families' rows
-                             * tell apart; the Families row keeps the icon. Collapsed, it stays and
-                             * the label goes (the last span).
-                             */}
-                            <PersonAvatar
-                                name={family.name}
-                                seed={family.id}
-                                size={20}
-                                className="-mx-px"
-                            />
-                            <span className="truncate">{family.name}</span>
-                        </SidebarMenuButton>
-                    </SidebarMenuItem>
-                );
-            })}
+            <SidebarMenuItem>
+                <SidebarMenuButton
+                    render={<Link to="/app/s/$groupId" params={{ groupId: family.id }} />}
+                    isActive={pathname === space || pathname.startsWith(`${space}/`)}
+                    tooltip="Family folders"
+                    className={cn(item, collapsed)}
+                >
+                    <FoldersIcon aria-hidden="true" />
+                    <span className="truncate">Family folders</span>
+                </SidebarMenuButton>
+            </SidebarMenuItem>
         </SidebarMenu>
     );
 }
@@ -455,7 +452,6 @@ export function AppSidebar({
     const { state, setOpenMobile } = useSidebar();
     const router = useRouter();
     const billing = useBillingEnabled();
-    const groups = useGroupsEnabled();
     useEffect(
         () => router.subscribe('onBeforeNavigate', () => setOpenMobile(false)),
         [router, setOpenMobile],
@@ -471,17 +467,14 @@ export function AppSidebar({
                 />
             </SidebarHeader>
             <SidebarContent className="gap-5 px-4 pt-5 rail:px-2">
+                <FamilyHeader userId={user.id} pathname={pathname} />
                 <SidebarGroup className={group}>
                     <NavGroup items={workspace.slice(0, 2)} pathname={pathname} />
-                    <FamilyRows userId={user.id} pathname={pathname} />
+                    <FamilyFolders userId={user.id} pathname={pathname} />
                     <NavGroup items={workspace.slice(2)} pathname={pathname} className="mt-0.5" />
                 </SidebarGroup>
                 <SidebarGroup className={group}>
-                    <NavGroup
-                        items={organise.filter((entry) => !entry.groups || groups)}
-                        pathname={pathname}
-                        small
-                    />
+                    <NavGroup items={organise} pathname={pathname} small />
                 </SidebarGroup>
                 {user.role === 'admin' && (
                     <SidebarGroup className="border-t border-rule p-0 pt-4">

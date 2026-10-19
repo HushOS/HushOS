@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { billingEnv } from '@hushos/env/billing';
 import { and, count, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import {
     activeRotation,
@@ -2244,6 +2245,37 @@ export async function openInvitation(tokenHash: Buffer) {
             ),
         );
     return row ?? null;
+}
+
+/*
+ * The open invitations addressed to this account's own (verified) address, to
+ * families it is not already in or waiting for: what Account → Family lists.
+ * No token: accepting still goes through the emailed link (decision 6).
+ */
+export async function openInvitationsFor(userId: string) {
+    const inviter = alias(users, 'inviter');
+    return db
+        .select({
+            id: groupInvitations.id,
+            name: groups.name,
+            inviterName: inviter.name,
+            expiresAt: groupInvitations.expiresAt,
+        })
+        .from(groupInvitations)
+        .innerJoin(users, eq(users.normalizedEmail, groupInvitations.normalizedEmail))
+        .innerJoin(groups, eq(groups.id, groupInvitations.groupId))
+        .leftJoin(inviter, eq(inviter.id, groupInvitations.invitedBy))
+        .where(
+            and(
+                eq(users.id, userId),
+                eq(groupInvitations.state, 'open'),
+                sql`${groupInvitations.expiresAt} > now()`,
+                isNull(groups.dissolvedAt),
+                eq(groups.kind, 'family'),
+                sql`not exists (select 1 from ${groupMemberships} m where m.group_id = ${groups.id} and m.user_id = ${users.id} and m.state in ('accepted', 'active'))`,
+            ),
+        )
+        .orderBy(groupInvitations.expiresAt);
 }
 
 export type AcceptResult =
