@@ -132,7 +132,7 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         if (recoverInApp == null) TextButton(onClick = model::startRecovery) { Text("Forgot your password?") }
         else {
             Text("Forgot your password?", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S2))
-            TextButton(onClick = recoverInApp) { Text("Finish recovery in the HushOS app") }
+            TextButton(onClick = recoverInApp) { Text("Recover your account in the HushOS app") }
         }
         // Accounts are made on the web; said as plain text, with no link to plans or pricing.
         Text("New to HushOS? Create an account at ${if (custom) hostOf(state.origin) else "hushos.com"}.", style = MaterialTheme.typography.bodyMedium,

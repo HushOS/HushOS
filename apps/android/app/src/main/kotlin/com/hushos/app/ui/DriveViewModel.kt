@@ -926,6 +926,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // Before any session is stored: a picker's sign-in screen waits for the new words to be confirmed.
         com.hushos.app.data.RecoveryWords.begun()
         viewModelScope.launch {
+          try {
             val origin = state.value.origin
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -948,6 +949,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     recovery = recovery?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
                 },
             )
+          } finally {
+            // Cancelled (the view model went) or failed: no new words are on screen, so nothing waits for them.
+            if (recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
+          }
         }
     }
 
@@ -1210,6 +1215,25 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }, done)
 
     fun clearSignedOut() = _state.update { it.copy(signedOutNotice = false, accountDeleted = false, removed = false) }
+
+    /*
+     * Whether this account's recovery words still wait to be confirmed as saved, as the server keeps it (a reset clears
+     * it, the word check sets it), so it survives the app being stopped: true or false, false too when there are no
+     * words to show, and null when the server couldn't be asked.
+     */
+    suspend fun recoveryWordsUnsaved(): Boolean? = withContext(Dispatchers.IO) {
+        try {
+            !Auth.recoveryBackup(context).second
+        } catch (error: com.hushos.app.data.AuthUnreachable) {
+            null
+        } catch (error: NotAuthenticated) {
+            null
+        } catch (error: com.hushos.app.data.AuthFailure) {
+            false
+        } catch (error: Exception) {
+            null
+        }
+    }
 
     /* The phrase, the recovery key for the kit file, and whether the phrase was confirmed as saved. */
     data class RecoveryKit(val phrase: String, val recovery: org.json.JSONObject, val confirmed: Boolean)

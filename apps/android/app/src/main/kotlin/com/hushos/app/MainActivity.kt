@@ -14,8 +14,10 @@ private const val SHORTCUT = "com.hushos.app.shortcut."
 
 class MainActivity : ComponentActivity() {
     companion object {
-        /* "Finish recovery in the HushOS app" from a file picker's sign-in screen: recovery starts here, signed out. */
+        /* "Recover your account in the HushOS app" from a file picker's sign-in screen: recovery starts here, signed out. */
         const val RECOVER = "com.hushos.app.RECOVER"
+        /* The picker's "Save your recovery words": the words and their check, unless a recovery is showing them already. */
+        const val SHOW_WORDS = "com.hushos.app.SHOW_WORDS"
     }
 
     private val model: DriveViewModel by viewModels()
@@ -55,15 +57,19 @@ class MainActivity : ComponentActivity() {
         when (intent?.action) {
             LinkHandoff.OPEN -> { LinkHandoff.take()?.let(model::openLink); return }
             com.hushos.app.data.TransferQueue.OPEN_TRANSFERS -> { model.openRequest("transfers"); return }
-            RECOVER -> { model.recoverWhenSignedOut(); return }
             com.hushos.app.data.TransferNotices.OPEN_PHONE -> { model.openRequest("phone"); return }
             com.hushos.app.data.TransferNotices.OPEN_FILES -> { model.openRequest("files::"); return }
         }
         intent?.action?.takeIf { it.startsWith(com.hushos.app.data.TransferNotices.OPEN_FOLDER + ":") }?.let {
             model.openRequest("files:${it.removePrefix(com.hushos.app.data.TransferNotices.OPEN_FOLDER + ":")}:"); return
         }
-        // Re-launched from Recents with the old intent: that link or shortcut was already opened.
+        // Re-launched from Recents with the old intent: that link, shortcut or recovery was already opened (signed out,
+        // Recents must bring back sign-in, not a recovery begun once from a picker).
         if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        when (intent.action) {
+            RECOVER -> { model.recoverWhenSignedOut(); return }
+            SHOW_WORDS -> { if (model.recovery == null) model.openRequest("words"); return }
+        }
         // A launcher shortcut: the + menu's action (or Search), signed in or once signed in.
         intent.action?.takeIf { it.startsWith(SHORTCUT) }?.let { model.shortcut(it.removePrefix(SHORTCUT)) }
     }

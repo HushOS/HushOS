@@ -1,48 +1,60 @@
 package com.hushos.app.ui
 
-import com.hushos.app.data.RecoveryWords
-import org.junit.After
+import com.hushos.app.ui.PickerReturn.Words
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /*
  * The picker's sign-in screen goes back to the picker once the account is open on this phone, wherever it was opened,
- * and never while a recovery's new words wait to be confirmed. The first version had two dead ends: a recovery (which
- * always finishes in the app's own screen, through its emailed link) or a sign-in in the app left the picker's screen
- * waiting forever on its own view model. These play those journeys out against the process-wide RecoveryWords the
- * app's screen sets, with the picker's own view model never signing in itself.
+ * and never while the account's recovery words wait to be confirmed as saved. Each case is a journey the person can
+ * take, with the picker's screen asking again as it resumes.
  */
 class PickerReturnTest {
-    @After fun reset() = RecoveryWords.settled()
+    private fun resumes(signedIn: Boolean, server: Boolean?, localUnsaved: Boolean = false) =
+        PickerReturn.ready(if (signedIn) Gate.SIGNED_IN else Gate.SIGNED_OUT, recovery = null, words = PickerReturn.words(server), localUnsaved = localUnsaved)
 
-    /* The picker's view model after it looked at the session again on resume (DriveViewModel.resumed). */
-    private fun pickerResumes(sessionOnPhone: Boolean) =
-        PickerReturn.ready(if (sessionOnPhone) Gate.SIGNED_IN else Gate.SIGNED_OUT, recovery = null, wordsUnsaved = RecoveryWords.unsaved.value)
-
+    /* The first dead end: a sign-in done in the app's own screen never let the picker's screen go back. */
     @Test
-    fun aRecoveryFinishedInTheAppReturnsOnlyAfterItsNewWordsAreConfirmed() {
-        assertFalse("signed out: stays", pickerResumes(sessionOnPhone = false))
-        // In the app's own screen: the kit is checked, then the session is stored before the new words show.
-        RecoveryWords.begun()
-        assertFalse("new words not seen yet: stays", pickerResumes(sessionOnPhone = true))
-        // The words are shown and confirmed (leaveRecovery).
-        RecoveryWords.settled()
-        assertTrue("account open, words saved: back to the picker", pickerResumes(sessionOnPhone = true))
+    fun aSignInInTheAppReturnsOnTheNextResume() {
+        assertFalse(resumes(signedIn = false, server = null))
+        assertTrue(resumes(signedIn = true, server = false))
+    }
+
+    /* A recovery finished in the app: back only once its words are confirmed, and the server says when. */
+    @Test
+    fun aRecoveryReturnsOnlyOnceTheServerHasTheWordsConfirmed() {
+        assertFalse(resumes(signedIn = true, server = true, localUnsaved = true))
+        assertTrue(PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(true), localUnsaved = true))
+        assertTrue(resumes(signedIn = true, server = false, localUnsaved = false))
+    }
+
+    /* The app stopped while the new words were on screen: the in-memory flag is gone, the server's answer is not. */
+    @Test
+    fun wordsLeftUnconfirmedWhenTheAppWasStoppedStillHold() {
+        assertFalse(resumes(signedIn = true, server = true, localUnsaved = false))
+        assertTrue(PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(true), localUnsaved = false))
+    }
+
+    /* A recovery cancelled after it began left the flag set with nothing to show: the server's "saved" wins. */
+    @Test
+    fun aStaleFlagWithNothingToSaveDoesNotHold() {
+        assertTrue(resumes(signedIn = true, server = false, localUnsaved = true))
+        assertFalse(PickerReturn.holding(Gate.SIGNED_IN, PickerReturn.words(false), localUnsaved = true))
+    }
+
+    /* The server can't be asked: only then does a recovery in this process decide. */
+    @Test
+    fun withoutTheServerTheLocalFlagDecides() {
+        assertFalse(resumes(signedIn = true, server = null, localUnsaved = true))
+        assertTrue(resumes(signedIn = true, server = null, localUnsaved = false))
     }
 
     @Test
-    fun aFailedRecoveryLeavesNothingWaiting() {
-        RecoveryWords.begun()
-        RecoveryWords.settled()
-        assertFalse(pickerResumes(sessionOnPhone = false))
-        // Then a plain sign-in in the app's own screen: the picker's screen goes back on its next resume.
-        assertTrue(pickerResumes(sessionOnPhone = true))
-    }
-
-    @Test
-    fun theGateStaysWhileChecking() {
-        assertFalse(PickerReturn.ready(Gate.CHECKING, null, wordsUnsaved = false))
-        for (step in DriveViewModel.RecoveryStep.entries) assertFalse("left during $step", PickerReturn.ready(Gate.SIGNED_IN, step, wordsUnsaved = false))
+    fun nothingReturnsWhileCheckingOrDuringItsOwnRecovery() {
+        assertFalse(PickerReturn.ready(Gate.SIGNED_IN, null, Words.CHECKING, localUnsaved = false))
+        assertFalse(PickerReturn.holding(Gate.SIGNED_IN, Words.CHECKING, localUnsaved = false))
+        assertFalse(PickerReturn.ready(Gate.CHECKING, null, Words.SAVED, localUnsaved = false))
+        for (step in DriveViewModel.RecoveryStep.entries) assertFalse("left during $step", PickerReturn.ready(Gate.SIGNED_IN, step, Words.SAVED, localUnsaved = false))
     }
 }
