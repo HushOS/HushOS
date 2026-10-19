@@ -4,11 +4,13 @@ import { ExternalLinkIcon, ImageIcon } from 'lucide-react';
 import {
     type AnchorHTMLAttributes,
     type CSSProperties,
+    Fragment,
     type ImgHTMLAttributes,
     memo,
     type ReactNode,
     type RefObject,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -245,7 +247,9 @@ const UNPAINTED = new Uint32Array(0);
  * A line's tokens as (start, end, paint) triples, kept small: a token object per
  * token is several hundred bytes, and a large file has hundreds of thousands.
  * Spaces are skipped and a token the same colour as the one before joins it.
- * A line the tokens don't spell out exactly stays plain rather than misplaced.
+ * A line the tokens don't spell out exactly stays plain rather than misplaced;
+ * the one difference allowed is a CRLF line's carriage return, which the
+ * highlighter leaves out of its tokens.
  */
 function paintedLine(line: string, tokens: ColouredLine, ink: Ink) {
     const out: number[] = [];
@@ -260,7 +264,8 @@ function paintedLine(line: string, tokens: ColouredLine, ink: Ink) {
         }
         at = end;
     }
-    return at === line.length ? Uint32Array.from(out) : UNPAINTED;
+    const whole = at === line.length || (at === line.length - 1 && line.endsWith('\r'));
+    return whole ? Uint32Array.from(out) : UNPAINTED;
 }
 
 /*
@@ -407,9 +412,13 @@ function scrollParent(element: HTMLElement) {
     return null;
 }
 
-/* Paints the runs in view or within a tenth of it, and unpaints the rest. */
+/*
+ * Paints the runs in view or within a tenth of it, and unpaints the rest. A layout
+ * effect: when the same view is handed new text (Load whole file), React writes it
+ * into the same text nodes, and the old ranges must be gone before that is drawn.
+ */
 function usePaintNearView(code: RefObject<HTMLElement | null>, painter: Painter, enabled: boolean) {
-    useEffect(() => {
+    useLayoutEffect(() => {
         const element = code.current;
         if (!enabled || !element) return;
         const observer = new IntersectionObserver(
@@ -467,6 +476,98 @@ const SourceBlock = memo(function SourceBlock({
     );
 });
 
+/*
+ * Without custom highlights (Safari before 17.2, Firefox before 140) a file up to
+ * HIGHLIGHT_LIMIT is coloured as it was before them: one element per token, built a
+ * block at a time. Past the limit those browsers aren't offered colour at all, since
+ * that many elements are what made a large file slow down the whole page.
+ */
+function useColouredBlocks(lines: readonly string[], language: string | null) {
+    const [state, setState] = useState<{ lines: readonly string[]; blocks: ColouredLine[][] }>({
+        lines: [],
+        blocks: [],
+    });
+    useEffect(() => {
+        if (!language) return;
+        let active = true;
+        let blocks: ColouredLine[][] = [];
+        let pending: ColouredLine[] = [];
+        const publish = () => {
+            if (active) setState({ lines, blocks });
+        };
+        colourLines(
+            lines,
+            language,
+            (slice) => {
+                const before = blocks.length;
+                for (const line of slice) {
+                    pending.push(line);
+                    if (pending.length === RENDER_BLOCK) {
+                        blocks = [...blocks, pending];
+                        pending = [];
+                    }
+                }
+                if (blocks.length !== before) publish();
+            },
+            () => !active,
+        )
+            .then(() => {
+                if (!pending.length) return;
+                blocks = [...blocks, pending];
+                pending = [];
+                publish();
+            })
+            .catch((error: unknown) => {
+                // Plain text is the fallback; in development say why.
+                if (import.meta.env.DEV) console.error('highlight failed', error);
+            });
+        return () => {
+            active = false;
+        };
+    }, [lines, language]);
+    return state.lines === lines ? state.blocks : null;
+}
+
+/* A token's colours as a class, one rule per colour pair in a sheet of this page's own. */
+const tokenClasses = new Map<string, string>();
+let tokenSheet: CSSStyleSheet | null = null;
+function tokenClass(style: Record<string, string> | undefined) {
+    if (!style) return undefined;
+    const rule = Object.entries(style)
+        .map(([name, value]) => `${name}:${value}`)
+        .join(';');
+    let name = tokenClasses.get(rule);
+    if (!name) {
+        name = `rt-c${tokenClasses.size}`;
+        if (!tokenSheet) {
+            tokenSheet = new CSSStyleSheet();
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, tokenSheet];
+        }
+        tokenSheet.insertRule(`.${name}{${rule}}`, tokenSheet.cssRules.length);
+        tokenClasses.set(rule, name);
+    }
+    return name;
+}
+
+const ColouredBlock = memo(function ColouredBlock({ lines }: { lines: ColouredLine[] }) {
+    return (
+        <span className="rt-block" style={blockStyle(lines.length)}>
+            {lines.map((tokens, index) => (
+                <Fragment key={index}>
+                    <span className="line">
+                        {tokens.map((token, at) => (
+                            <span key={at} className={tokenClass(token.htmlStyle)}>
+                                {token.content}
+                            </span>
+                        ))}
+                    </span>
+                    {'\n'}
+                </Fragment>
+            ))}
+        </span>
+    );
+});
+
 /* A whole file of code: line numbers, coloured when possible, wrapped only on a phone. */
 export function CodeView({
     text,
@@ -485,8 +586,8 @@ export function CodeView({
     quiet?: boolean;
 }) {
     const [asked, setAsked] = useState(false);
-    // Without custom highlights (Safari before 17.2, Firefox before 140) code shows plain.
-    const colourable = canHighlight(language) && canPaint();
+    const paint = canPaint();
+    const colourable = canHighlight(language) && (paint || size <= HIGHLIGHT_LIMIT);
     const stage = colourable ? largeFileStage('colour', size) : 'fine';
     const colour = colourable && (stage === 'fine' || (stage === 'offer' && asked));
     const lines = useMemo(() => text.split('\n'), [text]);
@@ -502,9 +603,11 @@ export function CodeView({
         return out;
     }, [lines]);
     const painter = useMemo(() => new Painter(lines), [lines]);
-    const done = useColouring(painter, colour ? language : null) ?? 0;
+    const painted = useColouring(painter, colour && paint ? language : null) ?? 0;
+    const elements = useColouredBlocks(lines, colour && !paint ? language : null);
+    const done = paint ? painted : Math.min((elements?.length ?? 0) * RENDER_BLOCK, lines.length);
     const code = useRef<HTMLElement>(null);
-    usePaintNearView(code, painter, colour);
+    usePaintNearView(code, painter, colour && paint);
     return (
         <>
             {stage !== 'fine' && !quiet && (
@@ -532,11 +635,17 @@ export function CodeView({
             >
                 <Gutter count={lines.length} markLine={markLine} />
                 <div className="rt-source">
-                    <pre>
+                    <pre className={paint ? undefined : 'shiki'}>
                         <code ref={code}>
-                            {blocks.map((block) => (
-                                <SourceBlock key={block.first} {...block} />
-                            ))}
+                            {blocks.map((block, index) => {
+                                // Plain until a block's colour arrives, and for good where there is none.
+                                const coloured = elements?.[index];
+                                return coloured ? (
+                                    <ColouredBlock key={block.first} lines={coloured} />
+                                ) : (
+                                    <SourceBlock key={block.first} {...block} />
+                                );
+                            })}
                         </code>
                     </pre>
                 </div>

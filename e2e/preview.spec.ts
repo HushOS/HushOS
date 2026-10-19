@@ -31,9 +31,10 @@ test.beforeAll(async ({ browser }) => {
     page = await newPage(browser);
     await registerAccount(page);
     const dir = mkdtempSync(join(tmpdir(), 'hushos-gutter-'));
-    const files = ['gutter.ts', 'gutter.txt'].map((name) => {
+    // The same lines with Windows line ends, which the highlighter splits differently.
+    const files = ['gutter.ts', 'gutter.txt', 'gutter-crlf.ts'].map((name) => {
         const path = join(dir, name);
-        writeFileSync(path, lines());
+        writeFileSync(path, name.includes('crlf') ? lines().replaceAll('\n', '\r\n') : lines());
         return path;
     });
     // Past the colouring threshold (512 KB): offered Colour anyway. Dense code, about 228,000
@@ -52,7 +53,7 @@ test.beforeAll(async ({ browser }) => {
         .locator('input[type=file]')
         .first()
         .setInputFiles([...files, big]);
-    await expect(page.locator('[data-node-id]')).toHaveCount(3, { timeout: 90_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(4, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.close();
@@ -97,7 +98,7 @@ function tops(targets: number[]) {
     }, targets);
 }
 
-for (const name of ['gutter.ts', 'gutter.txt']) {
+for (const name of ['gutter.ts', 'gutter.txt', 'gutter-crlf.ts']) {
     test(`line numbers stay level with their lines across blank block ends (${name})`, async () => {
         await row(page, name).locator('button').first().dblclick(grip);
         await expect(dialog(page)).toContainText(name);
@@ -110,6 +111,10 @@ for (const name of ['gutter.ts', 'gutter.txt']) {
             await expect
                 .poll(async () => (await paintedWords(page)).slice(0, 2))
                 .toEqual(['const', 'line1']);
+            // Every line of the first run of lines is coloured, not just the first.
+            const run = await dialog(page).locator('.rt-source [data-run="0"]').textContent();
+            const names = (await paintedWords(page)).filter((word) => /^line\d+$/.test(word));
+            expect(names).toEqual(run!.match(/\bline\d+(?= =)/g));
         }
         const measured = await tops([1, 99, 102, 255, 257, 511, 513, 767, 769, 1000]);
         for (const { n, code, gutter } of measured) {
