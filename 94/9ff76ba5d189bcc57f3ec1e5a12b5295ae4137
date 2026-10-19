@@ -1,0 +1,25 @@
+packages/crypto/src/session.drive.test.ts
+  s_c56e31c87cddde::t_2bd86912686729 701,952,973,987-1022,1083,1098
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_1b744f97d927ff 587-590,593,599-600,1158-1159,1169,1172-1173,1177,1236,2980-2982,2985-2986,2993,2995,3013-3014,3017,3111
+packages/drive/src/downloads.test.ts
+  s_c56e31c87cddde::t_107045c75ae04a 113-114,127-128,143,145-146,173-179,493-515
+packages/drive/src/downloads.ts
+  s_c56e31c87cddde::t_9010719cd68658 129,285-287,319,327,342,384-385,701-702,729
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "949ff76ba5d189bcc57f3ec1e5a12b5295ae4137",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
