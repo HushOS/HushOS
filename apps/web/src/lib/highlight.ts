@@ -157,9 +157,9 @@ export function languageFor(name: string): string | null {
  */
 export const HIGHLIGHT_LIMIT = 512 * 1024;
 /*
- * Past this, colouring isn't offered at all: a coloured file keeps one element
- * per token, about 300,000 for each MB, and past 4 MB the tab's memory and
- * every restyle become the problem rather than the wait.
+ * Past this, colouring isn't offered at all: a coloured file keeps every token's
+ * place in memory, about 300,000 for each MB, and colouring 4 MB of dense code
+ * already takes the better part of a minute.
  */
 export const COLOUR_CEILING = 4 * 1024 * 1024;
 
@@ -268,6 +268,15 @@ export async function colourLines(
         }
     }
     if (!cancelled() && slice.length) onSlice(slice);
+}
+
+/* The themes' own text colours: a token in them needs no colour of its own over the page's ink. */
+export async function themeInk() {
+    const instance = await highlighter();
+    return {
+        light: instance.getTheme(THEMES.light).fg.toLowerCase(),
+        dark: instance.getTheme(THEMES.dark).fg.toLowerCase(),
+    };
 }
 
 /*
