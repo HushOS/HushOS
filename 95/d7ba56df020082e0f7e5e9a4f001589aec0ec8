@@ -1,0 +1,19 @@
+e2e/preview.spec.ts
+  s_c56e31c87cddde::t_efba05d35aebbb 39-42,46-49,132-136,139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95d7ba56df020082e0f7e5e9a4f001589aec0ec8",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
