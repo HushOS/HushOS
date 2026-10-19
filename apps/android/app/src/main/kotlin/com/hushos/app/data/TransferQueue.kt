@@ -248,7 +248,10 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f)
 
-    override suspend fun doWork(): Result {
+    // One run per job id at a time: a rerun waits for a stopped run still inside the upload (JobLocks).
+    override suspend fun doWork(): Result = JobLocks.run(id.toString()) { work() }
+
+    private suspend fun work(): Result {
         // A rerun of a run that landed after its stop: already uploaded and said; its copy is gone, so nothing else is looked at.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
@@ -278,7 +281,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 is JobEnd.Done -> {
                     // Stopped while the last step was under way: it landed all the same, so it's said, and marked so a
                     // rerun WorkManager schedules does nothing (no duplicate, no same-name failure, nothing cancelled).
-                    if (end.stopped) LandedJobs.of(applicationContext).mark(this@UploadWorker.id.toString())
+                    if (end.stopped) LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
                     file.parentFile?.deleteRecursively()
                     TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
                     Result.success()
@@ -297,7 +300,9 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f, keeping = true)
 
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = JobLocks.run(id.toString()) { work() }
+
+    private suspend fun work(): Result {
         // A rerun of a run that kept the item after its stop: done already. The next keep queued behind it runs as usual.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
@@ -337,7 +342,7 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             when (end) {
                 is JobEnd.Done -> {
                     // Kept all the same: said, and marked so a rerun does nothing (the chain behind it isn't cancelled).
-                    if (end.stopped) LandedJobs.of(applicationContext).mark(this@KeepWorker.id.toString())
+                    if (end.stopped) LandedJobs.of(applicationContext).markOrLog(this@KeepWorker.id.toString())
                     end.value ?: run {
                         TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
                         Result.success()
