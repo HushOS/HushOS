@@ -28,6 +28,7 @@ jobs:
         outputs:
             browser: ${{ steps.paths.outputs.browser }}
             rust: ${{ steps.paths.outputs.rust }}
+            webkit: ${{ steps.paths.outputs.webkit }}
         steps:
             # A pull request checks out its merge commit: the first parent is the base.
             - uses: actions/checkout@v7
@@ -46,10 +47,12 @@ jobs:
                       echo "Not a pull request, or no diff to read: running everything."
                       echo "browser=true" >> "$GITHUB_OUTPUT"
                       echo "rust=true" >> "$GITHUB_OUTPUT"
+                      echo "webkit=true" >> "$GITHUB_OUTPUT"
                       exit 0
                   fi
                   browser=false
                   rust=false
+                  webkit=false
                   while IFS= read -r file; do
                       case "$file" in
                           # Served at /design.md, and the suite's own fixtures. In a case
@@ -63,10 +66,20 @@ jobs:
                       case "$file" in
                           crates/* | Cargo.toml | Cargo.lock | rust-toolchain* | packages/crypto/* | .github/workflows/ci.yml) rust=true ;;
                       esac
+                      # What the browser keeps on the device: sign-in, unlock, device keys and the
+                      # sealed stash. Storage APIs differ most in WebKit (#108 passed on Chromium
+                      # and broke device removal there), so these run WebKit without `full-ci`.
+                      case "$file" in
+                          packages/auth/src/* | packages/crypto/src/device* | packages/crypto/src/stash* | \
+                              apps/web/src/lib/auth* | apps/web/src/lib/session* | apps/web/src/lib/sign-out* | \
+                              apps/web/src/lib/stash* | e2e/devices.spec.ts | e2e/saved-unlock.spec.ts | \
+                              e2e/sealed-copy.spec.ts | e2e/recover.spec.ts) webkit=true ;;
+                      esac
                   done <<< "$files"
                   echo "browser=$browser" >> "$GITHUB_OUTPUT"
                   echo "rust=$rust" >> "$GITHUB_OUTPUT"
-                  echo "browser suites: $browser, Rust core tests: $rust"
+                  echo "webkit=$webkit" >> "$GITHUB_OUTPUT"
+                  echo "browser suites: $browser, Rust core tests: $rust, WebKit for on-device storage: $webkit"
 
     check:
         name: Check, migrate, and test
@@ -155,7 +168,7 @@ jobs:
     build-macos:
         name: Build (macOS, for WebKit)
         needs: changes
-        if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
+        if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || needs.changes.outputs.webkit == 'true' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
         runs-on: macos-15
         steps:
             - uses: actions/checkout@v7
@@ -345,12 +358,13 @@ jobs:
     # pages mid sign-up and differs in drag and drop, so its results said little about
     # Safari. macOS runners have no Docker: the infrastructure runs natively. It does not
     # gate deploys; a failure on main opens or updates an issue (webkit-report below).
-    # On pull requests only with the `full-ci` label: four macOS shards are the most
-    # expensive part of a run, and every push to main still runs them.
+    # On pull requests only with the `full-ci` label or a change to on-device storage (see
+    # `changes`): four macOS shards are the most expensive part of a run, and every push to
+    # main still runs them.
     e2e-webkit:
         name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
         needs: [changes, build-macos]
-        if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
+        if: needs.changes.outputs.browser == 'true' && (github.event_name == 'push' || needs.changes.outputs.webkit == 'true' || contains(github.event.pull_request.labels.*.name, 'full-ci'))
         runs-on: macos-15
         timeout-minutes: 40
         strategy:
@@ -566,7 +580,7 @@ jobs:
 
     # The one check branch protection needs: it fails when any job above failed or was
     # cancelled, and passes when the rest passed or were skipped by their own conditions
-    # (docs-only changes, Rust untouched, WebKit and images without `full-ci`). A job skipped
+    # (docs-only changes, Rust untouched, WebKit and images not asked for). A job skipped
     # because one it needs failed always comes with that failure here.
     ci-ok:
         name: CI ok
