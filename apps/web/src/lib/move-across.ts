@@ -105,7 +105,10 @@ export async function moveAcross(
         const reader = openReader(node, true);
         let id: string;
         try {
-            const { bytes } = await readAll(reader, MOVE_MAX_BYTES);
+            // Short of the whole file, the copy would replace the original with part of it.
+            const { bytes, truncated } = await readAll(reader, MOVE_MAX_BYTES);
+            if (truncated || bytes.byteLength !== contentSize(node))
+                throw new Error(`“${node.name}” couldn’t be read whole, so it wasn’t moved.`);
             const file: MemoryFile = {
                 kind: 'memory',
                 name,
@@ -176,7 +179,11 @@ export async function moveAcross(
 
 async function refuseLarge(node: DriveNode): Promise<void> {
     if (node.kind === 'file') {
-        if ((contentSize(node) ?? 0) > MOVE_MAX_BYTES)
+        const size = contentSize(node);
+        // No size: its version envelope didn't open here, so nothing can be read or moved.
+        if (size === null)
+            throw new Error(`“${node.name}” couldn’t be opened on this device, so it can’t move.`);
+        if (size > MOVE_MAX_BYTES)
             throw new Error(
                 `“${node.name}” is too large to move between your files and the family’s here. Download it, then upload it there.`,
             );

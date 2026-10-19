@@ -18,12 +18,16 @@ process.env.BILLING_PROVIDER = 'polar';
 const { closeDatabase, createTestAccount, createTestFamily, createTestIdentity, resetDatabase } =
     await import('../test/helpers');
 const signed = await import('../test/signed');
+const { registered, signedIn } = await import('../test/accounts');
+const auth = await import('./auth');
 const billing = await import('./billing');
 const { db } = await import('./client');
 const drive = await import('./drive');
 const groups = await import('./groups');
 const { poolUsage } = await import('./pool');
 const {
+    accountIdentities,
+    personalWorkspaces,
     driveNodes,
     driveObjectDeletions,
     driveUploads,
@@ -324,6 +328,17 @@ describe('moves within one pool', () => {
         expect(await exactUsage(groupId)).toEqual(before);
         expect(await own(ana.workspaceId)).toEqual({ used: 0n, reserved: 0n });
         expect(await own(area.workspaceId)).toEqual({ used: GIB, reserved: 0n });
+        // Done, the upload keeps no link from the copy back to where it came from.
+        const [link] = await db
+            .select({
+                workspaceId: driveUploads.moveWorkspaceId,
+                nodeId: driveUploads.moveNodeId,
+                versionId: driveUploads.moveVersionId,
+                by: driveUploads.moveBy,
+            })
+            .from(driveUploads)
+            .where(eq(driveUploads.id, moved.result.uploadId));
+        expect(link).toEqual({ workspaceId: null, nodeId: null, versionId: null, by: null });
         expect((await node(file.nodeId))?.purgedAt).not.toBeNull();
         expect((await node(moved.nodeId))?.currentVersionId).toBe(moved.versionId);
     });
@@ -440,6 +455,75 @@ describe('moves within one pool', () => {
         expect(await own(ana.workspaceId)).toEqual({ used: BigInt(rounds) * MIB, reserved: 0n });
         expect(await own(area.workspaceId)).toEqual({ used: BigInt(rounds) * MIB, reserved: 0n });
     }, 60_000);
+});
+
+describe('a move racing its mover’s account deletion', () => {
+    test('completion and deletion queue on the family folder; neither deadlocks', async () => {
+        const ana = await person();
+        // Ben deletes his account, so he is a registered account with a live session.
+        const { user } = await registered();
+        await db.delete(accountIdentities).where(eq(accountIdentities.userId, user.id));
+        await createTestIdentity(user.id);
+        const [personal] = await db
+            .select({ workspaceId: personalWorkspaces.workspaceId })
+            .from(personalWorkspaces)
+            .where(eq(personalWorkspaces.userId, user.id));
+        const benSpace = personal!.workspaceId;
+        const token = await signedIn(user.id);
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: ana.userId,
+            members: [{ userId: user.id }],
+            areas: 6,
+            pooled: true,
+        });
+        await billing.applyGroupState({
+            groupId,
+            provider: 'polar',
+            customerId: 'cus_family',
+            subscriptions: [plan(4n * GIB)],
+            graceMs: 3 * DAY,
+        });
+        // A folder whose id sorts after his own workspace's: locking the two in id order would
+        // take his workspace first, the reverse of what deleting his account takes.
+        const areaId = areaIds.find((id) => id > benSpace);
+        if (!areaId) throw new Error('No family folder sorts after the account; run again.');
+        await hold(areaId, user.id);
+        const mine: Place = { workspaceId: benSpace, root: await rootOf(benSpace, user.id) };
+        const area: Place = { workspaceId: areaId, root: await rootOf(areaId, user.id) };
+        const file = await stored(user.id, mine, 300n * MIB);
+        const moved = await begin(user.id, area, 300n * MIB, moveOf(file));
+        if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+        expect((await drive.startCompleting(areaId, moved.result.uploadId)).status).toBe('ok');
+        // A third connection holds Ben's workspace: the completion queues on it, then the
+        // deletion starts behind them both.
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let finishing: Promise<unknown>;
+        let deleting: Promise<unknown>;
+        try {
+            await blocker.query('begin');
+            await blocker.query('select id from workspaces where id = $1 for update', [benSpace]);
+            finishing = drive.finishCompleting(areaId, moved.result.uploadId, 300n * MIB).then(
+                (result) => result.status,
+                (error: unknown) => error,
+            );
+            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            deleting = auth
+                .deleteAccount({ userId: user.id, credentialVersion: 1, sessionTokenHash: token })
+                .then(
+                    (result) => result,
+                    (error: unknown) => error,
+                );
+            expect(await lockWaiters(blocker, 2)).toBeGreaterThanOrEqual(2);
+        } finally {
+            await blocker.query('commit');
+            await blocker.end();
+        }
+        // Both finish: the move first (it held the folder), then the deletion, never a deadlock
+        // (which the deletion answers as 'unavailable', and the completion throws).
+        expect(await finishing!).toBe('published');
+        expect(await deleting!).toBe(true);
+    });
 });
 
 describe('a move whose source changed', () => {
@@ -625,6 +709,36 @@ describe('a move whose source changed', () => {
         expect((await begin(ana.userId, area, 400n * MIB, moveOf(first))).result.status).toBe(
             'stale',
         );
+        expect(await own(area.workspaceId)).toEqual({ used: 0n, reserved: 0n });
+    });
+
+    test('the family’s plan lapses before it finishes: it leaned on one pool, so it is stale and the file stays', async () => {
+        const { ana, groupId, area } = await family(4n * GIB);
+        const file = await stored(ana.userId, ana, 300n * MIB);
+        const moved = await begin(ana.userId, area, 300n * MIB, moveOf(file));
+        if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+        // Within one pool: nothing reserved, the original's bytes stand in for the copy's.
+        expect(await uploadRow(moved.result.uploadId)).toMatchObject({ reservedBytes: 0n });
+        await billing.applyGroupState({
+            groupId,
+            provider: 'polar',
+            customerId: 'cus_family',
+            subscriptions: [
+                {
+                    ...plan(4n * GIB),
+                    status: 'past_due',
+                    currentPeriodStart: new Date(Date.now() - 34 * DAY),
+                    currentPeriodEnd: new Date(Date.now() - 4 * DAY),
+                },
+            ],
+            graceMs: 3 * DAY,
+        });
+        // Ana still holds both sides; only the pool is gone. Finishing would put 300 MiB in a
+        // folder with no room, paid for by bytes freed in another allowance.
+        expect((await complete(area.workspaceId, moved.result.uploadId, 300n * MIB)).status).toBe(
+            'move-stale',
+        );
+        expect((await node(file.nodeId))?.purgedAt).toBeNull();
         expect(await own(area.workspaceId)).toEqual({ used: 0n, reserved: 0n });
     });
 

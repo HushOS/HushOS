@@ -1808,10 +1808,14 @@ async function moveOfUpload(workspaceId: string, uploadId: string): Promise<Move
 
 /*
  * The workspace locks a completion or attach takes: the destination's, and for a
- * move the source's too, in id order (as lockAreas takes a family's folders), so
- * two moves in opposite directions queue instead of deadlocking. Returns each
- * one's next change sequence; the source's is null when its workspace is gone
- * (an account deleted, a family folder purged), which makes the move stale.
+ * move the source's too, in the order every write that holds both takes them
+ * (docs/families-shared-pool.md 3.6): a group's areas first, in id order, as
+ * lockAreas takes them, then a personal workspace, as account deletion does
+ * (departAllForDeletion's lockAreas, then the account's own workspace). Two moves
+ * in opposite directions queue on the area; a move racing its mover's account
+ * deletion queues too, instead of deadlocking. Returns each one's next change
+ * sequence; the source's is null when its workspace is gone (an account deleted,
+ * a family folder purged), which makes the move stale.
  */
 async function lockForCompletion(
     tx: Tx,
@@ -1822,8 +1826,15 @@ async function lockForCompletion(
     if (!move) return { changeSeq: await nextChangeSeq(tx, workspaceId, writer), sourceSeq: null };
     let changeSeq = 0;
     let sourceSeq: number | null = null;
-    const ids = [workspaceId, move.workspaceId].sort((a, b) =>
-        a.toLowerCase() < b.toLowerCase() ? -1 : 1,
+    // Read before any lock: who owns a workspace never changes.
+    const kinds = await tx
+        .select({ id: workspaces.id, ownerKind: workspaces.ownerKind })
+        .from(workspaces)
+        .where(inArray(workspaces.id, [workspaceId, move.workspaceId]));
+    const personal = (id: string) =>
+        kinds.find((kind) => kind.id === id)?.ownerKind === 'personal' ? 1 : 0;
+    const ids = [workspaceId, move.workspaceId].sort(
+        (a, b) => personal(a) - personal(b) || (a.toLowerCase() < b.toLowerCase() ? -1 : 1),
     );
     for (const id of ids) {
         if (id === workspaceId) {
@@ -1843,7 +1854,8 @@ async function lockForCompletion(
 /*
  * Whether a move may still finish, under both workspaces' locks (and the pool's,
  * for a move charged less than its copy; docs/families-shared-pool.md 3.8): the
- * source's workspace is there, its mover may still delete in it, a move that
+ * source's workspace is there, its mover may still delete in it and still write
+ * to the destination (not left, removed or held), a move that
  * leaned on the source's bytes is still within one pool (a member who left, or a
  * plan that ended, makes it two), and the file is as begin found it: not trashed
  * or deleted, nothing written to it (its change sequence: no rename, move, new or
@@ -1860,6 +1872,9 @@ async function moveStillHolds(tx: Tx, row: UploadRow, move: MoveRecord, sourceSe
         .where(eq(workspaces.id, move.workspaceId));
     if (!space || space.deletedAt) return false;
     if (!(await mayStillRemove(tx, move.by, move.workspaceId))) return false;
+    // And the destination still theirs: the expiry job completes with no writer, and must not
+    // land the copy where its mover can no longer open it while deleting their original.
+    if (!(await mayStillRemove(tx, move.by, row.workspaceId))) return false;
     // Charged in full, the copy spends nothing of the source's: one pool or two, it may land.
     if (row.ciphertextSize === null || row.reservedBytes < row.ciphertextSize) {
         const destination = await freeBytes(tx, row.workspaceId);
@@ -1892,6 +1907,25 @@ async function moveStillHolds(tx: Tx, row: UploadRow, move: MoveRecord, sourceSe
         .limit(1);
     if (pending) return false;
     return (await bytesFreedBy(tx, move.nodeId)) === move.freedBytes;
+}
+
+/*
+ * A move's copy is published: its source is purged in the same transaction, and
+ * the upload forgets where it came from, so no row links the two once it is done.
+ */
+async function settleMove(tx: Tx, uploadId: string, move: MoveRecord, sourceSeq: number) {
+    await purgeOne(tx, move.workspaceId, move.nodeId, sourceSeq);
+    await tx
+        .update(driveUploads)
+        .set({
+            moveWorkspaceId: null,
+            moveNodeId: null,
+            moveVersionId: null,
+            moveChangeSeq: null,
+            moveFreedBytes: null,
+            moveBy: null,
+        })
+        .where(eq(driveUploads.id, uploadId));
 }
 
 /*
@@ -1993,7 +2027,7 @@ async function finishCompletingOnce(
             node.currentVersionId,
             changeSeq,
         );
-        if (move) await purgeOne(tx, move.workspaceId, move.nodeId, sourceSeq!);
+        if (move) await settleMove(tx, uploadId, move, sourceSeq!);
         return published;
     });
 }
@@ -2124,7 +2158,7 @@ async function attachUploadOnce(
         const { changeSeq, sourceSeq } = await lockForCompletion(tx, workspaceId, writer, move);
         // A move's source goes with the copy's publish, in this transaction (finishCompleting).
         const settled = async <T>(published: T) => {
-            if (move) await purgeOne(tx, move.workspaceId, move.nodeId, sourceSeq!);
+            if (move) await settleMove(tx, uploadId, move, sourceSeq!);
             return published;
         };
         const [upload] = await tx

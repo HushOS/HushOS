@@ -329,9 +329,16 @@ function MovePicker({
                     </p>
                     {revoked && <p>{revoked}</p>}
                     {outOfFamily && (
-                        <p>
-                            Each file is signed as yours from now on, in place of whoever added it.
-                        </p>
+                        <>
+                            <p>
+                                It’s removed from the family folder for everyone in the family, and
+                                it doesn’t go to the family’s Trash.
+                            </p>
+                            <p>
+                                Each file is signed as yours from now on, in place of whoever added
+                                it.
+                            </p>
+                        </>
                     )}
                     <p>
                         {pooled

@@ -17,7 +17,8 @@ const { getStorageAllowance } = await import('./auth');
 const drive = await import('./drive');
 const { getStorage } = drive;
 const { db } = await import('./client');
-const { driveNodes, workspaceKeys, workspaceStorage } = await import('./schema');
+const { driveNodes, groupHolds, workspaceKeys, workspaceStorage } = await import('./schema');
+const groups = await import('./groups');
 
 beforeEach(resetDatabase);
 afterAll(closeDatabase);
@@ -118,31 +119,13 @@ test('without billing a pooled group’s folders read their own allowance, not t
     expect((await getStorage(older[0]!))?.allowance).toBe(10n * 1_073_741_824n);
 });
 
-/*
- * Without billing nothing is pooled (docs/families-shared-pool.md 8), so a member's own files
- * and the family's folder are two allowances: a move between them charges the copy to the
- * folder in full, as an upload, and still deletes the original in the completion's transaction.
- */
-test('without billing a move into a family folder needs the folder’s room, and the original goes with it', async () => {
-    const ana = await createTestAccount({ quotaBytes: 1000n });
-    await createTestIdentity(ana.userId);
-    const { areaIds } = await createTestFamily({ organizerId: ana.userId, areaQuotaBytes: 1000n });
-    const areaId = areaIds[0]!;
-    for (const workspaceId of [ana.workspaceId, areaId])
-        await db.insert(workspaceKeys).values({
-            workspaceId,
-            userId: ana.userId,
-            keyVersion: 1,
-            workspaceKeyVersion: 1,
-            wrappingSalt: randomBytes(32),
-            wrappingNonce: randomBytes(24),
-            encryptedKey: randomBytes(48),
-        });
+/* Uploads and moves as `userId` writes them, signed with their test identity. */
+function asWriter(userId: string) {
     async function rootOf(workspaceId: string) {
         const epoch = (await drive.allocateKeyEpochs(workspaceId, 1))!.from;
         const created = await signed.createRoot({
             workspaceId,
-            userId: ana.userId,
+            userId,
             id: randomUUID(),
             envelopes: {
                 keyEpoch: epoch,
@@ -165,7 +148,7 @@ test('without billing a move into a family folder needs the folder’s room, and
         const versionId = randomUUID();
         const result = await signed.beginUpload({
             workspaceId,
-            userId: ana.userId,
+            userId,
             node: {
                 existing: false,
                 id: nodeId,
@@ -193,6 +176,34 @@ test('without billing a move into a family folder needs the folder’s room, and
         });
         return { result, nodeId, versionId };
     }
+    return { rootOf, begin };
+}
+
+/* `userId` holds the workspace's key, as its owner or a member of the family whose folder it is. */
+async function hold(workspaceId: string, userId: string) {
+    await db.insert(workspaceKeys).values({
+        workspaceId,
+        userId,
+        keyVersion: 1,
+        workspaceKeyVersion: 1,
+        wrappingSalt: randomBytes(32),
+        wrappingNonce: randomBytes(24),
+        encryptedKey: randomBytes(48),
+    });
+}
+
+/*
+ * Without billing nothing is pooled (docs/families-shared-pool.md 8), so a member's own files
+ * and the family's folder are two allowances: a move between them charges the copy to the
+ * folder in full, as an upload, and still deletes the original in the completion's transaction.
+ */
+test('without billing a move into a family folder needs the folder’s room, and the original goes with it', async () => {
+    const ana = await createTestAccount({ quotaBytes: 1000n });
+    await createTestIdentity(ana.userId);
+    const { areaIds } = await createTestFamily({ organizerId: ana.userId, areaQuotaBytes: 1000n });
+    const areaId = areaIds[0]!;
+    for (const workspaceId of [ana.workspaceId, areaId]) await hold(workspaceId, ana.userId);
+    const { rootOf, begin } = asWriter(ana.userId);
     const mine = await rootOf(ana.workspaceId);
     const folder = await rootOf(areaId);
     const file = await begin(ana.workspaceId, mine);
@@ -239,3 +250,69 @@ test('without billing a move into a family folder needs the folder’s room, and
         .where(eq(driveNodes.id, file.nodeId));
     expect(original!.purgedAt).not.toBeNull();
 });
+
+/*
+ * The expiry job completes a move with no writer: it must hold the mover to the destination as
+ * well as the source. Ben moves his own file into the family's folder and, while the upload is
+ * completing, leaves the family or is held ahead of a removal. The route refuses to finish it
+ * (his access to the folder ended); the job, an hour later, must not publish the copy into a
+ * folder he can't open and delete his original: the move is stale, and his file stays his.
+ */
+test.each(['leaves the family', 'is held ahead of a removal'])(
+    'without billing a mover who %s while the move completes keeps their original',
+    async (change) => {
+        const ana = await createTestAccount({ quotaBytes: 1000n });
+        const ben = await createTestAccount({ quotaBytes: 1000n });
+        await createTestIdentity(ben.userId);
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: ana.userId,
+            members: [{ userId: ben.userId }],
+            areaQuotaBytes: 1000n,
+        });
+        const areaId = areaIds[0]!;
+        await hold(ben.workspaceId, ben.userId);
+        await hold(areaId, ben.userId);
+        const { rootOf, begin } = asWriter(ben.userId);
+        const mine = await rootOf(ben.workspaceId);
+        const folder = await rootOf(areaId);
+        const file = await begin(ben.workspaceId, mine);
+        if (file.result.status !== 'ok') throw new Error(file.result.status);
+        await drive.startCompleting(ben.workspaceId, file.result.uploadId);
+        await drive.finishCompleting(ben.workspaceId, file.result.uploadId, 100n);
+        const moved = await begin(areaId, folder, {
+            workspaceId: ben.workspaceId,
+            nodeId: file.nodeId,
+            versionId: file.versionId,
+        });
+        if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+        expect(
+            (await drive.startCompleting(areaId, moved.result.uploadId, ben.userId)).status,
+        ).toBe('ok');
+        if (change === 'leaves the family')
+            expect(await groups.leaveGroup(groupId, ben.userId)).toEqual({ status: 'left' });
+        else
+            await db.insert(groupHolds).values({
+                groupId,
+                userId: ben.userId,
+                expiresAt: new Date(Date.now() + 86_400_000),
+            });
+        // The route, as Ben: refused, the upload left completing.
+        await expect(
+            drive.finishCompleting(areaId, moved.result.uploadId, 100n, ben.userId),
+        ).rejects.toThrow(drive.AccessEndedError);
+        // The expiry job, as no one: stale, the copy released, the original untouched.
+        expect((await drive.finishCompleting(areaId, moved.result.uploadId, 100n)).status).toBe(
+            'move-stale',
+        );
+        const [original] = await db
+            .select({ purgedAt: driveNodes.purgedAt })
+            .from(driveNodes)
+            .where(eq(driveNodes.id, file.nodeId));
+        expect(original!.purgedAt).toBeNull();
+        const [area] = await db
+            .select({ used: workspaceStorage.usedBytes, reserved: workspaceStorage.reservedBytes })
+            .from(workspaceStorage)
+            .where(eq(workspaceStorage.workspaceId, areaId));
+        expect(area).toEqual({ used: 0n, reserved: 0n });
+    },
+);
