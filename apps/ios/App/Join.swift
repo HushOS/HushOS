@@ -451,7 +451,7 @@ struct JoinSections: View {
         case .compare(let shown, let changed):
             typed = ["", ""]
             step = .compare(shown, changed: changed, wrong: false)
-            focused = 0
+            // The first word field takes the keyboard once the fields are on screen (HiddenCode), every showing alike.
         case .wrongWords:
             // Most likely misheard: the same showing stays, both words to be read again.
             if case .compare(let shown, let changed, _) = step { step = .compare(shown, changed: changed, wrong: true) }
@@ -534,6 +534,12 @@ private struct HiddenCode: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Join code")
+        // Each showing (the first, Compare again, a changed code) puts the keyboard in its first field. Set once the
+        // field exists: focus set in the same update that brings the step on screen was dropped after Compare again.
+        .task(id: shown.hidden.map(String.init).joined(separator: ",") + shown.code.joined(separator: " ")) {
+            await Task.yield()
+            focused.wrappedValue = 0
+        }
     }
 }
 
