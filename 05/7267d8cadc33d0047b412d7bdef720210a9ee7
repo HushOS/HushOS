@@ -1,0 +1,65 @@
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_3369e6ec5f5b8e 150
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_f436fa32c88ef9 102-106,642-649
+apps/web/src/lib/billing.ts
+  s_c56e31c87cddde::t_3e92ed20f78657 29
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_c56e31c87cddde::t_6ff50a488f21c2 8,187-192,304-347
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_a617c47c48725c 179-186,188-192,197-198,411,428-429,434,436-469
+docs/self-hosting.md
+  s_c56e31c87cddde::t_dd87d1dd88b98b 69-70,202,543-549,576
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_e5af2862792e6c 1044,1047,1063-1076
+packages/billing/src/api.ts
+  s_c56e31c87cddde::t_c4f8284a14b261 71-90,139-140,171-175
+packages/billing/src/endings.ts
+  s_c56e31c87cddde::t_214c6dc69d7176 1-529
+packages/billing/src/groups.ts
+  s_c56e31c87cddde::t_27fe02ac0a2b02 9-10,359-363,947-958,1741-1793,1818,1822,1844,1891
+packages/billing/src/provider.ts
+  s_c56e31c87cddde::t_08f890edb47bf2 30-36,38,42,46
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_29c8ba5e57551a 2,195-197,202-224,561-562,712,716-719,721-786,818-819,890-901,2437-2438,2442-2447,3834-4301
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_3a139f9ae18606 10,32,35-42,90-97,101,104,106-109,112-135,153,508-509,604-605,704-713
+packages/db/drizzle/20261019150058_personal_plan_endings/migration.sql
+  s_c56e31c87cddde::t_2ec3629e0835d6 1-39
+packages/db/drizzle/20261019150058_personal_plan_endings/snapshot.json
+  s_c56e31c87cddde::t_52efb70574ddd6 1-13291
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_c91f743ed6d577 3,13,16-17,828-1048
+packages/db/src/pool.ts
+  s_c56e31c87cddde::t_741985df6ffb97 352-411
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_468a01ccdae4da 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_a1bdedb16ea30e 6,228-312
+packages/groups/src/server.billing.test.ts
+  s_c56e31c87cddde::t_a4bfea091a4ac3 573-616
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_b242c6635de537 33,1999,2018-2022
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_be39bfbcc73618 15,36-41,119-135
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_c56e31c87cddde::t_fde60a0c1d1be8 1-7,44-57,87-104
+packages/jobs/src/worker.ts
+  s_c56e31c87cddde::t_837cbb2f79a290 1,21,102-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "057267d8cadc33d0047b412d7bdef720210a9ee7",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
