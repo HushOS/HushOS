@@ -1,0 +1,41 @@
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_d790028f673fdf 40
+apps/ios/App/AppModel.swift
+  s_c56e31c87cddde::t_de622484033645 177-180,184-190
+apps/ios/App/BackgroundTransfers.swift
+  s_c56e31c87cddde::t_298092ef742f54 575-576
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionChange.swift
+  s_ea3b1eec5cf6d8::t_a84f09bc78e17c 33-44
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_c56e31c87cddde::t_528904a3779b41 58-74,77-78,80,82-87,91-120,136
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionForgetTests.swift
+  s_c56e31c87cddde::t_661f52f6897800 1-41
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ShareSweepTests.swift
+  s_c56e31c87cddde::t_6e22c139fadf80 1-84
+apps/ios/Share/SaveModel.swift
+  s_c56e31c87cddde::t_214a164f186095 55-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "71b12c4fde7d22c21b00901997986c482b42c87a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_ea3b1eec5cf6d8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3807e4bd-9e05-40a3-912d-69bfc92642dc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
