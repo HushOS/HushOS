@@ -32,7 +32,8 @@ object KeepRules {
      * whole job (WorkManager tries it again with its own backoff); anything else belongs to
      * that file, and the rest of the folder is kept.
      */
-    fun failsTheJob(error: Exception): Boolean = error is Unreachable || error is NotAuthenticated
+    fun failsTheJob(error: Exception): Boolean =
+        error is Unreachable || error is NotAuthenticated || error is kotlin.coroutines.cancellation.CancellationException
 
     /* The folder row's line when some of its files couldn't be kept. */
     fun folderLine(failures: Int): String? = when (failures) {

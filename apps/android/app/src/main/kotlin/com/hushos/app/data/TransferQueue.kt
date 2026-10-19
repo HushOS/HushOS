@@ -254,13 +254,15 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
         return withContext(Dispatchers.IO) {
-            try {
-                val folder = inputData.getString("folder")!!
+            val folder = inputData.getString("folder")!!
+            val end = stoppable({ isStopped }) { checkStop ->
                 if (vault.item(folder) == null) vault.resolve(folder)
                 val replacing = inputData.getString("replacing")?.let { vault.resolve(it) }
                 val mime = inputData.getString("mime")
                 var shown = 0
                 vault.upload(file, name, mime, folder, replacing, vault.makeThumbnail(file, mime)) { fraction ->
+                    // A stop (Cancel, or the network constraint lost) abandons the upload here; the vault aborts it.
+                    checkStop()
                     setProgressAsync(workDataOf("fraction" to fraction))
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
@@ -268,14 +270,17 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                         runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), fraction)) }
                     }
                 }
-                file.parentFile?.deleteRecursively()
-                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
-                Result.success()
-            } catch (error: Exception) {
-                // Stopped by WorkManager (constraints lost, cancelled): it reschedules or drops the job itself.
-                error.rethrowIfCancelled()
+            }
+            when (end) {
+                is JobEnd.Done -> {
+                    file.parentFile?.deleteRecursively()
+                    TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
+                    Result.success()
+                }
+                // Nothing said, nothing recorded: WorkManager drops a cancelled job and reschedules one whose constraint went.
+                JobEnd.Stopped -> Result.retry()
                 // A failure keeps the copy: the panel can retry from it, and removes it when the row goes.
-                outcome(error, inputData)
+                is JobEnd.Failed -> outcome(end.error, inputData)
             }
         }
     }
@@ -291,7 +296,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.")
         return withContext(Dispatchers.IO) {
-            try {
+            // Done(null): kept, and said; Done(a result): ended another way (the folder or share went), said by that result.
+            val end = stoppable({ isStopped }) { checkStop ->
                 val id = inputData.getString("node")!!
                 val folder = inputData.getBoolean("folder", false)
                 val shareRoot = inputData.getString("share")
@@ -299,16 +305,17 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     if (folder) vault.openKeptFolder(id, shareRoot) else vault.resolve(id)
                 } catch (error: NotFound) {
                     // A kept folder deleted from the drive: its files leave the phone with it.
-                    if (folder) { Offline.forgetFolder(applicationContext, id); return@withContext Result.success() }
+                    if (folder) { Offline.forgetFolder(applicationContext, id); return@stoppable Result.success() }
                     throw error
                 }
                 if (item == null) {
                     // The share stopped: what was kept from it goes, and the app says so.
                     Offline.forgetFolder(applicationContext, id)
-                    return@withContext Result.success(workDataOf("unshared" to name))
+                    return@stoppable Result.success(workDataOf("unshared" to name))
                 }
                 var shown = 0
                 val report = { fraction: Float, done: Int, total: Int ->
+                    checkStop()
                     setProgressAsync(workDataOf("fraction" to fraction, "done" to done, "total" to total))
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
@@ -317,11 +324,15 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     }
                 }
                 if (item.isFolder) vault.keepFolder(item, shareRoot, report) else vault.keepDownloaded(item) { report(it, 0, 1) }
-                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
-                Result.success()
-            } catch (error: Exception) {
-                error.rethrowIfCancelled()
-                outcome(error)
+                null
+            }
+            when (end) {
+                is JobEnd.Done -> end.value ?: run {
+                    TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
+                    Result.success()
+                }
+                JobEnd.Stopped -> Result.retry()
+                is JobEnd.Failed -> outcome(end.error)
             }
         }
     }
