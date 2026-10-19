@@ -1,0 +1,41 @@
+DESIGN.md
+  s_c56e31c87cddde::t_3f4da8b61c48c1 477
+apps/web/src/components/families/family-alerts.tsx
+  s_c56e31c87cddde::t_0df79c4d8307ed 2,42-43,45-48
+apps/web/src/components/families/family-billing.tsx
+  s_c56e31c87cddde::t_dac7b95990d7f8 421-431,481
+apps/web/src/components/families/let-in-dialog.tsx
+  s_c56e31c87cddde::t_d520c655f18bac 8,404-407,414-422,479-484,491,494-496,498-508
+apps/web/src/components/families/members.tsx
+  s_c56e31c87cddde::t_fa0a593be05934 250-254
+apps/web/src/components/families/remove-dialog.tsx
+  s_c56e31c87cddde::t_e983f117c79329 32-33,43-44,76-78,83-86,89,121-127
+apps/web/src/components/families/word-list.tsx
+  s_c56e31c87cddde::t_fa5bb5f6a3a5bd 21
+apps/web/src/components/fingerprint-words.tsx
+  s_c56e31c87cddde::t_07f444235608dd 23,27
+apps/web/src/lib/groups/removal.test.ts
+  s_c56e31c87cddde::t_fcc4d52a28b236 140-141
+apps/web/src/lib/groups/removal.ts
+  s_c56e31c87cddde::t_885d8b237cb572 179-180,185,189-190
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  s_c56e31c87cddde::t_6552d55278c5e6 321-322,337-338,461
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_0f8e6e58436676 996,1001-1002,1158-1160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f1c20d99a6838f4e957d3673a65dea051d20335d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
