@@ -355,9 +355,11 @@ async function recordThrough(doc: Json, through: number) {
 }
 
 /*
- * Every case's name and what it declares, as previewDoc gives them, without
- * the histories and records it signs and seals for the core to run over: all
- * a check of the core's run against this twin's cases reads.
+ * Every case's name and what it declares, as previewDoc gives them: all a
+ * check of the core's run against this twin's cases reads. The shared family
+ * (people and histories, signed once per file by family()) is still built,
+ * since the declared join codes come from it; what is skipped is the rest of
+ * previewDoc, the made-up history it signs and the records it seals.
  */
 export async function previewCases(): Promise<Json[]> {
     return (await specs()).map(caseJson);

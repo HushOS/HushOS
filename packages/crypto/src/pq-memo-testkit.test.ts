@@ -20,4 +20,8 @@ test('a remembered verdict is never handed to another signature, message, key or
     expect(memo.mlDsaVerify(signature, message, signer.publicKey, 'ctx2')).toBe(false);
     // And the honest one still holds after the refusals around it.
     expect(memo.mlDsaVerify(signature, message, signer.publicKey, 'ctx')).toBe(true);
+    // Changed in place, the same array is another signature: remembered by its bytes, not by
+    // which array it is, so a verdict for the old bytes is never handed to the new ones.
+    signature[100]! ^= 1;
+    expect(memo.mlDsaVerify(signature, message, signer.publicKey, 'ctx')).toBe(false);
 });
