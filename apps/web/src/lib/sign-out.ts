@@ -80,7 +80,10 @@ export async function leaveApp(
     }
 }
 
-/* What an unlocked Drive holds in memory beside the worker's keys, which the lock wiped. */
+/*
+ * What an unlocked Drive holds in memory beside the worker's keys, which the lock wiped. Every
+ * part is let go whatever another does; the first failure is thrown once all have run.
+ */
 async function forgetOpened() {
     const [{ driveClient, closeSpaces }, { forgetThumbnails }, { forgetPreviews }] =
         await Promise.all([
@@ -88,8 +91,18 @@ async function forgetOpened() {
             import('@/lib/thumbnails'),
             import('@/lib/previews'),
         ]);
-    driveClient.close();
-    closeSpaces();
-    forgetThumbnails();
-    forgetPreviews();
+    const failures: unknown[] = [];
+    for (const forget of [
+        () => driveClient.close(),
+        closeSpaces,
+        forgetThumbnails,
+        forgetPreviews,
+    ]) {
+        try {
+            forget();
+        } catch (error) {
+            failures.push(error);
+        }
+    }
+    if (failures.length) throw failures[0];
 }

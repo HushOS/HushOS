@@ -1,6 +1,29 @@
 {
     "extends": ["../../packages/config/oxlint.json"],
     "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y"],
-    "env": { "browser": true },
-    "ignorePatterns": ["src/routeTree.gen.ts", "dist/**", ".output/**", ".nitro/**", ".tanstack/**"]
+    "env": {
+        "browser": true
+    },
+    "ignorePatterns": [
+        "src/routeTree.gen.ts",
+        "dist/**",
+        ".output/**",
+        ".nitro/**",
+        ".tanstack/**"
+    ],
+    "overrides": [
+        {
+            "files": ["src/components/**", "src/routes/**"],
+            "rules": {
+                "no-restricted-properties": [
+                    "error",
+                    {
+                        "object": "authClient",
+                        "property": "store",
+                        "message": "Draw auth state with useAuthView from lib/auth-view: a sign-out holds it, so the page being left never redraws as locked. For an action about to use keys, read unlockedNow()."
+                    }
+                ]
+            }
+        }
+    ]
 }

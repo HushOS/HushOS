@@ -27,6 +27,11 @@ export function useSigningOutCover() {
     return useStore(view, (state) => state.held !== null && state.dim);
 }
 
+/* Who is unlocked here this moment, for an action about to use keys: never held. */
+export function unlockedNow() {
+    return authClient.store.getState().unlockedUserId;
+}
+
 /* Holds the view at what it shows now; the returned function lets it go. */
 export function holdAuthView({ dim = false }: { dim?: boolean } = {}) {
     view.setState({ held: authClient.store.getState(), dim });
