@@ -190,7 +190,11 @@ object Auth {
         return next.phrase
     }
 
-    fun signIn(context: Context, origin: String, email: String, password: String): SessionUser {
+    /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
+    fun signIn(context: Context, origin: String, email: String, password: String): SessionUser =
+        SessionGuard.signingIn { signInNow(context, origin, email, password) }
+
+    private fun signInNow(context: Context, origin: String, email: String, password: String): SessionUser {
         val start = opaqueStartLogin(password)
         val started = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request)).body
         val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }

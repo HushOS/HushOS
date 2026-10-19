@@ -213,16 +213,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private fun checkSession() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
+            val seen = com.hushos.app.data.SessionGuard.seen()
             val check = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context) } }
             val user = check.map { (it as? com.hushos.app.data.SessionCheck.SignedIn)?.user }
             when {
                 check.getOrNull() is com.hushos.app.data.SessionCheck.Removed -> {
                     // Removed from the account on another device: what this phone kept for it goes,
                     // queued transfers first, so none writes a decrypted file after the wipe.
-                    withContext(Dispatchers.IO) {
-                        stopTransfers()
-                        Auth.forgetRemoved(context)
+                    // Not if a sign-in began meanwhile (in a picker's sign-in screen too): that session is someone's now.
+                    val wiped = withContext(Dispatchers.IO) {
+                        com.hushos.app.data.SessionGuard.wipeUnlessSignedInSince(seen) {
+                            stopTransfers()
+                            Auth.forgetRemoved(context)
+                        }
                     }
+                    if (wiped == null) { checkSession(); return@launch }
                     filesAppChanged()
                     _state.update { it.copy(gate = Gate.SIGNED_OUT, signedOutNotice = true, removed = true) }
                 }
@@ -393,9 +398,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun setOrigin(origin: String) = _state.update { it.copy(origin = origin.trim().trimEnd('/')) }
 
     fun signIn(email: String, password: String, done: (String?) -> Unit) {
-        signInGeneration++
         viewModelScope.launch {
-            wiping?.join()
+            // SessionGuard (inside Auth.signIn) waits for a removal wipe under way, in this screen or another.
             val result = withContext(Dispatchers.IO) { runCatching { Auth.signIn(context, state.value.origin, email, password) } }
             result.onSuccess { signedIn(it); done(null) }.onFailure { done(com.hushos.app.data.Problems.say(it, Auth.UNREACHABLE)) }
         }
@@ -427,27 +431,24 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // unless someone has signed in since (the generation moved), and a sign-in started after the
         // answer waits for the wipe (signIn joins `wiping`).
         if (ended != null) viewModelScope.launch {
-            val generation = signInGeneration
+            val seen = com.hushos.app.data.SessionGuard.seen()
             val removed = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context, ended) }.getOrNull() } is com.hushos.app.data.SessionCheck.Removed
-            // On the main thread from here to `wiping` being set: no sign-in can start in between.
-            if (!removed || generation != signInGeneration ||
-                !Auth.mayForgetRemoved(ended, Shared.session(context), com.hushos.app.data.AccountStore.of(context).owner())) return@launch
-            val wipe = launch(Dispatchers.IO) {
-                stopTransfers()
-                Auth.forgetRemoved(context)
+            if (!removed) return@launch
+            // Process-wide: a sign-in begun since (here or in a picker's sign-in screen) drops the wipe, and one
+            // beginning while it runs waits for it.
+            val wiped = withContext(Dispatchers.IO) {
+                com.hushos.app.data.SessionGuard.wipeUnlessSignedInSince(seen) {
+                    if (!Auth.mayForgetRemoved(ended, Shared.session(context), com.hushos.app.data.AccountStore.of(context).owner())) return@wipeUnlessSignedInSince false
+                    stopTransfers()
+                    Auth.forgetRemoved(context)
+                    true
+                }
             }
-            wiping = wipe
-            wipe.join()
-            wiping = null
+            if (wiped != true) return@launch
             filesAppChanged()
             _state.update { if (it.gate == Gate.SIGNED_OUT) it.copy(signedOutNotice = true, removed = true) else it }
         }
     }
-
-    /* Bumped as every sign-in starts: a removal check answered after it clears nothing. */
-    private var signInGeneration = 0
-    /* A removal wipe under way: a sign-in waits for it, so the wipe never takes the new session. */
-    private var wiping: kotlinx.coroutines.Job? = null
 
     /*
      * Stops the account's queued and running transfers and waits for the cancel to be recorded, before
