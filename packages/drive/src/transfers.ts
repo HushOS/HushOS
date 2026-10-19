@@ -680,6 +680,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                 (buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer,
             );
             await rpc('driveSourceAttach', { sourceId, parts: file.parts }, { transfer: buffers });
+            // Cancelled or removed while the bytes were on their way: nothing will release them
+            // later (journalForget saw no source), so they are released now.
+            if (uploads.get(u.item.id) !== u || u.item.status === 'cancelled') {
+                await rpc('driveSourceRelease', { sourceId }).catch(() => {});
+                throw new Error('This upload was stopped.');
+            }
             // Set here, before `attaching` clears, so no read in between moves the parts again.
             u.sourceId = sourceId;
             return sourceId;
@@ -1899,8 +1905,16 @@ export function createTransferManager(options: TransferManagerOptions) {
     async function retry(id: string) {
         const u = uploads.get(id);
         if (!u || u.item.status !== 'failed') return;
-        // A lost copy has nothing to retry with; the list keeps its row until removed.
-        if (!u.file) return;
+        if (!u.file) {
+            // A lost copy has nothing to retry with; the list keeps its row until removed.
+            if (u.item.needsFile || u.item.origin !== 'copy') return;
+            // A copy whose bytes a lock took while it sat failed: back from its sealed stash, or
+            // reported lost when there is none, the way resume brings a paused one back.
+            u.attempts.clear();
+            set(u, { status: 'paused', error: null });
+            await resume(id);
+            return;
+        }
         u.attempts.clear();
         // What failed may have met a key change: the folder and the file are looked up again and
         // everything sealed afresh under the keys found, never sent again under the old ones, and
@@ -1947,6 +1961,8 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (!u) return;
         if (u.item.status !== 'done' && u.item.status !== 'cancelled' && u.item.status !== 'failed')
             return;
+        // A part still on its way finishes quietly instead of acting on a row that is gone.
+        u.generation++;
         uploads.delete(id);
         order.splice(order.indexOf(id), 1);
         // A failed copy's bytes may still sit in the worker: they go with the row.

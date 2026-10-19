@@ -129,6 +129,9 @@ function harness(
         keyChangePendingAt?: (parentKeyEpoch: number) => boolean;
         /* The worker dies mid-attach: the parts are moved, then the call fails with a lock. */
         attachLocks?: boolean;
+        /* Held until it resolves: the attach, and the encrypt of a chunk index, still on their way. */
+        attachHold?: () => Promise<void>;
+        encryptHold?: (index: number) => Promise<void> | undefined;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -180,6 +183,7 @@ function harness(
                 if (options.attachLocks)
                     throw new Error('Your account was locked. Please try again.');
                 sources.set(sourceId, moved);
+                await options.attachHold?.();
                 return {
                     size: moved.reduce((total, part) => total + part.byteLength, 0),
                 } as CryptoResults[K];
@@ -234,6 +238,7 @@ function harness(
             }
             case 'driveUploadEncrypt': {
                 const { file, index } = input as CryptoRequests['driveUploadEncrypt'];
+                await options.encryptHold?.(index);
                 return {
                     digest: digestOfInput(file, index),
                     bytes: CHUNK + 16,
@@ -1941,5 +1946,76 @@ describe('in-memory bytes after the upload stops', () => {
         await settle(300);
         expect(h.item(id!).status).toBe('failed');
         expect(h.item(id!).error).toMatch(/did not finish/);
+    }, 20_000);
+});
+
+describe('in-memory bytes and the person’s own actions', () => {
+    test('Retry brings back a failed copy whose bytes a lock took, from its sealed stash', async () => {
+        const stash = fakeStash();
+        const { content, file } = memoryCopy(2 * CHUNK);
+        stash.bytes.set('copy-1', content.slice());
+        let mode: 'fail' | 'lock' | 'ok' = 'fail';
+        const h = harness({
+            stash,
+            send: async (_objectId, index) => {
+                if (mode === 'lock') throw new Error('Your account was locked. Please try again.');
+                if (mode === 'fail')
+                    return { ok: false, status: 400, retryable: false, message: 'Refused.' };
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        const [copy] = h.manager.enqueue([
+            { file, parent: node('root', null), origin: 'copy', stash: 'copy-1' },
+        ]);
+        await settle(500);
+        expect(h.item(copy!).status).toBe('failed');
+        // Another upload meets the lock: the engine notices, and the worker's bytes are gone.
+        mode = 'lock';
+        h.manager.enqueue([{ file: fakeFile(CHUNK, 'other.bin'), parent: node('root', null) }]);
+        await settle(500);
+        h.lockWorker();
+        expect(h.item(copy!).status).toBe('failed');
+        mode = 'ok';
+        await h.manager.retry(copy!);
+        await settle(3_000);
+        expect(h.item(copy!).status).toBe('done');
+    }, 20_000);
+
+    test('a copy cancelled while its bytes move to the worker leaves none there', async () => {
+        let arrive: () => void = () => {};
+        const h = harness({ attachHold: () => new Promise((resolve) => (arrive = resolve)) });
+        const { file } = memoryCopy(CHUNK);
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(100);
+        expect(h.calls).toContain('driveSourceAttach');
+        await h.manager.cancel(id!);
+        arrive();
+        await settle(100);
+        expect(h.sources.size).toBe(0);
+    }, 20_000);
+
+    test('removing a failed copy with a part still encrypting touches nothing more', async () => {
+        // No stash: a part that wrongly carried on would end in lost(), on a row already gone.
+        const { file } = memoryCopy(3 * CHUNK);
+        let encrypted: () => void = () => {};
+        const events: string[] = [];
+        const h = harness({
+            // The first part is refused for good; the last is still being encrypted meanwhile.
+            send: async () => ({ ok: false, status: 400, retryable: false, message: 'Refused.' }),
+            encryptHold: (index) =>
+                index === 2 ? new Promise((resolve) => (encrypted = resolve)) : undefined,
+            onEvent: (event) => void events.push(event.type),
+        });
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(300);
+        expect(h.item(id!).status).toBe('failed');
+        const before = events.length;
+        h.manager.remove(id!);
+        await settle(10);
+        encrypted();
+        await settle(300);
+        // Nothing more happens to the removed copy: no lost event, no server abort.
+        expect(events.slice(before)).toEqual([]);
+        expect(h.server.aborted).toEqual([]);
     }, 20_000);
 });
