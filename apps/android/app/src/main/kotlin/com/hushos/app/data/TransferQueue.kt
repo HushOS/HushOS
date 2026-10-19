@@ -111,6 +111,7 @@ object TransferQueue {
      * alone, since a copy lands before its job is queued.
      */
     fun sweep(context: Context, inUse: Set<String>) {
+        LandedJobs.of(context).sweep()
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
         // A failed upload on the app's own record keeps its copy for Retry, however old its job.
         val recorded = FailedTransfers.of(context).all().mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()
@@ -248,6 +249,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f)
 
     override suspend fun doWork(): Result {
+        // A rerun of a run that landed after its stop: already uploaded and said; its copy is gone, so nothing else is looked at.
+        if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
         if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
@@ -273,9 +276,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
             when (end) {
                 is JobEnd.Done -> {
-                    // Stopped while the last step was under way: it landed all the same, so it's said, and the job is
-                    // cancelled so WorkManager doesn't run it again (a duplicate, or a same-name failure).
-                    if (end.stopped) WorkManager.getInstance(applicationContext).cancelWorkById(this@UploadWorker.id)
+                    // Stopped while the last step was under way: it landed all the same, so it's said, and marked so a
+                    // rerun WorkManager schedules does nothing (no duplicate, no same-name failure, nothing cancelled).
+                    if (end.stopped) LandedJobs.of(applicationContext).mark(this@UploadWorker.id.toString())
                     file.parentFile?.deleteRecursively()
                     TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
                     Result.success()
@@ -295,6 +298,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f, keeping = true)
 
     override suspend fun doWork(): Result {
+        // A rerun of a run that kept the item after its stop: done already. The next keep queued behind it runs as usual.
+        if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
         attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.")
@@ -331,8 +336,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             }
             when (end) {
                 is JobEnd.Done -> {
-                    // Kept all the same: said, and not run again.
-                    if (end.stopped) WorkManager.getInstance(applicationContext).cancelWorkById(this@KeepWorker.id)
+                    // Kept all the same: said, and marked so a rerun does nothing (the chain behind it isn't cancelled).
+                    if (end.stopped) LandedJobs.of(applicationContext).mark(this@KeepWorker.id.toString())
                     end.value ?: run {
                         TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
                         Result.success()

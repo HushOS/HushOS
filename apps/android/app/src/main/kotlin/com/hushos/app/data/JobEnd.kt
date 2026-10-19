@@ -9,7 +9,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * way is neither: the job says nothing and records nothing, and WorkManager drops or reschedules it.
  *
  * Work that returned is Done, stop or not: the file is on the server. `stopped` then says the stop came too late, and
- * the worker cancels its own job, so a rescheduled run can't upload the same file again.
+ * the worker marks its job as landed (LandedJobs), so a rescheduled run of it does nothing.
  */
 sealed interface JobEnd<out T> {
     data class Done<T>(val value: T, val stopped: Boolean = false) : JobEnd<T>
