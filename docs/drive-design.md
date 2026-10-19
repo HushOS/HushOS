@@ -415,6 +415,10 @@ No reservation is needed because nothing happens between the check and the write
 
 A copy costs quota like any other file even though the bytes are stored once, so purging either copy gives the bytes back predictably and nobody has to explain reference counting on a billing page. Copying a folder is the client copying node by node with progress, since each node needs a rewrap the server cannot do; the cost is visible and the client's. A copy into a share, later, must re-encrypt into a new object, because sharing is the operation that widens who can read the key, and copy must not do that silently.
 
+### Moves across workspaces
+
+A move between two workspaces (a person's own files and their family's folders) cannot be a tree move: each workspace has its own keys. The device reads the file, encrypts it again under the destination's keys, and uploads it with `moveOf` naming the source and the version it read. Where both draw from one storage pool the upload reserves only what the copy adds beyond what the source's versions free, and its completion deletes the source in the same transaction, or fails `move-stale` and releases the copy if the source changed. Across pools `moveOf` is refused and a move is a copy and a delete. docs/families-shared-pool.md 3.8 and 13 have the rules and what was built.
+
 ### Trash and restore
 
 **Trash** sets `trashed_at = now()` on the one node and assigns `change_seq`. Descendants are untouched and are effectively trashed because the walk finds a trashed ancestor. Listings exclude children with their own `trashed_at`, and a listing of a folder inside a trashed subtree is refused, so nothing under a trashed folder is reachable.
@@ -940,7 +944,7 @@ The earlier prototype worked, and its tree idea, per-node keys wrapped by the pa
 - A current version is never purged, whatever its `superseded_at` says. A file has at most two versions, current and the one it displaced.
 - A node without a `change_seq` is invisible: not listed, not in the feed, deletable without a tombstone.
 - No plaintext is ever encrypted under a key and nonce that already produced a ciphertext for different bytes; a resumed upload proves the source unchanged or starts over.
-- Over-quota blocks upload begin and copy, and nothing else.
+- Over-quota blocks upload begin and copy, and nothing else; a move within one pool that adds no bytes is not blocked.
 - Every object key in the store corresponds to a `drive_objects` row, or to a `drive_object_deletions` row, and nothing deletes a key that either table names. That is the whole rule for who may delete what: a published object's primary copy goes only after the replica holds it, or at once when no replica is configured, and its replica copy 30 days after that; an object that was never published has no replica and is deleted at once; the sweep deletes only keys that neither table names and that are older than 7 days.
 - The store accepts a part only at the length the server signed for it.
 - Authorization for every request is the walk: membership of the workspace, else the nearest live share in the ancestor chain, else 404. A revoked share is refused on the next request; URLs it already obtained expire within 15 minutes.

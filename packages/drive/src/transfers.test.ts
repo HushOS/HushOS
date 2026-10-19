@@ -1540,6 +1540,77 @@ describe('queued rows and stashed copies', () => {
         expect(second.journal.entries.has(ids[2]!)).toBe(false);
     });
 
+    test('a move waiting when the page went away is still a move: its begin names the source only where both sides are one pool', async () => {
+        const stash = fakeStash();
+        stash.files.set('move-1', fakeFile(CHUNK, 'pooled.bin'));
+        stash.files.set('move-2', fakeFile(CHUNK, 'apart.bin'));
+        const source = { workspaceId: 'mine', nodeId: 'n-1', versionId: 'v-1' };
+        const first = harness({ stash });
+        const ids = first.manager.enqueue([
+            { file: fakeFile(CHUNK, 'a.bin'), parent: node('root', null) },
+            { file: fakeFile(CHUNK, 'b.bin'), parent: node('root', null) },
+            {
+                file: fakeFile(CHUNK, 'pooled.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'move-1',
+                move: { of: source, pooled: true },
+            },
+            {
+                file: fakeFile(CHUNK, 'apart.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'move-2',
+                move: { of: { ...source, nodeId: 'n-2' }, pooled: false },
+            },
+        ]);
+        await settle(10);
+        // The two moves never began: only their queued rows hold them.
+        expect(first.journal.entries.has(ids[2]!)).toBe(false);
+        expect(first.journal.entries.has(ids[3]!)).toBe(false);
+        const second = harness({ journal: first.journal, stash });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        await settle(2_000);
+        expect(second.item(ids[2]!).status).toBe('done');
+        expect(second.item(ids[3]!).status).toBe('done');
+        // A begin sent without it would be a plain copy: charged in full, and the source kept.
+        const moves = second.server.begins.filter((begin) => begin.moveOf);
+        expect(moves.map((begin) => begin.moveOf)).toEqual([source]);
+        // Across pools the server isn't told, and the app learns it must delete the source itself.
+        expect(second.item(ids[3]!).move).toEqual({
+            of: { ...source, nodeId: 'n-2' },
+            pooled: false,
+        });
+    });
+
+    test('a move the server finds across two pools goes as a copy, and the app is told to delete the original', async () => {
+        const h = harness();
+        const begin = h.api.beginUpload;
+        const asked: unknown[] = [];
+        // The server's answer for two pools, as a move only: a plain begin goes through.
+        h.api.beginUpload = async (ws, input) => {
+            asked.push(input.moveOf ?? null);
+            if (input.moveOf) throw new DriveApiError('Not one storage pool.', 'not-pooled', 409);
+            return begin(ws, input);
+        };
+        const source = { workspaceId: 'mine', nodeId: 'n-1', versionId: 'v-1' };
+        const [id] = h.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'moved.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                move: { of: source, pooled: true },
+            },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('done');
+        // Asked once as a move, then begun again as a plain copy, sealed afresh.
+        expect(asked).toEqual([source, null]);
+        expect(h.calls.filter((call) => call === 'driveUploadPrepare')).toHaveLength(2);
+        expect(h.item(id!).move).toEqual({ of: source, pooled: false });
+    });
+
     test('a new version names only its version and object: the node is the file it replaces', async () => {
         const h = harness();
         const file = { ...node('doc'), kind: 'file' as const };

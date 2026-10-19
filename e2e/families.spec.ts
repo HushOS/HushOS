@@ -9,7 +9,9 @@ import {
     type Response,
     type Route,
 } from '@playwright/test';
+import { SQL } from 'bun';
 import {
+    e2eDatabase,
     hydrated,
     newContext,
     PASSWORD,
@@ -1818,6 +1820,159 @@ test.describe.serial('deleting a family folder', () => {
         // Mia opens the family's live folder, and the deleted one is listed for nobody.
         await openFamilyFolder(mia, family, 'Family');
         await upload(mia, 'list.txt', 'Milk\n');
+    });
+});
+
+/*
+ * Moving between My files and a family folder (docs/families-shared-pool.md 3.8). The move
+ * dialog reaches the family's folders under Places and says what a move loses before it
+ * starts; the file is decrypted on the device and uploaded again under the folder's keys,
+ * and the original goes. Where the family's plan pools a member's own files (billing on, a
+ * live plan) the server deletes the original in the same transaction as the copy lands, and
+ * nothing is counted twice: the meter doesn't change. A live plan needs Polar, which CI never
+ * calls, so that test writes the family's plan row as billing's write would (the server's own
+ * database, as operator roles are written) and runs only against a server that sells plans
+ * (verify-hushos `launch --groups --billing polar`). With billing off nothing is pooled, the
+ * two are separate allowances, and a move is a copy and a delete: that test runs in CI.
+ */
+test.describe.serial('moving between My files and a family folder', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    const family = 'Okafor family';
+    let ada: Person;
+    let billing = false;
+
+    test.beforeAll(async ({ browser, request }) => {
+        test.setTimeout(300_000);
+        const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
+            enabled?: boolean;
+        };
+        billing = catalogue.enabled === true;
+        ada = await person(browser, 'Ada Okafor');
+        await createFamily(ada, family);
+        // The family's folder open and writable on this device before anything moves into it.
+        await openFamilyFolder(ada, family, 'Family');
+    });
+    test.afterAll(async () => {
+        await ada?.page.context().close();
+    });
+
+    /* Opens Move for `name` in the folder on screen, goes to Places, then the family's folder. */
+    async function moveToFamilyFolder(name: string) {
+        await ada.page.getByRole('button', { name: `More for ${name}` }).click();
+        await ada.page.getByRole('menuitem', { name: /^Move(?: \S+)?$/ }).click();
+        const dialog = ada.page.locator('[data-slot=dialog-content]');
+        const location = dialog.getByRole('navigation', { name: 'Location' });
+        await location.getByRole('button', { name: 'Places' }).click({ timeout: 60_000 });
+        await dialog.getByRole('button', { name: 'Family', exact: true }).click();
+        await expect(location.locator('[aria-current=location]')).toHaveText('Family');
+        // Said before it starts: what a move to another place loses, and what it costs.
+        const notice = dialog.locator('[data-move-across]');
+        await expect(notice).toContainText(
+            'Only the current version of each file moves; earlier versions are deleted.',
+        );
+        return { dialog, notice };
+    }
+
+    async function storage() {
+        const answer = await ada.page.request.get('/api/auth/storage');
+        return (
+            (await answer.json()) as {
+                storage: { usedBytes: string; pool: { name: string } | null };
+            }
+        ).storage;
+    }
+
+    /* `name` is gone from My files, read from the server: past `stays`, or an empty folder. */
+    async function gone(name: string, stays?: string) {
+        await ada.page.goto('/app/drive');
+        await expect(
+            stays ? fileRow(ada.page, stays) : ada.page.getByText('Nothing here yet'),
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(fileRow(ada.page, name)).toHaveCount(0);
+        // Deleted, not left in the Trash, where it would still count.
+        await ada.page.goto('/app/trash', { waitUntil: 'networkidle' });
+        // Not left in the Trash either, where it would still count: nothing of hers is there.
+        await expect(ada.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+    }
+
+    test('without one pool (billing off) a move is a copy and a delete: the file lands in the family folder byte for byte, and the original is gone', async () => {
+        test.skip(
+            billing,
+            'This server pools a member’s files; the next test moves within the pool.',
+        );
+        test.setTimeout(300_000);
+        await ada.page.goto('/app/drive');
+        await upload(ada, 'stays.txt', 'Not moving\n');
+        await upload(ada, 'recipe.txt', 'Jollof, for eight\n');
+        const { dialog, notice } = await moveToFamilyFolder('recipe.txt');
+        await expect(notice).toContainText('It needs free space in Family');
+        await dialog.getByRole('button', { name: 'Move here' }).click();
+        await expect(dialog).toHaveCount(0, { timeout: 60_000 });
+        // Done when it leaves My files, as the person sees it, and nothing more is on its way.
+        await expect(fileRow(ada.page, 'recipe.txt')).toHaveCount(0, { timeout: 90_000 });
+        await ada.page.waitForLoadState('networkidle');
+        await openFamilyFolder(ada, family, 'Family');
+        await expect(fileRow(ada.page, 'recipe.txt')).toBeVisible({ timeout: 90_000 });
+        await ada.page.getByRole('button', { name: 'More for recipe.txt' }).click();
+        const [download] = await Promise.all([
+            ada.page.waitForEvent('download'),
+            ada.page.getByRole('menuitem', { name: /^Download(?: \S+)?$/ }).click(),
+        ]);
+        expect(readFileSync((await download.path())!, 'utf8')).toBe('Jollof, for eight\n');
+        await gone('recipe.txt', 'stays.txt');
+    });
+
+    test('a member moves a file from My files into a family folder and the meter doesn’t change', async () => {
+        test.skip(
+            !billing,
+            'Billing is off: nothing is pooled, so the two are separate allowances.',
+        );
+        test.setTimeout(300_000);
+        // The family's plan goes live as billing writes it, until next month, with a pool of
+        // 1 GB: her file fills it (each part counts in whole GB), so the move must go as one,
+        // charged nothing. A copy and a delete would be refused for room.
+        const groupId = (await ada.page
+            .getByRole('link', { name: 'Family folders', exact: true })
+            .first()
+            .getAttribute('href'))!
+            .split('/')
+            .at(-1)!;
+        const database = new SQL(e2eDatabase().url);
+        try {
+            await database`
+                insert into group_storage (group_id, quota_bytes, expires_at)
+                values (${groupId}, ${String(1024n ** 3n)}, now() + interval '30 days')
+                on conflict (group_id) do update
+                    set quota_bytes = excluded.quota_bytes, expires_at = excluded.expires_at`;
+        } finally {
+            await database.close();
+        }
+        await expect
+            .poll(async () => (await storage()).pool?.name, { timeout: 30_000 })
+            .toBe(family);
+        await ada.page.goto('/app/drive');
+        await upload(ada, 'budget.txt', 'Rent, food, school\n');
+        const meter = ada.page.getByText(/ of .+ used$/);
+        await expect.poll(async () => (await storage()).usedBytes).not.toBe('0');
+        await ada.page.reload();
+        const before = { api: (await storage()).usedBytes, shown: await meter.innerText() };
+        const { dialog, notice } = await moveToFamilyFolder('budget.txt');
+        await expect(notice).toContainText(`It uses no more of ${family}’s storage.`);
+        await dialog.getByRole('button', { name: 'Move here' }).click();
+        await expect(dialog).toHaveCount(0, { timeout: 60_000 });
+        // Done when it leaves My files, as the person sees it, and nothing more is on its way.
+        await expect(fileRow(ada.page, 'budget.txt')).toHaveCount(0, { timeout: 90_000 });
+        await ada.page.waitForLoadState('networkidle');
+        await openFamilyFolder(ada, family, 'Family');
+        await expect(fileRow(ada.page, 'budget.txt')).toBeVisible({ timeout: 90_000 });
+        await gone('budget.txt');
+        // One pool: the copy took the original's place, so neither the pool's figure nor the
+        // meter moved. The pool counts each part in whole GB (her own files, the folders), so
+        // My files held only this file: a copy left beside it, or in the Trash, would read a
+        // second part, 2 GB.
+        await ada.page.goto('/app/drive');
+        await expect(meter).toHaveText(before.shown, { timeout: 60_000 });
+        expect((await storage()).usedBytes).toBe(before.api);
     });
 });
 

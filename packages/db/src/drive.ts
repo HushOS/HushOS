@@ -24,6 +24,7 @@ import {
     fileVersions,
     groupHolds,
     groupMemberships,
+    groups,
     personalWorkspaces,
     users,
     workspaceKeys,
@@ -1366,7 +1367,128 @@ export type UploadBegin = {
     };
     multipartId: string;
     expiresAt: Date;
+    /*
+     * The file this upload moves here from another workspace of the same pool: the
+     * new file is its copy, re-encrypted on the device under this workspace's keys,
+     * and completion removes it (docs/families-shared-pool.md 3.8).
+     */
+    moveOf?: MoveOf;
 };
+
+/* A move's source as the client names it: the file and the version it read. */
+export type MoveOf = { workspaceId: string; nodeId: string; versionId: string };
+
+/* A move's source as begin found it, which completion holds it to. */
+type MoveRecord = MoveOf & { changeSeq: number; freedBytes: bigint; by: string };
+
+/* What removing `nodeId` gives back: every ready version's object, the current one and older ones (as purgeOne releases them). */
+async function bytesFreedBy(tx: Tx, nodeId: string) {
+    const [row] = await tx
+        .select({ bytes: sql<string>`coalesce(sum(${driveObjects.ciphertextSize}), 0)::text` })
+        .from(fileVersions)
+        .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
+        .where(and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.status, 'ready')));
+    return BigInt(row?.bytes ?? '0');
+}
+
+/*
+ * Whether `userId` may still delete what `workspaceId` holds: they hold it (its
+ * owner, or an active member of the family whose folder it is) and no holder holds
+ * them ahead of a removal (requireStillWriter's rule, without the throw).
+ */
+async function mayStillRemove(tx: Tx, userId: string, workspaceId: string) {
+    if (!(await holdsWorkspace(tx, userId, workspaceId))) return false;
+    const [held] = await tx
+        .select({ userId: groupHolds.userId })
+        .from(groupHolds)
+        .innerJoin(workspaces, eq(workspaces.groupId, groupHolds.groupId))
+        .where(
+            and(
+                eq(workspaces.id, workspaceId),
+                eq(groupHolds.userId, userId),
+                gt(groupHolds.expiresAt, sql`now()`),
+            ),
+        );
+    return held === undefined;
+}
+
+/*
+ * The company hook (docs/families-shared-pool.md 6.4): HushOS's own move takes
+ * nothing out of a company's area unless the company's policy allows it, for that
+ * person or for everyone. Company plans and their policies don't exist yet, so
+ * every company area refuses: this is where the rule attaches, not the rule. It
+ * stops HushOS's move and nothing more: anyone who can open a company file can
+ * save a copy of it, so no copy may say a file "can't leave", only that HushOS
+ * won't move it. Personal and family workspaces are always allowed.
+ */
+async function movePolicyAllows(tx: Tx, sourceWorkspaceId: string, _userId: string) {
+    const [row] = await tx
+        .select({ kind: groups.kind })
+        .from(workspaces)
+        .innerJoin(groups, eq(groups.id, workspaces.groupId))
+        .where(eq(workspaces.id, sourceWorkspaceId));
+    return row?.kind !== 'org';
+}
+
+/*
+ * Whether a move's source draws from the destination's pool, the destination's
+ * figures having been read under the pool's lock (freeBytes): a member's own
+ * files and their family's folders while the family's plan is live, or two
+ * folders of one family. Under that lock the source owner's membership and the
+ * plan are settled (every membership change and billing's pool write take it),
+ * so the answer holds until commit. A destination on its own allowance (billing
+ * off, no live plan, a group made before billing) shares a pool with nothing,
+ * and a company area's pool is never a family's.
+ */
+async function samePool(tx: Tx, destination: StorageFigures, sourceWorkspaceId: string) {
+    if (!destination.pool) return false;
+    const source = await storageFigures(tx, sourceWorkspaceId, { lock: false });
+    return source?.pool?.groupId === destination.pool.groupId;
+}
+
+/*
+ * A move's source at begin (docs/families-shared-pool.md 3.8): a file in another
+ * workspace, which the mover holds as a member (never through a share) and may
+ * delete, at the version they read, and not in the Trash. The destination must be
+ * the mover's too: a move lands in their own files or their family's folders, not
+ * in a folder someone shares with them. What its versions free is what the move's
+ * reservation is lowered by.
+ */
+async function moveSourceAtBegin(
+    tx: Tx,
+    input: UploadBegin & { moveOf: MoveOf },
+): Promise<MoveRecord | { status: 'invalid' | 'not-found' | 'policy' | 'stale' }> {
+    const { moveOf } = input;
+    if (input.node.existing || moveOf.workspaceId === input.workspaceId)
+        return { status: 'invalid' };
+    if (!(await holdsWorkspace(tx, input.userId, input.workspaceId)))
+        return { status: 'not-found' };
+    if (!(await mayStillRemove(tx, input.userId, moveOf.workspaceId)))
+        return { status: 'not-found' };
+    if (!(await movePolicyAllows(tx, moveOf.workspaceId, input.userId)))
+        return { status: 'policy' };
+    const chain = await walk(tx, moveOf.nodeId);
+    if (
+        !chain ||
+        chain.node.workspace_id !== moveOf.workspaceId ||
+        chain.purged ||
+        chain.node.kind !== 'file'
+    )
+        return { status: 'not-found' };
+    if (chain.trashed) return { status: 'stale' };
+    const [node] = await tx
+        .select({ currentVersionId: driveNodes.currentVersionId, changeSeq: driveNodes.changeSeq })
+        .from(driveNodes)
+        .where(eq(driveNodes.id, moveOf.nodeId));
+    if (!node || node.changeSeq === null || node.currentVersionId !== moveOf.versionId)
+        return { status: 'stale' };
+    return {
+        ...moveOf,
+        changeSeq: node.changeSeq,
+        freedBytes: await bytesFreedBy(tx, moveOf.nodeId),
+        by: input.userId,
+    };
+}
 
 export async function beginUpload(input: UploadBegin) {
     return settlingPool(() => beginUploadOnce(input));
@@ -1445,11 +1567,24 @@ async function beginUploadOnce(input: UploadBegin) {
             );
         if (!(await signedBy(tx, input.userId, statements)))
             return { status: 'bad-signature' as const };
+        let move: MoveRecord | null = null;
+        if (input.moveOf) {
+            const source = await moveSourceAtBegin(tx, { ...input, moveOf: input.moveOf });
+            if ('status' in source) return { status: source.status };
+            move = source;
+        }
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
-        if (spendable(storage) < input.object.ciphertextSize)
+        // A move is pool-neutral: both sides are one pool, so it reserves only what the copy
+        // takes beyond what the source frees, and a move into a full pool still goes. Across
+        // pools it is refused as a move; the client copies and deletes instead.
+        if (move && !(await samePool(tx, storage, move.workspaceId)))
+            return { status: 'not-pooled' as const };
+        const size = input.object.ciphertextSize;
+        const reserve = move ? (size > move.freedBytes ? size - move.freedBytes : 0n) : size;
+        if (reserve > 0n && spendable(storage) < reserve)
             return { status: 'over-quota' as const, free: named(spendable(storage)) };
-        await adjustStorage(tx, input.workspaceId, 0n, input.object.ciphertextSize);
+        await adjustStorage(tx, input.workspaceId, 0n, reserve);
         if (!input.node.existing) {
             const [node] = await tx
                 .insert(driveNodes)
@@ -1514,12 +1649,24 @@ async function beginUploadOnce(input: UploadBegin) {
                 expectedVersionId,
                 newNode: !input.node.existing,
                 multipartId: input.multipartId,
-                reservedBytes: input.object.ciphertextSize,
+                reservedBytes: reserve,
                 expiresAt: input.expiresAt,
                 status: 'open',
+                ...(move && {
+                    moveWorkspaceId: move.workspaceId,
+                    moveNodeId: move.nodeId,
+                    moveVersionId: move.versionId,
+                    moveChangeSeq: move.changeSeq,
+                    moveFreedBytes: move.freedBytes,
+                    moveBy: move.by,
+                }),
             })
+            // The one conflict left is drive_uploads_one_move_idx: another move of the same
+            // file is under way, and its source's bytes can't lower two reservations.
+            .onConflictDoNothing()
             .returning({ id: driveUploads.id });
-        return { status: 'ok' as const, uploadId: upload!.id };
+        if (!upload) return { status: 'moving' as const };
+        return { status: 'ok' as const, uploadId: upload.id };
     });
 }
 
@@ -1637,10 +1784,113 @@ async function releaseUpload(tx: Tx, upload: UploadRow, status: 'aborted' | 'com
 }
 
 /*
+ * The source a move upload names, read before its completion's transaction so
+ * that both workspaces can be locked in order. Written once at begin and never
+ * changed, so a read outside the transaction is the one inside it.
+ */
+async function moveOfUpload(workspaceId: string, uploadId: string): Promise<MoveRecord | null> {
+    const [row] = await db
+        .select({
+            workspaceId: driveUploads.moveWorkspaceId,
+            nodeId: driveUploads.moveNodeId,
+            versionId: driveUploads.moveVersionId,
+            changeSeq: driveUploads.moveChangeSeq,
+            freedBytes: driveUploads.moveFreedBytes,
+            by: driveUploads.moveBy,
+        })
+        .from(driveUploads)
+        .where(and(eq(driveUploads.id, uploadId), eq(driveUploads.workspaceId, workspaceId)));
+    if (!row?.workspaceId || !row.nodeId || !row.versionId || row.changeSeq === null) return null;
+    if (row.freedBytes === null || !row.by) return null;
+    return row as MoveRecord;
+}
+
+/*
+ * The workspace locks a completion or attach takes: the destination's, and for a
+ * move the source's too, in id order (as lockAreas takes a family's folders), so
+ * two moves in opposite directions queue instead of deadlocking. Returns each
+ * one's next change sequence; the source's is null when its workspace is gone
+ * (an account deleted, a family folder purged), which makes the move stale.
+ */
+async function lockForCompletion(
+    tx: Tx,
+    workspaceId: string,
+    writer: string | undefined,
+    move: MoveRecord | null,
+) {
+    if (!move) return { changeSeq: await nextChangeSeq(tx, workspaceId, writer), sourceSeq: null };
+    let changeSeq = 0;
+    let sourceSeq: number | null = null;
+    const ids = [workspaceId, move.workspaceId].sort((a, b) =>
+        a.toLowerCase() < b.toLowerCase() ? -1 : 1,
+    );
+    for (const id of ids) {
+        if (id === workspaceId) {
+            changeSeq = await nextChangeSeq(tx, workspaceId, writer);
+            continue;
+        }
+        const [row] = await tx
+            .update(workspaces)
+            .set({ changeSeq: sql`${workspaces.changeSeq} + 1` })
+            .where(eq(workspaces.id, id))
+            .returning({ changeSeq: workspaces.changeSeq });
+        sourceSeq = row?.changeSeq ?? null;
+    }
+    return { changeSeq, sourceSeq };
+}
+
+/*
+ * Whether a move may still finish, under both workspaces' locks and the pool's
+ * (docs/families-shared-pool.md 3.8): the source's workspace is there, its mover
+ * may still delete in it, both sides are still one pool (a member who left, or a
+ * plan that ended, makes it two), and the file is as begin found it: not trashed
+ * or deleted, nothing written to it (its change sequence: no rename, move, new or
+ * restored version), and its versions free what begin counted (none discarded).
+ * Anything else is stale: the copy is released and the source left as it is.
+ */
+async function moveStillHolds(
+    tx: Tx,
+    workspaceId: string,
+    move: MoveRecord,
+    sourceSeq: number | null,
+) {
+    if (sourceSeq === null) return false;
+    const [space] = await tx
+        .select({ deletedAt: workspaces.deletedAt })
+        .from(workspaces)
+        .where(eq(workspaces.id, move.workspaceId));
+    if (!space || space.deletedAt) return false;
+    if (!(await mayStillRemove(tx, move.by, move.workspaceId))) return false;
+    const destination = await freeBytes(tx, workspaceId);
+    if (!destination || !(await samePool(tx, destination, move.workspaceId))) return false;
+    const chain = await walk(tx, move.nodeId);
+    if (
+        !chain ||
+        chain.node.workspace_id !== move.workspaceId ||
+        chain.purged ||
+        chain.trashed ||
+        chain.node.kind !== 'file'
+    )
+        return false;
+    const [node] = await tx
+        .select({ currentVersionId: driveNodes.currentVersionId, changeSeq: driveNodes.changeSeq })
+        .from(driveNodes)
+        .where(eq(driveNodes.id, move.nodeId));
+    if (!node || node.currentVersionId !== move.versionId || node.changeSeq !== move.changeSeq)
+        return false;
+    return (await bytesFreedBy(tx, move.nodeId)) === move.freedBytes;
+}
+
+/*
  * Step three of complete, under the workspace lock. `storedSize` is what the
  * store reports after the multipart upload finished; anything but the reserved
  * size aborts. A precondition that moved leaves the upload `conflicted` with
  * its bytes still reserved and its object in the store, for attach or abort.
+ *
+ * A move (docs/families-shared-pool.md 3.8) also removes its source here, in the
+ * same transaction as the copy's publish: deleted outright, never to the Trash,
+ * so no commit leaves both counted or neither there. A source that changed is
+ * `stale`: the copy is released, the source untouched.
  */
 export async function finishCompleting(
     workspaceId: string,
@@ -1648,8 +1898,21 @@ export async function finishCompleting(
     storedSize: bigint | null,
     writer?: string,
 ) {
+    const move = await moveOfUpload(workspaceId, uploadId);
+    return settlingPool(() =>
+        finishCompletingOnce(workspaceId, uploadId, storedSize, move, writer),
+    );
+}
+
+async function finishCompletingOnce(
+    workspaceId: string,
+    uploadId: string,
+    storedSize: bigint | null,
+    move: MoveRecord | null,
+    writer?: string,
+) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, workspaceId, writer);
+        const { changeSeq, sourceSeq } = await lockForCompletion(tx, workspaceId, writer, move);
         const [upload] = await tx
             .select(uploadColumns)
             .from(driveUploads)
@@ -1684,6 +1947,10 @@ export async function finishCompleting(
             await releaseUpload(tx, row, 'aborted');
             return { status: 'purged' as const };
         }
+        if (move && !(await moveStillHolds(tx, workspaceId, move, sourceSeq))) {
+            await releaseUpload(tx, row, 'aborted');
+            return { status: 'move-stale' as const };
+        }
         let conflicted = chain.node.key_epoch !== row.keyEpoch;
         const [node] = await tx
             .select({
@@ -1706,7 +1973,15 @@ export async function finishCompleting(
             return { status: 'conflicted' as const, currentVersionId: node.currentVersionId };
         }
 
-        return publishUpload(tx, row, chain.ancestors, node.currentVersionId, changeSeq);
+        const published = await publishUpload(
+            tx,
+            row,
+            chain.ancestors,
+            node.currentVersionId,
+            changeSeq,
+        );
+        if (move) await purgeOne(tx, move.workspaceId, move.nodeId, sourceSeq!);
+        return published;
     });
 }
 
@@ -1821,8 +2096,24 @@ export async function attachUpload(
     input: AttachInput,
     writer?: string,
 ) {
+    const move = await moveOfUpload(workspaceId, uploadId);
+    return settlingPool(() => attachUploadOnce(workspaceId, uploadId, input, move, writer));
+}
+
+async function attachUploadOnce(
+    workspaceId: string,
+    uploadId: string,
+    input: AttachInput,
+    move: MoveRecord | null,
+    writer?: string,
+) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, workspaceId, writer);
+        const { changeSeq, sourceSeq } = await lockForCompletion(tx, workspaceId, writer, move);
+        // A move's source goes with the copy's publish, in this transaction (finishCompleting).
+        const settled = async <T>(published: T) => {
+            if (move) await purgeOne(tx, move.workspaceId, move.nodeId, sourceSeq!);
+            return published;
+        };
         const [upload] = await tx
             .select(uploadColumns)
             .from(driveUploads)
@@ -1841,6 +2132,10 @@ export async function attachUpload(
             .from(driveObjects)
             .where(eq(driveObjects.id, row.objectId));
         if (!object) return { status: 'not-conflicted' as const, uploadStatus: row.status };
+        if (move && !(await moveStillHolds(tx, workspaceId, move, sourceSeq))) {
+            await releaseUpload(tx, row, 'aborted');
+            return { status: 'move-stale' as const };
+        }
         const nodeId = input.mode === 'same-node' ? row.nodeId : input.node.id;
         const statements = [
             versionSigned({
@@ -1887,12 +2182,14 @@ export async function attachUpload(
                 .update(driveUploads)
                 .set({ keyEpoch: input.keyEpoch })
                 .where(eq(driveUploads.id, uploadId));
-            return publishUpload(
-                tx,
-                { ...row, keyEpoch: input.keyEpoch },
-                chain.ancestors,
-                node.currentVersionId,
-                changeSeq,
+            return settled(
+                await publishUpload(
+                    tx,
+                    { ...row, keyEpoch: input.keyEpoch },
+                    chain.ancestors,
+                    node.currentVersionId,
+                    changeSeq,
+                ),
             );
         }
 
@@ -1958,18 +2255,20 @@ export async function attachUpload(
                 keyEpoch: parent.node.key_epoch,
             },
         ];
-        return publishUpload(
-            tx,
-            {
-                ...row,
-                nodeId: input.node.id,
-                keyEpoch: input.node.keyEpoch,
-                expectedVersionId: null,
-                newNode: true,
-            },
-            ancestors,
-            null,
-            changeSeq,
+        return settled(
+            await publishUpload(
+                tx,
+                {
+                    ...row,
+                    nodeId: input.node.id,
+                    keyEpoch: input.node.keyEpoch,
+                    expectedVersionId: null,
+                    newNode: true,
+                },
+                ancestors,
+                null,
+                changeSeq,
+            ),
         );
     });
 }

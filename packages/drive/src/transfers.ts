@@ -18,6 +18,7 @@ import type {
     JournalEntry,
     QueuedEntry,
     UploadJournal,
+    UploadMove,
     UploadOrigin,
     UploadSignatures,
 } from './journal';
@@ -86,6 +87,8 @@ export type UploadItem = {
     /* Bytes this device can reopen itself: a kept file handle or a stash; `resume` uses them. */
     hasHandle: boolean;
     origin: UploadOrigin;
+    /* A move between the person's workspaces: the file this is a copy of (UploadMove). */
+    move?: UploadMove | null;
 };
 
 export type TransfersState = {
@@ -135,6 +138,8 @@ export type EnqueueInput = {
     signAs?: UploadSignatures;
     /* The stash the app wrote this upload's bytes to, so a reload can reopen them. */
     stash?: string;
+    /* A move: the file this one is a re-encrypted copy of, and whether both sides are one pool. */
+    move?: UploadMove;
 };
 
 /* Where the app keeps the bytes of uploads that have no file on disk, by name. */
@@ -1083,8 +1088,28 @@ export function createTransferManager(options: TransferManagerOptions) {
                     contentSuite: CONTENT_SUITE,
                     chunkCount: prepared.chunkCount,
                     ciphertextSize: String(prepared.ciphertextSize),
+                    // One pool: the server deletes the source when this completes, in the same
+                    // transaction, and charges only what the copy adds (UploadMove).
+                    ...(u.item.move?.pooled && { moveOf: u.item.move.of }),
                 });
             } catch (error) {
+                // A move the server won't take as one (its two sides aren't one pool): it goes as
+                // an ordinary copy, needing the room, and the app deletes the original once it is
+                // there (UploadMove). Nothing was kept of the refused begin; sealed afresh.
+                if (
+                    u.item.move?.pooled &&
+                    error instanceof DriveApiError &&
+                    error.code === 'not-pooled'
+                ) {
+                    if (u.generation !== generation) return;
+                    const move = { ...u.item.move, pooled: false };
+                    set(u, { move });
+                    if (u.queued) {
+                        u.queued = { ...u.queued, move, updatedAt: now() };
+                        void journal?.putQueued(u.queued).catch(() => {});
+                    }
+                    continue;
+                }
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;
@@ -1137,6 +1162,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             origin: u.item.origin,
             signAs: u.signAs,
             stash: u.stash,
+            move: u.item.move ?? null,
             parts: {},
             expiresAt: begun.upload.expiresAt,
             createdAt: now(),
@@ -1560,6 +1586,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     needsFile: false,
                     hasHandle: Boolean(input.handle) || Boolean(input.stash),
                     origin: input.origin ?? 'file',
+                    move: input.move ?? null,
                 },
                 input.file,
                 input.parent,
@@ -1587,6 +1614,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 origin: u.item.origin,
                 signAs: u.signAs,
                 stash: u.stash,
+                move: u.item.move ?? null,
                 createdAt: now(),
                 updatedAt: now(),
             };
@@ -2042,6 +2070,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     needsFile: true,
                     hasHandle: entry.handle !== null || stash !== null,
                     origin: entry.origin ?? 'file',
+                    move: entry.move ?? null,
                 },
                 null,
                 null,
@@ -2094,6 +2123,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     needsFile: true,
                     hasHandle: queued.handle !== null || queued.stash !== null,
                     origin: queued.origin,
+                    move: queued.move ?? null,
                 },
                 null,
                 null,

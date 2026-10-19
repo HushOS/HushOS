@@ -475,6 +475,23 @@ const tooDeep = () =>
 /* The repository verified the writer's signature against their current signing key and it failed. */
 const badSignature = (data?: unknown) =>
     new DriveError('bad-signature', 'This change was not signed by your keys.', 400, data);
+/* A move across pools: the client copies and deletes instead, which needs room at the destination. */
+const notPooled = () =>
+    new DriveError(
+        'not-pooled',
+        'These two places don’t share one storage pool, so this can’t move without using more storage.',
+        409,
+    );
+/* Company → You (docs/families-shared-pool.md 6.4): HushOS won't move it; never "it can't leave". */
+const movePolicy = () =>
+    new DriveError('policy', 'Your company’s policy doesn’t let HushOS move this out.', 403);
+/* A move whose source changed before it finished: its copy was released, the source left alone. */
+const moveStale = () =>
+    new DriveError(
+        'stale',
+        'The original changed while it was moving, so it stayed where it was. Try again.',
+        409,
+    );
 const stale = (data?: unknown) =>
     new DriveError(
         'stale',
@@ -1180,6 +1197,13 @@ export type UploadBeginInput = {
     chunkCount: number;
     /* The whole object, trailer included: what is reserved and what the store must confirm. */
     ciphertextSize: string;
+    /*
+     * The file this new one moves here from another of the mover's workspaces in the
+     * same pool, at the version read (docs/families-shared-pool.md 3.8): the upload
+     * reserves only what it takes beyond what that file frees, and completing it
+     * deletes that file in the same transaction.
+     */
+    moveOf?: { workspaceId: string; nodeId: string; versionId: string };
 };
 
 export type UploadView = {
@@ -1298,6 +1322,14 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
     ]);
     if (input.node.existing) await requireAccess(userId, workspaceId, input.node.id, 'editor');
     else await requireAccess(userId, workspaceId, input.node.parentId, 'editor');
+    // A move is between the mover's own workspaces (their files, their family's folders), never
+    // into or out of something shared with them; the repository asks again under the locks.
+    if (input.moveOf) {
+        if (input.node.existing || input.moveOf.workspaceId === workspaceId)
+            throw new DriveError('invalid', 'A move makes a new file in another workspace.');
+        await requireMember(userId, workspaceId);
+        await requireMember(userId, input.moveOf.workspaceId);
+    }
     // Suite 3 alone is written: an older suite would hand the server the file's exact size.
     if (input.contentSuite !== CONTENT_SUITE)
         throw new DriveError('unsupported', 'Update HushOS to upload.', 409);
@@ -1338,6 +1370,7 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
         },
         multipartId,
         expiresAt: new Date(Date.now() + UPLOAD_TTL_HOURS * 3600 * 1000),
+        ...(input.moveOf && { moveOf: input.moveOf }),
     });
     if (result.status !== 'ok') {
         await store.abortMultipart(key, multipartId).catch(() => {});
@@ -1366,6 +1399,14 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
                 throw badSignature();
             case 'conflict':
                 throw new DriveError('conflict', 'An item with this id already exists.', 409);
+            case 'invalid':
+                throw new DriveError('invalid', 'A move makes a new file in another workspace.');
+            case 'policy':
+                throw movePolicy();
+            case 'not-pooled':
+                throw notPooled();
+            case 'moving':
+                throw new DriveError('conflict', 'This file is already being moved.', 409);
         }
     }
     const row = await driveRepository.getUpload(workspaceId, result.uploadId);
@@ -1478,6 +1519,8 @@ export async function completeUpload(
                 'The folder this was going to no longer exists.',
                 404,
             );
+        case 'move-stale':
+            throw moveStale();
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);
         case 'not-completing':
@@ -1568,6 +1611,8 @@ export async function attachUpload(
             throw tooDeep();
         case 'stale':
             throw stale();
+        case 'move-stale':
+            throw moveStale();
         case 'bad-signature':
             throw badSignature();
         case 'conflict':

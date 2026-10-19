@@ -434,6 +434,13 @@ export type StorageBreakdown = {
  */
 export type ThumbnailUrls = { urls: { versionId: string; url: string }[]; urlExpiresAt: string };
 
+/*
+ * A move between two of a person's workspaces that draw from one storage pool (My files and
+ * their family's folders; docs/families-shared-pool.md 3.8): the file being moved, at the
+ * version the device read and re-encrypted. Completing the upload deletes it.
+ */
+export type MoveOf = { workspaceId: string; nodeId: string; versionId: string };
+
 export type PartUrl = { partNumber: number; length: number; url: string };
 export type PartUrls = { parts: PartUrl[]; urlExpiresAt: string };
 export type StoredPart = { partNumber: number; etag: string; size: number };
@@ -455,6 +462,8 @@ export interface DriveApi {
             chunkCount: number;
             /* The whole object, trailer included; the store must confirm it at complete. */
             ciphertextSize: string;
+            /* The file this one moves here, in another workspace of the same pool (MoveOf). */
+            moveOf?: MoveOf;
         },
     ): Promise<{ upload: UploadView } & PartUrls>;
     uploadState(

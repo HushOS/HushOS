@@ -17,6 +17,7 @@ import {
     refuseWrite,
     waitsForKeyChange,
 } from '@/lib/drive';
+import { DriveApiError } from '@hushos/drive/api';
 import { driveApi } from '@/lib/drive-api';
 import { stashAvailable, uploadStash } from '@/lib/stash';
 import { backoffDelay } from '@/lib/groups/walks';
@@ -131,9 +132,92 @@ export const transfers = createTransferManager({
         void queryClient.invalidateQueries({ queryKey: driveKeys.versions(node.id) });
     },
     onEvent: (event) => {
+        if (event.type === 'done' && event.item.move) void settleMove(event.item.move);
         for (const listener of listeners) listener(event);
     },
 });
+
+/*
+ * A move's copy is in place (lib/move-across.ts). In one pool the server
+ * deleted the source with it; across two, this deletes it now. The source is
+ * noted on this device first (`MOVES_TO_DELETE`, ids only), so a reload or a
+ * closed tab between the copy and the delete finishes it on the next open
+ * instead of leaving the original in the Trash, still counted.
+ */
+async function settleMove(move: NonNullable<TransferEvent['item']['move']>) {
+    if (!move.pooled) {
+        pendingDeletes(add(move.of));
+        await deleteMoved(move.of);
+    }
+    if (!queryClient) return;
+    // Where the source was listed, whichever folder that is: the feed would say so later.
+    await queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'folder'] });
+    await invalidateFolders(queryClient);
+}
+
+type MovedSource = NonNullable<TransferEvent['item']['move']>['of'];
+/* Per account: another account in this browser must never replay this one's deletes. */
+const movesToDelete = () => {
+    const userId = authClient.store.getState().unlockedUserId;
+    return userId ? `hushos:moves-to-delete:${userId}` : null;
+};
+const add = (of: MovedSource) => (held: MovedSource[]) => [
+    ...held.filter((at) => at.nodeId !== of.nodeId),
+    of,
+];
+const drop = (of: MovedSource) => (held: MovedSource[]) =>
+    held.filter((at) => at.nodeId !== of.nodeId);
+/* The sources still to delete on this device, after `change`; storage that fails holds none. */
+function pendingDeletes(change: (held: MovedSource[]) => MovedSource[] = (held) => held) {
+    let held: MovedSource[] = [];
+    try {
+        const key = movesToDelete();
+        if (!key) return change(held);
+        held = JSON.parse(window.localStorage.getItem(key) ?? '[]') as MovedSource[];
+        const next = change(held);
+        if (next.length) window.localStorage.setItem(key, JSON.stringify(next));
+        else window.localStorage.removeItem(key);
+        return next;
+    } catch {
+        return change(held);
+    }
+}
+
+/*
+ * To the Trash first, where no new version can start, then for good only if
+ * its current version is still the one copied; one changed meanwhile comes
+ * back out of the Trash and both stay. Forgotten once done, or once the server
+ * says it can't be (gone, not this person's any more); kept for the next open
+ * when the server can't be reached or asks to wait (a key change, a hold, a
+ * busy moment).
+ */
+async function deleteMoved(of: MovedSource) {
+    const { workspaceId, nodeId, versionId } = of;
+    try {
+        try {
+            await driveApi.trash(workspaceId, nodeId);
+        } catch (error) {
+            // Trashed already: by the person, or by this delete before a reload.
+            if (!(error instanceof DriveApiError && error.code === 'trashed')) throw error;
+        }
+        const { versions } = await driveApi.versions(workspaceId, nodeId);
+        if (versions.find((version) => version.current)?.id === versionId)
+            await driveApi.purge(workspaceId, nodeId);
+        else await driveApi.restore(workspaceId, nodeId);
+    } catch (error) {
+        if (!(error instanceof DriveApiError)) return;
+        if (error.code === 'rotating' || error.status === 403 || error.status >= 500) return;
+    }
+    pendingDeletes(drop(of));
+}
+
+/* Deletes a reload interrupted, once per page, when Drive opens. */
+let resumedDeletes = false;
+function resumeDeletes() {
+    if (resumedDeletes || typeof window === 'undefined') return;
+    resumedDeletes = true;
+    for (const of of pendingDeletes()) void deleteMoved(of);
+}
 
 /*
  * A folder's listing is refetched once for a burst of finished uploads, not
@@ -167,6 +251,7 @@ export function onTransferEvent(listener: (event: TransferEvent) => void) {
 /* Once per workspace open: bring back what this device was uploading before. */
 const restored = new Set<string>();
 export async function restoreTransfers(workspaceId: string) {
+    resumeDeletes();
     if (restored.has(workspaceId)) return;
     restored.add(workspaceId);
     await transfers.restore(workspaceId).catch(() => restored.delete(workspaceId));
