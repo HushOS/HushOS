@@ -249,11 +249,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /* The Files app and pickers ask again: the root says signed in or out, and its listing is this account's drive. */
-    private fun filesAppChanged() {
-        val authority = "${context.packageName}.documents"
-        context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri(authority), null)
-        context.contentResolver.notifyChange(android.provider.DocumentsContract.buildChildDocumentsUri(authority, "root"), null)
-    }
+    private fun filesAppChanged() = com.hushos.app.data.FilesRoots.changed(context)
 
     private fun signedIn(user: SessionUser) {
         showingOwnWords = false

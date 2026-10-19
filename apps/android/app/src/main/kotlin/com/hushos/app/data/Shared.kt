@@ -69,11 +69,18 @@ object Shared {
         Session(it.getString("origin"), it.getString("token"), it.getString("userId"), it.optString("email"))
     }
 
-    fun writeSession(context: Context, session: Session) =
+    /*
+     * The session is stored or dropped here, and the file pickers are told here: wherever it happens (the app, a
+     * sign-in from a picker whose screen is then killed, a removal wipe), the HushOS root and its listing ask again.
+     */
+    fun writeSession(context: Context, session: Session) {
         write(context, SESSION, JSONObject().put("origin", session.origin).put("token", session.token).put("userId", session.userId).put("email", session.email))
+        FilesRoots.changed(context)
+    }
 
     fun clearSession(context: Context) {
         prefs(context).edit().remove(SESSION).apply()
+        FilesRoots.changed(context)
     }
 
     fun device(context: Context): Device? = read(context, DEVICE)?.let {
