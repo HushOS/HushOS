@@ -1126,6 +1126,40 @@ export async function settlePlanRefund(
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
+/* Endings settled within the last `days` (by their last write): their refunds are read again. */
+export async function listRecentlySettledEndings(days: number) {
+    return db
+        .select()
+        .from(personalPlanEndings)
+        .where(
+            and(
+                eq(personalPlanEndings.outcome, 'settled'),
+                sql`${personalPlanEndings.updatedAt} > now() - make_interval(days => ${days})`,
+            ),
+        );
+}
+
+export async function getPlanEnding(subscriptionId: string) {
+    const [row] = await db
+        .select()
+        .from(personalPlanEndings)
+        .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+    return row ?? null;
+}
+
+/* A settled ending whose refund failed afterwards: open again, so its job places it again. */
+export async function reopenPlanEnding(subscriptionId: string) {
+    await db
+        .update(personalPlanEndings)
+        .set({ outcome: null, updatedAt: new Date() })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                eq(personalPlanEndings.outcome, 'settled'),
+            ),
+        );
+}
+
 /* The order's charge is disputed: its share is dropped for good, never moved. */
 export async function markPlanRefundDisputed(orderId: string) {
     await db

@@ -122,6 +122,8 @@ export async function queuePlanEnding(userId: string, options: { force?: boolean
  */
 export async function reconcilePlanEndings() {
     if (!billingEnabled()) return 0;
+    // Refunds Stripe failed after HushOS settled them: their endings are open again first.
+    await recheckSettledEndings();
     const users = new Set([
         ...(await billingRepository.listPooledWithPersonalPlan()),
         ...(await billingRepository.listUsersWithOpenPlanEndings()),
@@ -143,6 +145,100 @@ export async function reconcilePlanEndings() {
             queued += 1;
     }
     return queued;
+}
+
+/*
+ * How long a settled ending's refunds are read again: Stripe can fail a refund it
+ * reported succeeded for up to 30 days after (its refunds guide), and Polar then
+ * marks it failed and takes it back off the order.
+ */
+const SETTLED_RECHECK_DAYS = 30;
+
+/* What of a refund row's amount HushOS's live refunds on the order still hold, by `listed`. */
+function stillHeld(row: billingRepository.PlanRefund, listed: models.Refund[]) {
+    const asked = row.firstAttemptedAt?.getTime() ?? null;
+    return listed
+        .filter(
+            (refund) =>
+                isLive(refund) &&
+                (refund.metadata?.[REFUND_METADATA_KEY] === row.refundKey ||
+                    (asked !== null && Date.parse(refund.created_at) >= asked - ATTEMPT_SLACK_MS)),
+        )
+        .reduce((sum, refund) => sum + refund.amount, 0);
+}
+
+/*
+ * Opens a settled ending again, so what a failed refund held is placed again, and queues
+ * its job unless the caller (the daily reconcile, which queues every open ending) will.
+ */
+async function reopen(ending: billingRepository.PlanEnding, orderId: string, queue = true) {
+    log.warn({
+        message: 'A refund that had landed failed afterwards; the plan’s refunds are placed again',
+        billing: { user: ending.userId, subscription: ending.subscriptionId, order: orderId },
+    });
+    await billingRepository.reopenPlanEnding(ending.subscriptionId);
+    if (!queue) return;
+    await send({
+        userId: ending.userId,
+        groupId: ending.groupId,
+        admittedAt: ending.admittedAt.toISOString(),
+        seenAt: new Date().toISOString(),
+    });
+}
+
+/*
+ * The daily reconcile's part for endings settled in the last SETTLED_RECHECK_DAYS:
+ * each refund HushOS counted is listed again at Polar, and an ending whose refunds
+ * no longer hold what it counted (one failed or was cancelled after it succeeded)
+ * is opened again (the daily reconcile then queues its job with every open ending).
+ * Returns how many were opened.
+ */
+export async function recheckSettledEndings() {
+    if (!billingEnabled()) return 0;
+    let reopened = 0;
+    for (const ending of await billingRepository.listRecentlySettledEndings(SETTLED_RECHECK_DAYS)) {
+        for (const row of await billingRepository.listPlanRefunds(ending.subscriptionId)) {
+            if (row.amount <= 0 || (row.status !== 'succeeded' && row.status !== 'pending'))
+                continue;
+            let listed: models.Refund[];
+            try {
+                listed = (await polar().refunds.list({ order_id: row.orderId, limit: 100 })).items;
+            } catch (error) {
+                log.warn({
+                    message: 'A settled refund could not be read again',
+                    billing: { order: row.orderId, status: statusOf(error) },
+                });
+                continue;
+            }
+            if (stillHeld(row, listed) >= row.amount) continue;
+            await reopen(ending, row.orderId, false);
+            reopened += 1;
+            break;
+        }
+    }
+    return reopened;
+}
+
+/*
+ * Polar's `refund.updated` delivery for a refund HushOS made (its key in the metadata)
+ * that failed or was cancelled: its ending is opened again at once, rather than at the
+ * next daily reconcile. Anything else is left alone.
+ */
+export async function noteRefundUpdated(refund: {
+    order_id?: string;
+    status?: string;
+    metadata?: Record<string, unknown> | null;
+}) {
+    if (!billingEnabled()) return false;
+    const key = refund.metadata?.[REFUND_METADATA_KEY];
+    if (typeof key !== 'string' || !refund.order_id) return false;
+    if (refund.status !== 'failed' && refund.status !== 'canceled') return false;
+    const row = await billingRepository.getPlanRefund(refund.order_id);
+    if (!row || row.refundKey !== key) return false;
+    const ending = await billingRepository.getPlanEnding(row.subscriptionId);
+    if (!ending) return false;
+    await reopen(ending, row.orderId);
+    return true;
 }
 
 /* Polar's error name on a refused call (`AlreadyCanceledSubscription`, `RefundedAlready`). */
@@ -476,17 +572,24 @@ async function refundPeriod(
     ending: billingRepository.PlanEnding,
     hold: Hold,
 ): Promise<RefundOutcome> {
+    let last: { orderId: string; reason: 'disputed' | 'refunded-already' } | null = null;
     for (let pass = 0; pass < 4; pass++) {
         const outcome = await refundPass(ending, hold);
-        if (outcome !== 'recount') return outcome;
+        if (typeof outcome === 'string') return outcome;
+        last = outcome;
     }
+    // Polar kept saying the order is refunded whole while its listing didn't show it: a failed
+    // try, so a listing that never catches up ends on the owed list, not failing unseen.
+    const row = last ? await billingRepository.getPlanRefund(last.orderId) : null;
+    if (row && last?.reason === 'refunded-already')
+        return failRefund(ending, row, 'refunded-already-unconfirmed', 403);
     return 'failed';
 }
 
 async function refundPass(
     ending: billingRepository.PlanEnding,
     hold: Hold,
-): Promise<RefundOutcome | 'recount'> {
+): Promise<RefundOutcome | { orderId: string; reason: 'disputed' | 'refunded-already' }> {
     const orders = await periodOrders(ending);
     const rows = new Map(
         (await billingRepository.listPlanRefunds(ending.subscriptionId)).map((row) => [
@@ -670,7 +773,8 @@ async function refundPass(
             : await failRefund(ending, row, 'list', null);
         // A dispute zeroes the order's share, and Polar refunded whole already means its refunds
         // changed under us: either way the amounts are placed again from a fresh read.
-        if (result === 'disputed' || result === 'recount') return 'recount';
+        if (result === 'disputed') return { orderId: row.orderId, reason: 'disputed' };
+        if (result === 'recount') return { orderId: row.orderId, reason: 'refunded-already' };
         outcome = worse(outcome, result);
     }
     return outcome;
