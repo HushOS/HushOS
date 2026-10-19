@@ -1,0 +1,37 @@
+apps/web/src/components/app-sidebar.tsx
+  s_c56e31c87cddde::t_2c63c35bf08ff1 297,322-331
+apps/web/src/components/drive/details-panel.tsx
+  s_c56e31c87cddde::t_fdc18f646a338e 5,126-147,430-446,613-615
+apps/web/src/components/drive/json-view.tsx
+  s_c56e31c87cddde::t_6da610004f50cf 699-702
+apps/web/src/components/drive/office-viewer.tsx
+  s_c56e31c87cddde::t_c819b56544b883 220-234,242-252,254-278,280,296-299
+apps/web/src/components/drive/preview.tsx
+  s_c56e31c87cddde::t_1fef39a1ec3008 15-24,345-354,361,375,427-433
+apps/web/src/components/drive/rich-text.css
+  s_c56e31c87cddde::t_9cd8ace1939641 67-87,189-193,195-206,209-220,303-309
+apps/web/src/components/drive/rich-text.tsx
+  s_c56e31c87cddde::t_490e69d6a49438 295,344-348
+apps/web/src/components/drive/viewer-parts.tsx
+  s_c56e31c87cddde::t_125c25bfe9541c 127,151-158
+e2e/office.spec.ts
+  s_c56e31c87cddde::t_a392a1a9f09b34 72-74
+e2e/preview.spec.ts
+  s_c56e31c87cddde::t_aca693d3803c30 39-52,118-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc2dd4275d9983c4d0d93520578b8590e9ee33a5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
