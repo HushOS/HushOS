@@ -58,7 +58,8 @@ export function groupIdOf(externalId: string) {
 
 const customerKey = (groupId: string) => `${GROUP_CUSTOMER_PREFIX}${groupId}`;
 const graceMs = () => billingEnv.BILLING_GRACE_DAYS * DAY;
-const familyPage = (groupId: string) => `${appEnv.APP_ORIGIN}/app/families/${groupId}`;
+// Account → Family: the page of the one family an account is in (docs/families-shared-pool.md 7.2).
+const familyPage = (_groupId: string) => `${appEnv.APP_ORIGIN}/app/family`;
 
 function requireFamilyBilling() {
     if (!billingEnabled()) throw new BillingError('Billing is not available on this server.', 404);

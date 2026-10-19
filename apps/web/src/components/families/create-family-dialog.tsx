@@ -54,14 +54,14 @@ export function CreateFamilyDialog({
         setPending(true);
         setError('');
         try {
-            const { groupId, outcome } = await createFamily(familyContext(userId), trimmed);
+            const { outcome } = await createFamily(familyContext(userId), trimmed);
             void afterFamilyChange(queryClient, userId);
             if (outcome.status === 'landed') {
                 cue('success');
                 toast.add({ type: 'success', title: `${trimmed} created` });
                 onOpenChange(false);
                 setName('');
-                await navigate({ to: '/app/families/$groupId', params: { groupId } });
+                await navigate({ to: '/app/family' });
                 return;
             }
             if (outcome.status === 'pending') {

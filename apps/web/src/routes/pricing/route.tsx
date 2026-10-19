@@ -24,9 +24,9 @@ import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { faqFor } from '@/lib/pricing-faq';
-import { activeFamily } from '@/lib/families-shell';
-import { groupsApi } from '@/lib/groups/api';
+import { activeFamily, familiesQueryOptions } from '@/lib/families-shell';
 import { rememberReturn } from '@/lib/return-to';
+import { sessionQueryOptions } from '@/lib/session';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -669,47 +669,39 @@ function Business() {
 }
 
 /*
- * The family tiers, shown only where the server serves families and sells
- * plans, priced like the personal cards above (the same currency and the same
- * Monthly or Yearly). Choosing one happens on the family's own page, after it
- * is made: signed in, the button opens Families; signed out, it signs up first
- * and lands there.
- */
-/*
  * The family section's button. Create a family is offered only to someone in no family (one
- * per account), and leads to Account → Family, where the family is made; signed out, it signs
- * up first and lands there. Someone already in a family opens theirs instead. Nothing shows
- * until that is known, so the button never offers what the server would refuse.
+ * per account), and leads to Account → Family (/app/family), where the family is made; signed
+ * out, it signs up first and lands there. Someone already in a family opens theirs instead.
+ * Nothing shows until that is known, so the button never offers what the server would refuse;
+ * if the account or its families can't be read, it opens /app/families, which goes to the
+ * right one of the two.
  */
 function FamilyAction({ hasSession }: { hasSession: boolean }) {
-    const families = useQuery({
-        queryKey: ['families', 'pricing'],
-        queryFn: async () => (await groupsApi.listGroups()).groups,
-        enabled: hasSession,
-        retry: false,
-        staleTime: 15_000,
-    });
+    const session = useQuery({ ...sessionQueryOptions, enabled: hasSession });
+    const userId = session.data?.id;
+    const families = useQuery({ ...familiesQueryOptions(userId ?? ''), enabled: Boolean(userId) });
     const className = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
     if (!hasSession)
         return (
             <Link
                 to="/register"
-                onClick={() => rememberReturn('/app/account#family')}
+                onClick={() => rememberReturn('/app/family')}
                 className={className}
             >
                 Create a family
             </Link>
         );
-    if (families.isPending) return null;
-    // A server without families answers no list; Account then simply has no Family section.
+    if (session.isError || families.isError)
+        return (
+            <Link to="/app/families" className={className}>
+                Family
+            </Link>
+        );
+    if (!userId || families.isPending) return null;
     const yours = activeFamily(families.data);
-    return yours ? (
-        <Link to="/app/families/$groupId" params={{ groupId: yours.id }} className={className}>
-            Open {yours.name}
-        </Link>
-    ) : (
-        <Link to="/app/account" hash="family" className={className}>
-            Create a family
+    return (
+        <Link to="/app/family" className={className}>
+            {yours ? `Open ${yours.name}` : 'Create a family'}
         </Link>
     );
 }

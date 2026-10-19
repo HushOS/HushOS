@@ -55,6 +55,7 @@ import { Route as AuthenticatedSetupRecoveryKeyRouteImport } from './routes/_aut
 import { Route as AuthenticatedAppDriveIndexRouteImport } from './routes/_authenticated/app/_drive/index'
 import { Route as AuthenticatedAppDriveContactsRouteImport } from './routes/_authenticated/app/_drive/contacts'
 import { Route as AuthenticatedAppDriveFamiliesRouteRouteImport } from './routes/_authenticated/app/_drive/families/route'
+import { Route as AuthenticatedAppDriveFamilyRouteRouteImport } from './routes/_authenticated/app/_drive/family/route'
 import { Route as AuthenticatedAppDrivePeopleRouteImport } from './routes/_authenticated/app/_drive/people'
 import { Route as AuthenticatedAppDriveReferralsRouteImport } from './routes/_authenticated/app/_drive/referrals'
 import { Route as AuthenticatedAppDriveSearchRouteImport } from './routes/_authenticated/app/_drive/search'
@@ -65,6 +66,7 @@ import { Route as AuthenticatedAppAdminWorkspacesRouteImport } from './routes/_a
 import { Route as AuthenticatedAppDriveAdminAffiliatesRouteImport } from './routes/_authenticated/app/_drive/admin.affiliates'
 import { Route as AuthenticatedAppDriveDriveIndexRouteImport } from './routes/_authenticated/app/_drive/drive/index'
 import { Route as AuthenticatedAppDriveFamiliesIndexRouteImport } from './routes/_authenticated/app/_drive/families/index'
+import { Route as AuthenticatedAppDriveFamilyIndexRouteImport } from './routes/_authenticated/app/_drive/family/index'
 import { Route as AuthenticatedAppDriveSGroupIdRouteRouteImport } from './routes/_authenticated/app/_drive/s/$groupId/route'
 import { Route as AuthenticatedAppDriveTagsIndexRouteImport } from './routes/_authenticated/app/_drive/tags.index'
 import { Route as AuthenticatedAppDriveTagsTagIdRouteImport } from './routes/_authenticated/app/_drive/tags.$tagId'
@@ -315,6 +317,12 @@ const AuthenticatedAppDriveFamiliesRouteRoute =
     path: '/families',
     getParentRoute: () => AuthenticatedAppDriveRoute,
   } as any)
+const AuthenticatedAppDriveFamilyRouteRoute =
+  AuthenticatedAppDriveFamilyRouteRouteImport.update({
+    id: '/family',
+    path: '/family',
+    getParentRoute: () => AuthenticatedAppDriveRoute,
+  } as any)
 const AuthenticatedAppDrivePeopleRoute =
   AuthenticatedAppDrivePeopleRouteImport.update({
     id: '/people',
@@ -374,6 +382,12 @@ const AuthenticatedAppDriveFamiliesIndexRoute =
     id: '/',
     path: '/',
     getParentRoute: () => AuthenticatedAppDriveFamiliesRouteRoute,
+  } as any)
+const AuthenticatedAppDriveFamilyIndexRoute =
+  AuthenticatedAppDriveFamilyIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedAppDriveFamilyRouteRoute,
   } as any)
 const AuthenticatedAppDriveSGroupIdRouteRoute =
   AuthenticatedAppDriveSGroupIdRouteRouteImport.update({
@@ -497,6 +511,7 @@ export interface FileRoutesByFullPath {
   '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
   '/app/families': typeof AuthenticatedAppDriveFamiliesRouteRouteWithChildren
+  '/app/family': typeof AuthenticatedAppDriveFamilyRouteRouteWithChildren
   '/app/contacts': typeof AuthenticatedAppDriveContactsRoute
   '/app/people': typeof AuthenticatedAppDrivePeopleRoute
   '/app/referrals': typeof AuthenticatedAppDriveReferralsRoute
@@ -512,6 +527,7 @@ export interface FileRoutesByFullPath {
   '/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/app/drive/': typeof AuthenticatedAppDriveDriveIndexRoute
   '/app/families/': typeof AuthenticatedAppDriveFamiliesIndexRoute
+  '/app/family/': typeof AuthenticatedAppDriveFamilyIndexRoute
   '/app/tags/': typeof AuthenticatedAppDriveTagsIndexRoute
   '/app/admin/accounts/': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/app/admin/reports/': typeof AuthenticatedAppAdminReportsIndexRoute
@@ -576,6 +592,7 @@ export interface FileRoutesByTo {
   '/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/app/drive': typeof AuthenticatedAppDriveDriveIndexRoute
   '/app/families': typeof AuthenticatedAppDriveFamiliesIndexRoute
+  '/app/family': typeof AuthenticatedAppDriveFamilyIndexRoute
   '/app/tags': typeof AuthenticatedAppDriveTagsIndexRoute
   '/app/admin/accounts': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/app/admin/reports': typeof AuthenticatedAppAdminReportsIndexRoute
@@ -633,6 +650,7 @@ export interface FileRoutesById {
   '/_authenticated/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/_authenticated/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
   '/_authenticated/app/_drive/families': typeof AuthenticatedAppDriveFamiliesRouteRouteWithChildren
+  '/_authenticated/app/_drive/family': typeof AuthenticatedAppDriveFamilyRouteRouteWithChildren
   '/_authenticated/app/_drive/contacts': typeof AuthenticatedAppDriveContactsRoute
   '/_authenticated/app/_drive/people': typeof AuthenticatedAppDrivePeopleRoute
   '/_authenticated/app/_drive/referrals': typeof AuthenticatedAppDriveReferralsRoute
@@ -648,6 +666,7 @@ export interface FileRoutesById {
   '/_authenticated/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/_authenticated/app/_drive/drive/': typeof AuthenticatedAppDriveDriveIndexRoute
   '/_authenticated/app/_drive/families/': typeof AuthenticatedAppDriveFamiliesIndexRoute
+  '/_authenticated/app/_drive/family/': typeof AuthenticatedAppDriveFamilyIndexRoute
   '/_authenticated/app/_drive/tags/': typeof AuthenticatedAppDriveTagsIndexRoute
   '/_authenticated/app/admin/accounts/': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/_authenticated/app/admin/reports/': typeof AuthenticatedAppAdminReportsIndexRoute
@@ -704,6 +723,7 @@ export interface FileRouteTypes {
     | '/app/recovery-key'
     | '/setup/recovery-key'
     | '/app/families'
+    | '/app/family'
     | '/app/contacts'
     | '/app/people'
     | '/app/referrals'
@@ -719,6 +739,7 @@ export interface FileRouteTypes {
     | '/app/admin/accounts/$accountId'
     | '/app/drive/'
     | '/app/families/'
+    | '/app/family/'
     | '/app/tags/'
     | '/app/admin/accounts/'
     | '/app/admin/reports/'
@@ -783,6 +804,7 @@ export interface FileRouteTypes {
     | '/app/admin/accounts/$accountId'
     | '/app/drive'
     | '/app/families'
+    | '/app/family'
     | '/app/tags'
     | '/app/admin/accounts'
     | '/app/admin/reports'
@@ -839,6 +861,7 @@ export interface FileRouteTypes {
     | '/_authenticated/app/recovery-key'
     | '/_authenticated/setup/recovery-key'
     | '/_authenticated/app/_drive/families'
+    | '/_authenticated/app/_drive/family'
     | '/_authenticated/app/_drive/contacts'
     | '/_authenticated/app/_drive/people'
     | '/_authenticated/app/_drive/referrals'
@@ -854,6 +877,7 @@ export interface FileRouteTypes {
     | '/_authenticated/app/admin/accounts/$accountId'
     | '/_authenticated/app/_drive/drive/'
     | '/_authenticated/app/_drive/families/'
+    | '/_authenticated/app/_drive/family/'
     | '/_authenticated/app/_drive/tags/'
     | '/_authenticated/app/admin/accounts/'
     | '/_authenticated/app/admin/reports/'
@@ -1224,6 +1248,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAppDriveFamiliesRouteRouteImport
       parentRoute: typeof AuthenticatedAppDriveRoute
     }
+    '/_authenticated/app/_drive/family': {
+      id: '/_authenticated/app/_drive/family'
+      path: '/family'
+      fullPath: '/app/family'
+      preLoaderRoute: typeof AuthenticatedAppDriveFamilyRouteRouteImport
+      parentRoute: typeof AuthenticatedAppDriveRoute
+    }
     '/_authenticated/app/_drive/people': {
       id: '/_authenticated/app/_drive/people'
       path: '/people'
@@ -1293,6 +1324,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/app/families/'
       preLoaderRoute: typeof AuthenticatedAppDriveFamiliesIndexRouteImport
       parentRoute: typeof AuthenticatedAppDriveFamiliesRouteRoute
+    }
+    '/_authenticated/app/_drive/family/': {
+      id: '/_authenticated/app/_drive/family/'
+      path: '/'
+      fullPath: '/app/family/'
+      preLoaderRoute: typeof AuthenticatedAppDriveFamilyIndexRouteImport
+      parentRoute: typeof AuthenticatedAppDriveFamilyRouteRoute
     }
     '/_authenticated/app/_drive/s/$groupId': {
       id: '/_authenticated/app/_drive/s/$groupId'
@@ -1441,6 +1479,21 @@ const AuthenticatedAppDriveFamiliesRouteRouteWithChildren =
     AuthenticatedAppDriveFamiliesRouteRouteChildren,
   )
 
+interface AuthenticatedAppDriveFamilyRouteRouteChildren {
+  AuthenticatedAppDriveFamilyIndexRoute: typeof AuthenticatedAppDriveFamilyIndexRoute
+}
+
+const AuthenticatedAppDriveFamilyRouteRouteChildren: AuthenticatedAppDriveFamilyRouteRouteChildren =
+  {
+    AuthenticatedAppDriveFamilyIndexRoute:
+      AuthenticatedAppDriveFamilyIndexRoute,
+  }
+
+const AuthenticatedAppDriveFamilyRouteRouteWithChildren =
+  AuthenticatedAppDriveFamilyRouteRoute._addFileChildren(
+    AuthenticatedAppDriveFamilyRouteRouteChildren,
+  )
+
 interface AuthenticatedAppDriveSGroupIdRouteRouteChildren {
   AuthenticatedAppDriveSGroupIdTrashRoute: typeof AuthenticatedAppDriveSGroupIdTrashRoute
   AuthenticatedAppDriveSGroupIdIndexRoute: typeof AuthenticatedAppDriveSGroupIdIndexRoute
@@ -1464,6 +1517,7 @@ const AuthenticatedAppDriveSGroupIdRouteRouteWithChildren =
 
 interface AuthenticatedAppDriveRouteChildren {
   AuthenticatedAppDriveFamiliesRouteRoute: typeof AuthenticatedAppDriveFamiliesRouteRouteWithChildren
+  AuthenticatedAppDriveFamilyRouteRoute: typeof AuthenticatedAppDriveFamilyRouteRouteWithChildren
   AuthenticatedAppDriveContactsRoute: typeof AuthenticatedAppDriveContactsRoute
   AuthenticatedAppDrivePeopleRoute: typeof AuthenticatedAppDrivePeopleRoute
   AuthenticatedAppDriveReferralsRoute: typeof AuthenticatedAppDriveReferralsRoute
@@ -1483,6 +1537,8 @@ interface AuthenticatedAppDriveRouteChildren {
 const AuthenticatedAppDriveRouteChildren: AuthenticatedAppDriveRouteChildren = {
   AuthenticatedAppDriveFamiliesRouteRoute:
     AuthenticatedAppDriveFamiliesRouteRouteWithChildren,
+  AuthenticatedAppDriveFamilyRouteRoute:
+    AuthenticatedAppDriveFamilyRouteRouteWithChildren,
   AuthenticatedAppDriveContactsRoute: AuthenticatedAppDriveContactsRoute,
   AuthenticatedAppDrivePeopleRoute: AuthenticatedAppDrivePeopleRoute,
   AuthenticatedAppDriveReferralsRoute: AuthenticatedAppDriveReferralsRoute,

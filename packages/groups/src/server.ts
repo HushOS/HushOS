@@ -1858,7 +1858,6 @@ export async function listMyInvitations(userId: string) {
     return {
         invitations: (await groupsRepository.openInvitationsFor(userId)).map((row) => ({
             id: row.id,
-            groupId: row.groupId,
             name: row.name,
             inviterName: row.inviterName,
             expiresAt: row.expiresAt.toISOString(),

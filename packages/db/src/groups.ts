@@ -2231,7 +2231,6 @@ export async function openInvitationsFor(userId: string) {
     return db
         .select({
             id: groupInvitations.id,
-            groupId: groups.id,
             name: groups.name,
             inviterName: inviter.name,
             expiresAt: groupInvitations.expiresAt,

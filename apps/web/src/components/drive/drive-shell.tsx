@@ -106,7 +106,8 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     /* Polls in a row that still found a key change walking: each waits longer. */
     const walkPolls = useRef(0);
     useQuery({
-        // The Families page reads the same query.
+        // Account → Family (/app/family) reads the same query for its notices: this pass empties
+        // the outbox before any family page syncs, so they would be lost otherwise.
         queryKey: familiesSyncAllKey(user.id),
         // Each pass also does what is due in each family, and walks key changes, in the background.
         queryFn: async () =>
