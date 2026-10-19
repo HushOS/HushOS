@@ -40,9 +40,12 @@ vi.mock('@/lib/groups/store', () => ({ deleteGroupDevice: stores.groups }));
 vi.mock('@/lib/auth-client', () => ({ authClient: auth }));
 vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
 vi.mock('@/lib/session', () => ({ forgetSession }));
+const loadPage = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/load-page', () => ({ loadPage }));
 
 const { clearDevice, forgetDevice, leaveApp, SIGN_OUT_TIMEOUT_MS } = await import('./sign-out');
 const { useAuthView } = await import('./auth-view');
+const { afterSignOut, signOutSettled } = await import('./sign-in-gate');
 
 beforeEach(() => {
     stores.transfers.mockResolvedValue(undefined);
@@ -191,35 +194,119 @@ describe('signing out of the app', () => {
         // Still signed in on the server, so the session is not forgotten here either.
         expect(forgetSession).not.toHaveBeenCalled();
         expect(draw()).toBeNull();
+        // Try again is a new attempt, not the failed one again.
+        auth.logout.mockImplementation(async () => {});
+        await leaveApp(router);
+        expect(auth.logout).toHaveBeenCalledTimes(2);
+        expect(navigate).toHaveBeenCalledOnce();
     });
 
-    test('a logout that stalls is given up on, and the page is let go', async () => {
+    /* A logout the server has not answered yet: it locks at once, as the auth client does. */
+    function stalledLogout() {
+        let answer!: () => void;
+        auth.logout.mockImplementation(() => {
+            auth.store.setState({ unlockedUserId: null });
+            return new Promise<void>((resolve) => (answer = resolve));
+        });
+        return () => answer();
+    }
+
+    test('a logout that stalls is given up on, a retry joins it, and its late answer leaves', async () => {
         vi.useFakeTimers();
         try {
             const { router, navigate, draw } = leaving();
-            auth.logout.mockImplementation(() => {
-                auth.store.setState({ unlockedUserId: null });
-                return new Promise(() => {});
-            });
-            const left = leaveApp(router);
-            const outcome = expect(left).rejects.toThrow('too long');
+            const answer = stalledLogout();
+            const first = leaveApp(router);
+            const givenUp = expect(first).rejects.toThrow('too long');
             await vi.advanceTimersByTimeAsync(SIGN_OUT_TIMEOUT_MS);
-            await outcome;
+            await givenUp;
             expect(navigate).not.toHaveBeenCalled();
             expect(draw()).toBeNull();
+            // Try again while the first is still out: no second logout, which the client would
+            // refuse while the first holds it.
+            const retry = leaveApp(router);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(auth.logout).toHaveBeenCalledOnce();
+            answer();
+            await retry;
+            expect(navigate).toHaveBeenCalledOnce();
+            expect(mirrorRows).toBe(0);
         } finally {
             vi.useRealTimers();
         }
     });
 
-    test('a navigation that fails still forgets what the page drew from', async () => {
+    test('a logout that answers after it was given up on still leaves, without a second press', async () => {
+        vi.useFakeTimers();
+        try {
+            const { router, navigate, clear } = leaving();
+            const answer = stalledLogout();
+            const first = expect(leaveApp(router)).rejects.toThrow('too long');
+            await vi.advanceTimersByTimeAsync(SIGN_OUT_TIMEOUT_MS);
+            await first;
+            answer();
+            await vi.advanceTimersByTimeAsync(0);
+            await signOutSettled();
+            expect(navigate).toHaveBeenCalledExactlyOnceWith({ to: '/login' });
+            for (const forget of Object.values(memory)) expect(forget).toHaveBeenCalledOnce();
+            expect(clear).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test('signed out on the server but the sign-in page did not open: it is loaded instead', async () => {
         const { router, clear } = leaving(() => {
             throw new Error('The sign-in page did not load.');
         });
-        await expect(leaveApp(router)).rejects.toThrow('did not load');
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        // Not a failure to the person: the session is gone, and Try again would only fail.
+        await expect(leaveApp(router)).resolves.toBeUndefined();
+        expect(loadPage).toHaveBeenCalledExactlyOnceWith('/login');
+        // What the page drew from went before the document did.
         for (const forget of Object.values(memory)) expect(forget).toHaveBeenCalledOnce();
         expect(clear).toHaveBeenCalledOnce();
         expect(mirrorRows).toBe(0);
+        expect(clear.mock.invocationCallOrder[0]).toBeLessThan(
+            loadPage.mock.invocationCallOrder[0]!,
+        );
+    });
+
+    test('a sign-in started while the last wipe waits does not lose its stores to it', async () => {
+        // The second wipe of the families' stores waits on a database another tab holds.
+        let families: string | null = 'old account';
+        let unblock!: () => void;
+        stores.groups
+            .mockImplementationOnce(async () => {
+                families = null;
+            })
+            .mockImplementationOnce(
+                () =>
+                    new Promise<void>((resolve) => {
+                        unblock = () => {
+                            families = null;
+                            resolve();
+                        };
+                    }),
+            );
+        let signIn: Promise<unknown> | undefined;
+        const signedIn = afterSignOut({
+            login: async () => {
+                families = 'new account';
+            },
+            register: async () => {},
+            recover: async () => {},
+        });
+        // The person signs straight back in from the sign-in page.
+        const { router } = leaving(() => {
+            signIn = signedIn.login();
+        });
+        const left = leaveApp(router);
+        await expect.poll(() => unblock).toBeDefined();
+        unblock();
+        await left;
+        await signIn;
+        expect(families).toBe('new account');
     });
 
     test('forgets every decrypted copy and the cache even when one part fails, and says so only in the log', async () => {

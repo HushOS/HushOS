@@ -263,6 +263,12 @@ function AppLayout() {
     );
 }
 
+const passesThrough = (event: KeyboardEvent) =>
+    event.key === 'Tab' ||
+    event.key === 'Escape' ||
+    event.key === 'F5' ||
+    ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'r');
+
 /*
  * While signing out the page takes no keys: a shortcut would act on what is leaving. Signing out
  * from the palette or a Drive that didn't open leaves no busy control on screen, so the page also
@@ -273,6 +279,8 @@ function SigningOutCover() {
     useEffect(() => {
         if (!held) return;
         const swallow = (event: KeyboardEvent) => {
+            // Moving focus, Escape and reloading stay the person's own.
+            if (passesThrough(event)) return;
             event.preventDefault();
             event.stopImmediatePropagation();
         };

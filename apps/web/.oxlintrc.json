@@ -12,6 +12,13 @@
         ".tanstack/**"
     ],
     "overrides": [
+        // Components and routes draw auth state through useAuthView, never authClient.store:
+        // a sign-out holds the view so the page being left does not redraw as locked. oxlint's
+        // no-restricted-properties matches the object by name only, so `authClient as ac` would
+        // slip past a ban on authClient.store; the ban is on every `.store` read instead. A
+        // read that is not the auth client's (TanStack Form's `form.store`, say) is allowed
+        // where it is made, with its reason:
+        //   // oxlint-disable-next-line no-restricted-properties -- TanStack Form's store, not auth
         {
             "files": ["src/components/**", "src/routes/**"],
             "rules": {
