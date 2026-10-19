@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-19';
+export const updated = '2026-10-20';
 
 export const sections: RoadmapSection[] = [
     {
@@ -163,7 +163,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Apps',
                 title: 'The iPhone and Android apps in the stores',
-                body: 'The apps are built: your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. They are being prepared for the App Store and Google Play. You make your account on the web.',
+                body: 'The apps are built: your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. The Android app is with Google Play for review, and its APK is on each GitHub release; the iPhone app follows on the App Store. You make your account on the web.',
             },
             {
                 id: 'families-on-phones',
