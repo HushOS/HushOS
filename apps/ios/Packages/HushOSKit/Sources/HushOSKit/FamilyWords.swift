@@ -12,6 +12,8 @@ public enum FamilyWords {
     /* What family folders don't offer (the web hides Share, links, Report and versions there too). */
     public static let unavailable = "This isn’t available in family folders."
     public static let openAgain = "Open the family again, then try again."
+    /* An upload into a family's folder once this person is no longer in it: failed, its file removed. */
+    public static let notInFamily = "You’re not in this family any more, so this wasn’t uploaded."
     /* The core's KEY_CHANGE_PENDING, which both twins match exactly, and what the person reads instead. */
     static let keyChangePending = "This folder’s keys changed: the key change has not reached it yet."
     static let keyChangeWait = "HushOS is finishing a key change for this folder. Try again in a moment."

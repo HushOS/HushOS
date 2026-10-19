@@ -588,6 +588,12 @@ final class FamilyServer: @unchecked Sendable {
     private(set) var putLog: [(uploadId: String, part: Int)] = []
     /* The completed node served with a key envelope nothing opens: an upload that lands but whose row won't open here. */
     var corruptCompletedNode = false
+    /* Canned answers, taken one per request before the route's own: begins, completions, name records. */
+    var beginAnswers: [(Int, [String: Any])] = []
+    var completeAnswers: [(Int, [String: Any])] = []
+    var metadataAnswers: [(Int, [String: Any])] = []
+    /* Uploads completed: a second completion answers `completed` with the node as it is, as the server's startCompleting. */
+    private var completed: Set<String> = []
     private var nextEpoch: UInt64 = 10
     private var requests: [(method: String, path: String)] = []
     private let settingsKey: Data
@@ -801,6 +807,7 @@ final class FamilyServer: @unchecked Sendable {
             return lock.withLock {
                 guard let node = tree[rest[1]] else { return (404, ["message": "This item no longer exists."]) }
                 let changed: NodeView
+                if rest[2] == "metadata", !metadataAnswers.isEmpty { return metadataAnswers.removeFirst() }
                 switch rest[2] {
                 case "metadata":
                     changed = node.with(metadataVersion: node.metadataVersion + 1, metadataEnvelope: sent["metadataEnvelope"] as? String ?? "",
@@ -828,6 +835,7 @@ final class FamilyServer: @unchecked Sendable {
                     staleBegins -= 1
                     return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
                 }
+                if !beginAnswers.isEmpty { return beginAnswers.removeFirst() }
                 let id = UUID().uuidString.lowercased()
                 begins.append((id, sent))
                 let count = (sent["chunkCount"] as? NSNumber)?.intValue ?? 1
@@ -839,6 +847,8 @@ final class FamilyServer: @unchecked Sendable {
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":
             return lock.withLock {
                 guard let begun = begins.first(where: { $0.id == rest[1] })?.body, let node = begun["node"] as? [String: Any] else { return (404, ["message": "No upload."]) }
+                if !completeAnswers.isEmpty { return completeAnswers.removeFirst() }
+                if completed.contains(rest[1]) { return (200, ["status": "completed", "node": json(tree[node["id"] as? String ?? ""]!)]) }
                 // As the server's finishCompleting: a node (or its folder) re-keyed while the parts were in flight is conflicted.
                 let existing = node["existing"] as? Bool == true
                 let id = node["id"] as? String ?? ""
@@ -856,6 +866,7 @@ final class FamilyServer: @unchecked Sendable {
                                           readyAt: "2026-10-19T10:00:00.000Z")
                 var landed = existing ? tree[id]!.with(version: version) : made(node, workspaceId: begun["workspaceId"] as? String ?? "", kind: "file", version: version)
                 tree[landed.id] = landed
+                completed.insert(rest[1])
                 if corruptCompletedNode { landed = landed.with(keyEnvelope: base64urlEncode(bytes: Data(repeating: 0, count: 72))) }
                 return (200, ["status": "complete", "node": json(landed)])
             }

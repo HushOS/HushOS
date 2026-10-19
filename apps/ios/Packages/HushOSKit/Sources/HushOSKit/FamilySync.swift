@@ -155,6 +155,8 @@ public struct FamilyVerdict: Sendable, Equatable {
 struct FamilyFailure: Error, LocalizedError, Equatable {
     let message: String
     var errorDescription: String? { message }
+    /* Route 2 no longer lists the family, or route 3 answered not-member: what was opened is wiped. */
+    static let notInFamily = FamilyFailure(message: "You’re not in this family any more.")
 }
 
 public actor FamilySync: FamilyJudge {
@@ -239,7 +241,7 @@ public actor FamilySync: FamilyJudge {
                 throw DriveAPIError.transport(error.localizedDescription)
             }
             guard let found = listed.first(where: { $0.id.lowercased() == groupId.lowercased() }) else {
-                throw FamilyFailure(message: "You’re not in this family any more.")
+                throw FamilyFailure.notInFamily
             }
             summary = found
         }
@@ -247,7 +249,7 @@ public actor FamilySync: FamilyJudge {
         case .accepted: return
         case .failed(let words) where words == FamilyWords.noAnswer: throw DriveAPIError.transport(words)
         case .failed(let words): throw FamilyFailure(message: words)
-        case .wiped: throw FamilyFailure(message: "You’re not in this family any more.")
+        case .wiped: throw FamilyFailure.notInFamily
         default: throw FamilyFailure(message: FamilyWords.openAgain)
         }
     }

@@ -15,6 +15,12 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     case stale(String)
     /* A completion whose node moved while its parts were in flight (a key change re-keyed it or its folder, or a newer version): 409 `conflict` with `conflicted`. */
     case conflicted(String)
+    /*
+     * The API refused the write (403 with a `code`, such as a group manager's pause): final, never
+     * retried. A 403 from the store (an expired part address) carries no code and stays `server(403, _)`,
+     * which is signed again and retried.
+     */
+    case forbidden(String)
 
     public var errorDescription: String? {
         switch self {
@@ -23,7 +29,7 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.
         case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
-        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message): return message
+        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message), .forbidden(let message): return message
         case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
@@ -104,6 +110,7 @@ public final class DriveAPI: Sendable {
             if status == 409, body?["code"] as? String == "conflict", (body?["data"] as? [String: Any])?["conflicted"] as? Bool == true {
                 throw DriveAPIError.conflicted(message ?? "This file changed while it was uploading.")
             }
+            if status == 403, body?["code"] is String { throw DriveAPIError.forbidden(message ?? "You can’t change this.") }
             if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
             throw DriveAPIError.server(status, message ?? "Request failed")
         }

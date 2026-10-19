@@ -139,6 +139,8 @@ extension DriveStore {
             var roots: [String] = []
             if case .accepted(let view)? = previous { roots = view.areas.compactMap { $0.root?.id } }
             clearFamily(summary.id, roots: roots, details: state == .wiped)
+            // Removed from the family: what was queued into its folders fails now, its plaintext removed.
+            if state == .wiped { BackgroundTransfers.shared.endFamily(summary.id) }
         }
     }
 

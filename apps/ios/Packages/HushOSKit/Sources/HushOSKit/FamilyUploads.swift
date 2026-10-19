@@ -8,7 +8,10 @@ import HushOSCore
  * stored record after a background relaunch, and decide what a completion's answer means:
  *
  * - landed: the server completed it (also when its row doesn't open here, `UploadLanded`: never
- *   sent again, never aborted, so never a duplicate);
+ *   sent again, never aborted, so never a duplicate). A new version whose name record was refused
+ *   after it went live keeps its record, `published`, until the name is repaired (`Vault.repairLanded`,
+ *   retried while a key change or no answer stands in the way, for half an hour of key changes) or
+ *   someone else changed the file since: it is never sealed or sent again;
  * - re-seal: a key change reached the folder or the file while the parts were in flight, so the
  *   server refused the completion (409 `conflict` with `conflicted`, `rotating`, a late `stale`)
  *   or the ledger refused the replacement's name (KEY_CHANGE_PENDING): the upload is aborted, its
@@ -16,7 +19,10 @@ import HushOSCore
  *   keys it finds, waiting as before. The web re-attaches the bytes with the content key its
  *   worker still holds; the phone keeps no key between sealing and finishing, so it uploads again;
  * - retry: no answer, or a busy server: nothing changes, the queue looks again;
- * - failed: anything else, said in the person's words by the app.
+ * - failed: anything else, said in the person's words by the app: a group manager's pause (403
+ *   `forbidden`), a refusal, a node gone. The plaintext stays for Retry until the row is dismissed,
+ *   except when this person is no longer in the family: then the upload is aborted and its folder
+ *   removed at once.
  *
  * The record's folder (`directory`) holds the plaintext (`content`) until the upload lands and
  * the sealed parts (`part-N`) while they are sent: it is removed when the upload lands or is
@@ -46,9 +52,11 @@ public struct FamilyUpload: Codable, Sendable, Equatable {
     public var etags: [Int: String] = [:]
     /* Since when it has waited out a key change (kept across launches, for the half hour). */
     public var keyChangeSince: Date?
+    /* A new version that went live but whose name record still carries the old size: what to repair it against. */
+    public var published: Vault.Published?
 
     public init(family: Family, folderId: String, name: String, mime: String?, replacingId: String?, replacingVersionId: String?,
-                sealed: Vault.SealedUpload? = nil, etags: [Int: String] = [:], keyChangeSince: Date? = nil) {
+                sealed: Vault.SealedUpload? = nil, etags: [Int: String] = [:], keyChangeSince: Date? = nil, published: Vault.Published? = nil) {
         self.family = family
         self.folderId = folderId
         self.name = name
@@ -58,6 +66,7 @@ public struct FamilyUpload: Codable, Sendable, Equatable {
         self.sealed = sealed
         self.etags = etags
         self.keyChangeSince = keyChangeSince
+        self.published = published
     }
 
     public static func content(in directory: URL) -> URL { directory.appendingPathComponent("content") }
@@ -146,12 +155,10 @@ public struct FamilyUploads: Sendable {
             upload.keyChangeSince = nil
             return .send
         } catch {
-            if Resumable.retryable(error) {
-                // A wait for a connection isn't a key change: the half hour starts again with the next one.
-                upload.keyChangeSince = nil
-                return .retry(error)
-            }
+            // A wait for a connection keeps the key change's half hour where it was: a blip doesn't restart it.
             upload.keyChangeSince = began.value
+            if Resumable.retryable(error) { return .retry(error) }
+            if Self.notInFamily(error) { remove(directory) }
             return .failed(error)
         }
     }
@@ -159,17 +166,26 @@ public struct FamilyUploads: Sendable {
     /* Finishes the upload once every part landed (`upload.etags`), from the stored record in any process. */
     public func finish(_ upload: inout FamilyUpload, in directory: URL) async -> FamilyUploadStep {
         guard let sealed = upload.sealed else { return .reseal }
+        if let published = upload.published { return await repair(&upload, sealed, published, in: directory) }
         do {
             // Opened first so the row can be shown and a replacement's name written; when it can't be (a key change reached
             // the folder meanwhile), the server decides: it completes, or refuses a node the change moved (conflicted).
-            do { try await open(upload) } catch where Resumable.retryable(error) { throw error } catch {}
+            do { try await open(upload) } catch where Resumable.retryable(error) || Self.notInFamily(error) { throw error } catch {}
             _ = try await vault.finishUpload(sealed, etags: upload.etags)
             remove(directory)
             return .landed
-        } catch is UploadLanded {
+        } catch let landed as UploadLanded {
+            // Live on the server: the plaintext and the parts go, and nothing is aborted or sent again.
             remove(directory)
-            return .landed
+            guard let published = landed.published else { return .landed }
+            upload.published = published
+            upload.keyChangeSince = upload.keyChangeSince ?? now()
+            return .retry(landed)
         } catch {
+            if Self.notInFamily(error) {
+                await discard(upload, in: directory)
+                return .failed(error)
+            }
             if Self.refusedInFlight(error), FileManager.default.fileExists(atPath: FamilyUpload.content(in: directory).path) {
                 await vault.abortUpload(sealed)
                 // The parts were sealed under the keys the change replaced: none of them is sent again.
@@ -192,6 +208,28 @@ public struct FamilyUploads: Sendable {
         if let sealed = upload.sealed { await vault.abortUpload(sealed) }
         remove(directory)
     }
+
+    /*
+     * A live version's name record sealed again with its size (`Vault.repairLanded`). Retried while a
+     * key change or no answer stands in the way; after half an hour of key changes, or any other
+     * refusal, it has landed with the name record it had (the version itself is the new bytes).
+     */
+    private func repair(_ upload: inout FamilyUpload, _ sealed: Vault.SealedUpload, _ published: Vault.Published, in directory: URL) async -> FamilyUploadStep {
+        remove(directory)
+        do {
+            try await open(upload, recheck: true)
+            try await vault.repairLanded(sealed, published: published)
+            return .landed
+        } catch {
+            if Resumable.retryable(error) { return .retry(error) }
+            let since = upload.keyChangeSince ?? now()
+            if KeyChangeWait.meets(error, waited: true), now().timeIntervalSince(since) < KeyChangeWait.giveUp { return .retry(error) }
+            return .landed
+        }
+    }
+
+    /* Route 2 or 3 says this person isn't in the family any more. */
+    static func notInFamily(_ error: Error) -> Bool { (error as? FamilyFailure) == .notInFamily }
 
     /* A completion a key change refused while the parts were in flight. */
     static func refusedInFlight(_ error: Error) -> Bool {

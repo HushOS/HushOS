@@ -73,6 +73,8 @@ final class BackgroundTransfers {
         var keyChangeSince: Date?
         /* The version a replacement set out to replace, as queued: someone else's newer one is never overwritten. */
         var replacingVersionId: String?
+        /* A family replacement that went live whose name record is still to be signed again (FamilyUploads). */
+        var published: Vault.Published?
 
         var total: Int { sealed?.partCount ?? plan?.chunkCount ?? 0 }
         var landed: Int { kind == .upload ? etags.count : fetched.count }
@@ -106,9 +108,7 @@ final class BackgroundTransfers {
     private static let sealingAtOnce = 2
 
     private init() {
-        let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
-            ?? FileManager.default.temporaryDirectory
-        root = group.appendingPathComponent("transfers", isDirectory: true)
+        root = Unbacked.transfers
         // Plaintext waiting to be sealed and the records naming it: on this phone only, never in a backup.
         Unbacked.folder(root)
         relay.root = root
@@ -436,14 +436,22 @@ final class BackgroundTransfers {
         case .landed:
             land(id)
         case .reseal:
-            // Sealed again from the kept file, waiting out the key change as before; none of the old parts goes.
+            // Sealed again from the kept file, waiting out the key change as before; none of the old parts goes (their
+            // tasks are stopped, and a late callback names the old upload, so its ETag is dropped).
             update(id) { $0.state = .waiting; $0.expired = []; $0.failures = 0 }
             save()
-            Task { await pump() }
-        case .retry(let error), .failed(let error):
-            fail(id, error)
+            Task {
+                for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
+                await pump()
+            }
+        case .retry:
+            // Nothing changed (no answer, or a landed version's name still to sign): the row stays as it is, looked at again.
+            update(id) { $0.failures += 1 }
             save()
             scheduleRetry()
+        case .failed(let error):
+            fail(id, error)
+            save()
         }
     }
 
@@ -471,8 +479,9 @@ final class BackgroundTransfers {
         guard let record = records.first(where: { $0.id == id }), runnable(record) else { return }
         let directory = folder(id)
         for piece in 0 ..< record.total {
-            let description = "\(id.uuidString)|\(piece)"
-            if running.contains(description) { continue }
+            // An upload's parts name the server's upload too: a part of an upload since sealed again is told apart.
+            let description = Self.describe(id, piece, upload: record.sealed?.uploadId)
+            if running.contains(description) || running.contains("\(id.uuidString)|\(piece)") { continue }
             let task: URLSessionTask
             if let sealed = record.sealed {
                 let part = piece + 1
@@ -505,6 +514,8 @@ final class BackgroundTransfers {
         if let (id, _) = Self.parse(description), !records.contains(where: { $0.id == id }) { adoptHandoffs(force: id) }
         guard let (id, piece) = Self.parse(description), let record = records.first(where: { $0.id == id }) else { return }
         inFlight[id]?[piece] = nil
+        // A part of an upload this record no longer is (aborted and sealed again): its ETag belongs to no upload here.
+        if let upload = Self.upload(in: description), upload != record.sealed?.uploadId { return }
         if record.kind == .upload {
             let part = piece + 1
             if !failed, (200 ..< 300).contains(status), let etag {
@@ -713,7 +724,7 @@ final class BackgroundTransfers {
     func retry(_ id: UUID) {
         guard let record = records.first(where: { $0.id == id }), canRetry(record) else { return }
         update(id) {
-            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil; $0.keyChangeSince = nil
+            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil; $0.keyChangeSince = nil; $0.published = nil
         }
         save()
         Task { await pump() }
@@ -746,10 +757,38 @@ final class BackgroundTransfers {
         return vault
     }
 
+    /* `<record>|<piece>`, and for an upload's part `|<server upload id>` after it (Save to HushOS's parts name only the first two). */
+    nonisolated static func describe(_ id: UUID, _ piece: Int, upload: String?) -> String {
+        upload.map { "\(id.uuidString)|\(piece)|\($0)" } ?? "\(id.uuidString)|\(piece)"
+    }
+
     nonisolated static func parse(_ description: String) -> (UUID, Int)? {
         let parts = description.split(separator: "|")
-        guard parts.count == 2, let id = UUID(uuidString: String(parts[0])), let piece = Int(parts[1]) else { return nil }
+        guard parts.count == 2 || parts.count == 3, let id = UUID(uuidString: String(parts[0])), let piece = Int(parts[1]) else { return nil }
         return (id, piece)
+    }
+
+    nonisolated static func upload(in description: String) -> String? {
+        let parts = description.split(separator: "|")
+        return parts.count == 3 ? String(parts[2]) : nil
+    }
+
+    /*
+     * This account is not in the family any more (its sync wiped it): every upload queued into the
+     * family's folders fails at once, its tasks stopped and its folder, plaintext included, removed.
+     * The server's half is left: it refuses a member it no longer has, and its expiry releases it.
+     */
+    func endFamily(_ groupId: String) {
+        let gone = records.filter { $0.family?.groupId.lowercased() == groupId.lowercased() && [.waiting, .sending, .finishing].contains($0.state) }
+        guard !gone.isEmpty else { return }
+        for record in gone {
+            sealing.removeValue(forKey: record.id)?.cancel()
+            inFlight[record.id] = nil
+            update(record.id) { $0.state = .failed; $0.message = FamilyWords.notInFamily; $0.sealed = nil; $0.etags = [:] }
+            drop(record.id)
+            if let current = self.record(record.id) { ended(current, reason: FamilyWords.notInFamily) }
+        }
+        save()
     }
 }
 
@@ -809,12 +848,13 @@ extension BackgroundTransfers.Record {
     var familyUpload: FamilyUpload? {
         guard let family, let folderId else { return nil }
         return FamilyUpload(family: family, folderId: folderId, name: name, mime: mime, replacingId: replacingId, replacingVersionId: replacingVersionId,
-                            sealed: sealed, etags: etags, keyChangeSince: keyChangeSince)
+                            sealed: sealed, etags: etags, keyChangeSince: keyChangeSince, published: published)
     }
 
     mutating func take(_ upload: FamilyUpload) {
         sealed = upload.sealed
         etags = upload.etags
         keyChangeSince = upload.keyChangeSince
+        published = upload.published
     }
 }

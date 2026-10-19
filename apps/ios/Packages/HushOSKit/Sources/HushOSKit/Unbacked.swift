@@ -23,6 +23,9 @@ public enum Unbacked {
     /* Loose files that once sat at the top of the group, unmarked after any atomic write; moved into `local` once. */
     static let looseFiles = ["files-parents.json", "account-owner", "mirror.sqlite", "mirror.sqlite-wal", "mirror.sqlite-shm"]
 
+    /* The upload and keep queue's folder: its records, each upload's plaintext and sealed parts, each keep's chunks. */
+    public static var transfers: URL { group.appendingPathComponent("transfers", isDirectory: true) }
+
     /* The lists the app and its extensions share, as JSON: the group's defaults are a plist that backups take. */
     static var state: URL { group.appendingPathComponent("state", isDirectory: true) }
 

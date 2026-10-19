@@ -434,24 +434,22 @@ extension Vault {
             familyName = (try knownKey ?? writableKey(of: item), try await priorMetadata(of: item.node, family: true))
         }
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
-        guard var node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
+        guard let node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
         if replacing {
-            let ref = NodeRef(workspaceId: workspaceId, nodeId: nodeId)
-            var key = familyName?.key ?? knownKey ?? nodeKeys[ref]
-            if key == nil { _ = try await resolve(nodeId); key = nodeKeys[ref] }
-            guard let nodeKey = key else { throw DriveAPIError.server(500, "Node not opened") }
-            let sealed = try metadataSeal(
-                ctx: MetadataContext(workspaceId: workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
-                nodeKey: nodeKey, metadata: final
-            )
-            // The name kept from the record as the server holds it now: vouched for again only if that verified.
-            let prior: Integrity
-            if let familyName { prior = familyName.prior } else { prior = try await priorMetadata(of: node, family: false) }
-            let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed,
-                                                   signing: .after(prior))
-            node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
-                                        metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature)
-            return try adopt(node, nodeKey: nodeKey, metadata: final, in: workspaceId)
+            // The version is live from here: whatever refuses the name record now (a key change, a newer rename, no answer)
+            // leaves an upload that landed, with its name to repair, never one to fail, abort or seal again.
+            do {
+                let ref = NodeRef(workspaceId: workspaceId, nodeId: nodeId)
+                var key = familyName?.key ?? knownKey ?? nodeKeys[ref]
+                if key == nil { _ = try await resolve(nodeId); key = nodeKeys[ref] }
+                guard let nodeKey = key else { throw DriveAPIError.server(500, "Node not opened") }
+                // The name kept from the record as the server holds it now: vouched for again only if that verified.
+                let prior: Integrity
+                if let familyName { prior = familyName.prior } else { prior = try await priorMetadata(of: node, family: false) }
+                return try await resignLanded(node, nodeKey: nodeKey, prior: prior, final: final)
+            } catch {
+                throw UploadLanded(published: Published(metadataVersion: node.metadataVersion, versionId: node.currentVersion?.id))
+            }
         }
         if let knownKey { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) }
         // Finished by another launch: the node key comes from the parent's, which the tree opens. The upload has landed
@@ -614,6 +612,48 @@ extension Vault {
                                   replacing: sealed.replacing,
                                   final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified),
                                   nodeKey: nil, etags: etags)
+    }
+
+    /* A new version as the server published it: its name record is repaired only while both are still these. */
+    public struct Published: Codable, Sendable, Equatable {
+        public let metadataVersion: UInt64
+        public let versionId: String?
+        public init(metadataVersion: UInt64, versionId: String?) {
+            self.metadataVersion = metadataVersion
+            self.versionId = versionId
+        }
+    }
+
+    /*
+     * The name record of a new version that went live while re-signing it was refused (`UploadLanded`),
+     * sealed again with the new size and date through the same path, under the keys and the
+     * judgement the item has now. Nothing is written once someone else changed the file or its name
+     * since (their record is newer than this one would be): `false`.
+     */
+    @discardableResult
+    public func repairLanded(_ sealed: SealedUpload, published: Published) async throws -> Bool {
+        let item = try await resolve(sealed.nodeId)
+        guard item.node.metadataVersion == published.metadataVersion, item.node.currentVersion?.id == published.versionId else { return false }
+        let family = try familyTarget(sealed.workspaceId)
+        let ref = NodeRef(workspaceId: sealed.workspaceId, nodeId: sealed.nodeId)
+        guard let nodeKey = family ? try writableKey(of: item) : nodeKeys[ref] else { throw DriveAPIError.server(500, "Node not opened") }
+        let prior = try await priorMetadata(of: item.node, family: family)
+        _ = try await resignLanded(item.node, nodeKey: nodeKey, prior: prior,
+                                   final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified))
+        return true
+    }
+
+    /* A new version's name record sealed again with its size and date, after the record it carries over. */
+    private func resignLanded(_ node: NodeView, nodeKey: Data, prior: Integrity, final: NodeMetadata) async throws -> Opened {
+        let sealed = try metadataSeal(
+            ctx: MetadataContext(workspaceId: node.workspaceId, nodeId: node.id, metadataVersion: node.metadataVersion + 1),
+            nodeKey: nodeKey, metadata: final
+        )
+        let signature = try await signMetadata(workspaceId: node.workspaceId, nodeId: node.id, kind: .file, version: node.metadataVersion + 1, envelope: sealed,
+                                               signing: .after(prior))
+        let renamed = try await api.rename(nodeId: node.id, workspaceId: node.workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
+                                           metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature)
+        return try adopt(renamed, nodeKey: nodeKey, metadata: final, in: node.workspaceId)
     }
 
     public func abortUpload(_ sealed: SealedUpload) async {

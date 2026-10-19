@@ -132,10 +132,12 @@ extension OnFakeDrive {
         }
 
         /*
-         * The plaintext and the sealed parts live only in the record's folder, which is out of
-         * backups under the queue's protection class; a discarded (cancelled) upload is aborted and
-         * its folder removed. Sign-out and another account's sign-in remove the whole queue
-         * (AccountStoreTests). Fails if discarding leaves the plaintext or the server's half.
+         * The plaintext and the sealed parts live only in the record's folder, in the queue's own
+         * folder (`Unbacked.transfers`), which is out of backups; a discarded (cancelled) upload is
+         * aborted and its folder removed. Sign-out and another account's sign-in remove the whole
+         * queue (AccountStoreTests). Fails if discarding leaves the plaintext or the server's half.
+         * The protection class (`Unbacked.protection`) is not asserted: the simulator has no data
+         * protection, and `attributesOfItem` answers no `.protectionKey` there.
          */
         @Test func aDiscardedUploadIsAbortedAndItsPlaintextRemoved() async throws {
             let family = try FamilyFixture()
@@ -157,13 +159,170 @@ extension OnFakeDrive {
             #expect(!FileManager.default.fileExists(atPath: directory.path))
         }
 
+        /*
+         * A new version of Recipes.txt goes live, then re-signing its name record is refused (409
+         * `stale`, a key change's walk reaching the file in between). It has landed: never aborted,
+         * sealed or sent again, its plaintext gone, and the record kept (`published`) until the name is
+         * repaired: the next pass signs it again with the new size, and it lands once. Fails if the
+         * refusal after the completion is taken for a refusal in flight (the old path aborted a
+         * finished upload, sealed it again, and failed it for good on the version that moved).
+         */
+        @Test func aReplacementWhoseNameIsRefusedAfterItWentLiveLandsAndItsNameIsRepaired() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let recipes = try #require(try await phone.vault.children(of: family.rootId).first { $0.id == family.fileId })
+            let bytes = Data("Rye bread, the long way, with a second rise.".utf8)
+            let directory = try queued(bytes)
+            var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
+                                      name: "Recipes.txt", mime: "text/plain", replacingId: recipes.id, replacingVersionId: recipes.node.currentVersion?.id)
+            let uploads = queue(phone)
+            guard case .send = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("not sealed"); return }
+            try await send(&upload, from: directory, with: phone.vault)
+            let sealed = try #require(upload.sealed)
+
+            server.metadataAnswers = [(409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])]
+            guard case .retry = await uploads.finish(&upload, in: directory) else { Issue.record("a version that went live wasn't kept to repair its name"); return }
+            #expect(upload.published != nil && upload.sealed == sealed)
+            #expect(server.node(family.fileId)?.currentVersion?.id == server.allBegins.last?.body["versionId"] as? String)
+            #expect(!FileManager.default.fileExists(atPath: directory.path))
+
+            guard case .landed = await uploads.finish(&upload, in: directory) else { Issue.record("the name wasn't repaired"); return }
+            #expect(server.count("/api/drive/uploads/\(sealed.uploadId)/complete", method: "POST") == 1)
+            #expect(!server.requested("/api/drive/uploads/\(sealed.uploadId)/abort", method: "POST"))
+            #expect(server.allBegins.count == 1)
+            let renamed = try #require(server.sent("/api/drive/nodes/\(family.fileId)/metadata").last)
+            let metadata = try metadataOpen(ctx: MetadataContext(workspaceId: family.workspaceId, nodeId: family.fileId,
+                                                                 metadataVersion: try #require(server.node(family.fileId)?.metadataVersion)),
+                                            nodeKey: family.fileKey, envelope: try base64urlDecode(value: try #require(renamed["metadataEnvelope"] as? String)))
+            #expect(metadata.size == UInt64(bytes.count))
+        }
+
+        /*
+         * A group manager paused this member's writes: the server answers 403 `forbidden`. The begin
+         * and the completion each fail with the server's words, at once, never retried (an expired
+         * part address shares the status, without a code); the plaintext stays for Retry. Fails if
+         * the API's 403 is taken for an expired address (the upload retried every 30 s for ever).
+         */
+        @Test func aPausedMembersUploadFailsWithTheServersWordsAndIsNotRetried() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+            let directory = try queued(Data("minutes".utf8))
+            var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
+                                      name: "minutes.txt", mime: "text/plain", replacingId: nil, replacingVersionId: nil)
+            let uploads = queue(phone)
+            let held: (Int, [String: Any]) = (403, ["code": "forbidden", "message": "A group manager has paused changes to this folder."])
+
+            server.beginAnswers = [held]
+            guard case .failed(let refused) = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("a held begin wasn't a failure"); return }
+            #expect(!Resumable.retryable(refused))
+            #expect((refused as? LocalizedError)?.errorDescription == "A group manager has paused changes to this folder.")
+            #expect(FileManager.default.fileExists(atPath: FamilyUpload.content(in: directory).path))
+
+            guard case .send = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("not sealed"); return }
+            try await send(&upload, from: directory, with: phone.vault)
+            server.completeAnswers = [held]
+            guard case .failed(let finished) = await uploads.finish(&upload, in: directory) else { Issue.record("a held completion wasn't a failure"); return }
+            #expect(!Resumable.retryable(finished))
+            #expect(server.allBegins.count == 1)
+            #expect(FileManager.default.fileExists(atPath: FamilyUpload.content(in: directory).path))
+        }
+
+        /*
+         * Completions refused for reasons a key change isn't: a plain 409 `conflict` (the upload was
+         * cancelled) and a 404 (it no longer exists) fail, with nothing sealed or begun again. Fails if
+         * any 409 or a 404 is taken for a refusal in flight (a cancelled upload would come back).
+         */
+        @Test func aPlainConflictOrAMissingUploadFailsWithoutSealingAgain() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+            let uploads = queue(phone)
+            for answer: (Int, [String: Any]) in [(409, ["code": "conflict", "message": "This upload was cancelled."]),
+                                                 (404, ["code": "not-found", "message": "This upload no longer exists."])] {
+                let directory = try queued(Data("receipt \(answer.0)".utf8))
+                var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
+                                          name: "receipt-\(answer.0).txt", mime: "text/plain", replacingId: nil, replacingVersionId: nil)
+                guard case .send = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("not sealed"); return }
+                try await send(&upload, from: directory, with: phone.vault)
+                let begun = server.allBegins.count
+                server.completeAnswers = [answer]
+                guard case .failed = await uploads.finish(&upload, in: directory) else { Issue.record("a \(answer.0) wasn't a failure"); return }
+                #expect(upload.sealed != nil && upload.keyChangeSince == nil)
+                #expect(server.allBegins.count == begun)
+            }
+        }
+
+        /*
+         * The app is killed after the server completed an upload but before the queue saved it: the
+         * relaunch completes it again from the record it had. The server answers `completed` with the
+         * node as it is; the upload lands, once, with one node and one begin. Fails if a second
+         * completion is taken for anything but landed (a duplicate, or a failure on a file that's up).
+         */
+        @Test func completingTwiceLandsOnce() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+            let directory = try queued(Data("boarding pass".utf8))
+            var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
+                                      name: "boarding.txt", mime: "text/plain", replacingId: nil, replacingVersionId: nil)
+            let uploads = queue(phone)
+            guard case .send = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("not sealed"); return }
+            try await send(&upload, from: directory, with: phone.vault)
+            var unsaved = upload
+            guard case .landed = await uploads.finish(&upload, in: directory) else { Issue.record("not landed"); return }
+            guard case .landed = await uploads.finish(&unsaved, in: directory) else { Issue.record("a second completion wasn't landed"); return }
+            let sealed = try #require(upload.sealed)
+            #expect(server.count("/api/drive/uploads/\(sealed.uploadId)/complete", method: "POST") == 2)
+            #expect(!server.requested("/api/drive/uploads/\(sealed.uploadId)/abort", method: "POST"))
+            #expect(server.allBegins.count == 1)
+            #expect(server.node(sealed.nodeId)?.currentVersion != nil)
+        }
+
+        /*
+         * This person was removed from the family while an upload waited: the background launch that
+         * seals it finds them not in it (not-member), and the upload fails with its folder, plaintext
+         * included, removed at once. (A process that already had the family open learns it from its
+         * next sync, and the app ends the family's uploads then.) Fails if the plaintext of a family
+         * one no longer belongs to stays on the phone for a Retry.
+         */
+        @Test func anUploadIntoAFamilyThePersonLeftFailsAndItsPlaintextGoes() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            first.done()
+            let later = try await family.phone(server, records: first.records)
+            defer { later.done() }
+            let directory = try queued(Data("letter".utf8))
+            var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
+                                      name: "letter.txt", mime: "text/plain", replacingId: nil, replacingVersionId: nil)
+            server.notMember = true
+            guard case .failed(let error) = await queue(later).seal(&upload, in: directory, thumbnail: nil) else { Issue.record("not failed"); return }
+            #expect((error as? LocalizedError)?.errorDescription == "You’re not in this family any more.")
+            #expect(!FileManager.default.fileExists(atPath: directory.path))
+            #expect(server.allBegins.isEmpty)
+        }
+
         private func queue(_ phone: FamilyFixture.Phone) -> FamilyUploads {
             FamilyUploads(vault: phone.vault, families: phone.sync, pause: { _ in })
         }
 
-        /* A queued record's folder, as the app makes it: in a queue folder out of backups, the plaintext given the folder's class. */
+        /* A queued record's folder, as the app makes it: in the queue's own folder, out of backups, the plaintext given the folder's class. */
         private func queued(_ bytes: Data) throws -> URL {
-            let queue = Unbacked.folder(FileManager.default.temporaryDirectory.appendingPathComponent("family-queue-\(UUID().uuidString)", isDirectory: true))
+            let queue = Unbacked.folder(Unbacked.transfers)
             let directory = queue.appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let content = FamilyUpload.content(in: directory)

@@ -34,8 +34,17 @@ public enum FamilyWriteError: Error, LocalizedError, Equatable {
     }
 }
 
-/* An upload the server completed whose row doesn't open in this process (a background launch): landed, not failed. */
-public struct UploadLanded: Error {}
+/*
+ * An upload the server completed: landed, never failed, aborted or sent again, whatever went
+ * wrong after the completion. Either its row doesn't open in this process (a background launch),
+ * or, for a new version, the name record re-signed with the new size was refused after the
+ * version went live (`published`, what to repair it against: `Vault.repairLanded`).
+ */
+public struct UploadLanded: Error, LocalizedError {
+    public let published: Vault.Published?
+    public init(published: Vault.Published? = nil) { self.published = published }
+    public var errorDescription: String? { "Uploaded. Its size and date will update shortly." }
+}
 
 /*
  * What a family folder's write needs from the family's sync (FamilySync, which holds the members
