@@ -21,6 +21,8 @@ import {
  * Dark mode swaps to the dark ground and card. Inline-safe for mail clients.
  */
 const mono = '"Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+/* Hidden everywhere, Outlook included; a variable, since React's types lack mso-hide. */
+const hidden = { display: 'none', msoHide: 'all' };
 const sans = 'Geist, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
 const label = {
     margin: 0,
@@ -33,12 +35,15 @@ const label = {
 export default function VerifyEmail({
     purpose = 'register',
     logoUrl = '/static/hushos-logo-square.png',
+    marker = 'preview',
     verificationUrl = 'http://localhost:5173/register/complete#verify=preview',
 }: {
     purpose?: 'register' | 'recover';
     verificationUrl?: string;
     /** The logo: the brand square as one image, the same in both colour schemes. */
     logoUrl?: string;
+    /** Different in every message; see the end of the body. */
+    marker?: string;
 }) {
     const recover = purpose === 'recover';
     const facts: [string, string][] = [
@@ -146,7 +151,7 @@ export default function VerifyEmail({
                             </Column>
                         </Row>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '28px 28px 8px' }}>
+                    <Section className="email-pad" style={{ padding: '28px 28px 24px' }}>
                         <Heading
                             className="email-heading"
                             style={{
@@ -167,7 +172,7 @@ export default function VerifyEmail({
                             style={{
                                 fontSize: '15px',
                                 lineHeight: '24px',
-                                margin: '0 0 20px',
+                                margin: 0,
                                 color: '#5a6380',
                             }}
                         >
@@ -176,7 +181,26 @@ export default function VerifyEmail({
                                 : 'Verify your email, then choose your name and password to finish creating your account.'}
                         </Text>
                     </Section>
-                    <Section className="email-pad" style={{ padding: '0 28px 20px' }}>
+                    <Section className="email-pad" style={{ padding: '0 28px 24px' }}>
+                        <Button
+                            className="email-button"
+                            href={verificationUrl}
+                            style={{
+                                display: 'inline-block',
+                                backgroundColor: '#2c428e',
+                                color: '#ffffff',
+                                padding: '13px 22px',
+                                borderRadius: '10px',
+                                fontSize: '15px',
+                                lineHeight: '20px',
+                                fontWeight: 700,
+                                textDecoration: 'none',
+                            }}
+                        >
+                            Verify email
+                        </Button>
+                    </Section>
+                    <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
                         <table
                             role="presentation"
                             cellPadding={0}
@@ -192,7 +216,7 @@ export default function VerifyEmail({
                                             style={{
                                                 width: '44%',
                                                 padding: '9px 0',
-                                                borderBottom: '1px solid #e2e5ee',
+                                                borderTop: '1px solid #e2e5ee',
                                             }}
                                         >
                                             <Text className="email-muted" style={label}>
@@ -203,7 +227,7 @@ export default function VerifyEmail({
                                             className="email-cell"
                                             style={{
                                                 padding: '9px 0',
-                                                borderBottom: '1px solid #e2e5ee',
+                                                borderTop: '1px solid #e2e5ee',
                                                 textAlign: 'right',
                                             }}
                                         >
@@ -224,25 +248,6 @@ export default function VerifyEmail({
                                 ))}
                             </tbody>
                         </table>
-                    </Section>
-                    <Section className="email-pad" style={{ padding: '4px 28px 28px' }}>
-                        <Button
-                            className="email-button"
-                            href={verificationUrl}
-                            style={{
-                                display: 'inline-block',
-                                backgroundColor: '#2c428e',
-                                color: '#ffffff',
-                                padding: '13px 22px',
-                                borderRadius: '10px',
-                                fontSize: '15px',
-                                lineHeight: '20px',
-                                fontWeight: 700,
-                                textDecoration: 'none',
-                            }}
-                        >
-                            Verify email
-                        </Button>
                     </Section>
                     <Section
                         className="email-pad email-cell"
@@ -290,6 +295,13 @@ export default function VerifyEmail({
                 >
                     HushOS · Open source · Easy to self-host
                 </Text>
+                {/*
+                 * Different in every message, and last: Gmail folds the end of a message
+                 * behind "•••" when it matches an earlier one in the thread.
+                 */}
+                <span data-marker="" style={hidden}>
+                    {marker}
+                </span>
             </Body>
         </Html>
     );
