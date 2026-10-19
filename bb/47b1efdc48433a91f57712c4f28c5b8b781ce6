@@ -1,0 +1,45 @@
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_88fd3f26a8c156 118
+apps/ios/App/AppModel.swift
+  s_c56e31c87cddde::t_e9416aada6e13e 260-261,263-264
+apps/ios/App/DriveStore.swift
+  s_c56e31c87cddde::t_c1151b5c72f22d 96-104
+apps/ios/App/Families.swift
+  s_c56e31c87cddde::t_4c7cfc1811b125 112-117
+apps/ios/App/Join.swift
+  s_c56e31c87cddde::t_416ef986ef0f9c 111-113,123-124,126,133,142,144-147,153,194-195,287,290,441,443-445
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_c56e31c87cddde::t_130dc5a6f217a1 67,90-102,104-113
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AppLinks.swift
+  s_c56e31c87cddde::t_785cda2b347db8 6-9
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyJoin.swift
+  s_c56e31c87cddde::t_a6c2e9a6706ce5 121-158,347,349,359,362
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c56e31c87cddde::t_0b30ebe61f9b38 194-201
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_c56e31c87cddde::t_ac4e1107a9acb4 153-158,161-182
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_c56e31c87cddde::t_7a71b20b27e6ce 188-223,259-274,296-316
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_c56e31c87cddde::t_2725e9d316a12f 316-335
+apps/web/src/lib/app-links.server.ts
+  s_c56e31c87cddde::t_7dc6e55bfd7b55 6
+docs/groups-mobile-plan.md
+  s_c56e31c87cddde::t_4fc686075305ef 168-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bb47b1efdc48433a91f57712c4f28c5b8b781ce6",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
