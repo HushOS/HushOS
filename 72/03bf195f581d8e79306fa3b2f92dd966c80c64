@@ -1,0 +1,23 @@
+docs/drive-design.md
+  s_c56e31c87cddde::t_90f75f1b0dc786 26
+packages/drive/src/transfers.test.ts
+  s_c56e31c87cddde::t_5b90b051933a02 132-134,186,241,1951-2021
+packages/drive/src/transfers.ts
+  s_c56e31c87cddde::t_400eb50bb94888 683-688,1908-1917,1964-1965
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7203bf195f581d8e79306fa3b2f92dd966c80c64",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
