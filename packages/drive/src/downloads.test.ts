@@ -105,6 +105,8 @@ function harness(options: {
     offline?: () => boolean;
     /* What a suite 3 version's envelope would say, by object id. */
     sealed?: Record<string, { plaintextSize: number; thumbnailBytes: number }>;
+    /* Opening a file's folder, which a test can hold. */
+    ensureOpen?: () => Promise<void>;
 }) {
     const calls: string[] = [];
     const attempts = new Map<string, number>();
@@ -248,7 +250,7 @@ function harness(options: {
                 children: options.folders?.[folderId] ?? [],
             };
         },
-        ensureOpen: async () => {},
+        ensureOpen: options.ensureOpen ?? (async () => {}),
         zip: options.zip ? zip : undefined,
         lookahead: options.lookahead,
         maxAttempts: 3,
@@ -260,6 +262,10 @@ function harness(options: {
         manager,
         calls,
         closed,
+        /* The keys the worker holds open now. */
+        get openKeys() {
+            return readers.size;
+        },
         listed,
         sinks,
         zipped,
@@ -511,6 +517,31 @@ describe('download manager', () => {
         expect(h.closed).toEqual(['o-r']);
         await fresh.close();
         expect(h.closed).toEqual(['o-r', 'o-r']);
+    });
+
+    test('a reader closed while its folder is still opening leaves no key in the worker', async () => {
+        let folderOpen: () => void = () => {};
+        const h = harness({
+            ensureOpen: () => new Promise<void>((resolve) => (folderOpen = resolve)),
+        });
+        const reader = h.manager.openReader(file('r', CHUNK), 2);
+        const read = expect(reader.read(0, 1)).rejects.toThrow();
+        const closing = reader.close();
+        folderOpen();
+        await closing;
+        await read;
+        await settle(100);
+        expect(h.openKeys).toBe(0);
+    });
+
+    test('a file that changed while it opened leaves no key in the worker', async () => {
+        // The worker reads another size from the version than the listing gave.
+        const h = harness({ sealed: { 'o-r': { plaintextSize: 10, thumbnailBytes: 0 } } });
+        const reader = h.manager.openReader(file('r', CHUNK), 2);
+        const read = expect(reader.read(0, 1)).rejects.toThrow(/changed while it was being opened/);
+        await settle(100);
+        await read;
+        expect(h.openKeys).toBe(0);
     });
 
     test('a padded file is fetched to the end of its object and written to the end of the file', async () => {

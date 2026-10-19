@@ -315,6 +315,9 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         function open() {
             opened ??= (async () => {
                 await options.ensureOpen(node);
+                // Closed while the folder opened: the key is never asked for, so nothing is
+                // left open under a reader no one will close.
+                if (closed) throw new Error('Cancelled.');
                 const opened = await rpc('driveDownloadOpen', {
                     reader,
                     workspaceId: node.workspaceId,
@@ -322,8 +325,10 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                     version: versionEnvelopeOf(version!),
                     contentNonce: version!.contentNonce,
                 });
-                if (opened.plaintextSize !== plaintextSize || opened.chunkCount !== total)
+                if (opened.plaintextSize !== plaintextSize || opened.chunkCount !== total) {
+                    await rpc('driveDownloadClose', { reader }).catch(() => {});
                     throw new Error(`“${node.name}” changed while it was being opened.`);
+                }
                 track?.open.add(reader);
                 void freshUrl().catch(() => {});
             })();
@@ -381,6 +386,9 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         async function close() {
             closed = true;
             if (!opened) return;
+            // After the open, never before it: a close that overtook it would find nothing, and
+            // the key the open then made would stay until the device locks.
+            await opened.catch(() => {});
             await rpc('driveDownloadClose', { reader }).catch(() => {});
             track?.open.delete(reader);
         }
