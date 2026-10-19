@@ -107,7 +107,7 @@ End-to-end encrypted cloud storage. Your files are locked before they upload.
 
 The two most searched phrases sit in the two most indexed fields, and it doesn't repeat the title word for word. The previous one ("Private cloud storage. Your files are locked on your phone before they upload.", 78) is still fine if the owner prefers it.
 
-**Full description** (4000 max), 2225:
+**Full description** (4000 max), 2226:
 
 ```text
 HushOS is end-to-end encrypted cloud storage for your files, photos and documents. Everything you add is locked on your phone before it uploads, with a key made on your device. We store your files and hand them back, but we can't open them.
@@ -119,7 +119,7 @@ A PRIVATE DRIVE THAT WORKS LIKE THE ONE YOU USE
 • Rename, move, copy, and move to Trash. Trash keeps things for 30 days.
 • Keep a file or a whole folder on your phone, to open without a connection.
 • Save to HushOS from the share menu in other apps.
-• HushOS appears in Android's Files app and in every file picker, so other apps can open and save your files.
+• HushOS appears in the system file picker and in Files by Google, so other apps can open and save your files.
 
 SHARE FILES SECURELY
 • Share a file or folder with another HushOS account, as someone who can view or someone who can edit.
@@ -146,7 +146,7 @@ You need a HushOS account to use the app. Make one at hushos.com.
 
 "Encrypted", "cloud storage", "share files securely", "private" and "open source" each appear once or twice, in sentences. "Free" appears nowhere: Google's best-practice page puts price and promotional words out of every listing field, and the payments section below keeps plans out of the app. "For free" was dropped from the last line for that reason.
 
-**Release notes** for 0.9.0, the first internal, closed and production release (500 max per language), 385:
+**Release notes** for 0.9.0, the first internal, closed and production release (500 max per language), 386:
 
 ```text
 <en-US>
@@ -154,7 +154,7 @@ The first release of HushOS for Android.
 • Your end-to-end encrypted drive: browse, search, tag, and upload files, photos and whole folders.
 • Keep files and folders on your phone to open without a connection.
 • Share with people you check with twelve words, or with a link.
-• HushOS in Android's Files app and every file picker.
+• HushOS in the system file picker and Files by Google.
 • See and remove the devices signed in to your account.
 </en-US>
 ```
