@@ -13,6 +13,8 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     case rotating(String)
     /* Envelopes under a key epoch or a version that is no longer the item's: the server's 409 `stale`. */
     case stale(String)
+    /* A completion whose node moved while its parts were in flight (a key change re-keyed it or its folder, or a newer version): 409 `conflict` with `conflicted`. */
+    case conflicted(String)
 
     public var errorDescription: String? {
         switch self {
@@ -21,7 +23,7 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.
         case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
-        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message): return message
+        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message): return message
         case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
@@ -99,6 +101,9 @@ public final class DriveAPI: Sendable {
             if status == 404 { throw DriveAPIError.notFound(message ?? "This item no longer exists.") }
             if status == 409, body?["code"] as? String == "trashed" { throw DriveAPIError.trashed(message ?? "This item is in the trash.") }
             if status == 409, body?["code"] as? String == "rotating" { throw DriveAPIError.rotating(message ?? "Keys are being rotated for this folder. Try again in a moment.") }
+            if status == 409, body?["code"] as? String == "conflict", (body?["data"] as? [String: Any])?["conflicted"] as? Bool == true {
+                throw DriveAPIError.conflicted(message ?? "This file changed while it was uploading.")
+            }
             if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
             throw DriveAPIError.server(status, message ?? "Request failed")
         }

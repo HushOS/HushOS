@@ -335,6 +335,9 @@ struct FamilyRotation {
     let tripsFile: NodeView
     let walkedKey: Data
     let walked: NodeView
+    /* The fixture's "Docs" as the walk re-keys it (epoch 9, under the new top folder key). */
+    let docsWalkedKey: Data
+    let docsWalked: NodeView
 
     init(_ family: FamilyFixture) throws {
         func chain(_ rosters: [SignedGroupStatement]) throws -> AcceptedRosters {
@@ -372,6 +375,9 @@ struct FamilyRotation {
         walkedKey = try randomBytes(length: 32)
         walked = try FamilyFixture.node(id: tripsId, in: ws, parent: family.rootId, parentKey: rootKey, key: walkedKey, kind: .folder,
                                         name: "Trips", writer: family.creator, keyEpoch: 7, parentKeyEpoch: 5)
+        docsWalkedKey = try randomBytes(length: 32)
+        docsWalked = try FamilyFixture.node(id: family.docs.id, in: ws, parent: family.rootId, parentKey: rootKey, key: docsWalkedKey, kind: .folder,
+                                            name: "Docs", writer: family.creator, keyEpoch: 9, parentKeyEpoch: 5)
     }
 }
 
@@ -392,13 +398,13 @@ final class Clock: @unchecked Sendable {
     var now: Date { lock.withLock { current } }
 }
 
-private func temporaryFolder() throws -> URL {
+func temporaryFolder() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("family-write-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }
 
-private func temporaryFile(_ name: String, _ data: Data) throws -> URL {
+func temporaryFile(_ name: String, _ data: Data) throws -> URL {
     let url = try temporaryFolder().appendingPathComponent(name)
     try data.write(to: url)
     return url

@@ -584,6 +584,10 @@ final class FamilyServer: @unchecked Sendable {
     private(set) var bodies: [(method: String, path: String, body: [String: Any])] = []
     /* Stored objects, by version id: what a ranged read of a version's URL is answered from. */
     var objects: [String: Data] = [:]
+    /* Every part PUT, in order, by upload id and part number. */
+    private(set) var putLog: [(uploadId: String, part: Int)] = []
+    /* The completed node served with a key envelope nothing opens: an upload that lands but whose row won't open here. */
+    var corruptCompletedNode = false
     private var nextEpoch: UInt64 = 10
     private var requests: [(method: String, path: String)] = []
     private let settingsKey: Data
@@ -698,7 +702,10 @@ final class FamilyServer: @unchecked Sendable {
         // The object store: a part PUT, a ranged read of a version.
         if request.url?.host == "store.test" {
             if method == "PUT", parts.count == 2 {
-                lock.withLock { self.parts[parts[0], default: [:]][Int(parts[1]) ?? 0] = body ?? Data() }
+                lock.withLock {
+                    self.parts[parts[0], default: [:]][Int(parts[1]) ?? 0] = body ?? Data()
+                    putLog.append((parts[0], Int(parts[1]) ?? 0))
+                }
                 return (200, Data())
             }
             guard parts.count == 1, let object = lock.withLock({ objects[parts[0]] }) else { return (404, Data()) }
@@ -737,6 +744,9 @@ final class FamilyServer: @unchecked Sendable {
             let next = lock.withLock { () -> (@Sendable () -> Void)? in defer { afterRosters = nil }; return afterRosters }
             next?()
             return answer
+        case ("GET", "/api/groups"):
+            return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": [String](), "state": "active",
+                                      "rosterVersion": lock.withLock { chain.count }, "groupKeyVersion": 1]]])
         case ("GET", "/api/groups/\(f.groupId)"):
             return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6]])
         case ("GET", "/api/groups/\(f.groupId)/identities"):
@@ -829,13 +839,24 @@ final class FamilyServer: @unchecked Sendable {
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":
             return lock.withLock {
                 guard let begun = begins.first(where: { $0.id == rest[1] })?.body, let node = begun["node"] as? [String: Any] else { return (404, ["message": "No upload."]) }
+                // As the server's finishCompleting: a node (or its folder) re-keyed while the parts were in flight is conflicted.
+                let existing = node["existing"] as? Bool == true
+                let id = node["id"] as? String ?? ""
+                let moved: Bool
+                if existing {
+                    moved = tree[id]?.keyEpoch != (node["keyEpoch"] as? NSNumber)?.uint64Value
+                } else {
+                    moved = tree[node["parentId"] as? String ?? ""]?.keyEpoch != (node["parentKeyEpoch"] as? NSNumber)?.uint64Value
+                }
+                if moved { return (409, ["code": "conflict", "message": "This file changed while it was uploading.", "data": ["conflicted": true]]) }
                 let version = VersionView(id: begun["versionId"] as? String ?? "", objectId: begun["objectId"] as? String ?? "",
                                           contentKeyEnvelope: begun["contentKeyEnvelope"] as? String ?? "", status: "ready",
                                           contentSuite: UInt32((begun["contentSuite"] as? NSNumber)?.intValue ?? 3), chunkCount: (begun["chunkCount"] as? NSNumber)?.intValue ?? 1,
                                           contentNonce: begun["contentNonce"] as? String ?? "", plaintextSize: nil, ciphertextSize: begun["ciphertextSize"] as? String,
                                           readyAt: "2026-10-19T10:00:00.000Z")
-                let landed = made(node, workspaceId: begun["workspaceId"] as? String ?? "", kind: "file", version: version)
+                var landed = existing ? tree[id]!.with(version: version) : made(node, workspaceId: begun["workspaceId"] as? String ?? "", kind: "file", version: version)
                 tree[landed.id] = landed
+                if corruptCompletedNode { landed = landed.with(keyEnvelope: base64urlEncode(bytes: Data(repeating: 0, count: 72))) }
                 return (200, ["status": "complete", "node": json(landed)])
             }
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":

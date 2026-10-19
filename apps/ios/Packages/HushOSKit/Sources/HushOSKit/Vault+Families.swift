@@ -72,7 +72,7 @@ public enum KeyChangeWait {
      * again and looked up again within the same deadline, as the web's first begin meets `rotating` and syncs in its pause.
      */
     public static func meets(_ error: Error, waited: Bool) -> Bool {
-        if let core = error as? CoreError { return [FamilyWords.keyChangePending, FamilyWords.olderWorkspaceKey].contains(FamilyWords.message(of: core)) }
+        if let core = error as? CoreError { return [FamilyWords.keyChangePending, FamilyWords.olderWorkspaceKey, FamilyWords.olderFolderKey].contains(FamilyWords.message(of: core)) }
         if case DriveAPIError.rotating = error { return true }
         if case DriveAPIError.stale = error { return waited }
         return false

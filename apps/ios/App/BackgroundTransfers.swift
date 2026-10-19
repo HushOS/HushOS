@@ -68,7 +68,7 @@ final class BackgroundTransfers {
         /* Whose transfer it is: it runs only while that account is signed in, and is dropped once another is (TransferOwnership). */
         var owner: AccountOwner?
         /* An upload into a family folder: which family and folder, and since when it has waited out a key change there. */
-        struct Family: Codable, Equatable { let groupId: String; let workspaceId: String }
+        typealias Family = FamilyUpload.Family
         var family: Family?
         var keyChangeSince: Date?
         /* The version a replacement set out to replace, as queued: someone else's newer one is never overwritten. */
@@ -166,6 +166,8 @@ final class BackgroundTransfers {
         if (try? FileManager.default.moveItem(at: fileURL, to: content)) == nil {
             try? FileManager.default.copyItem(at: fileURL, to: content)
         }
+        // A moved file keeps the class it was made with: the plaintext takes the queue folder's.
+        Unbacked.protectFile(content)
         records.append(record)
         update(record.id) { $0.size = (try? FileManager.default.attributesOfItem(atPath: content.path)[.size] as? Int64) ?? nil }
         save()
@@ -235,7 +237,10 @@ final class BackgroundTransfers {
         sealing.removeValue(forKey: id)?.cancel()
         for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
         // Aborted only under the session of the account that began it; another account's session never names its upload.
-        if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
+        if let upload = record.familyUpload, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
+            // HushOSKit's discard: the server's half aborted, the folder (the plaintext included) removed.
+            await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault)).discard(upload, in: folder(id))
+        } else if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
             await vault.abortUpload(sealed)
         }
         try? FileManager.default.removeItem(at: folder(id))
@@ -326,7 +331,7 @@ final class BackgroundTransfers {
                 case (.upload, .finishing):
                     guard let sealed = record.sealed else { continue }
                     if record.family != nil {
-                        if sealing[id] == nil { finishFamily(record, sealed, vault) }
+                        finishFamily(record, vault)
                         continue
                     }
                     _ = try await vault.finishUpload(sealed, etags: record.etags)
@@ -377,103 +382,68 @@ final class BackgroundTransfers {
     }
 
     /*
-     * A family folder's upload, sealed off the pass: the family opened in this process's ledger,
-     * the folder found in its workspace, then sealed with the wait for a key change the folder
-     * hasn't reached. A record cancelled meanwhile has its begun upload aborted.
+     * A family folder's upload, sealed or finished off the pass, a couple at a time: every
+     * decision (the family opened in this process, the key-change wait, what a completion's answer
+     * means) is HushOSKit's `FamilyUploads`; this only applies its step to the record and the
+     * session. A record cancelled meanwhile has its begun upload aborted.
      */
     private func sealFamily(_ record: Record, _ vault: Vault) {
-        guard record.family != nil, let folderId = record.folderId, sealing[record.id] == nil, sealing.count < Self.sealingAtOnce else { return }
+        guard var upload = record.familyUpload, sealing[record.id] == nil, sealing.count < Self.sealingAtOnce else { return }
         let id = record.id
+        let directory = folder(id)
         sealing[id] = Task { @MainActor in
             defer { sealing[id] = nil }
-            do {
-                try await openFamily(record, vault)
-                let directory = folder(id)
-                let content = directory.appendingPathComponent("content")
-                var replacing: Opened?
-                if let replacingId = record.replacingId {
-                    replacing = try await vault.resolve(replacingId)
-                    // Someone else's version made since this was queued is never the one replaced.
-                    if let expected = record.replacingVersionId, replacing?.node.currentVersion?.id != expected {
-                        throw DriveAPIError.server(409, KeyChangeWait.versionMoved)
-                    }
-                }
-                let policy = KeyChangeWait.Policy(since: record.keyChangeSince, waiting: { began in
+            let thumbnail = Thumbnails.make(for: FamilyUpload.content(in: directory), mime: upload.mime)
+            let step = await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault))
+                .seal(&upload, in: directory, thumbnail: thumbnail) { began in
                     Task { @MainActor in
                         guard BackgroundTransfers.shared.record(id)?.keyChangeSince == nil else { return }
                         BackgroundTransfers.shared.update(id) { $0.keyChangeSince = began }
                         BackgroundTransfers.shared.save()
                     }
-                })
-                let sealed = try await vault.sealUpload(
-                    fileURL: content, name: record.name, mime: record.mime, in: folderId, replacing: replacing,
-                    thumbnail: Thumbnails.make(for: content, mime: record.mime), into: directory, waiting: policy
-                )
-                guard self.record(id) != nil, !Task.isCancelled else {
-                    await vault.abortUpload(sealed)
-                    return
                 }
-                // The plaintext stays until it lands (see the type's note): a refused completion seals afresh from it.
-                update(id) { $0.sealed = sealed; $0.state = .sending; $0.keyChangeSince = nil }
-                save()
-                start(id, skipping: [])
-            } catch {
-                guard self.record(id) != nil, !Task.isCancelled else { return }
-                // A wait for a connection isn't a key change: the row says so, and the half hour starts again with the next one.
-                if Resumable.retryable(error) { update(id) { $0.keyChangeSince = nil } }
-                fail(id, error)
-                save()
-                scheduleRetry()
+            guard self.record(id) != nil, !Task.isCancelled else {
+                if let sealed = upload.sealed { await vault.abortUpload(sealed) }
+                return
             }
+            apply(step, upload, to: id)
             // A slot is free: the next family upload waiting for one goes.
             Task { await BackgroundTransfers.shared.pump() }
         }
     }
 
-    /* A family folder's open in this process's ledger, the folder listed in its own workspace: what sealing and finishing need after a background launch. */
-    private func openFamily(_ record: Record, _ vault: Vault) async throws {
-        guard let family = record.family, let folderId = record.folderId else { return }
-        try await FamilySync.shared(for: vault).ensureOpen(family.groupId)
-        await vault.hint(workspace: family.workspaceId, for: folderId)
-        _ = try await vault.listChildren(of: folderId)
-    }
-
-    /*
-     * A family upload's completion: the family opened here first (a background launch has nothing open), then finished.
-     * A key change that reached the folder while the parts were in flight is refused by the server (or the ledger, for a
-     * replacement's name): the upload is aborted and sealed afresh from the file it kept, waiting as before.
-     */
-    private func finishFamily(_ record: Record, _ sealed: Vault.SealedUpload, _ vault: Vault) {
+    /* A family upload's completion, from the stored record (after a background launch too). */
+    private func finishFamily(_ record: Record, _ vault: Vault) {
+        guard var upload = record.familyUpload, sealing[record.id] == nil else { return }
         let id = record.id
+        let directory = folder(id)
         sealing[id] = Task { @MainActor in
             defer { sealing[id] = nil }
-            do {
-                try await openFamily(record, vault)
-                _ = try await vault.finishUpload(sealed, etags: record.etags)
-                land(id)
-            } catch is UploadLanded {
-                land(id)
-            } catch {
-                guard self.record(id) != nil, !Task.isCancelled else { return }
-                let content = folder(id).appendingPathComponent("content")
-                if KeyChangeWait.meets(error, waited: true), FileManager.default.fileExists(atPath: content.path) {
-                    await vault.abortUpload(sealed)
-                    for part in (try? FileManager.default.contentsOfDirectory(at: folder(id), includingPropertiesForKeys: nil)) ?? []
-                    where part.lastPathComponent != "content" {
-                        try? FileManager.default.removeItem(at: part)
-                    }
-                    update(id) {
-                        $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0
-                        $0.keyChangeSince = $0.keyChangeSince ?? Date()
-                    }
-                    save()
-                    Task { await pump() }
-                    return
-                }
-                fail(id, error)
-                save()
-                scheduleRetry()
-            }
+            let step = await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault)).finish(&upload, in: directory)
+            guard self.record(id) != nil, !Task.isCancelled else { return }
+            apply(step, upload, to: id)
+        }
+    }
+
+    /* What a family upload's step means for its row and its parts. */
+    private func apply(_ step: FamilyUploadStep, _ upload: FamilyUpload, to id: UUID) {
+        update(id) { $0.take(upload) }
+        switch step {
+        case .send:
+            update(id) { $0.state = .sending; $0.expired = []; $0.failures = 0 }
+            save()
+            start(id, skipping: [])
+        case .landed:
+            land(id)
+        case .reseal:
+            // Sealed again from the kept file, waiting out the key change as before; none of the old parts goes.
+            update(id) { $0.state = .waiting; $0.expired = []; $0.failures = 0 }
+            save()
+            Task { await pump() }
+        case .retry(let error), .failed(let error):
+            fail(id, error)
+            save()
+            scheduleRetry()
         }
     }
 
@@ -684,6 +654,8 @@ final class BackgroundTransfers {
 
     private func land(_ id: UUID) {
         update(id) { $0.state = .done }
+        // Saved at once: a background launch is suspended soon after, and a record left `finishing` would be finished again.
+        save()
         if let record = record(id) { ended(record, reason: nil) }
         try? FileManager.default.removeItem(at: folder(id))
         onLanded?()
@@ -829,5 +801,20 @@ private final class SessionRelay: NSObject, URLSessionDataDelegate, URLSessionDo
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         let identifier = session.configuration.identifier
         Task { @MainActor in BackgroundTransfers.shared.sessionEventsDone(identifier) }
+    }
+}
+
+/* The queue's record as HushOSKit's family upload, and back. */
+extension BackgroundTransfers.Record {
+    var familyUpload: FamilyUpload? {
+        guard let family, let folderId else { return nil }
+        return FamilyUpload(family: family, folderId: folderId, name: name, mime: mime, replacingId: replacingId, replacingVersionId: replacingVersionId,
+                            sealed: sealed, etags: etags, keyChangeSince: keyChangeSince)
+    }
+
+    mutating func take(_ upload: FamilyUpload) {
+        sealed = upload.sealed
+        etags = upload.etags
+        keyChangeSince = upload.keyChangeSince
     }
 }

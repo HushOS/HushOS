@@ -55,6 +55,12 @@ public enum Unbacked {
      */
     public static let protection = FileProtectionType.completeUntilFirstUserAuthentication
 
+    /*
+     * A file moved into one of these folders keeps the class it was made with (a move carries its
+     * attributes): the queue's plaintext, moved in from a picker's copy, is given the folder's class.
+     */
+    public static func protectFile(_ url: URL) { protect(url) }
+
     /* Sets the class on one item; files made in a folder later take the folder's class. */
     static func protect(_ url: URL) {
         let files = FileManager.default

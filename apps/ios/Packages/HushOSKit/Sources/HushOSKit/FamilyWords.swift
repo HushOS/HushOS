@@ -24,6 +24,8 @@ public enum FamilyWords {
     public static let couldntCheckKeys = "Couldn’t check this folder’s keys."
     /* The ledger's refusal of a top folder under an area key version it doesn't hold (a key change not accepted here yet). */
     static let olderWorkspaceKey = "This folder was wrapped under an older workspace key."
+    /* The same for a folder re-keyed under its parent's next key before this process has it (a walk it hasn't followed yet). */
+    static let olderFolderKey = "This item was wrapped under an older folder key."
 
     public static func keyChangeWords(_ message: String) -> String {
         if message == keyChangePending { return keyChangeWait }
