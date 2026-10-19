@@ -27,6 +27,15 @@ export type UploadSignatures = {
     version: 'ordinary' | 'saved' | 'resealed';
 };
 
+/*
+ * A move to another of the person's workspaces (docs/families-shared-pool.md 3.8): the file
+ * this upload is a re-encrypted copy of, sent with begin (`moveOf`). The server deletes it in
+ * the transaction that completes the upload, or fails the move `stale` if it changed.
+ */
+export type UploadMove = {
+    of: { workspaceId: string; nodeId: string; versionId: string };
+};
+
 /* The seeds an upload's ids were derived from (`node` null for a new version of a file). */
 export type IdSeeds = { node: string | null; version: string; object: string };
 
@@ -71,6 +80,8 @@ export type JournalEntry = {
     signAs?: UploadSignatures;
     /* The stash holding this upload's bytes on this device, when it has one. */
     stash?: string | null;
+    /* The file this upload moves here, when it is a move; absent on older rows. */
+    move?: UploadMove | null;
     parts: Record<string, JournalPart>;
     expiresAt: string;
     createdAt: number;
@@ -92,6 +103,8 @@ export type QueuedEntry = {
     /* How a copy signs; absent on older rows, where a copy signs re-sealed. */
     signAs?: UploadSignatures;
     stash: string | null;
+    /* The file this upload moves here, when it is a move; absent on older rows. */
+    move?: UploadMove | null;
     createdAt: number;
     updatedAt: number;
 };

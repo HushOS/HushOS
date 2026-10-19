@@ -1430,6 +1430,13 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 contentSuite: t.Integer({ minimum: 1, maximum: 255 }),
                 chunkCount: t.Integer({ minimum: 1, maximum: 10_000 }),
                 ciphertextSize: t.String({ pattern: '^[0-9]{1,16}$' }),
+                moveOf: t.Optional(
+                    t.Object({
+                        workspaceId: uuidSchema,
+                        nodeId: uuidSchema,
+                        versionId: uuidSchema,
+                    }),
+                ),
             }),
         },
         async ({ request, sessionToken, body }) =>

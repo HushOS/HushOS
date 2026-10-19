@@ -363,12 +363,36 @@ export const driveUploads = pgTable(
             .default('open'),
         completingAt: timestamp('completing_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+        /*
+         * A move from another workspace of the same pool (docs/families-shared-pool.md
+         * 3.8): the file it replaces, as begin found it (its node's change sequence and
+         * current version, and the bytes its versions free), and who moved it. Completion
+         * removes that file in its own transaction, or fails `stale` if it changed. No
+         * foreign keys: a source workspace deleted meanwhile makes the move stale, never a
+         * plain upload. Null for every other upload.
+         */
+        moveWorkspaceId: uuid('move_workspace_id'),
+        moveNodeId: uuid('move_node_id'),
+        moveVersionId: uuid('move_version_id'),
+        moveChangeSeq: bigint('move_change_seq', { mode: 'number' }),
+        moveFreedBytes: bigint('move_freed_bytes', { mode: 'bigint' }),
+        moveBy: uuid('move_by'),
     },
     (table) => [
         index('drive_uploads_expiry_idx')
             .on(table.expiresAt)
             .where(sql`status in ('open', 'completing', 'conflicted')`),
         index('drive_uploads_node_idx').on(table.nodeId),
+        // One live move per file: the bytes it frees are counted once, never by two moves at once.
+        uniqueIndex('drive_uploads_one_move_idx')
+            .on(table.moveNodeId)
+            .where(
+                sql`status in ('open', 'completing', 'conflicted') and move_node_id is not null`,
+            ),
+        check(
+            'drive_uploads_move_whole',
+            sql`(${table.moveNodeId} is null) = (${table.moveWorkspaceId} is null) and (${table.moveNodeId} is null) = (${table.moveVersionId} is null) and (${table.moveNodeId} is null) = (${table.moveChangeSeq} is null) and (${table.moveNodeId} is null) = (${table.moveFreedBytes} is null) and (${table.moveNodeId} is null) = (${table.moveBy} is null) and (${table.moveFreedBytes} is null or ${table.moveFreedBytes} >= 0)`,
+        ),
         check(
             'drive_uploads_status_valid',
             sql`${table.status} in ('open', 'completing', 'conflicted', 'completed', 'aborted')`,

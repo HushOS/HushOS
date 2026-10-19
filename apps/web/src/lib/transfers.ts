@@ -131,9 +131,21 @@ export const transfers = createTransferManager({
         void queryClient.invalidateQueries({ queryKey: driveKeys.versions(node.id) });
     },
     onEvent: (event) => {
+        if (event.type === 'done' && event.item.move) void settleMove();
         for (const listener of listeners) listener(event);
     },
 });
+
+/*
+ * A move's copy is in place (lib/move-across.ts): the server deleted the source
+ * in the same transaction, wherever it was listed, which the feed would say only
+ * later.
+ */
+async function settleMove() {
+    if (!queryClient) return;
+    await queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'folder'] });
+    await invalidateFolders(queryClient);
+}
 
 /*
  * A folder's listing is refetched once for a burst of finished uploads, not

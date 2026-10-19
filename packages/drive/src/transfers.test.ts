@@ -1540,6 +1540,36 @@ describe('queued rows and stashed copies', () => {
         expect(second.journal.entries.has(ids[2]!)).toBe(false);
     });
 
+    test('a move waiting when the page went away is still a move: its begin names the source', async () => {
+        const stash = fakeStash();
+        stash.files.set('move-1', fakeFile(CHUNK, 'moved.bin'));
+        const source = { workspaceId: 'mine', nodeId: 'n-1', versionId: 'v-1' };
+        const first = harness({ stash });
+        const ids = first.manager.enqueue([
+            { file: fakeFile(CHUNK, 'a.bin'), parent: node('root', null) },
+            { file: fakeFile(CHUNK, 'b.bin'), parent: node('root', null) },
+            {
+                file: fakeFile(CHUNK, 'moved.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'move-1',
+                move: { of: source },
+            },
+        ]);
+        await settle(10);
+        // The move never began: only its queued row holds it.
+        expect(first.journal.entries.has(ids[2]!)).toBe(false);
+        const second = harness({ journal: first.journal, stash });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        await settle(2_000);
+        expect(second.item(ids[2]!).status).toBe('done');
+        // A begin sent without it would be a plain copy: charged in full, and the source kept.
+        const moves = second.server.begins.filter((begin) => begin.moveOf);
+        expect(moves.map((begin) => begin.moveOf)).toEqual([source]);
+        expect(second.item(ids[2]!).move).toEqual({ of: source });
+    });
+
     test('a new version names only its version and object: the node is the file it replaces', async () => {
         const h = harness();
         const file = { ...node('doc'), kind: 'file' as const };

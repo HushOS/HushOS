@@ -18,6 +18,7 @@ import type {
     JournalEntry,
     QueuedEntry,
     UploadJournal,
+    UploadMove,
     UploadOrigin,
     UploadSignatures,
 } from './journal';
@@ -86,6 +87,8 @@ export type UploadItem = {
     /* Bytes this device can reopen itself: a kept file handle or a stash; `resume` uses them. */
     hasHandle: boolean;
     origin: UploadOrigin;
+    /* A move between the person's workspaces: the file this is a copy of (UploadMove). */
+    move?: UploadMove | null;
 };
 
 export type TransfersState = {
@@ -135,6 +138,8 @@ export type EnqueueInput = {
     signAs?: UploadSignatures;
     /* The stash the app wrote this upload's bytes to, so a reload can reopen them. */
     stash?: string;
+    /* A move: the file this one is a re-encrypted copy of. */
+    move?: UploadMove;
 };
 
 /* Where the app keeps the bytes of uploads that have no file on disk, by name. */
@@ -1083,6 +1088,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                     contentSuite: CONTENT_SUITE,
                     chunkCount: prepared.chunkCount,
                     ciphertextSize: String(prepared.ciphertextSize),
+                    // A move: the server deletes the source when this completes, in the same
+                    // transaction (UploadMove).
+                    ...(u.item.move && { moveOf: u.item.move.of }),
                 });
             } catch (error) {
                 // Without a way to look the folder up again there is nothing to seal afresh from.
@@ -1137,6 +1145,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             origin: u.item.origin,
             signAs: u.signAs,
             stash: u.stash,
+            move: u.item.move ?? null,
             parts: {},
             expiresAt: begun.upload.expiresAt,
             createdAt: now(),
@@ -1560,6 +1569,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     needsFile: false,
                     hasHandle: Boolean(input.handle) || Boolean(input.stash),
                     origin: input.origin ?? 'file',
+                    move: input.move ?? null,
                 },
                 input.file,
                 input.parent,
@@ -1587,6 +1597,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 origin: u.item.origin,
                 signAs: u.signAs,
                 stash: u.stash,
+                move: u.item.move ?? null,
                 createdAt: now(),
                 updatedAt: now(),
             };
@@ -2042,6 +2053,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     needsFile: true,
                     hasHandle: entry.handle !== null || stash !== null,
                     origin: entry.origin ?? 'file',
+                    move: entry.move ?? null,
                 },
                 null,
                 null,
@@ -2094,6 +2106,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     needsFile: true,
                     hasHandle: queued.handle !== null || queued.stash !== null,
                     origin: queued.origin,
+                    move: queued.move ?? null,
                 },
                 null,
                 null,
