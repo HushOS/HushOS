@@ -1575,13 +1575,14 @@ async function beginUploadOnce(input: UploadBegin) {
         }
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
-        // A move is pool-neutral: both sides are one pool, so it reserves only what the copy
-        // takes beyond what the source frees, and a move into a full pool still goes. Across
-        // pools it is refused as a move; the client copies and deletes instead.
-        if (move && !(await samePool(tx, storage, move.workspaceId)))
-            return { status: 'not-pooled' as const };
+        // Within one pool a move is pool-neutral: it reserves only what the copy takes beyond
+        // what the source frees, so a move into a full pool still goes. Across two (billing
+        // off, no live plan, a company area) the source frees another allowance, so the copy
+        // is charged in full, as an upload is. Either way completion removes the source.
         const size = input.object.ciphertextSize;
-        const reserve = move ? (size > move.freedBytes ? size - move.freedBytes : 0n) : size;
+        const pooled = move !== null && (await samePool(tx, storage, move.workspaceId));
+        const reserve =
+            move && pooled ? (size > move.freedBytes ? size - move.freedBytes : 0n) : size;
         if (reserve > 0n && spendable(storage) < reserve)
             return { status: 'over-quota' as const, free: named(spendable(storage)) };
         await adjustStorage(tx, input.workspaceId, 0n, reserve);
@@ -1840,20 +1841,18 @@ async function lockForCompletion(
 }
 
 /*
- * Whether a move may still finish, under both workspaces' locks and the pool's
- * (docs/families-shared-pool.md 3.8): the source's workspace is there, its mover
- * may still delete in it, both sides are still one pool (a member who left, or a
+ * Whether a move may still finish, under both workspaces' locks (and the pool's,
+ * for a move charged less than its copy; docs/families-shared-pool.md 3.8): the
+ * source's workspace is there, its mover may still delete in it, a move that
+ * leaned on the source's bytes is still within one pool (a member who left, or a
  * plan that ended, makes it two), and the file is as begin found it: not trashed
  * or deleted, nothing written to it (its change sequence: no rename, move, new or
- * restored version), and its versions free what begin counted (none discarded).
- * Anything else is stale: the copy is released and the source left as it is.
+ * restored version), its versions free what begin counted (none discarded), and
+ * no upload of a new version of it is under way (deleting the file would throw
+ * that version away). Anything else is stale: the copy is released and the
+ * source left as it is, newer version and all.
  */
-async function moveStillHolds(
-    tx: Tx,
-    workspaceId: string,
-    move: MoveRecord,
-    sourceSeq: number | null,
-) {
+async function moveStillHolds(tx: Tx, row: UploadRow, move: MoveRecord, sourceSeq: number | null) {
     if (sourceSeq === null) return false;
     const [space] = await tx
         .select({ deletedAt: workspaces.deletedAt })
@@ -1861,8 +1860,11 @@ async function moveStillHolds(
         .where(eq(workspaces.id, move.workspaceId));
     if (!space || space.deletedAt) return false;
     if (!(await mayStillRemove(tx, move.by, move.workspaceId))) return false;
-    const destination = await freeBytes(tx, workspaceId);
-    if (!destination || !(await samePool(tx, destination, move.workspaceId))) return false;
+    // Charged in full, the copy spends nothing of the source's: one pool or two, it may land.
+    if (row.ciphertextSize === null || row.reservedBytes < row.ciphertextSize) {
+        const destination = await freeBytes(tx, row.workspaceId);
+        if (!destination || !(await samePool(tx, destination, move.workspaceId))) return false;
+    }
     const chain = await walk(tx, move.nodeId);
     if (
         !chain ||
@@ -1878,6 +1880,17 @@ async function moveStillHolds(
         .where(eq(driveNodes.id, move.nodeId));
     if (!node || node.currentVersionId !== move.versionId || node.changeSeq !== move.changeSeq)
         return false;
+    const [pending] = await tx
+        .select({ id: driveUploads.id })
+        .from(driveUploads)
+        .where(
+            and(
+                eq(driveUploads.nodeId, move.nodeId),
+                inArray(driveUploads.status, ['open', 'completing', 'conflicted']),
+            ),
+        )
+        .limit(1);
+    if (pending) return false;
     return (await bytesFreedBy(tx, move.nodeId)) === move.freedBytes;
 }
 
@@ -1947,7 +1960,7 @@ async function finishCompletingOnce(
             await releaseUpload(tx, row, 'aborted');
             return { status: 'purged' as const };
         }
-        if (move && !(await moveStillHolds(tx, workspaceId, move, sourceSeq))) {
+        if (move && !(await moveStillHolds(tx, row, move, sourceSeq))) {
             await releaseUpload(tx, row, 'aborted');
             return { status: 'move-stale' as const };
         }
@@ -2132,7 +2145,7 @@ async function attachUploadOnce(
             .from(driveObjects)
             .where(eq(driveObjects.id, row.objectId));
         if (!object) return { status: 'not-conflicted' as const, uploadStatus: row.status };
-        if (move && !(await moveStillHolds(tx, workspaceId, move, sourceSeq))) {
+        if (move && !(await moveStillHolds(tx, row, move, sourceSeq))) {
             await releaseUpload(tx, row, 'aborted');
             return { status: 'move-stale' as const };
         }

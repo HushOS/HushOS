@@ -1827,13 +1827,13 @@ test.describe.serial('deleting a family folder', () => {
  * Moving between My files and a family folder (docs/families-shared-pool.md 3.8). The move
  * dialog reaches the family's folders under Places and says what a move loses before it
  * starts; the file is decrypted on the device and uploaded again under the folder's keys,
- * and the original goes. Where the family's plan pools a member's own files (billing on, a
- * live plan) the server deletes the original in the same transaction as the copy lands, and
- * nothing is counted twice: the meter doesn't change. A live plan needs Polar, which CI never
+ * and the server deletes the original in the same transaction as the copy lands. Where the
+ * family's plan pools a member's own files (billing on, a live plan) nothing is counted
+ * twice, even in a full pool: the meter doesn't change. A live plan needs Polar, which CI never
  * calls, so that test writes the family's plan row as billing's write would (the server's own
  * database, as operator roles are written) and runs only against a server that sells plans
  * (verify-hushos `launch --groups --billing polar`). With billing off nothing is pooled, the
- * two are separate allowances, and a move is a copy and a delete: that test runs in CI.
+ * two are separate allowances, and the copy is charged to the folder: that test runs in CI.
  */
 test.describe.serial('moving between My files and a family folder', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
@@ -1895,7 +1895,7 @@ test.describe.serial('moving between My files and a family folder', () => {
         await expect(ada.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
     }
 
-    test('without one pool (billing off) a move is a copy and a delete: the file lands in the family folder byte for byte, and the original is gone', async () => {
+    test('without one pool (billing off) the copy is charged to the folder: the file lands there byte for byte, and the original is gone', async () => {
         test.skip(
             billing,
             'This server pools a member’s files; the next test moves within the pool.',
@@ -1905,7 +1905,7 @@ test.describe.serial('moving between My files and a family folder', () => {
         await upload(ada, 'stays.txt', 'Not moving\n');
         await upload(ada, 'recipe.txt', 'Jollof, for eight\n');
         const { dialog, notice } = await moveToFamilyFolder('recipe.txt');
-        await expect(notice).toContainText('It needs free space in Family');
+        await expect(notice).toContainText('It needs free space in Family for the copy');
         await dialog.getByRole('button', { name: 'Move here' }).click();
         await expect(dialog).toHaveCount(0, { timeout: 60_000 });
         // Done when it leaves My files, as the person sees it, and nothing more is on its way.
@@ -1930,7 +1930,7 @@ test.describe.serial('moving between My files and a family folder', () => {
         test.setTimeout(300_000);
         // The family's plan goes live as billing writes it, until next month, with a pool of
         // 1 GB: her file fills it (each part counts in whole GB), so the move must go as one,
-        // charged nothing. A copy and a delete would be refused for room.
+        // charged nothing. A copy charged in full would be refused for room.
         const groupId = (await ada.page
             .getByRole('link', { name: 'Family folders', exact: true })
             .first()

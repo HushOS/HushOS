@@ -138,7 +138,7 @@ export type EnqueueInput = {
     signAs?: UploadSignatures;
     /* The stash the app wrote this upload's bytes to, so a reload can reopen them. */
     stash?: string;
-    /* A move: the file this one is a re-encrypted copy of, and whether both sides are one pool. */
+    /* A move: the file this one is a re-encrypted copy of. */
     move?: UploadMove;
 };
 
@@ -1088,28 +1088,11 @@ export function createTransferManager(options: TransferManagerOptions) {
                     contentSuite: CONTENT_SUITE,
                     chunkCount: prepared.chunkCount,
                     ciphertextSize: String(prepared.ciphertextSize),
-                    // One pool: the server deletes the source when this completes, in the same
-                    // transaction, and charges only what the copy adds (UploadMove).
-                    ...(u.item.move?.pooled && { moveOf: u.item.move.of }),
+                    // A move: the server deletes the source when this completes, in the same
+                    // transaction (UploadMove).
+                    ...(u.item.move && { moveOf: u.item.move.of }),
                 });
             } catch (error) {
-                // A move the server won't take as one (its two sides aren't one pool): it goes as
-                // an ordinary copy, needing the room, and the app deletes the original once it is
-                // there (UploadMove). Nothing was kept of the refused begin; sealed afresh.
-                if (
-                    u.item.move?.pooled &&
-                    error instanceof DriveApiError &&
-                    error.code === 'not-pooled'
-                ) {
-                    if (u.generation !== generation) return;
-                    const move = { ...u.item.move, pooled: false };
-                    set(u, { move });
-                    if (u.queued) {
-                        u.queued = { ...u.queued, move, updatedAt: now() };
-                        void journal?.putQueued(u.queued).catch(() => {});
-                    }
-                    continue;
-                }
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;

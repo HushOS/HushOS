@@ -29,15 +29,11 @@ export type UploadSignatures = {
 
 /*
  * A move to another of the person's workspaces (docs/families-shared-pool.md 3.8): the file
- * this upload is a re-encrypted copy of. `pooled`: asked of the server as a move (`moveOf`),
- * which reserves only what the copy adds and deletes the source when it completes. A server
- * that answers `not-pooled` (the two sides aren't one storage pool) turns it false: then the
- * copy is an ordinary upload, needing the destination's room, and the app deletes the source
- * once the copy is there (an ordinary copy plus a delete).
+ * this upload is a re-encrypted copy of, sent with begin (`moveOf`). The server deletes it in
+ * the transaction that completes the upload, or fails the move `stale` if it changed.
  */
 export type UploadMove = {
     of: { workspaceId: string; nodeId: string; versionId: string };
-    pooled: boolean;
 };
 
 /* The seeds an upload's ids were derived from (`node` null for a new version of a file). */

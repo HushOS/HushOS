@@ -25,13 +25,12 @@ import { onTransferEvent, transfers } from '@/lib/transfers';
  * own, and the server copies only within one, so a move across them is done
  * here: each file is read whole and decrypted on this device, queued as an
  * upload under the destination's keys (the server never sees a byte of
- * plaintext), and its source is removed. The upload names its source
- * (`moveOf`): where both sides draw from one pool the server charges only what
- * the copy adds and deletes the source in the completion's own transaction, so
- * a full family can move files and nothing is ever counted twice. Where they
- * don't, it answers `not-pooled` and the move becomes a copy and a delete
- * (lib/transfers.ts deletes the source once the copy is there), which needs
- * the destination's room.
+ * plaintext). The upload names its source (`moveOf`), and the server deletes
+ * the source in the transaction that completes it, or fails the move `stale` and
+ * keeps the source if it changed: there is never a moment with both or neither.
+ * Where both sides draw from one pool the copy is charged only what it adds, so
+ * a full family can move files; across two (billing off, no live plan) it needs
+ * the destination's room, as an upload does.
  *
  * Loaded with the move dialog only: it brings the families layer with it.
  */
@@ -130,15 +129,12 @@ export async function moveAcross(
                     // becomes the mover (docs/families-shared-pool.md 3.8).
                     signAs: copySignatureForms(node, 'drive'),
                     stash: stash ?? undefined,
-                    // Asked as a move; a server that finds two pools says so (`not-pooled`) and
-                    // the engine sends it as a copy instead, deleted after (UploadMove).
                     move: {
                         of: {
                             workspaceId: node.workspaceId,
                             nodeId: node.id,
                             versionId: version.id,
                         },
-                        pooled: true,
                     },
                 },
             ]) as [string];

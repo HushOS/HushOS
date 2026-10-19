@@ -17,7 +17,7 @@ const { getStorageAllowance } = await import('./auth');
 const drive = await import('./drive');
 const { getStorage } = drive;
 const { db } = await import('./client');
-const { workspaceKeys, workspaceStorage } = await import('./schema');
+const { driveNodes, workspaceKeys, workspaceStorage } = await import('./schema');
 
 beforeEach(resetDatabase);
 afterAll(closeDatabase);
@@ -120,10 +120,10 @@ test('without billing a pooled group’s folders read their own allowance, not t
 
 /*
  * Without billing nothing is pooled (docs/families-shared-pool.md 8), so a member's own files
- * and the family's folder are two allowances: a move between them is refused as a move
- * (`not-pooled`), and the client copies and deletes instead, which needs the folder's room.
+ * and the family's folder are two allowances: a move between them charges the copy to the
+ * folder in full, as an upload, and still deletes the original in the completion's transaction.
  */
-test('without billing a move between My files and a family folder is refused as a move', async () => {
+test('without billing a move into a family folder needs the folder’s room, and the original goes with it', async () => {
     const ana = await createTestAccount({ quotaBytes: 1000n });
     await createTestIdentity(ana.userId);
     const { areaIds } = await createTestFamily({ organizerId: ana.userId, areaQuotaBytes: 1000n });
@@ -201,18 +201,41 @@ test('without billing a move between My files and a family folder is refused as 
     expect((await drive.finishCompleting(ana.workspaceId, file.result.uploadId, 100n)).status).toBe(
         'published',
     );
-    // Both sides have room; only the pool refuses it.
-    const moved = await begin(areaId, folder, {
-        workspaceId: ana.workspaceId,
-        nodeId: file.nodeId,
-        versionId: file.versionId,
-    });
-    expect(moved.result.status).toBe('not-pooled');
-    const [area] = await db
-        .select({ reserved: workspaceStorage.reservedBytes })
-        .from(workspaceStorage)
+    const source = { workspaceId: ana.workspaceId, nodeId: file.nodeId, versionId: file.versionId };
+    const storage = async (workspaceId: string) =>
+        (
+            await db
+                .select({
+                    used: workspaceStorage.usedBytes,
+                    reserved: workspaceStorage.reservedBytes,
+                })
+                .from(workspaceStorage)
+                .where(eq(workspaceStorage.workspaceId, workspaceId))
+        )[0]!;
+    // The folder's own allowance is what pays: with 950 of its 1000 bytes used, 100 won't fit,
+    // whatever the original frees in Ana's own files.
+    await db
+        .update(workspaceStorage)
+        .set({ usedBytes: 950n })
         .where(eq(workspaceStorage.workspaceId, areaId));
-    expect(area!.reserved).toBe(0n);
-    // An ordinary upload of the same size fits: it was the move that was refused, not the room.
-    expect((await begin(areaId, folder)).result.status).toBe('ok');
+    expect((await begin(areaId, folder, source)).result.status).toBe('over-quota');
+    await db
+        .update(workspaceStorage)
+        .set({ usedBytes: 0n })
+        .where(eq(workspaceStorage.workspaceId, areaId));
+    const moved = await begin(areaId, folder, source);
+    if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+    expect(await storage(areaId)).toEqual({ used: 0n, reserved: 100n });
+    await drive.startCompleting(areaId, moved.result.uploadId);
+    expect((await drive.finishCompleting(areaId, moved.result.uploadId, 100n)).status).toBe(
+        'published',
+    );
+    // In one transaction: the copy counted in the folder, the original gone from Ana's files.
+    expect(await storage(areaId)).toEqual({ used: 100n, reserved: 0n });
+    expect(await storage(ana.workspaceId)).toEqual({ used: 0n, reserved: 0n });
+    const [original] = await db
+        .select({ purgedAt: driveNodes.purgedAt })
+        .from(driveNodes)
+        .where(eq(driveNodes.id, file.nodeId));
+    expect(original!.purgedAt).not.toBeNull();
 });

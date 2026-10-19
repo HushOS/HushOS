@@ -550,6 +550,57 @@ describe('a move whose source changed', () => {
         },
     );
 
+    test('a new version still uploading when the move completes: stale, and the new version lands on the original', async () => {
+        const { ana, area } = await family(4n * GIB);
+        const file = await stored(ana.userId, ana, 300n * MIB);
+        const moved = await begin(ana.userId, area, 300n * MIB, moveOf(file));
+        if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+        // Someone uploads a new version of the original; it has begun, not landed.
+        const [row] = await db
+            .select({ keyEpoch: driveNodes.keyEpoch })
+            .from(driveNodes)
+            .where(eq(driveNodes.id, file.nodeId));
+        const objectId = randomUUID();
+        const versionId = randomUUID();
+        const update = await signed.beginUpload({
+            workspaceId: ana.workspaceId,
+            userId: ana.userId,
+            node: {
+                existing: true,
+                id: file.nodeId,
+                keyEpoch: row!.keyEpoch,
+                expectedVersionId: file.versionId,
+            },
+            version: { id: versionId, contentKeyEnvelope: randomBytes(72) },
+            object: {
+                id: objectId,
+                objectKey: `ws/${ana.workspaceId}/${objectId}`,
+                contentSuite: 2,
+                chunkSize: 8 * 1024 * 1024,
+                chunkCount: 1,
+                contentNonce: randomBytes(16),
+                ciphertextSize: 100n * MIB,
+            },
+            multipartId: `mp-${objectId}`,
+            expiresAt: new Date(Date.now() + DAY),
+        });
+        if (update.status !== 'ok') throw new Error(update.status);
+        // The move finishes first: deleting the original would throw the new version away.
+        expect((await complete(area.workspaceId, moved.result.uploadId, 300n * MIB)).status).toBe(
+            'move-stale',
+        );
+        expect(await node(moved.nodeId)).toBeNull();
+        expect(await own(area.workspaceId)).toEqual({ used: 0n, reserved: 0n });
+        // Then the new version lands, on the original, which is still there.
+        expect((await complete(ana.workspaceId, update.uploadId, 100n * MIB)).status).toBe(
+            'published',
+        );
+        expect(await node(file.nodeId)).toMatchObject({
+            purgedAt: null,
+            currentVersionId: versionId,
+        });
+    });
+
     test('an earlier version discarded meanwhile: the source frees less than begin counted, so it is stale', async () => {
         const { ana, ben, area } = await family(4n * GIB);
         const first = await stored(ana.userId, ana, 400n * MIB);
@@ -668,8 +719,8 @@ describe('a move finished by attach or by the expiry job', () => {
     });
 });
 
-describe('moves across pools are refused as moves', () => {
-    test('a family whose plan ended: My files and the family folder are two pools, both ways', async () => {
+describe('moves across two pools are charged in full, and still atomic', () => {
+    test('a family whose plan ended: out of the folder the copy pays its own way and the original goes with it; into the folder there is no room', async () => {
         const { ana, groupId, area } = await family(4n * GIB);
         const theirs = await stored(ana.userId, area, 50n);
         // The plan lapses (past its period and the grace days): Ana is back on her own
@@ -692,31 +743,35 @@ describe('moves across pools are refused as moves', () => {
             .update(workspaceStorage)
             .set({ baseQuotaBytes: 10n * GIB })
             .where(eq(workspaceStorage.workspaceId, ana.workspaceId));
+        // Into the folder: two pools, so the copy needs the folder's room, and it has none.
         const mine = await stored(ana.userId, ana, 50n);
-        expect((await begin(ana.userId, area, 50n, moveOf(mine))).result.status).toBe('not-pooled');
-        // Out of the folder, too, though her own allowance has the room: not one pool.
-        expect((await begin(ana.userId, ana, 50n, moveOf(theirs))).result.status).toBe(
-            'not-pooled',
-        );
-        // Nothing reserved by either refusal, and both files where they were.
-        expect(await own(area.workspaceId)).toEqual({ used: 50n, reserved: 0n });
-        expect(await own(ana.workspaceId)).toEqual({ used: 50n, reserved: 0n });
+        expect((await begin(ana.userId, area, 50n, moveOf(mine))).result.status).toBe('over-quota');
         expect((await node(mine.nodeId))?.purgedAt).toBeNull();
-        expect((await node(theirs.nodeId))?.purgedAt).toBeNull();
+        // Out of the folder: charged in full to her own allowance (the source frees the
+        // folder's bytes, not hers), and the source deleted in the same transaction.
+        const moved = await begin(ana.userId, ana, 50n, moveOf(theirs));
+        if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+        expect(await uploadRow(moved.result.uploadId)).toMatchObject({ reservedBytes: 50n });
+        expect((await complete(ana.workspaceId, moved.result.uploadId, 50n)).status).toBe(
+            'published',
+        );
+        expect((await node(theirs.nodeId))?.purgedAt).not.toBeNull();
+        expect(await own(area.workspaceId)).toEqual({ used: 0n, reserved: 0n });
+        expect(await own(ana.workspaceId)).toEqual({ used: 100n, reserved: 0n });
     });
 
-    test('a family that never had a plan: refused as a move, not for room', async () => {
+    test('a family that never had a plan: refused for room, not as a move, and nothing reserved', async () => {
         const { ana, area } = await family(null);
         await db
             .update(workspaceStorage)
             .set({ baseQuotaBytes: 10n * GIB })
             .where(eq(workspaceStorage.workspaceId, ana.workspaceId));
         const mine = await stored(ana.userId, ana, 50n);
-        expect((await begin(ana.userId, area, 50n, moveOf(mine))).result.status).toBe('not-pooled');
+        expect((await begin(ana.userId, area, 50n, moveOf(mine))).result.status).toBe('over-quota');
         expect(await own(area.workspaceId)).toEqual({ used: 0n, reserved: 0n });
     });
 
-    test('a company area: out of it is refused by its policy, into it is another pool', async () => {
+    test('a company area: out of it is refused by its policy; into it is another pool, charged in full', async () => {
         const { ana, groupId, area } = await family(4n * GIB);
         // A company (an org group) with its own live pool, and a folder Ana holds as a member.
         const orgId = randomUUID();
@@ -761,12 +816,12 @@ describe('moves across pools are refused as moves', () => {
         // Company → You: HushOS won't move it, into her own files or the family's folder.
         expect((await begin(ana.userId, ana, 50n, moveOf(report))).result.status).toBe('policy');
         expect((await begin(ana.userId, area, 50n, moveOf(report))).result.status).toBe('policy');
-        // You → company: another pool, so not a move.
+        // You → company: allowed (owner decision 1), and charged to the company's pool in full.
         const mine = await stored(ana.userId, ana, 50n);
-        expect((await begin(ana.userId, company, 50n, moveOf(mine))).result.status).toBe(
-            'not-pooled',
-        );
-        expect(await own(company.workspaceId)).toEqual({ used: 50n, reserved: 0n });
+        const moved = await begin(ana.userId, company, 50n, moveOf(mine));
+        if (moved.result.status !== 'ok') throw new Error(moved.result.status);
+        expect(await uploadRow(moved.result.uploadId)).toMatchObject({ reservedBytes: 50n });
+        expect(await own(company.workspaceId)).toEqual({ used: 50n, reserved: 50n });
         expect(await exactUsage(groupId)).toEqual({ used: 50n, reserved: 0n });
     });
 

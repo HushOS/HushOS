@@ -417,7 +417,7 @@ A copy costs quota like any other file even though the bytes are stored once, so
 
 ### Moves across workspaces
 
-A move between two workspaces (a person's own files and their family's folders) cannot be a tree move: each workspace has its own keys. The device reads the file, encrypts it again under the destination's keys, and uploads it with `moveOf` naming the source and the version it read. Where both draw from one storage pool the upload reserves only what the copy adds beyond what the source's versions free, and its completion deletes the source in the same transaction, or fails `move-stale` and releases the copy if the source changed. Across pools `moveOf` is refused and a move is a copy and a delete. docs/families-shared-pool.md 3.8 and 13 have the rules and what was built.
+A move between two workspaces (a person's own files and their family's folders) cannot be a tree move: each workspace has its own keys. The device reads the file, encrypts it again under the destination's keys, and uploads it with `moveOf` naming the source and the version it read. Its completion deletes the source in the same transaction, or fails `move-stale` and releases the copy if the source changed (a new version uploading on it included). Where both draw from one storage pool the upload reserves only what the copy adds beyond what the source's versions free; across two it reserves the whole copy, as any upload does. docs/families-shared-pool.md 3.8 and 13 have the rules and what was built.
 
 ### Trash and restore
 

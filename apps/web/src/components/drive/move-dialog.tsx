@@ -117,7 +117,7 @@ function MovePicker({
         reachable?.find((place) => place.workspaceId === workspaceId);
     const family = placeOf(destination?.workspaceId)?.family ?? placeOf(sourceWorkspace)?.family;
     // One pool: the person's own files draw from their family's, whose plan is live. Only what
-    // the dialog says rests on it; the server decides how the move goes (`not-pooled`).
+    // the dialog says rests on it; the server charges the move as it finds the pools.
     const pooled =
         across &&
         family !== undefined &&
@@ -336,7 +336,7 @@ function MovePicker({
                     <p>
                         {pooled
                             ? `It uses no more of ${family!.name}’s storage.`
-                            : `It needs free space in ${placeName(destination!)}: the copy is made there before the original is deleted.`}
+                            : `It needs free space in ${placeName(destination!)} for the copy; the original is deleted as it lands.`}
                     </p>
                 </div>
             )}

@@ -475,13 +475,6 @@ const tooDeep = () =>
 /* The repository verified the writer's signature against their current signing key and it failed. */
 const badSignature = (data?: unknown) =>
     new DriveError('bad-signature', 'This change was not signed by your keys.', 400, data);
-/* A move across pools: the client copies and deletes instead, which needs room at the destination. */
-const notPooled = () =>
-    new DriveError(
-        'not-pooled',
-        'These two places don’t share one storage pool, so this can’t move without using more storage.',
-        409,
-    );
 /* Company → You (docs/families-shared-pool.md 6.4): HushOS won't move it; never "it can't leave". */
 const movePolicy = () =>
     new DriveError('policy', 'Your company’s policy doesn’t let HushOS move this out.', 403);
@@ -489,7 +482,7 @@ const movePolicy = () =>
 const moveStale = () =>
     new DriveError(
         'stale',
-        'The original changed while it was moving, so it stayed where it was. Try again.',
+        'This file changed while it was being moved, so it stayed where it was. Nothing was copied.',
         409,
     );
 const stale = (data?: unknown) =>
@@ -1198,10 +1191,10 @@ export type UploadBeginInput = {
     /* The whole object, trailer included: what is reserved and what the store must confirm. */
     ciphertextSize: string;
     /*
-     * The file this new one moves here from another of the mover's workspaces in the
-     * same pool, at the version read (docs/families-shared-pool.md 3.8): the upload
-     * reserves only what it takes beyond what that file frees, and completing it
-     * deletes that file in the same transaction.
+     * The file this new one moves here from another of the mover's workspaces, at the
+     * version read (docs/families-shared-pool.md 3.8): completing the upload deletes
+     * that file in the same transaction. Within one pool it reserves only what it
+     * takes beyond what that file frees; across two, all of it.
      */
     moveOf?: { workspaceId: string; nodeId: string; versionId: string };
 };
@@ -1403,8 +1396,6 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
                 throw new DriveError('invalid', 'A move makes a new file in another workspace.');
             case 'policy':
                 throw movePolicy();
-            case 'not-pooled':
-                throw notPooled();
             case 'moving':
                 throw new DriveError('conflict', 'This file is already being moved.', 409);
         }

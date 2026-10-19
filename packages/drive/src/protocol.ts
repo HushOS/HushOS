@@ -116,11 +116,6 @@ export type DriveErrorCode =
     | 'bad-signature'
     /* A share or link made or changed in a family folder, where sharing is not offered. */
     | 'family-sharing'
-    /*
-     * A move whose two sides aren't one storage pool (docs/families-shared-pool.md 3.8):
-     * refused as a move, so the client copies and deletes instead.
-     */
-    | 'not-pooled'
     /* A move out of a company's area its policy doesn't allow (docs/families-shared-pool.md 6.4). */
     | 'policy';
 
