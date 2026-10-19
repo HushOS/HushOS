@@ -171,7 +171,7 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
     // The row lands while the dialog is still on its way out; a drag does not wait for it.
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
-    await dragOnto(page, row(page, 'pixel.png'), row(page, 'photos'));
+    await dragOnto(page, row(page, 'pixel.png'), row(page, 'photos'), 'Move to “photos”');
     await expect(page.getByText(/moved to “photos”/)).toBeVisible();
     await expect(row(page, 'pixel.png')).toHaveCount(0);
 
@@ -181,7 +181,7 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
     await expect(row(page, 'inner')).toBeVisible();
     await expect(row(page, 'pixel.png')).toBeVisible();
     // Dropping on a breadcrumb moves back up.
-    await dragOnto(page, row(page, 'pixel.png'), crumb);
+    await dragOnto(page, row(page, 'pixel.png'), crumb, 'Move to “My files”');
     await expect(page.getByText(/moved to My files/)).toBeVisible();
 
     // A folder in the path drags too: inner, picked up from the breadcrumb and dropped on
@@ -191,13 +191,13 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
     await expect(open).toHaveText('inner');
     await dragOnto(page, open, page.locator('[data-crumb-id]').nth(1), 'Drop on a folder');
     await expect(page.locator('[data-crumb-id]')).toHaveCount(2);
-    await dragOnto(page, open, crumb);
+    await dragOnto(page, open, crumb, 'Move to “My files”');
     await expect(page.getByText('“inner” moved to My files')).toBeVisible();
     await expect(page.locator('[data-crumb-id]')).toHaveCount(1);
     await crumb.click();
     await expect(row(page, 'inner')).toBeVisible();
     // Back where the rest of this suite expects it, by the ordinary route.
-    await dragOnto(page, row(page, 'inner'), row(page, 'photos'));
+    await dragOnto(page, row(page, 'inner'), row(page, 'photos'), 'Move to “photos”');
     await expect(page.getByText('“inner” moved to “photos”')).toBeVisible();
     await expect(row(page, 'pixel.png')).toBeVisible();
 
@@ -237,7 +237,7 @@ test('copy: a file copies beside itself under a “(copy)” name, a folder copi
 
     // Alt while dropping copies instead of moving.
     await page.keyboard.down('Alt');
-    await dragOnto(page, row(page, 'pixel.png'), row(page, 'photos'), /^Copy to “photos”/);
+    await dragOnto(page, row(page, 'pixel.png'), row(page, 'photos'), 'Copy to “photos”');
     await page.keyboard.up('Alt');
     await expect(page.getByText(/copied to “photos”/)).toBeVisible();
     await expect(row(page, 'pixel.png')).toBeVisible();
