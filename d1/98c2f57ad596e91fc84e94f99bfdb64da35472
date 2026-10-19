@@ -1,0 +1,37 @@
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_f5888bf03d6563 183,185-186,441,446,457
+docs/self-hosting.md
+  s_c56e31c87cddde::t_bf3115269efec5 202,576
+packages/billing/src/endings.ts
+  s_c56e31c87cddde::t_cb160874e4ea21 1,299-307,312-323,325-355,374-393,395,397,403-421,423-442,444-448,450-454,456-459,461,463-465,467-468,471-473,480-481,483,486-487,489-502,504-505,508-531,533-539,541-548,550-555,558-567,571,581,584-591,594-595,598,600,603,621-626,633-634,664,668-678,680-695,697-748,756-760
+packages/billing/src/server.test.ts
+  s_c56e31c87cddde::t_db8d9a42a691ee 224-225,757-764,767,919,3952-3953,3955,4113-4147,4160,4165,4178-4179,4206-4240,4274-4275,4283-4312
+packages/billing/src/server.ts
+  s_c56e31c87cddde::t_0d2a70d27948cb 37
+packages/db/drizzle/20261019155231_personal_plan_endings/migration.sql
+  s_c56e31c87cddde::t_e10a5454265c0c 16-17,31-32
+packages/db/drizzle/20261019155231_personal_plan_endings/snapshot.json
+  s_c56e31c87cddde::t_0931a590172672 4,7613-7638,7764,7770,7773,7777
+packages/db/src/billing.ts
+  s_c56e31c87cddde::t_c641ae5cd92a1d 963,979-980,983-984,987,991-995,1000-1005,1007-1056
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_1c6929f3c9e809 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_dc7214779dcd1e 256-263,294-298,309-311,313-315
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d198c2f57ad596e91fc84e94f99bfdb64da35472",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
