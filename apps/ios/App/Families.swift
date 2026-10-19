@@ -109,9 +109,12 @@ extension DriveStore {
         }
     }
 
-    /* One family checked again, and who route 3 names in it. Skipped while its join screen is open (that screen checks it). */
-    func refreshFamily(_ summary: GroupSummary) async {
-        guard !familySyncing.contains(summary.id), !familyJoining.contains(summary.id) else { return }
+    /*
+     * One family checked again, and who route 3 names in it. Skipped while a join screen is open
+     * for it (that screen checks it), unless the join screen itself asks (`fromJoin`).
+     */
+    func refreshFamily(_ summary: GroupSummary, fromJoin: Bool = false) async {
+        guard !familySyncing.contains(summary.id), fromJoin || familyJoining[summary.id] == nil else { return }
         familySyncing.insert(summary.id)
         defer { familySyncing.remove(summary.id) }
         let previous = familyStates[summary.id]
@@ -123,7 +126,6 @@ extension DriveStore {
      * sync's would be, with route 2 read again so the row says it is in (no second acceptance).
      */
     func joined(_ groupId: String, _ state: FamilyState) async {
-        familyJoining.remove(groupId)
         if let list = try? await families.list() {
             familyList = list
             familiesSyncedAt = Date()

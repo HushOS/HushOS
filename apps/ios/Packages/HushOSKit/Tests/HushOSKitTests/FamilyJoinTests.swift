@@ -186,6 +186,42 @@ extension OnFakeDrive {
         }
 
         /*
+         * A server can't reset the alarm by saying this phone was removed: after a wrong pair, the
+         * removed-device wipe (and the account's next sign-in claiming the store) keeps the join
+         * check, so the same positions are hidden and the next wrong pair is the alarm. Only the
+         * person's own sign-out removes it.
+         */
+        @Test func aRemovedDeviceWipeKeepsTheJoinCheck() async throws {
+            let family = try FamilyFixture()
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("account-\(UUID().uuidString)")
+            let account = AccountStore(root: root, temporary: root.appendingPathComponent("tmp"))
+            let owner = AccountOwner(userId: family.member.userId, origin: "https://family.test")
+            account.claim(owner)
+            let records = FamilyRecords(folder: root.appendingPathComponent("local/groups"), activity: .expired)
+            let server = FamilyServer(family: family)
+            server.serve(chain: [family.r1, family.r2])
+            try server.storeSettings(pin: nil)
+            let first = try await family.phone(server, records: records)
+            let shown = try showing(try await first.sync.joinStatus(family.groupId))
+            #expect(try await first.sync.confirmJoin(family.groupId, shown, typed: misheard(shown)) == .wrongWords)
+            first.done()
+
+            // "Removed": the device's account data goes; then the account signs in again on this phone.
+            account.wipeAfterRemoval()
+            #expect(account.owner() == nil)
+            account.claim(owner)
+            let again = try await family.phone(server, records: FamilyRecords(folder: root.appendingPathComponent("local/groups"), activity: .expired))
+            defer { again.done() }
+            let next = try showing(try await again.sync.joinStatus(family.groupId))
+            #expect(next.hidden == shown.hidden && next.code == shown.code)
+            #expect(try await again.sync.confirmJoin(family.groupId, next, typed: misheard(next)) == .mismatch)
+
+            // The person's own sign-out is what clears it.
+            account.wipe()
+            #expect(records.read(.holds, userId: family.member.userId, groupId: family.groupId) == nil)
+        }
+
+        /*
          * Killed between "They match" and the end of the join: the relaunched phone holds only the
          * sealed joins record, and finishes the join from it without asking for the words again.
          */
@@ -221,6 +257,22 @@ extension OnFakeDrive {
         }
 
         /*
+         * The app and the background queue ask for the session's vault separately: they must get the
+         * same one, and so the same family sync, or a join, a sync and a queued family upload stop
+         * taking turns per family (two ledgers, two queues). Another session gets its own.
+         */
+        @Test func oneSessionHasOneVaultAndOneFamilySync() {
+            defer { FamilySync.forget() }
+            let session = SharedKeychain.Session(origin: "https://family.test", token: UUID().uuidString, userId: UUID().uuidString.lowercased())
+            let app = Vault.current.vault(for: session)
+            let queue = Vault.current.vault(for: session)
+            #expect(app === queue)
+            #expect(FamilySync.shared(for: app) === FamilySync.shared(for: queue))
+            let next = Vault.current.vault(for: SharedKeychain.Session(origin: session.origin, token: UUID().uuidString, userId: session.userId))
+            #expect(next !== app)
+        }
+
+        /*
          * One family per account: an invitation opened while in another family names it, and accepting
          * is refused 409 `in-family` with the family in its data; the token goes in the body only.
          */
@@ -241,10 +293,27 @@ extension OnFakeDrive {
             #expect(invitation.inFamily?.name == "Ortega family" && invitation.name == "Lindqvist family")
             #expect(JoinWords.inFamily("Ortega family", invitedTo: invitation.name, expiresAt: invitation.expiresAt)
                 == "You’re in Ortega family. To join Lindqvist family, leave yours first, from its page. This invitation stays open until 26 October.")
-            await #expect(throws: GroupsAPIError.self) { _ = try await api.acceptInvitation(token) }
-            do { _ = try await api.acceptInvitation(token) } catch let error as GroupsAPIError {
-                #expect(error.code == "in-family" && error.family?.name == "Ortega family")
-            }
+            // Accept is off, with the leave-first words, whether opening found the family or accepting did.
+            let opened = InvitationNotice.of(invitation, refusal: nil, email: nil)
+            #expect(!opened.canAccept)
+            guard case .inFamily(_, let yours) = opened.note else { Issue.record("no leave-first note"); return }
+            #expect(yours.name == "Ortega family")
+            var refused: GroupsAPIError?
+            do { _ = try await api.acceptInvitation(token) } catch let error as GroupsAPIError { refused = error }
+            #expect(refused?.code == "in-family" && refused?.family?.name == "Ortega family")
+            let notIn = Invitation(inFamily: nil, invitationId: invitation.invitationId, groupId: invitation.groupId, kind: "family", name: "Lindqvist family",
+                                   inviter: nil, expiresAt: invitation.expiresAt)
+            #expect(InvitationNotice.of(notIn, refusal: refused, email: nil).canAccept == false)
+            #expect(InvitationNotice.of(notIn, refusal: nil, email: nil) == InvitationNotice(note: nil, canAccept: true))
+            // An `in-family` refusal that names no family, or names the newcomer: the web's words, and Accept still off.
+            server.acceptAnswer = (409, ["code": "in-family", "message": "You’re in a family."])
+            do { _ = try await api.acceptInvitation(token) } catch let error as GroupsAPIError { refused = error }
+            #expect(InvitationNotice.of(notIn, refusal: refused, email: nil)
+                == InvitationNotice(note: .problem("You’re in a family already. Leave it before you create another."), canAccept: false))
+            server.acceptAnswer = (409, ["code": "in-family", "message": "They joined another family.", "data": ["reason": "newcomer"]])
+            do { _ = try await api.acceptInvitation(token) } catch let error as GroupsAPIError { refused = error }
+            #expect(InvitationNotice.of(notIn, refusal: refused, email: nil)
+                == InvitationNotice(note: .problem("They’ve joined another family since they accepted. They can join yours once they leave it."), canAccept: false))
             for request in server.traffic where request.url.contains("/invitations/") {
                 #expect(!request.url.contains(token))
                 #expect(String(decoding: request.body, as: UTF8.self).contains(token))

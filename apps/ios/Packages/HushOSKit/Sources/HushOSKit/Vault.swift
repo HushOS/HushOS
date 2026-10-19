@@ -150,9 +150,36 @@ public actor Vault {
         }
     }
 
+    /*
+     * The vault of the keychain's session: one per session per process, whoever asks (the app's
+     * model, the background queue, an extension). Two vaults for one session would hold two area
+     * ledgers and, through `FamilySync.shared(for:)`, two family syncs, so a join, a sync and a
+     * queued family upload would no longer take turns per family.
+     */
     public static func fromKeychain() -> Vault? {
         guard let session = SharedKeychain.session else { return nil }
-        return Vault(api: DriveAPI(session: session), session: session)
+        return current.vault(for: session)
+    }
+
+    /* Sign-out, deletion, a removed device: the session's vault (and the keys it holds) is let go. */
+    public static func forgetCurrent() { current.forget() }
+
+    static let current = Current()
+
+    final class Current: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: Vault?
+
+        func vault(for session: SharedKeychain.Session) -> Vault {
+            lock.withLock {
+                if let held, held.session == session { return held }
+                let made = Vault(api: DriveAPI(session: session), session: session)
+                held = made
+                return made
+            }
+        }
+
+        func forget() { lock.withLock { held = nil } }
     }
 
     private func saveIndex() {

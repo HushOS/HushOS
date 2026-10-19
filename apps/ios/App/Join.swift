@@ -108,8 +108,9 @@ struct InvitationSheet: View {
 
     @ViewBuilder private func loaded(_ invitation: Invitation) -> some View {
         let inviter = invitation.inviter
-        // Theirs as opening the invitation found it, or as accepting did (they joined one meanwhile).
-        let yours = invitation.inFamily ?? (error?.code == "in-family" ? error?.family : nil)
+        let notice = InvitationNotice.of(invitation, refusal: error, email: model.user?.email)
+        // No answer, or something other than a refusal: said as such, and Accept stays to try again.
+        let note = notice.note ?? problem.map { InvitationNotice.Note.problem($0) }
         Section {} header: {
             VStack(alignment: .leading, spacing: Alpine.Space.s1) {
                 title(inviter.map { "\($0.name) invited you to \(invitation.name)" } ?? "You’re invited to \(invitation.name)")
@@ -119,22 +120,17 @@ struct InvitationSheet: View {
             }
         }
         Section {
-            if yours == nil {
-                let them = inviter.map { firstName($0.name) } ?? "they"
-                Text("After you accept, you and \(them) check it’s really each other, on a call or in person. Then you’re let in.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
-            }
-            if let yours {
+            switch note {
+            case .inFamily(let words, let yours):
                 VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                    Text(JoinWords.inFamily(yours.name, invitedTo: invitation.name, expiresAt: invitation.expiresAt))
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+                    Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
                     NavigationLink(value: FamilyRoute.family(yours.groupId)) {
                         Text("Open \(yours.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
                     }
                 }
                 .padding(.vertical, Alpine.Space.s1)
                 .listRowBackground(Alpine.tint)
-            } else if let error, error.code == "already-member" {
+            case .alreadyMember:
                 VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                     Text("You’re already in this family").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
                     NavigationLink(value: FamilyRoute.family(invitation.groupId)) {
@@ -143,14 +139,18 @@ struct InvitationSheet: View {
                 }
                 .padding(.vertical, Alpine.Space.s1)
                 .listRowBackground(Alpine.tint)
-            } else if let words = problem {
+            case .problem(let words):
                 Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.danger).listRowBackground(Alpine.dangerSoft)
+            case nil:
+                let them = inviter.map { firstName($0.name) } ?? "they"
+                Text("After you accept, you and \(them) check it’s really each other, on a call or in person. Then you’re let in.")
+                    .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
             }
         } footer: { signedInAs }
         Section {
             Button { Task { await accept(invitation) } } label: { Text(accepting ? "Accepting" : "Accept").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle())
-                .disabled(accepting || error?.code == "email-mismatch" || yours != nil)
+                .disabled(accepting || !notice.canAccept)
         }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
     }
@@ -191,13 +191,9 @@ struct InvitationSheet: View {
             let groupId = try await store.families.acceptInvitation(token)
             await store.refreshFamilies(force: true)
             step = .joining(groupId, family: invitation.name)
-        } catch let refused as GroupsAPIError {
+        } catch let refused as GroupsAPIError where refused.status != 0 {
+            // Said under the invitation in the web's words (InvitationNotice), Accept off where it can't help.
             error = refused
-            if refused.code == "email-mismatch" {
-                problem = "This invitation is for another email address than \(model.user?.email ?? "this one"). Sign in with that one."
-            } else if refused.code != "in-family" && refused.code != "already-member" {
-                problem = JoinWords.refusal(refused, family: invitation.name)
-            }
         } catch {
             if endsSession(error) { store.report(error); dismiss(); return }
             problem = JoinWords.refusal(error, family: invitation.name)
@@ -288,10 +284,10 @@ struct JoinSections: View {
             }
         }
         .task {
-            store.familyJoining.insert(groupId)
+            store.openJoin(groupId)
             await resume()
         }
-        .onDisappear { store.familyJoining.remove(groupId) }
+        .onDisappear { store.closeJoin(groupId) }
         // Route 3 answers someone who accepted: who manages the family, read again every few seconds.
         .task(id: groupId) {
             while !Task.isCancelled {
@@ -442,10 +438,11 @@ struct JoinSections: View {
                 onJoined?()
             }
         case .member:
-            // This phone already holds the family: nothing to join.
-            store.familyJoining.remove(groupId)
+            // This phone already holds the family: nothing to join. Checked as a member, from this screen.
             Task {
-                await store.refreshFamilies(force: true)
+                if let summary = try? await store.families.list().first(where: { $0.id == groupId }) {
+                    await store.refreshFamily(summary, fromJoin: true)
+                }
                 onJoined?()
             }
         case .waiting:

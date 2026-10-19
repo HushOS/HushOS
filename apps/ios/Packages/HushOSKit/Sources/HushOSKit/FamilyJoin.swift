@@ -118,6 +118,44 @@ public enum JoinWords {
     }
 }
 
+/*
+ * What the invitation screen says under the invitation and whether Accept is offered, from route
+ * 14's answer and route 15's refusal (the web's routes/join/route.tsx). One family per account:
+ * someone in a family (as opening the invitation found it, or as accepting did) is told to leave
+ * theirs first, and Accept is off; an `in-family` refusal that names no family (or names the
+ * newcomer) is said in the web's error words, and Accept is off too (the web leaves it on, where
+ * pressing it again only meets the same refusal).
+ */
+public struct InvitationNotice: Sendable, Equatable {
+    public enum Note: Sendable, Equatable {
+        /* Leave yours first: the words, and the family to open. */
+        case inFamily(words: String, yours: Invitation.Family)
+        case alreadyMember
+        case problem(String)
+    }
+    public let note: Note?
+    public let canAccept: Bool
+
+    public static func of(_ invitation: Invitation, refusal: GroupsAPIError?, email: String?) -> InvitationNotice {
+        let code = refusal?.code
+        if let yours = invitation.inFamily ?? (code == "in-family" ? refusal?.family : nil) {
+            return InvitationNotice(note: .inFamily(words: JoinWords.inFamily(yours.name, invitedTo: invitation.name, expiresAt: invitation.expiresAt), yours: yours),
+                                    canAccept: false)
+        }
+        guard let refusal else { return InvitationNotice(note: nil, canAccept: true) }
+        switch code {
+        case "already-member":
+            return InvitationNotice(note: .alreadyMember, canAccept: true)
+        case "in-family":
+            return InvitationNotice(note: .problem(JoinWords.refusal(refusal, family: invitation.name)), canAccept: false)
+        case "email-mismatch":
+            return InvitationNotice(note: .problem("This invitation is for another email address than \(email ?? "this one"). Sign in with that one."), canAccept: false)
+        default:
+            return InvitationNotice(note: .problem(JoinWords.refusal(refusal, family: invitation.name)), canAccept: true)
+        }
+    }
+}
+
 extension FamilySync {
     /*
      * Where this phone's join of `groupId` stands, for the join screen to resume at: waiting to be
@@ -306,8 +344,9 @@ extension FamilySync {
      * record goes. A record that can't be kept lets the ledger go of the family too, or its chain
      * would count as a mark this phone can't show and a retry be refused.
      */
-    private func acceptJoin(_ groupId: String, served: ServedChain, matched: JoinMatched) async throws -> JoinOutcome {
+    private func acceptJoin(_ groupId: String, served first: ServedChain, matched: JoinMatched) async throws -> JoinOutcome {
         let me = try await vault.ownIdentities()
+        var served = first
         var overtaken = 0
         while true {
             let result = try ledger.acceptJoining(me: me, groupId: groupId, record: records.read(userId: userId, groupId: groupId)?.envelope,
@@ -317,8 +356,10 @@ extension FamilySync {
                 records.delete(userId: userId, groupId: groupId)
                 continue
             case .overtaken(let split):
+                // Another acceptance moved the family on meanwhile: read the member list again, as a sync does.
                 overtaken += 1
                 if overtaken >= 3 { throw FamilyFailure(message: servedRaceMessage(split: split)) }
+                served = try await fetchServed(groupId, after: 0)
                 continue
             case .changed(let session):
                 records.delete(.joins, userId: userId, groupId: groupId)

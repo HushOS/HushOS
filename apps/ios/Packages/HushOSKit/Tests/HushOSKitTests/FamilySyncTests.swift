@@ -313,6 +313,26 @@ extension OnFakeDrive {
          * Another process finished a later acceptance (roster 3) while this one was fetching
          * roster 2: this one's record lands second and must not replace the later one.
          */
+        /*
+         * A route 2 row read before the join finished can still say `accepted`: with a device record on
+         * this phone the family is synced as a member (never forgetting what the join opened); without
+         * one it is still waiting to be let in.
+         */
+        @Test func anAcceptedRowWithADeviceRecordSyncsAsAMemberAndWithoutOneWaits() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let s = family.summary
+            let stale = GroupSummary(id: s.id, kind: s.kind, name: s.name, roles: s.roles, state: "accepted", rosterVersion: s.rosterVersion, groupKeyVersion: s.groupKeyVersion)
+
+            #expect(await phone.sync.sync(stale) == .waiting)
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil)
+            guard case .accepted = await phone.sync.sync(stale) else { Issue.record("a member's family forgotten on a stale row"); return }
+            #expect(try await phone.vault.children(of: family.rootId).map(\.name) == ["Recipes.txt"])
+        }
+
         @Test func aLateAcceptanceNeverWritesAnOlderRecordOverANewerOne() async throws {
             let family = try FamilyFixture()
             let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))

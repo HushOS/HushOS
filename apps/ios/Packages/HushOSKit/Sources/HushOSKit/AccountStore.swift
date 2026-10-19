@@ -64,7 +64,7 @@ public struct AccountStore: Sendable {
     @discardableResult
     public func claim(_ owner: AccountOwner) -> Bool {
         let other = recorded() != .owner(owner)
-        if other { wipe() }
+        if other { wipe(keepingJoinChecks: true) }
         record(owner)
         return other
     }
@@ -87,10 +87,30 @@ public struct AccountStore: Sendable {
         }
     }
 
-    /* Sign-out and account deletion: every account file, decrypted or not, and the owner. */
-    public func wipe() {
+    /* Sign-out and account deletion, the person's own: every account file, decrypted or not, and the owner. */
+    public func wipe() { wipe(keepingJoinChecks: false) }
+
+    /*
+     * The server says this phone was removed from the account: the same, except the join checks.
+     * Each family's kept escalation (`local/groups/<user>_<group>.holds`, FamilyJoin) stays, as the
+     * web keeps it through everything but the person's own sign-out: a server that could clear it by
+     * answering "removed" could reset the alarm after every wrong pair. They are sealed under the
+     * account's store key and name only the family; the next sign-in of the account reads them.
+     */
+    public func wipeAfterRemoval() { wipe(keepingJoinChecks: true) }
+
+    private func wipe(keepingJoinChecks: Bool) {
         let files = FileManager.default
-        for name in Self.accountFiles { try? files.removeItem(at: root.appendingPathComponent(name)) }
+        for name in Self.accountFiles {
+            let url = root.appendingPathComponent(name)
+            if keepingJoinChecks && name == "local/groups" {
+                for item in (try? files.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? [] where item.pathExtension != FamilyRecords.Kept.holds.rawValue {
+                    try? files.removeItem(at: item)
+                }
+                continue
+            }
+            try? files.removeItem(at: url)
+        }
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
             try? files.removeItem(at: item)
         }

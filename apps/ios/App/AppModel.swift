@@ -257,8 +257,11 @@ final class AppModel {
         await BackgroundTransfers.shared.cancelAll()
         await FilesDomain.remove()
         SharedKeychain.delete(SharedKeychain.sessionAccount)
-        AccountStore.shared.wipe()
+        // The families' join checks stay: only the person's own sign-out may reset them (AccountStore).
+        AccountStore.shared.wipeAfterRemoval()
         TransferNotices.shared.clear()
+        // The old session's sync and the ledger keys it held leave memory.
+        FamilySync.forget()
         user = nil
         vault = nil
         owner = nil

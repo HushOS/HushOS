@@ -191,8 +191,14 @@ public actor FamilySync: FamilyJudge {
     private static let registry = Registry()
     public static func shared(for vault: Vault) -> FamilySync { registry.sync(for: vault) }
 
-    /* Sign-out: the session's sync goes, and the ledger it held is wiped, so nothing keeps the family keys alive. */
-    public static func forget() { registry.forget() }
+    /*
+     * Sign-out (and deletion, and a removed device): the session's sync goes, the ledger it held is
+     * wiped, and the session's vault is let go, so nothing keeps the family keys alive.
+     */
+    public static func forget() {
+        registry.forget()
+        Vault.forgetCurrent()
+    }
 
     private final class Registry: @unchecked Sendable {
         private let lock = NSLock()
