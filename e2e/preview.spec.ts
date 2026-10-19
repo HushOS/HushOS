@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newPage, registerAccount } from './helpers';
+import { grip, newPage, paintedWords, registerAccount } from './helpers';
 
 /*
  * The code view draws a file in blocks of 256 lines beside a gutter drawn the
@@ -36,17 +36,16 @@ test.beforeAll(async ({ browser }) => {
         writeFileSync(path, lines());
         return path;
     });
-    // Past the colouring threshold (512 KB): offered Colour anyway. Mostly comment lines, a
-    // token or two each: coloured, a dense file of code draws over 150,000 spans, and on WebKit
-    // every later render of the page then takes more than a second (an upload behind the viewer
-    // took 20 s), which is the page's cost to fix, not this test's to wait out.
+    // Past the colouring threshold (512 KB): offered Colour anyway. Dense code, about 228,000
+    // tokens coloured: drawn as an element each, every later render of the page took over a
+    // second on WebKit (an upload behind the viewer took minutes), so colour is painted over the
+    // text near the view instead, and this file holds the page to that.
     const big = join(dir, 'big.ts');
     writeFileSync(
         big,
-        Array.from({ length: 11_000 }, (_, n) =>
-            n % 50 === 0
-                ? `export const value${n} = ${n};`
-                : `// ${n} The quick brown fox jumps over the lazy dog again.`,
+        Array.from(
+            { length: 12_000 },
+            (_, n) => `export const value${n}: number = ${n} * 2; // line ${n}`,
         ).join('\n'),
     );
     await page
@@ -105,9 +104,13 @@ for (const name of ['gutter.ts', 'gutter.txt']) {
         await expect(dialog(page).locator('.rt-source .rt-block').first()).toBeVisible({
             timeout: 60_000,
         });
-        // The coloured file is checked once its colours are in, the plain one as it is.
-        if (name.endsWith('.ts'))
-            await expect(dialog(page).locator('.rt-source .line').first()).toBeVisible();
+        // The coloured file is checked once its colours are in, on the right words, the plain one as it is.
+        if (name.endsWith('.ts')) {
+            await expect(dialog(page).locator('.rt-code[data-coloured]')).toHaveCount(1);
+            await expect
+                .poll(async () => (await paintedWords(page)).slice(0, 2))
+                .toEqual(['const', 'line1']);
+        }
         const measured = await tops([1, 99, 102, 255, 257, 511, 513, 767, 769, 1000]);
         for (const { n, code, gutter } of measured) {
             expect(code, `line ${n} in the code`).not.toBeNull();
@@ -141,6 +144,7 @@ test('Colour anyway holds when the folder is listed again behind the viewer', as
     await expect(row(page, 'other.txt')).toBeAttached({ timeout: 30_000 });
     await page.waitForTimeout(1_000);
     await expect(colour).toHaveCount(0);
-    await expect(dialog(page).locator('.rt-source .line').first()).toBeVisible();
+    await expect(dialog(page).locator('.rt-code[data-coloured]')).toHaveCount(1);
+    await expect.poll(async () => (await paintedWords(page))[0]).toMatch(/^export const\b/);
     await page.keyboard.press('Escape');
 });

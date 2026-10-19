@@ -73,6 +73,25 @@ export function operatorRole(action: 'grant' | 'revoke', email: string) {
 export const grip = { position: { x: 16, y: 12 } } as const;
 
 /*
+ * The words the open viewer's code is coloured on, in order, from its first run of
+ * lines. Colour is painted over the text as ranges in CSS custom highlights, not
+ * built into it as elements, so this reads the ranges rather than the markup.
+ */
+export function paintedWords(page: Page) {
+    return page.evaluate(() => {
+        const run = document.querySelector('[data-slot=dialog-content] .rt-source [data-run="0"]');
+        const text = run?.firstChild;
+        if (!(text instanceof Text)) return [];
+        const ranges: AbstractRange[] = [];
+        for (const highlight of CSS.highlights.values())
+            for (const range of highlight) if (range.startContainer === text) ranges.push(range);
+        return ranges
+            .sort((a, b) => a.startOffset - b.startOffset)
+            .map((range) => text.data.slice(range.startOffset, range.endOffset));
+    });
+}
+
+/*
  * The modifier the app's own shortcuts answer to. The app reads the platform from
  * the browser, and the WebKit project presents itself as Safari on a Mac even on
  * Linux, where Playwright's `ControlOrMeta` would press Control; so ask the page.

@@ -8,6 +8,7 @@ import {
     grip,
     newFolder,
     newPage,
+    paintedWords,
     PASSWORD,
     registerAccount,
     sampleFiles,
@@ -113,7 +114,8 @@ test('previews render each kind on the device: Markdown as a document, code high
 
     await openPreviewVia(page, 'ArrowLeft', 'notes.md');
     await openPreviewVia(page, 'ArrowLeft', 'module.ts');
-    await expect(dialog(page).locator('.shiki span').first()).toBeVisible();
+    await expect(dialog(page).locator('.rt-code[data-coloured]')).toHaveCount(1);
+    await expect.poll(async () => (await paintedWords(page))[0]).toMatch(/^export\b/);
     // One number per line: the gutter is text now, drawn in blocks like the code beside it.
     await expect(dialog(page).locator('.rt-gutter')).toHaveText(/^\s*1\s+2\s+3\s+4\s*$/);
 
