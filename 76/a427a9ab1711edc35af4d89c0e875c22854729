@@ -1,0 +1,27 @@
+docs/drive-design.md
+  s_c56e31c87cddde::t_150f1a2c7c3eac 911
+e2e/drive.spec.ts
+  s_c56e31c87cddde::t_f2ea014d72569d 174,184,194,200,240
+e2e/helpers.ts
+  s_c56e31c87cddde::t_d7e0199a777f9a 130-132,138
+e2e/integrity.spec.ts
+  s_c56e31c87cddde::t_5f86c462911afd 73-79,81-89,113-119,121,135
+e2e/sealed-copy.spec.ts
+  s_c56e31c87cddde::t_167a7a96982dbf 87-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "76a427a9ab1711edc35af4d89c0e875c22854729",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
