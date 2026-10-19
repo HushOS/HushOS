@@ -257,7 +257,7 @@ After reviewing changes and migrations:
 docker compose up -d --build
 ```
 
-On the published images, read the release notes of every version between yours and the next one first (`https://github.com/HushOS/HushOS/releases`): an **Upgrade notes** section at the top of a release says what to do before or after moving to it (a setting to change, a migration that takes a while, a minimum client version raised). Then move `HUSHOS_IMAGE_TAG` and run `docker compose -f compose.yaml -f compose.images.yaml up -d`.
+On the published images, read the release notes of every version between yours and the next one first (`https://github.com/HushOS/HushOS/releases`): an **Upgrade notes** section at the top of a release says what to do before or after moving to it (a setting to change, a migration that takes a while, a minimum client version raised). Then move `HUSHOS_IMAGE_TAG` and run `docker compose -f compose.yaml -f compose.images.yaml up -d`. Each release's **Server images** section lists the web, worker and migrate images with the digest the version tag names, to pull or pin exactly those.
 
 - The migrator tracks applied migrations and can run repeatedly. Keep the same `.env` and persistent volumes.
 - `docker compose down` stops services and retains data; adding `--volumes` deletes it.
