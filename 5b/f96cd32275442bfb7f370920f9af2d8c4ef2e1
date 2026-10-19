@@ -1,0 +1,32 @@
+apps/web/src/lib/sign-out.ts
+  s_c56e31c87cddde::t_befeb1271a6658 128
+  s_c56e31c87cddde::t_d9f3807875eda2 6-7,61-91,95-96,103,105-123,125,129-130,132-137
+apps/web/.oxlintrc.json
+  s_c56e31c87cddde::t_8e1afaeb97c6f3 15-21
+apps/web/src/lib/auth-client.ts
+  s_c56e31c87cddde::t_c9c06f0a36b8a3 8,11-27
+apps/web/src/lib/load-page.ts
+  s_c56e31c87cddde::t_4ad8ee39ac9ce7 1-4
+apps/web/src/lib/sign-in-gate.ts
+  s_c56e31c87cddde::t_946e0e97b601d1 1-41
+apps/web/src/lib/sign-out.test.ts
+  s_c56e31c87cddde::t_d07e72a0158d39 43-44,48,197-201,204-214,218-220,222,225-252,258,262-266,270-309
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_c56e31c87cddde::t_d4e403b7b20e7a 266-271,282-283
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5bf96cd32275442bfb7f370920f9af2d8c4ef2e1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
