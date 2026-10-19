@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -165,25 +166,31 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                 LazyColumn(Modifier.fillMaxSize()) {
                     if (!byMe) {
                         item(key = "open-link") {
+                            // The app's field and a tonal button of the field's height, centred on one row.
                             Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
-                                OutlinedTextField(
-                                    value = linkText, onValueChange = { linkText = it }, singleLine = true, label = { Text("Paste a HushOS link") },
-                                    leadingIcon = { Icon(Icons.Outlined.ContentPaste, null) }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                PillField(
+                                    value = linkText, onValueChange = { linkText = it }, placeholder = "Paste a HushOS link",
+                                    leadingIcon = { Icon(Icons.Outlined.ContentPaste, null, tint = Alpine.colors.ink) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = androidx.compose.ui.text.input.ImeAction.Go),
+                                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onGo = { if (linkText.contains("/s/")) model.showLink(linkText.trim()) }),
                                     modifier = Modifier.weight(1f),
                                 )
-                                FilledTonalButton(enabled = linkText.contains("/s/"), onClick = { model.showLink(linkText.trim()) }, modifier = Modifier.padding(start = AlpineSpace.S2)) { Text("Open") }
+                                FilledTonalButton(
+                                    enabled = linkText.contains("/s/"), onClick = { model.showLink(linkText.trim()) },
+                                    modifier = Modifier.padding(start = AlpineSpace.S2).height(FieldHeight),
+                                ) { Text("Open") }
                             }
                         }
                         val shares = state.shares
                         when {
                             shares == null && state.sharesFailed -> item(key = "error") {
-                                EmptyState("Couldn’t load what’s shared", "Check your connection and try again.", Icons.Outlined.WarningAmber, danger = true, modifier = Modifier.padding(top = 64.dp)) {
+                                EmptyState("Couldn’t load what’s shared", "Check your connection and try again.", modifier = Modifier.padding(top = 64.dp)) {
                                     Button(onClick = { model.refreshShares() }) { Text("Try again") }
                                 }
                             }
                             shares == null -> item(key = "loading") { SkeletonRows(4) }
                             shares.isEmpty() -> item(key = "empty") {
-                                EmptyState("Nothing shared with you yet", "When someone shares a folder or file with you, it shows up here.", Icons.Outlined.Group, modifier = Modifier.padding(top = 64.dp))
+                                EmptyState("Nothing shared with you yet", "When someone shares a folder or file with you, it shows up here.", modifier = Modifier.padding(top = 64.dp))
                             }
                         }
                         items(shares.orEmpty(), key = { it.share.id }) { mount -> ReceivedRow(model, state, mount, onOpen = { mount.root?.let { open(it) } }, onMore = { received = mount }, onPeople = { people = true }) }
@@ -194,13 +201,13 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                         val links = rows.orEmpty().filter { it.link != null }.map { Outgoing(it.item, nameOf(it.item), emptyList(), it) }
                         when {
                             rows == null && mineFailed -> item(key = "error") {
-                                EmptyState("Couldn’t load what’s shared", "Check your connection and try again.", Icons.Outlined.WarningAmber, danger = true, modifier = Modifier.padding(top = 64.dp)) {
+                                EmptyState("Couldn’t load what’s shared", "Check your connection and try again.", modifier = Modifier.padding(top = 64.dp)) {
                                     Button(onClick = { reload++ }) { Text("Try again") }
                                 }
                             }
                             rows == null -> item(key = "loading") { SkeletonRows(4) }
                             rows.isEmpty() -> item(key = "empty") {
-                                EmptyState("You haven’t shared anything yet", "Choose Share on any folder or file to let someone open it.", Icons.Outlined.Group, modifier = Modifier.padding(top = 64.dp))
+                                EmptyState("You haven’t shared anything yet", "Choose Share on any folder or file to let someone open it.", modifier = Modifier.padding(top = 64.dp))
                             }
                             else -> {
                                 item(key = "people") { Subheader("With people") }

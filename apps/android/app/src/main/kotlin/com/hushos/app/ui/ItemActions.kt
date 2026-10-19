@@ -679,14 +679,13 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
             if (items.size == 1) ItemHeader(model, state, items[0], subtitle = "Tags")
             else Text("Tags for ${items.size} items", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2))
             Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6), verticalAlignment = Alignment.CenterVertically) {
-                TextField(
-                    value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Find or add a tag") },
-                    leadingIcon = { Icon(Icons.Outlined.Search, null, tint = alpine.inkMuted) }, shape = CircleShape,
+                PillField(
+                    value = query, onValueChange = { query = it }, placeholder = "Find or add a tag",
+                    leadingIcon = { Icon(Icons.Outlined.Search, null, tint = alpine.inkMuted) },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { add() }),
-                    colors = TextFieldDefaults.colors(focusedContainerColor = alpine.fill, unfocusedContainerColor = alpine.fill, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
-                    modifier = Modifier.weight(1f).then(if (alpine.high) Modifier.border(1.dp, alpine.field, CircleShape) else Modifier),
+                    modifier = Modifier.weight(1f),
                 )
-                FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2)) { Text("Add") }
+                FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2).height(FieldHeight)) { Text("Add") }
             }
             // The colour a new tag gets.
             Row(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {

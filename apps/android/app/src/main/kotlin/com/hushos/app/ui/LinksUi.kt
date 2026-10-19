@@ -1153,7 +1153,7 @@ internal fun LinkBrowser(model: DriveViewModel, state: DriveState, session: Link
             val problem = session.trouble
             when {
                 problem != null -> Column(Modifier.fillMaxSize().padding(horizontal = 40.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    EmptyState(problem.title, problem.body, if (problem == LinkTrouble.GONE) Icons.Outlined.LinkOff else Icons.Outlined.ErrorOutline, danger = problem == LinkTrouble.FAILED) {
+                    EmptyState(problem.title, problem.body) {
                         if (problem == LinkTrouble.FAILED) Button(onClick = { session.retry() }) { Text("Try again") }
                         if (problem == LinkTrouble.INCOMPLETE) {
                             // The link's secret is a key: no autocorrect, and nothing the keyboard learns or suggests from it later.

@@ -376,16 +376,16 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                         }
                         when {
                             words.isNotEmpty() && items.isEmpty() -> item(key = "none") {
-                                EmptyState("No results for “${query.trim()}”", "Check the spelling, or try fewer words.", Icons.Outlined.Search, modifier = Modifier.padding(top = 48.dp))
+                                EmptyState("No results for “${query.trim()}”", "Check the spelling, or try fewer words.", modifier = Modifier.padding(top = 48.dp))
                             }
                             folderId != null && folderId in state.failedFolders && !loaded -> item(key = "failed") {
-                                EmptyState("This folder couldn’t be opened", "The connection dropped while it was loading. Nothing in it has changed.", Icons.Outlined.WarningAmber, danger = true, modifier = Modifier.padding(top = 96.dp)) {
+                                EmptyState("This folder couldn’t be opened", "The connection dropped while it was loading. Nothing in it has changed.", modifier = Modifier.padding(top = 96.dp)) {
                                     Button(onClick = { model.refresh(folderId) }) { Text("Try again") }
                                 }
                             }
                             !loaded && state.unreachable && (folderId == null || folderId !in state.loading) -> item(key = "offline") {
                                 // Nothing on this phone for this folder and no network to fetch it: say so instead of a blank list.
-                                EmptyState("Not opened on this phone yet", "“$folderName” hasn’t been opened here before, so there’s nothing to show offline. It opens when you’re back online.", Icons.Outlined.CloudOff, modifier = Modifier.padding(top = 96.dp))
+                                EmptyState("Not opened on this phone yet", "“$folderName” hasn’t been opened here before, so there’s nothing to show offline. It opens when you’re back online.", modifier = Modifier.padding(top = 96.dp))
                             }
                             !loaded -> item(key = "loading") { if (grid) SkeletonTiles(columns) else SkeletonRows() }
                             items.isEmpty() && tagFilter != null -> item(key = "untagged") {
@@ -393,7 +393,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                 EmptyState("Nothing tagged $name", "Nothing in this folder carries this tag.", modifier = Modifier.padding(top = 64.dp))
                             }
                             items.isEmpty() -> item(key = "empty") {
-                                EmptyState("Nothing here yet", "Use + to add files, or save to HushOS from the Files app.", Icons.Outlined.CreateNewFolder, modifier = Modifier.padding(top = 64.dp, bottom = 32.dp))
+                                EmptyState("Nothing here yet", "Use + to add files, or save to HushOS from the Files app.", modifier = Modifier.padding(top = 64.dp, bottom = 32.dp))
                             }
                         }
                         fun open(item: Opened) {
