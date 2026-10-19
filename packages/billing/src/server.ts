@@ -7,7 +7,7 @@ import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms } from './api';
-import { queuePlanEnding } from './endings';
+import { noteRefundUpdated, queuePlanEnding } from './endings';
 import { groupIdOf, reconcileGroup } from './groups';
 import {
     BillingError,
@@ -38,6 +38,7 @@ export {
     PlanEndingBusyError,
     queuePlanEnding,
     reconcilePlanEndings,
+    recheckSettledEndings,
     REFUND_FAILURES_BEFORE_OWED,
     setEndPersonalPlanQueue,
     type EndPersonalPlanJob,
@@ -698,6 +699,9 @@ export async function handleWebhook(request: Request): Promise<Response> {
         const userId = owner?.kind === 'user' ? owner.id : null;
         if (userId) await reconcileCustomer(userId);
         if (owner?.kind === 'group') await reconcileGroup(owner.id);
+        // A refund HushOS made that failed after it succeeded: its plan's refunds are placed again.
+        if (event.type === 'refund.updated')
+            await noteRefundUpdated(event.data as Parameters<typeof noteRefundUpdated>[0]);
         if (event.type === 'order.paid') {
             await recordAffiliateEarning(
                 event.data as Parameters<typeof recordAffiliateEarning>[0],

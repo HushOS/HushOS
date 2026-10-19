@@ -240,6 +240,8 @@ const polar = {
     refundWindowDays: null as number | null,
     /* Orders Polar refuses a refund on, by its error name (RefundsBlocked, RefundDisputedPayment). */
     refusedOrders: new Map<string, string>(),
+    /* Orders Polar says are refunded whole, though their refunds don't list it (a lagging listing). */
+    refundedAlreadyOrders: new Set<string>(),
     /* The status Polar gives a new refund. */
     refundStatus: 'succeeded' as 'pending' | 'succeeded' | 'failed',
     /* The refunds API can't be read (a token without `refunds:read`). */
@@ -823,6 +825,8 @@ const fakeClient = {
             }
             const order = polar.orders.find((candidate) => candidate.id === body.order_id);
             if (!order) throw notFound();
+            if (polar.refundedAlreadyOrders.has(order.id))
+                throw new PolarClientError(403, { error: 'RefundedAlready' });
             const refused = polar.refusedOrders.get(order.id);
             if (refused) throw new PolarClientError(403, { error: refused, detail: refused });
             if (
@@ -986,6 +990,7 @@ beforeEach(async () => {
     polar.refundLatencyMs = 0;
     polar.refundWindowDays = null;
     polar.refusedOrders = new Map();
+    polar.refundedAlreadyOrders = new Set();
     polar.onRefundList = null;
     polar.refundStatus = 'succeeded';
     polar.refundsUnreadable = false;
@@ -4694,6 +4699,72 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         await expect(first).rejects.toMatchObject({ name: 'PlanEndingBusyError' });
         expect(callsTo('refunds.create')).toHaveLength(1);
         expect(refundsMade()).toEqual([['order_cycle', 499]]);
+    });
+
+    test('a refund Stripe fails after it was settled is found by the daily reconcile and made again', async () => {
+        const { member, job } = await pooledSubscriber();
+        await billing.endPersonalPlans(job);
+        expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        // Two weeks on, Stripe fails it (the card was closed): Polar marks it failed and takes it
+        // back off the order. The ending was settled.
+        polar.refunds[0]!.status = 'failed';
+        polar.orders.find((order) => order.id === 'order_cycle')!.refunded_amount = 0;
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily).map((queued) => queued.userId)).toEqual([member.userId]);
+        await runQueued(daily);
+        expect(polar.refunds.map((refund) => [refund.amount, refund.status])).toEqual([
+            [499, 'failed'],
+            [499, 'succeeded'],
+        ]);
+        // Held again: the next reconcile opens nothing.
+        const next = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(next)).toEqual([]);
+    });
+
+    test('Polar’s refund.updated for a failed refund of HushOS’s opens its settled ending at once', async () => {
+        const { member, job } = await pooledSubscriber();
+        await billing.endPersonalPlans(job);
+        const refund = polar.refunds[0]!;
+        refund.status = 'failed';
+        polar.orders.find((order) => order.id === 'order_cycle')!.refunded_amount = 0;
+        const mark = endingJobs.length;
+        const delivery = await signedWebhook({
+            type: 'refund.updated',
+            timestamp: new Date().toISOString(),
+            data: {
+                ...refund,
+                modified_at: new Date().toISOString(),
+                reason: 'customer_request',
+                tax_amount: 90,
+                currency: 'usd',
+                organization_id: 'org_test',
+                subscription_id: 'sub_personal',
+                customer_id: 'cus_personal',
+                revoke_benefits: false,
+                dispute: null,
+            },
+        });
+        expect((await billing.handleWebhook(delivery)).status).toBe(200);
+        expect(endingJobs.slice(mark).map((queued) => queued.userId)).toEqual([member.userId]);
+        await runQueued(mark);
+        expect(polar.refunds.filter((r) => r.status === 'succeeded').map((r) => r.amount)).toEqual([
+            499,
+        ]);
+    });
+
+    test('Polar saying refunded whole while its listing never shows it ends on the owed list', async () => {
+        const { job } = await pooledSubscriber();
+        polar.refundedAlreadyOrders.add('order_cycle');
+        for (let run = 1; run <= 4; run++) {
+            await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+            expect(await billingRepository.listRefundsOwed()).toEqual([]);
+        }
+        await expect(billing.endPersonalPlans(job)).resolves.toMatchObject({ owed: 1 });
+        expect(await billingRepository.listRefundsOwed()).toEqual([
+            expect.objectContaining({ orderId: 'order_cycle', amount: 499, failures: 5 }),
+        ]);
     });
 
     test('a refund that timed out and lands at Polar later is not asked for twice', async () => {
