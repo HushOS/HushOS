@@ -26,7 +26,7 @@
 use crate::area_ledger::{
     AreaLedger, AreaOpened, NOT_CHECKED_KEYS, NOT_LISTED, NOT_THE_FAMILYS, NO_ACCOUNT, NO_CHAIN,
 };
-use crate::bytes::{decode, encode, random, KEY_BYTES, NONCE_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES, NONCE_BYTES};
 use crate::canonical::uuid;
 use crate::consent::NOT_OWN_IDENTITY;
 use crate::drive::WorkspaceGrant;
@@ -223,6 +223,48 @@ pub fn area_self_grant_open(
     grant: &WorkspaceGrant,
 ) -> CoreResult<Vec<u8>> {
     self_grant_open(root, user_id, group_id, grant).map(|key| key.to_vec())
+}
+
+/// A family folder's self-grant under a new account key, for a master-key
+/// rotation (the worker's `rewrapAreaSelfGrant`): opened as `group_id`'s under
+/// `old_root` and sealed again as `group_id`'s under `new_root` at
+/// `key_version`, the folder key version kept. The group is the one the
+/// security challenge names (`groupId`); a wrong or missing one fails to open,
+/// so the rotation is refused, never rewrapped under another context. Only the
+/// sealed grant comes back: the folder key never crosses the FFI.
+///
+/// ```no_run
+/// # let (old_root, new_root, grant) = (vec![0u8; 32], vec![1u8; 32], todo!());
+/// let rewrapped = hushos_core::area_self_grant_rewrap(
+///     "user-1".into(), "22222222-2222-4222-8222-222222222222".into(), old_root, new_root, grant, 2)?;
+/// assert_eq!(rewrapped.key_version, 2);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn area_self_grant_rewrap(
+    user_id: String,
+    group_id: String,
+    old_root: Vec<u8>,
+    new_root: Vec<u8>,
+    grant: WorkspaceGrant,
+    key_version: u64,
+) -> CoreResult<WorkspaceGrant> {
+    let (old_root, new_root) = (Zeroizing::new(old_root), Zeroizing::new(new_root));
+    expect_len("account key", &old_root, KEY_BYTES)?;
+    expect_len("new account key", &new_root, KEY_BYTES)?;
+    if !(1..=MAX_SAFE_INTEGER).contains(&key_version) {
+        return Err(input(UNSUPPORTED_GRANT));
+    }
+    let key = self_grant_open(&old_root, &user_id, &group_id, &grant)?;
+    self_grant_seal(
+        &key,
+        &new_root,
+        &user_id,
+        &group_id,
+        &grant.workspace_id,
+        key_version,
+        grant.workspace_key_version,
+    )
 }
 
 #[cfg(test)]

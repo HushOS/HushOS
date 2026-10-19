@@ -304,3 +304,51 @@ fn a_self_grant_of_another_key_gives_way_to_the_grant_never_to_a_refusal() {
     let opened = f.ledger().open_family_area(GROUP.into(), area, 1).unwrap();
     assert_eq!((opened.from, opened.opened.version), (AreaKeyFrom::Grant, 2));
 }
+
+/* Master-key rotation: the self-grant follows the root and stays its family's. */
+#[test]
+fn a_rotation_rewraps_a_self_grant_under_the_new_root_and_its_own_family() {
+    let (old_root, new_root, key) = (vec![7u8; 32], vec![8u8; 32], vec![9u8; 32]);
+    let grant = self_grant_seal(&key, &old_root, "USER-1", GROUP, AREA, 2, 5).unwrap();
+    let rewrapped = area_self_grant_rewrap(
+        "user-1".into(),
+        GROUP.into(),
+        old_root.clone(),
+        new_root.clone(),
+        grant.clone(),
+        3,
+    )
+    .unwrap();
+    assert_eq!((rewrapped.key_version, rewrapped.workspace_key_version), (3, 5));
+    assert_eq!(rewrapped.workspace_id, AREA);
+    assert_eq!(self_grant_open(&new_root, "user-1", GROUP, &rewrapped).unwrap().to_vec(), key);
+    // Still the family's: not another family's, not a personal grant, not under the old root.
+    assert!(self_grant_open(&new_root, "user-1", OTHER_GROUP, &rewrapped).is_err());
+    assert!(workspace_open("user-1".into(), new_root.clone(), rewrapped.clone()).is_err());
+    assert!(self_grant_open(&old_root, "user-1", GROUP, &rewrapped).is_err());
+    // The personal rewrap refuses a self-grant rather than rewrapping it under a guessed context.
+    assert!(crate::workspace_grant_rewrap(
+        "user-1".into(),
+        old_root.clone(),
+        new_root.clone(),
+        grant.clone(),
+        3
+    )
+    .is_err());
+}
+
+#[test]
+fn a_rotation_refuses_a_self_grant_named_for_another_family_or_none() {
+    let (old_root, new_root, key) = (vec![7u8; 32], vec![8u8; 32], vec![9u8; 32]);
+    let grant = self_grant_seal(&key, &old_root, "user-1", GROUP, AREA, 2, 5).unwrap();
+    let rewrap = |group: &str, old: Vec<u8>, version: u64| {
+        area_self_grant_rewrap("user-1".into(), group.into(), old, new_root.clone(), grant.clone(), version)
+    };
+    assert!(rewrap(OTHER_GROUP, old_root.clone(), 3).is_err());
+    assert!(rewrap("family", old_root.clone(), 3).is_err());
+    assert!(rewrap(GROUP, vec![1u8; 32], 3).is_err());
+    // Roots are 32 bytes and the new key version a positive safe integer, as the web's.
+    assert!(rewrap(GROUP, vec![7u8; 31], 3).is_err());
+    assert!(rewrap(GROUP, old_root.clone(), 0).is_err());
+    assert!(rewrap(GROUP, old_root, 1 << 53).is_err());
+}

@@ -27,6 +27,7 @@ import {
 } from '../../crypto/src/group-testkit';
 import { db } from '../../db/src/client';
 import {
+    accountKeys,
     accountIdentityHistory,
     areaGrants,
     driveLinks,
@@ -3419,6 +3420,14 @@ describe('roster calls the phones and the web build (Core 5a)', () => {
             await db
                 .insert(workspaceStorage)
                 .values({ workspaceId: workspace!.id, baseQuotaBytes: 1_073_741_824n });
+            // An account root at key version 1: a self-grant is checked against it.
+            await db.insert(accountKeys).values({
+                userId: who.userId,
+                envelopeVersion: 1,
+                wrappingSalt: randomBytes(32),
+                wrappingNonce: randomBytes(24),
+                encryptedKey: randomBytes(48),
+            });
             await storeTestIdentity(who.userId, who.served);
             out.push(Object.assign(who, { email }));
         }

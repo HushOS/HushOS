@@ -12,7 +12,15 @@ import {
 import { rewrapIdentity, type IdentityEnvelope } from './identity';
 import { rewrapSettingsKey, type SettingsKeyEnvelope } from './contacts';
 import { createRecovery, type RecoveryEnvelope } from './recovery';
-import { rewrapWorkspaceGrant, type WorkspaceKeyEnvelope } from './workspace';
+import { rewrapAreaSelfGrant, rewrapWorkspaceGrant, type WorkspaceKeyEnvelope } from './workspace';
+
+/*
+ * A grant as a security change is served it: the envelope, and for a group
+ * area's self-grant the group it is bound to (its workspace's group). The
+ * group only picks the context the grant must open under; a wrong or missing
+ * one makes the rewrap refuse, never pick another context.
+ */
+export type SecurityWorkspaceGrant = WorkspaceKeyEnvelope & { groupId?: string | null };
 
 export type SecurityAction = 'password' | 'master-key' | 'recovery-key';
 export type SecurityChallenge = {
@@ -29,7 +37,7 @@ export type SecurityChallenge = {
     identityHistory?: IdentityEnvelope[];
     /* The settings key as GET /api/auth/settings serves it; null before the account has one. */
     settingsKey?: SettingsKeyEnvelope | null;
-    workspaces: WorkspaceKeyEnvelope[];
+    workspaces: SecurityWorkspaceGrant[];
 };
 export type SecurityUpdate = {
     finishLoginRequest: string;
@@ -49,8 +57,10 @@ export type SecurityUpdate = {
  * and recovery envelopes: the identity and every earlier one (shares sealed to
  * them open with nothing else), each keeping its key version and public keys;
  * the settings key, when the account has one; and every workspace grant, at
- * the new root revision with its workspace key epoch unchanged. The server
- * refuses a rotation that leaves any of them behind.
+ * the new root revision with its workspace key epoch unchanged. A group
+ * area's self-grant is rewrapped as its group's (rewrapAreaSelfGrant), since
+ * the personal context cannot open it. The server refuses a rotation that
+ * leaves any of them behind.
  */
 export async function rewrapAccountKeys(
     root: Uint8Array<ArrayBuffer>,
@@ -70,8 +80,10 @@ export async function rewrapAccountKeys(
             ? await rewrapSettingsKey(root, nextRoot, userId, keys.settingsKey)
             : undefined,
         workspaces: await Promise.all(
-            keys.workspaces.map((grant) =>
-                rewrapWorkspaceGrant(root, nextRoot, userId, grant, keyVersion),
+            keys.workspaces.map(({ groupId, ...grant }) =>
+                groupId
+                    ? rewrapAreaSelfGrant(root, nextRoot, userId, groupId, grant, keyVersion)
+                    : rewrapWorkspaceGrant(root, nextRoot, userId, grant, keyVersion),
             ),
         ),
     };

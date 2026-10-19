@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
     closeDatabase,
+    createTestFamily,
     hybridSignerFromSeed,
     resetDatabase,
     type HybridSigner,
@@ -1184,5 +1185,96 @@ describe('the settings key in a master-key rotation', () => {
         const now = await auth.getSettingsKey(user.id);
         expect(now?.ciphertext.equals(rewrapped.ciphertext)).toBe(true);
         expect(now?.nonce.equals(rewrapped.nonce)).toBe(true);
+    });
+});
+
+describe('a family folder’s self-grant in a master-key rotation', () => {
+    test('is served with its family, and must follow the root like any grant', async () => {
+        const workspaceId = randomUUID();
+        const created = await auth.registerAccount({
+            enrollmentTokenHash: await verifiedEnrollment('self-grant@hushos.test'),
+            ...registration(workspaceId),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        const user = created.user;
+        const sessionTokenHash = await signedIn(user.id);
+        const stored = (await auth.getIdentity(user.id))!;
+        const {
+            groupId,
+            areaIds: [areaId],
+        } = await createTestFamily({ organizerId: user.id });
+        // Route 23's row: the folder key under the member's own root, at the folder's version 3.
+        await db.insert(workspaceKeys).values({
+            workspaceId: areaId!,
+            userId: user.id,
+            keyVersion: 1,
+            workspaceKeyVersion: 3,
+            wrappingSalt: bytes(32),
+            wrappingNonce: bytes(24),
+            encryptedKey: bytes(48),
+        });
+
+        // A self-grant opens only under its family's context, so the client must be told which.
+        const served = (await auth.getSecurityBundles(user.id))!.workspaces;
+        expect(
+            Object.fromEntries(served.map((grant) => [grant.workspaceId, grant.groupId])),
+        ).toEqual({ [workspaceId]: null, [areaId!]: groupId });
+
+        const grant = (workspaceKeyVersion: number) => ({
+            keyVersion: 2,
+            workspaceKeyVersion,
+            wrappingSalt: bytes(32),
+            wrappingNonce: bytes(24),
+            encryptedKey: bytes(48),
+        });
+        const rotate = (workspaces: auth.WorkspaceGrantInput[]) =>
+            auth.changeAccountSecurity({
+                userId: user.id,
+                action: 'master-key',
+                sessionTokenHash,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: {
+                    keyVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                },
+                recovery: {
+                    keyVersion: 2,
+                    recoveryVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                    backupNonce: bytes(24),
+                    encryptedRecoveryKey: bytes(48),
+                    publicKey: bytes(32),
+                },
+                identity: {
+                    keyVersion: 2,
+                    wrappingSalt: bytes(32),
+                    encryptionPublicKey: stored.encryptionPublicKey,
+                    encryptionPrivateKeyNonce: bytes(24),
+                    encryptedEncryptionPrivateKey: bytes(48),
+                    signingPublicKey: stored.signingPublicKey,
+                    signingSeedNonce: bytes(24),
+                    encryptedSigningSeed: bytes(48),
+                },
+                workspaces,
+            });
+        const personal = { id: workspaceId, grant: grant(1) };
+        // Left behind, the self-grant would stay sealed under a root that no longer exists.
+        expect(await rotate([personal])).toBe(false);
+        // Carried at another folder version, it would name a key the member was not given.
+        expect(await rotate([personal, { id: areaId!, grant: grant(2) }])).toBe(false);
+        const family = { id: areaId!, grant: grant(3) };
+        expect(await rotate([personal, family])).toBe(true);
+        const rows = await db
+            .select()
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.workspaceId, areaId!));
+        expect(rows).toHaveLength(1);
+        expect([rows[0]!.keyVersion, rows[0]!.workspaceKeyVersion]).toEqual([2, 3]);
+        expect(rows[0]!.encryptedKey.equals(family.grant.encryptedKey)).toBe(true);
     });
 });

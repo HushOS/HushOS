@@ -151,15 +151,21 @@ export async function grantAreaKey(
     if (!WORKSPACE_ID_PATTERN.test(workspaceId) || !WORKSPACE_ID_PATTERN.test(groupId))
         throw new CryptoError('Invalid workspace id.');
     if (workspaceKey.length !== 32) throw new CryptoError('Invalid workspace key.');
-    return wrapWorkspaceKey(
-        Uint8Array.from(workspaceKey),
-        root,
-        userId,
-        workspaceId,
-        keyVersion,
-        workspaceKeyVersion,
-        areaSelfGrantContext(userId, groupId, workspaceId, keyVersion, workspaceKeyVersion),
-    );
+    // A copy the caller cannot see, so it is zeroed here; the caller zeroes its own.
+    const copy = Uint8Array.from(workspaceKey);
+    try {
+        return await wrapWorkspaceKey(
+            copy,
+            root,
+            userId,
+            workspaceId,
+            keyVersion,
+            workspaceKeyVersion,
+            areaSelfGrantContext(userId, groupId, workspaceId, keyVersion, workspaceKeyVersion),
+        );
+    } finally {
+        copy.fill(0);
+    }
 }
 
 /* A group area's self-grant, opened only as one of `groupId`'s. The caller owns the key and zeroes it. */
@@ -221,6 +227,36 @@ export async function openWorkspaceKey(
         return key;
     } finally {
         wrap.fill(0);
+    }
+}
+
+/*
+ * Master-key rotation of a group area's self-grant: the same area key under the
+ * new root, still bound to `groupId`. It opens only as that group's, so a
+ * server naming the wrong group (or none) gets a refusal, never a rewrap under
+ * another context.
+ */
+export async function rewrapAreaSelfGrant(
+    oldRoot: Uint8Array<ArrayBuffer>,
+    newRoot: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    envelope: WorkspaceKeyEnvelope,
+    keyVersion: number,
+): Promise<WorkspaceKeyEnvelope> {
+    const workspaceKey = await openAreaSelfGrant(oldRoot, userId, groupId, envelope);
+    try {
+        return await grantAreaKey(
+            workspaceKey,
+            newRoot,
+            userId,
+            groupId,
+            envelope.workspaceId,
+            keyVersion,
+            envelope.workspaceKeyVersion,
+        );
+    } finally {
+        workspaceKey.fill(0);
     }
 }
 

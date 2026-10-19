@@ -11,6 +11,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../src/client';
 import type { CreateLink, CreateShare } from '../src/drive';
 import {
+    accountKeys,
     accountIdentities,
     driveLinks,
     driveShares,
@@ -47,6 +48,14 @@ export async function createTestAccount(input: { email?: string; quotaBytes?: bi
         .returning({ id: workspaces.id });
     if (!workspace) throw new Error('Could not create the test workspace.');
     await db.insert(personalWorkspaces).values({ userId: user.id, workspaceId: workspace.id });
+    // An account root at key version 1, as an unlocked account has: self-grants are checked against it.
+    await db.insert(accountKeys).values({
+        userId: user.id,
+        envelopeVersion: 1,
+        wrappingSalt: randomBytes(32),
+        wrappingNonce: randomBytes(24),
+        encryptedKey: randomBytes(48),
+    });
     await db.insert(workspaceStorage).values({
         workspaceId: workspace.id,
         baseQuotaBytes: input.quotaBytes ?? 1_073_741_824n,
