@@ -4660,18 +4660,33 @@ describe('a personal plan ends when its owner’s files join a family', () => {
 
     test('two runs at once (pg-boss retrying one it took for dead) refund once', async () => {
         const { job } = await pooledSubscriber();
-        polar.refundLatencyMs = 20;
-        const runs = await Promise.allSettled([
-            billing.endPersonalPlans(job),
-            billing.endPersonalPlans(job),
-        ]);
-        // One did the work; the other stopped before asking Polar for anything.
-        expect(runs.map((run) => run.status).sort()).toEqual(['fulfilled', 'rejected']);
-        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
-        expect(callsTo('refunds.list')).toHaveLength(1);
+        // The first run takes the ending's lease, revokes, then is held inside its refunds listing
+        // until the second run has come and gone: the overlap doesn't depend on timing.
+        let release = () => {};
+        let held = () => {};
+        const holding = new Promise<void>((resolve) => (held = resolve));
+        polar.onRefundList = () =>
+            new Promise<void>((resolve) => {
+                release = resolve;
+                held();
+            });
+        const first = billing.endPersonalPlans(job);
+        await holding;
+        const second = await Promise.allSettled([billing.endPersonalPlans(job)]);
+        release();
+        await first;
+        // The money: one refund, of the unused half, whatever the runs did.
+        expect(callsTo('refunds.create')).toHaveLength(1);
         expect(refundsMade()).toEqual([['order_cycle', 499]]);
+        expect(callsTo('subscriptions.revoke')).toHaveLength(1);
+        // The second, run while the first held the lease, stopped before asking Polar for any
+        // refund: refused as busy, its listing never made.
+        expect(second[0]).toMatchObject({
+            status: 'rejected',
+            reason: expect.objectContaining({ name: 'PlanEndingBusyError' }),
+        });
+        expect(callsTo('refunds.list')).toHaveLength(1);
         // The retry pg-boss makes of the one that stopped finds it done.
-        polar.refundLatencyMs = 0;
         await billing.endPersonalPlans(job);
         expect(refundsMade()).toEqual([['order_cycle', 499]]);
     });
