@@ -13,8 +13,15 @@ permissions:
 env:
     TURBO_TELEMETRY_DISABLED: 1
 
+# A pull request's runs share one group per pull request, so a new push cancels the run it
+# supersedes. Every other run (each push to main) has a group of its own commit: a group holds one
+# running and one pending run, and a newer run replaces the pending one, so a shared main group
+# dropped every push that arrived while another ran. Not `github.ref`: a pull request event on a
+# merged pull request (release-please labels its release pull request after the merge) has no
+# merge ref, runs with `refs/heads/main`, and cancelled the release commit's own run. Deploys and
+# `latest` keep their order through their own groups (`latest` and `deploy` below).
 concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
+    group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.sha) }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -477,7 +484,9 @@ jobs:
                   fi
 
     # Built on pull requests only with the `full-ci` label (a Dockerfile change wants it);
-    # every push to main builds and publishes them.
+    # every push to main builds and publishes them as sha-<commit>. Not `latest`: runs for
+    # different commits overlap, and an older one finishing last would move it backwards. The
+    # `latest` job moves it, in commit order.
     images:
         name: Image ${{ matrix.image }}
         needs: check
@@ -534,37 +543,139 @@ jobs:
                   push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
                   cache-from: type=gha,scope=image-${{ matrix.image }}
                   cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope=image-{0}', matrix.image) || '' }}
-                  tags: |
-                      ${{ steps.image.outputs.name }}:latest
-                      ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+                  tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
                   labels: |
                       org.opencontainers.image.source=https://github.com/${{ github.repository }}
                       org.opencontainers.image.revision=${{ github.sha }}
                       org.opencontainers.image.version=${{ steps.release.outputs.version }}
                       org.opencontainers.image.licenses=AGPL-3.0-only
 
-    # Never ship a build the Linux suites refused. WebKit is left out on purpose (see
-    # webkit-report). A job skipped by its own condition (Rust or browser suites a change
-    # cannot affect) does not hold the deploy; one skipped because a job it needs failed
-    # cannot happen here, since changes and build must both have passed.
-    deploy:
-        name: Deploy production
+    # `latest` is what hushos.com's Coolify and the published compose file pull, so it never
+    # gets a build the Linux suites refused. WebKit is left out on purpose (see webkit-report).
+    # A job skipped by its own condition (Rust or browser suites a change cannot affect) does
+    # not hold it back; one skipped because a job it needs failed cannot happen here, since
+    # changes and build must both have passed. It only moves forward. Runs for different commits overlap, so this takes them one at a time
+    # (`queue: max` keeps every waiting run; the default keeps only the newest and cancels the
+    # rest), and a commit older than the one `latest` names leaves it alone and succeeds:
+    # re-running an old commit's CI rebuilds its images (release.yml copies them) without
+    # moving `latest` back. The web image moves last, so its revision label, the one read
+    # here, names a commit all three images have reached.
+    latest:
+        name: Move latest to this commit
         needs: [changes, check, build, rust, e2e, e2e-families, images]
         if: >-
             !cancelled() &&
-            github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true' &&
+            github.event_name == 'push' && github.ref == 'refs/heads/main' &&
             needs.changes.result == 'success' && needs.check.result == 'success' &&
             needs.build.result == 'success' && needs.images.result == 'success' &&
             (needs.rust.result == 'success' || needs.rust.result == 'skipped') &&
             (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') &&
             (needs.e2e-families.result == 'success' || needs.e2e-families.result == 'skipped')
         runs-on: ubuntu-latest
+        timeout-minutes: 10
+        concurrency:
+            group: ${{ github.workflow }}-latest
+            queue: max
+        permissions:
+            contents: read
+            packages: write
+        outputs:
+            current: ${{ steps.move.outputs.current }}
+        steps:
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v4
+            - name: Log in to GHCR
+              uses: docker/login-action@v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Move latest, unless it already names a later commit
+              id: move
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+                  # A registry error must not read as "no latest yet", or an old run would move it.
+                  if config=$(docker buildx imagetools inspect "$prefix-web:latest" --format '{{json .Image}}' 2> "$RUNNER_TEMP/inspect"); then
+                      current=$(jq -r 'if has("config") then . else .["linux/amd64"] end | .config.Labels["org.opencontainers.image.revision"] // empty' <<< "$config")
+                  elif grep -q ': not found' "$RUNNER_TEMP/inspect"; then
+                      current=''
+                  else
+                      cat "$RUNNER_TEMP/inspect" >&2
+                      exit 1
+                  fi
+                  if [[ -n "$current" && "$current" != "$GITHUB_SHA" ]]; then
+                      # Where this commit stands against latest's: ahead means it is later.
+                      status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current...$GITHUB_SHA" --jq .status)
+                      case "$status" in
+                          ahead) ;;
+                          behind)
+                              echo "::notice title=latest left alone::latest is at $current, a later commit than $GITHUB_SHA."
+                              echo "current=false" >> "$GITHUB_OUTPUT"
+                              exit 0
+                              ;;
+                          *)
+                              echo "::error title=latest not moved::latest is at $current, which is $status against $GITHUB_SHA; main is never rewritten, so look before moving it by hand."
+                              exit 1
+                              ;;
+                      esac
+                  fi
+                  for image in migrate worker web; do
+                      digest=$(docker buildx imagetools inspect "$prefix-$image:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r .digest)
+                      docker buildx imagetools create --tag "$prefix-$image:latest" "$prefix-$image@$digest"
+                      moved=$(docker buildx imagetools inspect "$prefix-$image:latest" --format '{{json .Manifest}}' | jq -r .digest)
+                      [[ "$moved" == "$digest" ]] || { echo "::error::$prefix-$image:latest is $moved, not $digest"; exit 1; }
+                      echo "$prefix-$image:latest -> $digest"
+                  done
+                  echo "current=true" >> "$GITHUB_OUTPUT"
+
+    # Production pulls `latest`, so a deploy only redeploys what the job above moved. One at a
+    # time, in order, and only for main's head: a commit that main has moved past is skipped,
+    # not failed (the later commit's run deploys), and so is one older than the release
+    # production already runs. Both hold on a re-run of an old commit, which would otherwise
+    # roll production back.
+    deploy:
+        name: Deploy production
+        needs: latest
+        if: needs.latest.outputs.current == 'true' && vars.DEPLOY_ENABLED == 'true'
+        runs-on: ubuntu-latest
         timeout-minutes: 15
+        concurrency:
+            group: ${{ github.workflow }}-deploy
+            queue: max
+        permissions:
+            contents: read
         environment:
             name: production
             url: ${{ vars.DEPLOY_ORIGIN }}
         steps:
+            - name: Skip a commit main or production has moved past
+              id: gate
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  DEPLOY_ORIGIN: ${{ vars.DEPLOY_ORIGIN }}
+              run: |
+                  head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+                  if [[ "$head" != "$GITHUB_SHA" ]]; then
+                      echo "::notice title=Deploy skipped::main is at $head, past $GITHUB_SHA; its run deploys."
+                      echo "skip=true" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  # Unreachable, not ready or without the header: deploy, since that is the repair.
+                  live=''
+                  if curl --fail --silent --max-time 10 --dump-header "$RUNNER_TEMP/ready" --output /dev/null "$DEPLOY_ORIGIN/api/ready"; then
+                      live=$(tr -d '\r' < "$RUNNER_TEMP/ready" | awk 'tolower($1) == "x-hushos-release:" { print $2 }')
+                  fi
+                  if [[ -n "$live" && "$live" != "$GITHUB_SHA" ]] && \
+                      [[ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$live" --jq .status)" == ahead ]]; then
+                      echo "::notice title=Deploy skipped::production runs $live, a later commit than $GITHUB_SHA."
+                      echo "skip=true" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  echo "skip=false" >> "$GITHUB_OUTPUT"
             - name: Request deployment
+              if: steps.gate.outputs.skip == 'false'
               env:
                   DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
                   DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
@@ -572,17 +683,30 @@ jobs:
                   curl --request POST --fail --silent --show-error --max-time 30 --output /dev/null \
                     --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
                     "$DEPLOY_WEBHOOK_URL"
+            # A later commit's `latest` can land between the gate and the pull, and production
+            # then comes up on it: that release counts too.
             - name: Wait for the published release
+              if: steps.gate.outputs.skip == 'false'
               env:
+                  GH_TOKEN: ${{ github.token }}
                   DEPLOY_ORIGIN: ${{ vars.DEPLOY_ORIGIN }}
               run: |
-                  for attempt in $(seq 1 90); do
-                    if curl --fail --silent --show-error --max-time 10 \
-                      --dump-header /tmp/readiness-headers --output /dev/null \
-                      "$DEPLOY_ORIGIN/api/ready" && \
-                      tr -d '\r' < /tmp/readiness-headers | grep -iq "^x-hushos-release: $GITHUB_SHA$"; then
+                  compared=''
+                  for _ in $(seq 1 90); do
+                    live=''
+                    if curl --fail --silent --show-error --max-time 10 --dump-header "$RUNNER_TEMP/ready" --output /dev/null "$DEPLOY_ORIGIN/api/ready"; then
+                      live=$(tr -d '\r' < "$RUNNER_TEMP/ready" | awk 'tolower($1) == "x-hushos-release:" { print $2 }')
+                    fi
+                    if [[ "$live" == "$GITHUB_SHA" ]]; then
                       echo "Published release is ready."
                       exit 0
+                    fi
+                    if [[ -n "$live" && "$live" != "$compared" ]]; then
+                      compared=$live
+                      if [[ "$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$live" --jq .status || true)" == ahead ]]; then
+                        echo "Production came up on $live, a later commit."
+                        exit 0
+                      fi
                     fi
                     sleep 5
                   done

@@ -135,7 +135,7 @@ The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), 
 | Migrations | `ghcr.io/hushos/hushos-migrate` |
 | Worker     | `ghcr.io/hushos/hushos-worker`  |
 
-- Each image receives `latest` and `sha-<full-commit-sha>` tags. A release (CONTRIBUTING.md, Releasing) also tags its images `X.Y.Z`, `X.Y` and `X`, copied by digest from that commit's `sha-<commit>` images: the same images main published, not a rebuild. The version tags appear shortly after the GitHub release, once CI has published the commit's images. Pin a deployment to one version, or one commit tag, for all three.
+- Each image receives a `sha-<full-commit-sha>` tag. `latest` moves to a commit's images once its Linux test suites pass, and only forward: an older commit's run that finishes late, or a re-run of one, leaves it on the later commit. A release (CONTRIBUTING.md, Releasing) also tags its images `X.Y.Z`, `X.Y` and `X`, copied by digest from that commit's `sha-<commit>` images: the same images main published, not a rebuild. The version tags appear shortly after the GitHub release, once CI for the commit has finished. Pin a deployment to one version, or one commit tag, for all three.
 - Each image is labelled `org.opencontainers.image.version` (the product version in `package.json`, which between releases is still the last release's) and `org.opencontainers.image.revision` (the commit).
 - Image names derive from the lowercase GitHub repository name, so forks publish under their own namespace.
 - All three HushOS images are public and support anonymous pulls. Publishing uses the workflow's `GITHUB_TOKEN` with `packages: write`; no separate registry secret is required.
@@ -144,7 +144,7 @@ The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), 
 
 ### Deploy webhook
 
-The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after all three images publish, then verifies `/api/ready` reports the published commit. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. For Coolify, a single deploy webhook can target both web and worker by listing their resource UUIDs separated by a comma in its `uuid` query parameter. Keep hosting configuration and credentials in your platform and GitHub settings.
+The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after `latest` moves to the commit, then verifies `/api/ready` reports it (or a later commit). Point the platform at the `latest` tags. Deploys run one at a time, and a commit that is no longer the head of `main`, or older than the release `/api/ready` reports, is skipped rather than deployed, so a late or re-run job never rolls production back. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. For Coolify, a single deploy webhook can target both web and worker by listing their resource UUIDs separated by a comma in its `uuid` query parameter. Keep hosting configuration and credentials in your platform and GitHub settings.
 
 ### Running the published images
 
