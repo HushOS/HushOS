@@ -55,17 +55,67 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
     /* Where the extension copies what it was handed, one folder per sheet, until Save seals it into `transfers`. */
     public static var staging: URL { transfers.deletingLastPathComponent().appendingPathComponent("share-staging", isDirectory: true) }
 
+    /* How long a note may be held before its extension must be gone; a folder nothing claims is left that long too. */
+    static let heldAge: TimeInterval = 120
+    /* A staging folder whose sheet left no owner (an older version): kept an hour. */
+    static let unownedStagingAge: TimeInterval = 3600
+    /* No sheet stays open a day: past that an owner's process id is taken for reused. */
+    static let ownedStagingAge: TimeInterval = 86400
+
+    /*
+     * A sheet's staging folder belongs to the extension process that made it: the folder names
+     * it (`owner`, the process id), and the sweep leaves it while that process runs, however long
+     * the sheet stays open. A plain marker, never a lock: a process suspended holding a lock in the
+     * group container is killed (0xdead10cc).
+     */
+    public static func claimStaging(_ folder: URL, pid: Int32 = getpid()) {
+        try? Data(String(pid).utf8).write(to: folder.appendingPathComponent("owner"), options: .atomic)
+    }
+
     /*
      * Plaintext copies a sheet left behind: an extension killed before it closed never removed its
-     * folder. Folders untouched for an hour go (a sheet still open longer than that loses its copies,
-     * and says it couldn't read them); sign-out takes the rest (AccountStore).
+     * folder. A folder whose owning process is gone goes at once; one whose process still runs stays
+     * (a day at most); one with no owner on record goes after an hour. Sign-out takes the rest (AccountStore).
      */
-    public static func sweepStaging(now: Date = Date()) {
+    public static func sweepStaging(now: Date = Date(), in root: URL = staging, running: (Int32) -> Bool = processRuns) {
         let files = FileManager.default
-        for folder in (try? files.contentsOfDirectory(at: staging, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
-            let touched = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if now.timeIntervalSince(touched) > 3600 { try? files.removeItem(at: folder) }
+        for folder in (try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let age = now.timeIntervalSince(lastTouched(folder))
+            let owner = (try? String(contentsOf: folder.appendingPathComponent("owner"), encoding: .utf8)).flatMap { Int32($0) }
+            let stale: Bool
+            if let owner { stale = !running(owner) || age > ownedStagingAge } else { stale = age > unownedStagingAge }
+            if stale { try? files.removeItem(at: folder) }
         }
+    }
+
+    /* Whether a process is alive: a signal check, which fails with "no such process" only when it is gone. */
+    public static func processRuns(_ pid: Int32) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /*
+     * Folders under `transfers` nothing owns: no note beside them (the extension was killed while
+     * sealing, leaving the plaintext in `content`) and no queued transfer of that id, untouched for
+     * as long as a held note is waited for. Anything else in the folder (the queue's records) stays.
+     */
+    public static func sweepOrphans(keeping queued: Set<UUID>, now: Date = Date(), in root: URL = transfers) {
+        let files = FileManager.default
+        for folder in (try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
+            guard let id = UUID(uuidString: folder.lastPathComponent), !queued.contains(id),
+                  !files.fileExists(atPath: folder.appendingPathComponent("handoff.json").path),
+                  now.timeIntervalSince(lastTouched(folder)) > heldAge
+            else { continue }
+            try? files.removeItem(at: folder)
+        }
+    }
+
+    /* The latest change to a folder or anything directly in it: a seal writing parts keeps it fresh. */
+    static func lastTouched(_ folder: URL) -> Date {
+        let key: Set<URLResourceKey> = [.contentModificationDateKey]
+        let own = (try? folder.resourceValues(forKeys: key).contentModificationDate) ?? .distantPast
+        let inside = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: Array(key))) ?? [])
+            .compactMap { try? $0.resourceValues(forKeys: key).contentModificationDate }
+        return ([own] + inside).max() ?? own
     }
 
     private static func note(_ id: UUID) -> URL { directory(id).appendingPathComponent("handoff.json") }
@@ -83,7 +133,7 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
             guard let data = try? Data(contentsOf: file), let note = try? JSONDecoder().decode(ShareHandoff.self, from: data) else { return nil }
             if note.released { return note }
             let written = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
-            return now.timeIntervalSince(written) > 120 ? note : nil
+            return now.timeIntervalSince(written) > heldAge ? note : nil
         }
     }
 

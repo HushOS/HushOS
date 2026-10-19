@@ -572,6 +572,8 @@ final class BackgroundTransfers {
            let note = try? JSONDecoder().decode(ShareHandoff.self, from: data) {
             notes.append(note)
         }
+        // Plaintext an extension killed mid-seal left with no note, which nothing would ever adopt or remove.
+        ShareHandoff.sweepOrphans(keeping: Set(records.map(\.id)))
         var added = false
         let signedIn = AccountOwner.signedIn
         for note in notes where !records.contains(where: { $0.id == note.id }) {

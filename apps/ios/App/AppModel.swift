@@ -174,12 +174,20 @@ final class AppModel {
     func checkAccount() async {
         guard state == .signedIn || state == .signedOut, wiping == nil else { return }
         let shown = state == .signedIn ? vault?.api.session : nil
-        switch SessionChange.decide(shown: shown, last: owner ?? lastOwner, stored: SharedKeychain.session, declined: declinedToken) {
+        let change = SessionChange.decide(shown: shown, last: owner ?? lastOwner, stored: SharedKeychain.session, declined: declinedToken)
+        // The last session's family sync, ledger keys and vault go before anything follows the new one.
+        change.forgetLastSession()
+        switch change {
         case .none:
             return
         case .adopt:
-            // The drive takes the new session (DriveStore.adopt, through MainView) and keeps what it shows.
-            vault = Vault.fromKeychain()
+            // The drive takes the new session (DriveStore.adopt, through MainView) and keeps what it shows, with the
+            // account as the new session describes it. No vault for it, or a session already over: start again instead.
+            guard let next = Vault.fromKeychain() else { break }
+            let check = try? await Auth.checkSession()
+            if check == .ended || check == .removed { break }
+            if case let .signedIn(fresh, _)? = check { setUser(fresh) }
+            vault = next
             if let owner { await FilesDomain.register(for: owner) }
             return
         case .another:
