@@ -1126,6 +1126,14 @@ export async function settlePlanRefund(
         .where(eq(personalPlanRefunds.orderId, orderId));
 }
 
+/* The order's charge is disputed: its share is dropped for good, never moved. */
+export async function markPlanRefundDisputed(orderId: string) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ status: 'disputed', amount: 0, unsureUntil: null, updatedAt: new Date() })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
 /*
  * A try that failed (Polar refused, could not be reached, or its refund failed): one
  * more in a row. At `owedAfter` in a row it is listed under Refunds owed, from then

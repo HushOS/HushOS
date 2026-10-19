@@ -378,10 +378,11 @@ function AdminPage() {
                                 </tbody>
                             </OperatorTable>
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
-                                The part of an ended personal plan’s unused days that Polar won’t
-                                refund on its orders, usually because the customer’s balance paid
-                                them. HushOS refunded the rest; refund this by hand if you decide
-                                to.
+                                The part of an ended personal plan’s unused days that neither its
+                                orders nor the customer’s earlier card payments can take back, and
+                                the share of any disputed charge, which a lost dispute returns in
+                                full. HushOS refunded the rest; refund this by hand if you decide
+                                to, after any dispute is settled.
                             </p>
                         </>
                     )}
