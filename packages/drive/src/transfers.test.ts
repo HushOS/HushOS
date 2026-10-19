@@ -12,6 +12,7 @@ import {
     VERSION_MOVED,
     type TransferManagerOptions,
     type UploadStash,
+    type MemoryFile,
     StashGone,
 } from './transfers';
 
@@ -119,12 +120,50 @@ function harness(
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
     const digestOf = options.digest ?? ((file: File, index: number) => `d-${file.name}-${index}`);
+    /* Attached in-memory bytes, as the worker holds them, and what each read chunk held. */
+    const sources = new Map<string, Uint8Array[]>();
+    const readChunks = new Map<string, Uint8Array>();
+    const released: string[] = [];
+    const readSource = (sourceId: string, index: number) => {
+        const parts = sources.get(sourceId);
+        if (!parts) throw new Error('This upload’s bytes are no longer on this device.');
+        const joined = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+        let at = 0;
+        for (const part of parts) {
+            joined.set(part, at);
+            at += part.byteLength;
+        }
+        return joined.slice(index * CHUNK, (index + 1) * CHUNK);
+    };
+    const digestOfInput = (file: CryptoRequests['driveUploadEncrypt']['file'], index: number) => {
+        if (file instanceof Blob || !('source' in file)) return digestOf(file as File, index);
+        const chunk = readSource(file.source, index);
+        readChunks.set(`${file.source}:${index}`, chunk);
+        // Enough of the bytes to tell chunks apart, cheaply; the test compares them in full.
+        const at = (i: number) => chunk[Math.min(i, chunk.length - 1)] ?? 0;
+        return `d-mem-${index}-${chunk.length}-${at(0)}-${at(4096)}-${at(chunk.length - 1)}`;
+    };
     const rpc: Rpc = async <K extends keyof CryptoRequests>(
         operation: K,
         input: CryptoRequests[K],
+        rpcOptions?: { transfer?: Transferable[] },
     ): Promise<CryptoResults[K]> => {
         calls.push(operation);
         switch (operation) {
+            case 'driveSourceAttach': {
+                const { sourceId, parts } = input as CryptoRequests['driveSourceAttach'];
+                // As postMessage does: what is listed for transfer moves, and is detached here.
+                const moved = structuredClone(parts, { transfer: rpcOptions?.transfer ?? [] });
+                sources.set(sourceId, moved);
+                return {
+                    size: moved.reduce((total, part) => total + part.byteLength, 0),
+                } as CryptoResults[K];
+            }
+            case 'driveSourceRelease': {
+                const { sourceId } = input as CryptoRequests['driveSourceRelease'];
+                released.push(sourceId);
+                return { released: sources.delete(sourceId) } as CryptoResults[K];
+            }
             case 'driveCreateNodes':
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes)
                     if (options.keyChangePendingAt?.(n.parentKeyEpoch))
@@ -162,12 +201,12 @@ function harness(
             }
             case 'driveUploadDigest': {
                 const { file, index } = input as CryptoRequests['driveUploadDigest'];
-                return { digest: digestOf(file as File, index) } as CryptoResults[K];
+                return { digest: digestOfInput(file, index) } as CryptoResults[K];
             }
             case 'driveUploadEncrypt': {
                 const { file, index } = input as CryptoRequests['driveUploadEncrypt'];
                 return {
-                    digest: digestOf(file as File, index),
+                    digest: digestOfInput(file, index),
                     bytes: CHUNK + 16,
                 } as CryptoResults[K];
             }
@@ -375,6 +414,9 @@ function harness(
         journal,
         published,
         peak: () => peakInFlight,
+        sources,
+        readChunks,
+        released,
         state: () => manager.getState(),
         item: (id: string) => manager.getState().uploads.find((u) => u.id === id)!,
     };
@@ -1697,4 +1739,82 @@ describe('queued rows and stashed copies', () => {
         expect(second.item(stashed!).status).toBe('failed');
         expect(second.calls).not.toContain('driveUploadPrepare');
     });
+});
+
+/* A copy's bytes in memory, in uneven parts, with a recognisable pattern. */
+function memoryCopy(size: number, name = 'copy.bin') {
+    const content = Uint8Array.from({ length: size }, (_, i) => (i * 31 + 11) & 0xff);
+    const cut = [0, 1000, CHUNK + 7, size].filter(
+        (at, i, all) => at <= size && all.indexOf(at) === i,
+    );
+    const parts = cut.slice(1).map((end, i) => content.slice(cut[i], end));
+    const file: MemoryFile = {
+        kind: 'memory',
+        name,
+        size,
+        type: 'application/octet-stream',
+        lastModified: 2_000,
+        parts,
+        thumbnail: new Uint8Array([1, 2, 3]),
+    };
+    return { content, file };
+}
+
+describe('uploads from memory', () => {
+    test('send exactly the bytes, never as a Blob, and move them to the worker rather than copy', async () => {
+        const blobs = vi.spyOn(globalThis, 'Blob');
+        const files = vi.spyOn(globalThis, 'File');
+        const h = harness();
+        // Five chunks, so later parts are read after the first wave (three in flight) has
+        // already moved the bytes: they must read the worker's copy, not move them again.
+        const size = 4 * CHUNK + 5;
+        const { content, file } = memoryCopy(size);
+        const parts = [...file.parts];
+        const [id] = h.manager.enqueue([{ file, parent: node('root', null), origin: 'copy' }]);
+        await settle(3_000);
+        expect(h.item(id!).status).toBe('done');
+        // Byte for byte: the chunks the worker read, in order, are the copy.
+        const sourceId = [...h.readChunks.keys()][0]!.split(':')[0]!;
+        const sent = new Uint8Array(size);
+        for (let index = 0; index < 5; index++)
+            sent.set(h.readChunks.get(`${sourceId}:${index}`)!, index * CHUNK);
+        // Compared natively, without printing 40 MB on a mismatch.
+        expect(Buffer.compare(sent, content)).toBe(0);
+        // Moved once: the page's buffers are detached, and attached a single time.
+        expect(h.calls.filter((call) => call === 'driveSourceAttach')).toHaveLength(1);
+        expect(parts.every((part) => part.byteLength === 0)).toBe(true);
+        // And let go of in the worker once the upload is done.
+        expect(h.released).toEqual([sourceId]);
+        expect(h.sources.size).toBe(0);
+        // The plaintext never became a Blob or a File on the way.
+        expect(blobs.mock.calls.length).toBe(0);
+        expect(files.mock.calls.length).toBe(0);
+    }, 20_000);
+
+    test('a lock drops the bytes the worker held, and the copy comes back from its stash', async () => {
+        const stash = fakeStash();
+        const { file } = memoryCopy(3 * CHUNK);
+        stash.files.set('copy-1', fakeFile(3 * CHUNK, 'copy.bin', 2_000));
+        let fail = false;
+        const h = harness({
+            stash,
+            send: async (_objectId, index) => {
+                if (fail) throw new Error('Your account was locked. Please try again.');
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        const [id] = h.manager.enqueue([
+            { file, parent: node('root', null), origin: 'copy', stash: 'copy-1' },
+        ]);
+        fail = true;
+        await settle(500);
+        expect(h.item(id!).status).toBe('paused');
+        // What was moved to the worker is not asked for again: the page has nothing to move.
+        const opened = vi.spyOn(stash, 'open');
+        fail = false;
+        await h.manager.resume(id!);
+        await settle(2_000);
+        expect(opened).toHaveBeenCalledTimes(1);
+        expect(h.item(id!).status).toBe('done');
+    }, 20_000);
 });

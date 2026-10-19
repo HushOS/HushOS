@@ -255,6 +255,31 @@ function scheduleFlush() {
     }, 30);
 }
 
+/*
+ * A node's own thumbnail as bytes (a small WebP), for a copy that keeps its
+ * source's thumbnail rather than rendering one from its plaintext. Null when
+ * it has none or it can't be fetched; the copy then goes without.
+ */
+export async function thumbnailBytes(node: DriveNode): Promise<Uint8Array | null> {
+    const version = node.currentVersion;
+    if (!version || !hasThumbnail(node)) return null;
+    try {
+        const { urls } = await driveApi.thumbnailUrls(node.workspaceId, [version.id]);
+        const url = urls.find((entry) => entry.versionId === version.id)?.url;
+        if (!url) return null;
+        const { plaintext } = await authClient.rpc('driveThumbnailFetch', {
+            workspaceId: node.workspaceId,
+            nodeId: node.id,
+            version: versionEnvelopeOf(version),
+            contentNonce: version.contentNonce,
+            url,
+        });
+        return plaintext;
+    } catch {
+        return null;
+    }
+}
+
 /* Whether a node has a thumbnail worth asking for: its envelope said there is a trailer. */
 export function hasThumbnail(node: DriveNode) {
     return node.kind === 'file' && (node.content?.thumbnailBytes ?? 0) > 0;

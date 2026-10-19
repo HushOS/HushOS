@@ -3,7 +3,9 @@ import { copySignatureForms } from '@hushos/drive/trust';
 import type { QueryClient } from '@tanstack/react-query';
 import { driveClient, folderQueryOptions, invalidateFolders, nextName } from '@/lib/drive';
 import { openReader, readAll } from '@/lib/previews';
+import type { MemoryFile } from '@hushos/drive/transfers';
 import { stashBytes } from '@/lib/stash';
+import { thumbnailBytes } from '@/lib/thumbnails';
 import { transfers } from '@/lib/transfers';
 
 /*
@@ -43,15 +45,24 @@ export async function saveCopy(
         const size = contentSize(node) ?? 0;
         if (size > SAVE_COPY_MAX_BYTES)
             throw new Error(`“${node.name}” is too large to copy this way. Download it instead.`);
-        const reader = openReader(node);
+        const reader = openReader(node, true);
         try {
             const { bytes } = await readAll(reader, SAVE_COPY_MAX_BYTES);
-            const file = new File([bytes as BlobPart], name, {
+            // Uploaded from memory, never a Blob the browser could page to disk; the source's
+            // own thumbnail comes along, so nothing renders one from the plaintext.
+            const file: MemoryFile = {
+                kind: 'memory',
+                name,
+                size: bytes.byteLength,
                 type: node.metadata?.mime ?? '',
                 lastModified: node.metadata?.modified
                     ? new Date(node.metadata.modified).getTime()
                     : Date.now(),
-            });
+                parts: [bytes],
+                thumbnail: await thumbnailBytes(node),
+            };
+            // Sealed to the stash first: the upload moves the bytes to the worker, after which
+            // this page no longer holds them.
             const stash = await stashBytes(bytes);
             transfers.enqueue([
                 {

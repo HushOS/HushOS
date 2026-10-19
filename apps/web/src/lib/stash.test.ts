@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { openStash, sealStash } from '@hushos/crypto/stash';
-import { StashGone } from '@hushos/drive/transfers';
+import { inMemory, StashGone, type UploadFile } from '@hushos/drive/transfers';
 
 // The real auth client starts a worker and opens device storage; these tests stand in for both.
 vi.mock('@/lib/auth-client', () => ({ authClient: { store: { getState: () => ({}) } } }));
@@ -130,6 +130,18 @@ const canary = new TextEncoder().encode('PLAINTEXT-CANARY a copy of something sh
 const described = { name: 'copy.txt', type: 'text/plain', size: canary.length, lastModified: 1 };
 const plain = new TextDecoder().decode(canary);
 
+/* An opened stash is bytes in memory, never a Blob: read back by decoding its parts. */
+function textOf(file: UploadFile) {
+    if (!inMemory(file)) throw new Error('expected bytes in memory, not a File');
+    const joined = new Uint8Array(file.size);
+    let at = 0;
+    for (const part of file.parts) {
+        joined.set(part, at);
+        at += part.byteLength;
+    }
+    return new TextDecoder().decode(joined);
+}
+
 function contains(haystack: Uint8Array, needle: Uint8Array) {
     outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
         for (let j = 0; j < needle.length; j++) if (haystack[i + j] !== needle[j]) continue outer;
@@ -148,7 +160,7 @@ describe('the sealed upload stash', () => {
         expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
         const file = await stash.open(name!, described);
         expect(file.name).toBe('copy.txt');
-        expect(await file.text()).toBe(plain);
+        expect(textOf(file)).toBe(plain);
     });
 
     it('calls a stash another key sealed lost, and a missing one too', async () => {
@@ -167,7 +179,7 @@ describe('the sealed upload stash', () => {
         sealer.open.mockRejectedValueOnce(new Error('Your account was locked. Please try again.'));
         const refused = await stash.open(name!, described).catch((error: unknown) => error);
         expect(refused).not.toBeInstanceOf(StashGone);
-        expect(await (await stash.open(name!, described)).text()).toBe(plain);
+        expect(textOf(await stash.open(name!, described))).toBe(plain);
     });
 
     it('keeps nothing while the account is locked', async () => {
@@ -187,7 +199,7 @@ describe('the sealed upload stash', () => {
         state.account = null; // pagehide
         await stash.settle();
         state.account = 'user-1'; // unlocked again after the reload
-        expect(await (await stash.open(name!, described)).text()).toBe(plain);
+        expect(textOf(await stash.open(name!, described))).toBe(plain);
     });
 
     it('is deleted after an explicit lock, here or in another tab, before anything reads it', async () => {
@@ -277,6 +289,6 @@ describe('the sealed upload stash', () => {
         await stash.dropPlaintext();
         expect(fs.directories.has('upload-stash')).toBe(false);
         expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
-        expect(await (await stash.open(kept!, described)).text()).toBe(plain);
+        expect(textOf(await stash.open(kept!, described))).toBe(plain);
     });
 });
