@@ -111,7 +111,7 @@ The manifest declares `FOREGROUND_SERVICE_DATA_SYNC`: WorkManager runs queued up
 1. **Foreground service permissions** > tick **Data sync**.
 2. **Description:** `Uploads the person's files to their HushOS drive, and downloads files they chose to keep on the phone, after they start it. The transfer shows a notification with progress and continues if they leave the app, so large uploads finish.`
 3. **Impact if deferred:** `A large upload or a folder kept for offline use would stop when the person leaves the app and leave partial files.`
-4. **Video:** record the emulator or a phone: start an upload of a large file, go Home, pull down the notification showing progress, return when it finishes. Upload it unlisted to YouTube (or a shareable Drive link) and paste the URL.
+4. **Video:** record the emulator or a phone: start an upload of a large file, go Home, pull down the notification showing progress, return when it finishes. Upload it unlisted to YouTube (or a shareable Drive link) and paste the URL. One recorded on the store emulator on 2026-10-19 is `docs/release/assets/android-data-sync.mp4` (56 s, store-listing.md describes it).
 
 Google recommends the "user-initiated data transfer" job API over data sync for transfers the user starts. Review may push back; moving to it is an app change (checklist.md).
 
@@ -122,7 +122,7 @@ Everything from store-listing.md:
 - **App name, short description, full description.**
 - **App icon:** `docs/release/assets/google-play-icon.png` (512×512, 32-bit PNG).
 - **Feature graphic:** `docs/release/assets/google-feature-graphic.png` (1024×500, no alpha).
-- **Phone screenshots:** `docs/release/screenshots/android/01-home.png` … `06-account.png` (2 to 8; JPEG or 24-bit PNG; 320 to 3840 px; the long side at most twice the short; 1080×1920 makes them eligible for promotion). Source: https://support.google.com/googleplay/android-developer/answer/9866151.
+- **Phone screenshots:** `docs/release/screenshots/android/play/01-home.png` … `08-devices.png`, in that order (the captioned set; store-listing.md has the captions and the raw captures beside them) (2 to 8; JPEG or 24-bit PNG; 320 to 3840 px; the long side at most twice the short; 1080×1920 makes them eligible for promotion). Source: https://support.google.com/googleplay/android-developer/answer/9866151.
 - **Tablet screenshots:** leave empty (needed only for large-screen promotion).
 - **Video:** none.
 

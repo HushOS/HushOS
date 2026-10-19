@@ -301,7 +301,9 @@ test.beforeAll(async ({ browser }) => {
         await newContext(browser, { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 })
     ).newPage();
     // A fresh account each run; the address is unique in the part the sidebar truncates.
-    const domain = `mail-${Date.now().toString(36)}.example.com`;
+    // SCREENSHOTS_DOMAIN (say example.com) gives a fresh database short addresses that fit the
+    // phone apps' rows, for the store screenshots.
+    const domain = process.env.SCREENSHOTS_DOMAIN ?? `mail-${Date.now().toString(36)}.example.com`;
     // Someone for Maya to share with, so the share dialog shows a person as well as a link.
     const jonas = await (await newContext(browser)).newPage();
     const { email: jonasEmail } = await registerAccount(

@@ -19,14 +19,19 @@
 #   LISBON_FOLDER  the "Family/Lisbon 2026" folder id (found in the local database if unset)
 #   PHOTO          a photo in it (likewise)
 # The password is e2e/helpers.ts's PASSWORD; the script puts it on the clipboard, never prints it.
+#   PORT           the web server the apps talk to (default 5173). Another port (an isolated
+#                  instance, say) rebuilds the Android debug app to talk to it.
+#   DB             its database (default hushos), in the hushos-db-1 container.
 # Times on screen are in a timezone where it is mid-morning now (e2e/morning-zone.ts), as on the web.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 WHICH="${1:-both}"
-DEMO_EMAIL="${DEMO_EMAIL:-$(docker exec hushos-db-1 psql -U hushos -d hushos -Atc "select email from users where email like 'maya.lindqvist@%' order by created_at desc limit 1" 2>/dev/null || true)}"
+PORT="${PORT:-5173}"
+DB="${DB:-hushos}"
+DEMO_EMAIL="${DEMO_EMAIL:-$(docker exec hushos-db-1 psql -U hushos -d "$DB" -Atc "select email from users where email like 'maya.lindqvist@%' order by created_at desc limit 1" 2>/dev/null || true)}"
 [[ -n "$DEMO_EMAIL" ]] || { echo "No demo account: run SCREENSHOTS=1 bunx playwright test e2e/screenshots.spec.ts --project=chromium first." >&2; exit 1; }
-ZONE=$(bun e2e/morning-zone.ts "$(docker exec hushos-db-1 psql -U hushos -d hushos -Atc "select to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') from users where email = '$DEMO_EMAIL'")")
+ZONE=$(bun e2e/morning-zone.ts "$(docker exec hushos-db-1 psql -U hushos -d "$DB" -Atc "select to_char(created_at at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') from users where email = '$DEMO_EMAIL'")")
 OUT="$ROOT/docs/release/screenshots"
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
@@ -36,7 +41,7 @@ say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 fail() { printf '\033[31m%s\033[0m\n' "$1" >&2; exit 1; }
 wait_enter() { printf '  %s\n  Press Enter to capture. ' "$1"; read -r _; }
 
-curl -s -o /dev/null --max-time 5 http://localhost:5173/ || fail "Start the web dev server first (bun dev): the debug apps talk to http://localhost:5173."
+curl -s -o /dev/null --max-time 5 "http://localhost:$PORT/" || fail "Start the web dev server first (bun dev): the debug apps talk to http://localhost:$PORT."
 
 # The demo folder and a photo in it, by structure (names are encrypted, so the server can't
 # tell): the account's one folder that holds exactly twelve files and nothing else.
@@ -46,7 +51,7 @@ if [[ -z "${LISBON_FOLDER:-}" || -z "${PHOTO:-}" ]]; then
         where u.email = '$DEMO_EMAIL' and f.kind = 'folder' and f.trashed_at is null
         and (select count(*) from drive_nodes c where c.parent_id = f.id and c.trashed_at is null and c.kind = 'file') = 12
         and (select count(*) from drive_nodes c where c.parent_id = f.id and c.trashed_at is null) = 12 limit 1"
-    found=$(docker exec hushos-db-1 psql -U hushos -d hushos -Atc "$query" 2>/dev/null || true)
+    found=$(docker exec hushos-db-1 psql -U hushos -d "$DB" -Atc "$query" 2>/dev/null || true)
     LISBON_FOLDER="${LISBON_FOLDER:-${found%%|*}}"
     PHOTO="${PHOTO:-${found##*|}}"
 fi
@@ -123,23 +128,29 @@ android() {
     if ! emulator -list-avds | grep -qx "$avd"; then
         echo "no" | avdmanager create avd -n "$avd" -k "system-images;android-36;google_apis;arm64-v8a" -d pixel_2 >/dev/null
     fi
-    [[ -f "$apk" ]] || bun run android:build
+    if [[ "$PORT" != 5173 ]]; then
+        (cd apps/android && ./gradlew :app:assembleDebug -q -PdefaultOrigin="http://localhost:$PORT")
+    else
+        [[ -f "$apk" ]] || bun run android:build
+    fi
     nohup emulator -avd "$avd" -no-snapshot-save -no-boot-anim >/dev/null 2>&1 &
     adb wait-for-device
     until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do sleep 2; done
     serial=$(adb get-serialno)
     local a="adb -s $serial"
     $a install -r "$apk" >/dev/null
-    $a reverse tcp:5173 tcp:5173 >/dev/null
+    $a reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
     $a reverse tcp:9000 tcp:9000 >/dev/null
     $a shell cmd uimode night no >/dev/null
     $a shell cmd alarm set-timezone "$ZONE" >/dev/null
     $a shell settings put global sysui_demo_allowed 1
     demo() { $a shell am broadcast -a com.android.systemui.demo -e command "$@" >/dev/null; }
     demo enter
-    demo clock -e hhmm 0941
+    # The time on the device, so the clock is never earlier than the newest row on screen.
+    demo clock -e hhmm "$(TZ=$ZONE date +%H%M)"
     demo network -e wifi show -e level 4 -e fully true
-    demo network -e mobile show -e level 4 -e datatype none
+    # Wi-Fi only: a mobile signal drew a "3G" badge that datatype none did not remove.
+    demo network -e mobile hide
     demo battery -e level 100 -e plugged false
     demo notifications -e visible false
     $a shell am start -n com.hushos.app/.MainActivity >/dev/null
@@ -161,11 +172,14 @@ android() {
     say "First keep Lisbon 2026, Finances and Q3 report.md on this phone (each one's ⋮ > Keep on this phone)."
     shot 01 home "Home, scrolled to the top." "hushos://app"
     shot 02 folder "Lisbon 2026 as a grid: More (or the sort button on Android) > View > Grid." "hushos://app/drive?folder=$LISBON_FOLDER"
-    shot 03 share "In Lisbon 2026, tap Manage on the banner, so the sheet shows Maya, Jonas and one link." ""
+    shot 03 share "Back up to Family, tap Manage on the banner, so the sheet is titled Family and shows Maya, Jonas and one link." ""
     # Android opens files in their own apps, so a viewer shot would show another app; Shared instead.
     shot 04 shared "Shared, By me: the folders and links Maya shares." "hushos://app/shared?view=by-me"
     shot 05 phone "Home > On this phone." "hushos://app"
-    shot 06 account "The Account tab, scrolled to the top." ""
+    # No plan or storage figures in Play's set (store-listing.md): Devices, not the Account tab.
+    shot 06 devices "Account > Devices, with one browser left (Remove the spec's other sessions)." ""
+    shot 07 words "Shared > People > Your twelve words, so no plan shows behind the sheet." ""
+    shot 08 files "Android's Files app: the menu > HushOS > Family > Lisbon 2026, as a grid." ""
     demo exit
     $a emu kill >/dev/null 2>&1 || true
     say "Android done: $OUT/android"
