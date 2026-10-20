@@ -1,6 +1,8 @@
 import type { DriveNode } from '@hushos/drive/client';
 import {
     DriveApiError,
+    type PurgeBatchItem,
+    type PurgeRefusal,
     type RestoreBatchItem,
     type RestoreRefusal,
     type TrashBatchItem,
@@ -9,9 +11,10 @@ import {
 import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 
 /*
- * Moving a selection to the trash and Undo putting it back. The Drive client
- * calls come in as `TrashParts`, so the rules here (what is sent, what counts as
- * moved, what Undo puts back) are tested without a server or a worker.
+ * Moving a selection to the trash, Undo putting it back, and deleting Trash
+ * rows forever. The Drive client calls come in as `TrashParts`, so the rules
+ * here (what is sent, what counts as moved or gone, what Undo puts back) are
+ * tested without a server or a worker.
  */
 
 export type TrashParts = {
@@ -22,15 +25,17 @@ export type TrashParts = {
      */
     trash: (workspaceId: string, nodeIds: string[]) => Promise<{ results: TrashBatchItem[] }>;
     restore: (workspaceId: string, nodeIds: string[]) => Promise<{ results: RestoreBatchItem[] }>;
+    /* Delete forever (api.ts purgeBatch). */
+    purge: (workspaceId: string, nodeIds: string[]) => Promise<{ results: PurgeBatchItem[] }>;
     /* The folders an item sits in, as far as this device knows; any order. */
     ancestorsOf: (node: DriveNode) => { id: string }[];
 };
 
-type Item = TrashBatchItem | RestoreBatchItem;
+type Item = TrashBatchItem | RestoreBatchItem | PurgeBatchItem;
 /* What the server said about one item: its answer, or why there is none (`error`). */
 type Answer<T extends Item> = { node: DriveNode; item: T | null; error: unknown };
 
-const REFUSAL_CODES: Record<TrashRefusal | RestoreRefusal, DriveApiError['code']> = {
+const REFUSAL_CODES: Record<TrashRefusal | RestoreRefusal | PurgeRefusal, DriveApiError['code']> = {
     'not-found': 'not-found',
     forbidden: 'forbidden',
     root: 'invalid',
@@ -38,6 +43,7 @@ const REFUSAL_CODES: Record<TrashRefusal | RestoreRefusal, DriveApiError['code']
     'not-trashed': 'conflict',
     removed: 'forbidden',
     'parent-trashed': 'parent-trashed',
+    busy: 'conflict',
 };
 
 /*
@@ -96,6 +102,33 @@ const firstError = (answers: Answer<Item>[]) =>
     answers.find((answer) => answer.error !== null)?.error ?? null;
 
 /*
+ * A selection as this device knows it: `roots`, the items inside no other
+ * selected item, which are all that is sent; and `wentWith`, every selected
+ * item that went once these ids did, itself or inside one of them.
+ */
+function nesting(nodes: DriveNode[], parts: TrashParts) {
+    const picked = new Set(nodes.map((node) => node.id));
+    /* The selected folders each item sits in. */
+    const within = new Map(
+        nodes.map((node) => {
+            const chain = new Set(parts.ancestorsOf(node).map((ancestor) => ancestor.id));
+            if (node.parentId) chain.add(node.parentId);
+            return [node.id, [...chain].filter((id) => picked.has(id))];
+        }),
+    );
+    return {
+        roots: nodes.filter((node) => !within.get(node.id)!.length),
+        wentWith: (wentIds: Set<string>) =>
+            nodes
+                .filter(
+                    (node) =>
+                        wentIds.has(node.id) || within.get(node.id)!.some((id) => wentIds.has(id)),
+                )
+                .map((node) => node.id),
+    };
+}
+
+/*
  * Moves items to the trash. An item inside a folder that is also going, as far
  * as this device knows, is never sent: trashed as well, it would either be
  * refused as already in the trash or come back on Undo without its folder. It
@@ -113,23 +146,7 @@ export async function trashBatch(
     parts: TrashParts,
     onMoved?: (ids: string[]) => void,
 ) {
-    const going = new Set(nodes.map((node) => node.id));
-    /* The selected folders each item sits in. */
-    const within = new Map(
-        nodes.map((node) => {
-            const chain = new Set(parts.ancestorsOf(node).map((ancestor) => ancestor.id));
-            if (node.parentId) chain.add(node.parentId);
-            return [node.id, [...chain].filter((id) => going.has(id))];
-        }),
-    );
-    const roots = nodes.filter((node) => !within.get(node.id)!.length);
-    const wentWith = (movedIds: Set<string>) =>
-        nodes
-            .filter(
-                (node) =>
-                    movedIds.has(node.id) || within.get(node.id)!.some((id) => movedIds.has(id)),
-            )
-            .map((node) => node.id);
+    const { roots, wentWith } = nesting(nodes, parts);
     const went = (answers: Answer<TrashBatchItem>[]) =>
         new Set(
             answers
@@ -159,8 +176,9 @@ export async function trashBatch(
  * the same request, but not for one in a later request. So folders go first,
  * as far as this device knows, and an item refused as `parent-trashed` is tried
  * again once the other requests have landed, for as long as that brings more
- * back. `back` is what came back, in the order given; `error` the first
- * refusal that stands. `onBack` hears them as they land.
+ * back. `back` is what came back, in the order given; `failed` each that did
+ * not, with why; `error` the first refusal that stands. `onBack` hears them as
+ * they land.
  */
 export async function restoreBatch(
     nodes: DriveNode[],
@@ -204,5 +222,59 @@ export async function restoreBatch(
         if (!again.some(({ item }) => item?.status === 'restored')) break;
     }
     const answers = nodes.map((node) => latest.get(node.id)!);
-    return { back: back(answers), error: firstError(answers) };
+    return {
+        back: back(answers),
+        failed: answers.flatMap(({ node, item, error }) =>
+            item?.status === 'restored' ? [] : [{ node, error }],
+        ),
+        error: firstError(answers),
+    };
+}
+
+/*
+ * Delete forever for Trash rows. An item inside a folder that is also going,
+ * as far as this device knows, is never sent: purged with the folder it goes
+ * with it, and asked for on its own it would be refused as gone. It stays if
+ * the folder is refused. The server does the same for what this device does
+ * not know (`covered`). `gone` is every picked item now deleted, those inside
+ * a purged folder included, in the order given: what "N of M" counts. What a
+ * request had no time for (`busy`) is sent again while that gets further.
+ * `error` is the first refusal that stands. `onGone` hears the same ids as
+ * each request lands.
+ */
+export async function purgeBatch(
+    nodes: DriveNode[],
+    parts: TrashParts,
+    onGone?: (ids: string[]) => void,
+) {
+    const { roots, wentWith } = nesting(nodes, parts);
+    const went = (answers: Answer<PurgeBatchItem>[]) =>
+        new Set(
+            answers
+                .filter(({ item }) => item?.status === 'purged' || item?.status === 'covered')
+                .map(({ node }) => node.id),
+        );
+    const tell = (landed: Answer<PurgeBatchItem>[]) => {
+        const ids = wentWith(went(landed));
+        if (ids.length) onGone?.(ids);
+    };
+    const latest = new Map(
+        (await sendEach(roots, parts.purge, tell)).map((answer) => [answer.node.id, answer]),
+    );
+    // What a request had no time for is sent again, for as long as that gets further.
+    for (;;) {
+        const waited = [...latest.values()].filter(
+            ({ item }) => item?.status === 'refused' && item.reason === 'busy',
+        );
+        if (!waited.length) break;
+        const again = await sendEach(
+            waited.map(({ node }) => node),
+            parts.purge,
+            tell,
+        );
+        for (const answer of again) latest.set(answer.node.id, answer);
+        if (!again.some(({ item }) => item?.status === 'purged')) break;
+    }
+    const answers = roots.map((node) => latest.get(node.id)!);
+    return { gone: wentWith(went(answers)), error: firstError(answers) };
 }

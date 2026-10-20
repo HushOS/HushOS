@@ -2038,6 +2038,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     function restoreMany(workspaceId: string, nodeIds: string[]) {
         return api.restoreBatch(workspaceId, nodeIds);
     }
+    /* Delete forever for a selection in this workspace's trash, in one request (api.ts purgeBatch). */
+    function purgeMany(workspaceId: string, nodeIds: string[]) {
+        return api.purgeBatch(workspaceId, nodeIds);
+    }
 
     /* Delete forever. The server refuses anything not itself in the trash. */
     async function purge(node: DriveNode) {
@@ -2210,6 +2214,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         restore,
         trashMany,
         restoreMany,
+        purgeMany,
         purge,
         emptyTrash,
         storageBreakdown,

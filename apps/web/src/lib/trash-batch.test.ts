@@ -1,8 +1,8 @@
-import type { RestoreBatchItem, TrashBatchItem } from '@hushos/drive/api';
+import type { PurgeBatchItem, RestoreBatchItem, TrashBatchItem } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
 import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import { describe, expect, test } from 'vitest';
-import { restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
+import { purgeBatch, restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
 
 /*
  * A selection to the trash and back, against a server kept in memory that
@@ -32,6 +32,9 @@ const node = (id: string, workspaceId = 'ws') =>
 function server({
     refuseTrash = [] as string[],
     refuseRestore = [] as string[],
+    refusePurge = [] as string[],
+    /* The most one delete request purges before it answers the rest `busy`. */
+    purgeBudget = Infinity,
     /* Ids this device does not know the folders of (opened from search, say). */
     unknownFolders = [] as string[],
     /* The requests, counted from 0, that fail as a whole. */
@@ -40,7 +43,12 @@ function server({
     leaveOut = [] as string[],
 } = {}) {
     const trashed = new Set<string>();
-    const sent = { trash: [] as { ws: string; ids: string[] }[], restore: [] as string[][] };
+    const purged = new Set<string>();
+    const sent = {
+        trash: [] as { ws: string; ids: string[] }[],
+        restore: [] as string[][],
+        purge: [] as string[][],
+    };
     let requests = 0;
     let changeSeq = 100;
     const chain = (id: string) => {
@@ -103,10 +111,57 @@ function server({
                 }),
             };
         },
+        purge: async (_ws, ids) => {
+            sent.purge.push(ids);
+            let spent = 0;
+            await request();
+            // Gone already, itself or with a folder purged before: as if it never was.
+            const gone = (id: string) => purged.has(id) || chain(id).some((up) => purged.has(up));
+            const passed = new Set(
+                ids.filter(
+                    (id, index) =>
+                        !refusePurge.includes(id) &&
+                        !gone(id) &&
+                        trashed.has(id) &&
+                        index < purgeBudget,
+                ),
+            );
+            const results = ids.map((id): PurgeBatchItem => {
+                if (refusePurge.includes(id) || gone(id))
+                    return { id, status: 'refused', reason: 'not-found', message: `no ${id}` };
+                if (!trashed.has(id))
+                    return {
+                        id,
+                        status: 'refused',
+                        reason: 'not-trashed',
+                        message: `${id} is not in the trash`,
+                    };
+                const by = chain(id)
+                    .reverse()
+                    .find((up) => passed.has(up));
+                if (by) return { id, status: 'covered', by };
+                if (spent++ >= purgeBudget)
+                    return { id, status: 'refused', reason: 'busy', message: 'no time' };
+                return { id, status: 'purged', changeSeq: ++changeSeq };
+            });
+            spent = 0;
+            for (const result of results)
+                if (result.status === 'purged') {
+                    purged.add(result.id);
+                    trashed.delete(result.id);
+                }
+            return { results: results.filter((result) => !leaveOut.includes(result.id)) };
+        },
         ancestorsOf: (n) =>
             unknownFolders.includes(n.id) ? [] : chain(n.id).map((id) => ({ id })),
     };
-    return { parts, sent, inTrash };
+    /* Whether an item is deleted forever, itself or with a folder it is in. */
+    const isPurged = (id: string) => purged.has(id) || chain(id).some((up) => purged.has(up));
+    /* Into the trash on their own, each in its own request, as rows of the Trash are. */
+    const trashEach = async (ids: string[]) => {
+        for (const id of ids) await parts.trash('ws', [id]);
+    };
+    return { parts, sent, inTrash, isPurged, trashEach };
 }
 const ids = (nodes: DriveNode[]) => nodes.map((n) => n.id);
 const sorted = (list: string[]) => [...list].sort();
@@ -309,5 +364,126 @@ describe('Undo', () => {
         expect(undone.error).toMatchObject({ message: 'refused F' });
         expect(['a', 'x'].some(inTrash)).toBe(false);
         expect(inTrash('F')).toBe(true);
+    });
+});
+
+describe('deleting Trash rows forever', () => {
+    test('the rows go in one request, and “N of M” counts only what is gone', async () => {
+        const { parts, sent, isPurged, trashEach } = server({ refusePurge: ['b'] });
+        await trashEach(['a', 'b', 'x']);
+        const told: string[][] = [];
+        const result = await purgeBatch(
+            ['a', 'b', 'x'].map((id) => node(id)),
+            parts,
+            (ids) => told.push(ids),
+        );
+        expect(sent.purge).toEqual([['a', 'b', 'x']]);
+        expect(result.gone).toEqual(['a', 'x']);
+        expect(told).toEqual([['a', 'x']]);
+        expect(result.error).toMatchObject({ message: 'no b', code: 'not-found' });
+        expect(['a', 'b', 'x'].filter(isPurged)).toEqual(['a', 'x']);
+    });
+
+    test('a row inside a folder that is going is not sent, and counts as gone with it', async () => {
+        // Each in the Trash on its own, the folder last: two rows of the Trash.
+        const { parts, sent, isPurged, trashEach } = server();
+        await trashEach(['c', 'F']);
+        const result = await purgeBatch([node('c'), node('F')], parts);
+        expect(sent.purge).toEqual([['F']]);
+        expect(result.gone).toEqual(['c', 'F']);
+        expect(result.error).toBeNull();
+        expect(['c', 'F'].every(isPurged)).toBe(true);
+    });
+
+    test('a row inside a refused folder stays, and is not counted', async () => {
+        const { parts, isPurged, trashEach } = server({ refusePurge: ['F'] });
+        await trashEach(['c', 'F', 'a']);
+        const result = await purgeBatch([node('F'), node('c'), node('a')], parts);
+        expect(result.gone).toEqual(['a']);
+        expect(['F', 'c'].some(isPurged)).toBe(false);
+    });
+
+    test('a row the server says goes with its folder counts as gone', async () => {
+        // This device does not know `c` is inside `F`; the server does.
+        const { parts, sent, trashEach } = server({ unknownFolders: ['c'] });
+        await trashEach(['c', 'F']);
+        const result = await purgeBatch([blind('c'), node('F')], parts);
+        expect(sent.purge).toEqual([['c', 'F']]);
+        expect(result.gone).toEqual(['c', 'F']);
+        expect(result.error).toBeNull();
+    });
+
+    test(`over ${MAX_TRASH_BATCH} rows go in requests of at most that many; one failing keeps none of the others back`, async () => {
+        const all = many('n', 2 * MAX_TRASH_BATCH + 101);
+        const { parts, sent, isPurged } = server({ failRequests: [2] });
+        // Requests 0 and 1 put them in the Trash; request 2, the first delete, fails.
+        await parts.trash('ws', all.slice(0, MAX_TRASH_BATCH));
+        await parts.trash('ws', all.slice(MAX_TRASH_BATCH));
+        const told: number[] = [];
+        const result = await purgeBatch(
+            all.map((id) => node(id)),
+            parts,
+            (ids) => told.push(ids.length),
+        );
+        expect(sent.purge.map((ids) => ids.length)).toEqual([
+            MAX_TRASH_BATCH,
+            MAX_TRASH_BATCH,
+            101,
+        ]);
+        const went = all.slice(MAX_TRASH_BATCH);
+        expect(told).toEqual([MAX_TRASH_BATCH, 101]);
+        expect(result.gone).toEqual(went);
+        expect((result.error as Error).message).toBe('request 2 failed');
+        expect(all.filter(isPurged)).toEqual(went);
+    });
+
+    test('a row the server leaves out of its answer is not counted as gone', async () => {
+        const { parts, trashEach } = server({ leaveOut: ['b'] });
+        await trashEach(['a', 'b']);
+        const result = await purgeBatch([node('a'), node('b')], parts);
+        expect(result.gone).toEqual(['a']);
+        expect(result.error).toMatchObject({ code: 'unavailable' });
+    });
+});
+
+describe('restoring Trash rows', () => {
+    test('says which did not come back, and why', async () => {
+        const { parts, trashEach } = server({ refuseRestore: ['b'] });
+        await trashEach(['a', 'b']);
+        const result = await restoreBatch([node('a'), node('b')], parts);
+        expect(ids(result.back)).toEqual(['a']);
+        expect(result.failed.map(({ node: n }) => n.id)).toEqual(['b']);
+        expect(result.failed[0]!.error).toMatchObject({ message: 'refused b' });
+    });
+});
+
+describe('deleting Trash rows a request has no time for', () => {
+    test('what a request answered busy is sent again until it is all gone', async () => {
+        const rows = many('f', 5);
+        const { parts, sent, isPurged, trashEach } = server({ purgeBudget: 2 });
+        await trashEach(rows);
+        const told: string[][] = [];
+        const result = await purgeBatch(
+            rows.map((id) => node(id)),
+            parts,
+            (ids) => told.push(ids),
+        );
+        expect(sent.purge).toEqual([rows, rows.slice(2), rows.slice(4)]);
+        expect(told).toEqual([rows.slice(0, 2), rows.slice(2, 4), rows.slice(4)]);
+        expect(result.gone).toEqual(rows);
+        expect(result.error).toBeNull();
+        expect(rows.every(isPurged)).toBe(true);
+    });
+
+    test('a request that gets nothing further ends it, and says so', async () => {
+        const { parts, sent, trashEach } = server({ purgeBudget: 0 });
+        await trashEach(['a', 'b']);
+        const result = await purgeBatch([node('a'), node('b')], parts);
+        expect(sent.purge).toEqual([
+            ['a', 'b'],
+            ['a', 'b'],
+        ]);
+        expect(result.gone).toEqual([]);
+        expect(result.error).toMatchObject({ code: 'conflict', message: 'no time' });
     });
 });

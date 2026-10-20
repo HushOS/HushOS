@@ -441,6 +441,8 @@ Then it assigns `change_seq` and enqueues `drive.purge-subtree`, which walks the
 
 A person does not have to wait. **Delete forever** on a trashed item is this same request, and **Empty trash** enqueues `drive.empty-trash`, which purges the workspace's trash roots in batches of 100, because a trash can hold a hundred thousand roots and one request must not. Trashed bytes count against quota until purged, and the UI says so and shows the trash draining; this keeps accounting honest and gives people the same control an operating system does.
 
+**Delete forever for a selection** is `workspaces/:id/purge-batch`, with the same limits and the same lock rules as `trash-batch` (up to 200 ids, a 12 KiB body, 60 batch requests a minute, 2 s lock and statement timeouts), for members only: anyone else is answered without the lock being taken. Each node goes through the same purge as one (versions, storage, the outbox, shares and links, the tombstone and its own `change_seq`) or is refused on its own (`not-found`, `root`, `not-trashed`); a node inside a folder of the same request that is purged is `covered` and goes with it by the fan-out. A purge costs a dozen statements a node, so a request stops purging once it has held the lock for 1 s, keeps what it purged and answers the rest `busy`; the web sends those again while that gets further. Empty trash keeps its own loop, one root per transaction in one request: batching it would only hold the lock longer, since it has no round trips to save.
+
 ### Releasing objects and tombstones
 
 - A version's bytes are released when it is purged.
@@ -791,7 +793,7 @@ Content and envelope primitives go into `@hushos/crypto` under a new `drive.ts`,
 Under `/api/drive/`:
 
 - `capabilities`
-- `workspaces/:id/root`, `workspaces/:id/changes`, `workspaces/:id/trash` (empty), `workspaces/:id/trash-batch`, `workspaces/:id/restore-batch`, `workspaces/:id/documents/:kind`
+- `workspaces/:id/root`, `workspaces/:id/changes`, `workspaces/:id/trash` (empty), `workspaces/:id/trash-batch`, `workspaces/:id/restore-batch`, `workspaces/:id/purge-batch`, `workspaces/:id/documents/:kind`
 - `nodes/:id/children` (cursor-paginated), `nodes` (create), `nodes/:id/metadata`, `nodes/:id/parent`, `nodes/:id/copy`, `nodes/:id/trash`, `nodes/:id/restore`, `nodes/:id` (purge), `nodes/rotate`
 - `uploads`, `uploads/:id/parts`, `uploads/:id/complete`, `uploads/:id/attach`, `uploads/:id` (abort)
 - `versions/:id/url`, `versions/:id` (discard a superseded version)
