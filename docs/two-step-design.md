@@ -394,13 +394,18 @@ After the phrase passes the step, the session's settings page opens on Two-step 
         That is the WebAuthn options from the step response, and the app's `state`. The fragment never reaches the server in a request line or a log.
 
     2. The page is static. It makes no request to the API, and it renders nothing from the fragment. It says what is about to happen: "Use your security key to finish signing in to HushOS in the app on this phone. If you didn't just start that, close this page." It then runs `navigator.credentials.get` with that challenge, for the server's RP ID.
-    3. The page returns the result only to a callback fixed in its own code, never one named by the fragment:
+    3. The page returns the result only to a callback fixed in its own code, never one named by the fragment. The callback is an `https` link on hushos.com, which the app is associated with whatever server it signs in to:
 
         ```
-        hushos://two-step-key#<base64url(JSON { state, response })>
+        https://hushos.com/two-step/return#<base64url(JSON { state, response })>
         ```
 
-        On iOS the session hands that URL to the completion handler of the app that opened it. On Android it reaches the app through its intent filter.
+        - **Android 12 and later:** the link is a verified App Link. hushos.com's `assetlinks.json` already names the app, so the system opens it in HushOS and in no other app.
+        - **iOS:** the link is a Universal Link (`applinks:` in the entitlements). The app passes it to `ASWebAuthenticationSession` as its `https` callback, so the session hands the URL to the completion handler of the app that opened it.
+        - **A tapped button, not a redirect.** After the key is touched, the page shows **Return to HushOS** and navigates only when it is tapped. Chrome opens an app for a link only on a navigation the person started, and Safari treats Universal Links the same way.
+        - **The path joins the app-link paths** in hushos.com's `apple-app-site-association` and the app's App Link intent filter, beside the paths the app already opens.
+        - **The page on hushos.com that the link names is static.** If the link opens in a browser after all (HushOS not installed, or the link not verified), it says "Open this in the HushOS app". It never sends the fragment anywhere, and renders nothing from it.
+        - **The custom scheme is only a fallback:** `hushos://two-step-key#…`, for Android before 12 and for installs where verification failed. The page offers it as a second, smaller link only when the first did not open the app.
 
     4. The app accepts the result only if its `state` is the one it made for the step it has pending. Anything else it drops.
     5. The app calls `login/two-step { token, proof: { kind: 'webauthn', response } }`. That is the same request and the same checks as on the web: the challenge in `clientDataJSON` must be the one stored with this token, and the origin must be `APP_ORIGIN`.
@@ -410,8 +415,8 @@ After the phrase passes the step, the session's settings page opens on Two-step 
     **The attack this stops.** Someone with only the password runs OPAQUE, gets a step token and its challenge, and sends the victim a link to the real page with that challenge. If the victim touches their key, the assertion goes to the victim's own app, which has no matching `state` and drops it. Nothing reaches the attacker, so the attacker's token cannot pass.
 
     **What is left:**
-    - On Android a custom scheme is not exclusive: another app on the victim's phone that registers `hushos://` could receive the callback. It would also have to forward the assertion to the attacker, and the victim would have to touch their key on a page they did not start. That is malware on the phone working with someone who has the password, and section 9 counts a compromised device as its owner.
-    - The callback is a custom scheme because an `https` callback must be on one of the app's associated domains, which a self-hosted server's domain is not.
+    - **Wherever the custom-scheme fallback is used, any app can claim the callback.** A custom scheme is not exclusive, so another app on the phone that registers `hushos://` could receive the assertion. That happens on Android without a verified App Link, and on iOS when the page is opened in plain Safari, as an attacker's link would be, rather than in the app's own session. The other app would also have to forward the assertion to the attacker, and the victim would have to touch their key on a page they did not start. That is malware on the phone working with someone who has the password, and section 9 counts a compromised device as its owner. The verified link on hushos.com closes it on every install where it works.
+    - **The callback is on hushos.com, not the server's own domain,** because an `https` callback must be on one of the app's associated domains, and a self-hosted server's domain is not one. hushos.com sees no request for it: the system opens the app before any load, and the fragment never leaves the device.
     - The page is served by the server, which the apps otherwise do not trust with code. Here that loses nothing: the step is the server's own check, and the page never sees the password, a key or the step token.
 
     Android could use the operator's own `assetlinks.json` instead, naming the HushOS app. Nothing in Google's documentation rules that out, and nothing confirms it. The browser path is one path for both platforms.
@@ -543,24 +548,25 @@ WebAuthn public keys are not secret.
 
 Base64url without padding; ids lowercase UUIDs, as elsewhere.
 
-| Route                                                   | Body → response                                                                                       | Notes                                                                                                                                |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /api/auth/login/finish`                           | adds `twoStep: 1` → `{ twoStep: { token, methods, expiresAt, webauthn? } }` or today's response       | 409 `update-required` for a client without `twoStep: 1` on an account with the step on                                               |
-| `POST /api/auth/login/two-step`                         | `{ token, proof }` → `{ user, envelope, device }` and the cookie                                      | 401 for a wrong answer; the token ends after five                                                                                    |
-| `GET /api/auth/two-step`                                | → `{ on, methods: [{ id, kind, name, createdAt, lastUsedAt, synced }], backupCodesLeft, totpFrozen }` | Any session of the account                                                                                                           |
-| `POST /api/auth/two-step/reauth`                        | `{ startLoginRequest }` → `{ attemptToken, loginResponse }`                                           | A bound OPAQUE attempt tagged `two-step`, limited like the others (`limitBoundAttempts`)                                             |
-| `POST /api/auth/two-step/challenge`                     | `{ purpose }` → `{ token, methods, webauthn? }`                                                       | A step token bound to the session and the purpose                                                                                    |
-| `POST /api/auth/two-step/totp`                          | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ id, secret, uri }`                              | A pending factor for ten minutes; `twoStep` once the step is on                                                                      |
-| `POST /api/auth/two-step/totp/:id/confirm`              | `{ code }` → `{ backupCodes? }`                                                                       | Codes only when this turns the step on                                                                                               |
-| `POST /api/auth/two-step/keys/options`                  | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ registrationToken, options }`                   |                                                                                                                                      |
-| `POST /api/auth/two-step/keys`                          | `{ registrationToken, name?, response }` → `{ method, backupCodes? }`                                 | 409 `limit` past ten keys                                                                                                            |
-| `PUT /api/auth/two-step/methods/:id`                    | `{ name }`                                                                                            | PUT, as the device rename is                                                                                                         |
-| `DELETE /api/auth/two-step/methods/:id`                 | `{ attemptToken, finishLoginRequest, twoStep }`                                                       | The last one turns the step off and deletes the codes                                                                                |
-| `POST /api/auth/two-step/backup-codes`                  | `{ attemptToken, finishLoginRequest, twoStep }` → `{ codes }`                                         | Replaces every code                                                                                                                  |
-| `GET /two-step/key`                                     | A static page, no API call                                                                            | The apps' browser path for security keys (section 6): runs the assertion from the fragment and returns it to `hushos://two-step-key` |
-| `GET /api/auth/security-events`                         | → `[{ id, kind, method, deviceId, deviceKind, createdAt }]`                                           | The last 90 days, newest first                                                                                                       |
-| `POST /api/children/:userId/reset`                      | adds `twoStep?: { token, proof }` (the guardian's own)                                                | `DELETE /api/children/:userId/two-step` removes the child's methods, before `adultFrom` only                                         |
-| `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`                                                                      | 403 `two-step` when the step is on and the proof is missing or wrong                                                                 |
+| Route                                                   | Body → response                                                                                       | Notes                                                                                                                                                                             |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/login/finish`                           | adds `twoStep: 1` → `{ twoStep: { token, methods, expiresAt, webauthn? } }` or today's response       | 409 `update-required` for a client without `twoStep: 1` on an account with the step on                                                                                            |
+| `POST /api/auth/login/two-step`                         | `{ token, proof }` → `{ user, envelope, device }` and the cookie                                      | 401 for a wrong answer; the token ends after five                                                                                                                                 |
+| `GET /api/auth/two-step`                                | → `{ on, methods: [{ id, kind, name, createdAt, lastUsedAt, synced }], backupCodesLeft, totpFrozen }` | Any session of the account                                                                                                                                                        |
+| `POST /api/auth/two-step/reauth`                        | `{ startLoginRequest }` → `{ attemptToken, loginResponse }`                                           | A bound OPAQUE attempt tagged `two-step`, limited like the others (`limitBoundAttempts`)                                                                                          |
+| `POST /api/auth/two-step/challenge`                     | `{ purpose }` → `{ token, methods, webauthn? }`                                                       | A step token bound to the session and the purpose                                                                                                                                 |
+| `POST /api/auth/two-step/totp`                          | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ id, secret, uri }`                              | A pending factor for ten minutes; `twoStep` once the step is on                                                                                                                   |
+| `POST /api/auth/two-step/totp/:id/confirm`              | `{ code }` → `{ backupCodes? }`                                                                       | Codes only when this turns the step on                                                                                                                                            |
+| `POST /api/auth/two-step/keys/options`                  | `{ attemptToken, finishLoginRequest, twoStep? }` → `{ registrationToken, options }`                   |                                                                                                                                                                                   |
+| `POST /api/auth/two-step/keys`                          | `{ registrationToken, name?, response }` → `{ method, backupCodes? }`                                 | 409 `limit` past ten keys                                                                                                                                                         |
+| `PUT /api/auth/two-step/methods/:id`                    | `{ name }`                                                                                            | PUT, as the device rename is                                                                                                                                                      |
+| `DELETE /api/auth/two-step/methods/:id`                 | `{ attemptToken, finishLoginRequest, twoStep }`                                                       | The last one turns the step off and deletes the codes                                                                                                                             |
+| `POST /api/auth/two-step/backup-codes`                  | `{ attemptToken, finishLoginRequest, twoStep }` → `{ codes }`                                         | Replaces every code                                                                                                                                                               |
+| `GET /two-step/key`                                     | A static page, no API call                                                                            | The apps' browser path for security keys (section 6): runs the assertion from the fragment and returns it to `https://hushos.com/two-step/return` (the custom scheme as fallback) |
+| `GET /two-step/return` (hushos.com)                     | A static page, no API call                                                                            | The verified callback the apps open; in a browser it says to open the HushOS app, and never sends its fragment                                                                    |
+| `GET /api/auth/security-events`                         | → `[{ id, kind, method, deviceId, deviceKind, createdAt }]`                                           | The last 90 days, newest first                                                                                                                                                    |
+| `POST /api/children/:userId/reset`                      | adds `twoStep?: { token, proof }` (the guardian's own)                                                | `DELETE /api/children/:userId/two-step` removes the child's methods, before `adultFrom` only                                                                                      |
+| `POST /api/auth/security/finish`, `/auth/delete/finish` | add `twoStep?: { token, proof }`                                                                      | 403 `two-step` when the step is on and the proof is missing or wrong                                                                                                              |
 
 ### Migrations
 
@@ -623,7 +629,8 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
     - the fifth consecutive failure sends one notice an hour;
     - the hundredth freezes the authenticator app for new devices only.
 - **The apps' browser path:**
-    - the key page makes no API request and returns only to `hushos://two-step-key`, whatever the fragment says;
+    - the key page makes no API request and returns only to `https://hushos.com/two-step/return`, or the `hushos://two-step-key` fallback, whatever the fragment says, and only on a tap;
+    - the hushos.com return page sends nothing and renders nothing from its fragment;
     - an assertion over one token's challenge does not pass another token;
     - the app drops a callback whose `state` is not the one it made.
 - **Policies and guardians:**
@@ -650,7 +657,7 @@ One change per pull request, as AGENTS.md asks:
 5. **`docs`:** `docs/self-hosting.md` (the settings, the key, the trigger, rollback) and `docs/opaque-auth-design.md`.
 6. **`chore(web)`:** turn `TWO_STEP_ENABLED` on at hushos.com once the apps from 4 are live in both stores. The roadmap item moves to Shipped in the same PR.
 7. **`feat(auth)` and `feat(web)`:** security keys, registration and assertion, with the virtual-authenticator tests.
-8. **`feat(ios)` and `feat(android)`:** security keys natively on hushos.com, and the browser path for self-hosted servers (the static `/two-step/key` page, `hushos://two-step-key`).
+8. **`feat(ios)` and `feat(android)`:** security keys natively on hushos.com, and the browser path for self-hosted servers (the static `/two-step/key` page; the verified `https://hushos.com/two-step/return` link, with `hushos://two-step-key` as the fallback).
 
 Approve new devices (`docs/devices-design.md` 10, milestone 2) then builds on the step's place in the sign-in: password, step, approval.
 
@@ -665,6 +672,20 @@ Approve new devices (`docs/devices-design.md` 10, milestone 2) then builds on th
 7. **Where does the two-step key come from when the operator sets none?** _Recommendation: derived from the OPAQUE server setup wherever it lives, with its own HKDF `info`._ Moving the setup from the database to the environment, as the guide advises, then leaves the key unchanged. The cost: an instance that keeps the setup in the database keeps the key beside the secrets it seals, where it protects nothing against a copy of the database.
 8. **A key whose counter does not go up: refuse it, or accept it with a notice?** _Recommendation: refuse, by the specification's rule (either counter non-zero and the new one not greater), and notify._ The person has other methods, and a cloned key is worth a sign-in's friction. Synced passkeys, always at 0, are unaffected.
 9. **Is the database trigger acceptable as the repository's first?** _Recommendation: yes._ hushos.com does not need it: it deploys each release in order, and only switches the step on (release B) once no container of an earlier release runs. Self-hosters do. One who skips releases, rolling from before release A straight to B or later, runs old and new containers side by side while people can turn the step on, and one who rolls back runs old code against accounts that have it. Without the guard, either silently signs those accounts in with the password alone. It covers sign-in only, not step-ups (section 10).
+
+## Owner decisions (2026-10-21)
+
+All nine open questions are answered as recommended:
+
+1. The recovery phrase passes the step at once, with a security notice; there is no wait.
+2. The step is asked for on every new session, and is good for 30 days on a device that keeps its session.
+3. Both authenticator apps and security keys are offered, and security keys are recommended.
+4. No group can turn a member's step off, except a guardian on a child account before `adult_from`, recorded, notified and logged.
+5. A group can require the step; a member without a method enrols at their next sign-in, before the envelope.
+6. Turning the step on offers to sign out the other devices, ticked by default.
+7. The two-step key is derived from the OPAQUE server setup wherever it lives, with its own HKDF `info`, unless `TWO_STEP_KEY` is set.
+8. A key whose counter does not go up, when either counter is non-zero, is refused, with a notice.
+9. The `sessions` guard trigger goes in, as the repository's first, covering sign-in only.
 
 ## Sources
 
