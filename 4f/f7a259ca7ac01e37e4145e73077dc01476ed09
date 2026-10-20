@@ -1,0 +1,32 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TrashBatch.kt
+  s_c56e31c87cddde::t_1a4ebc2ab5fe49 7,9-14
+  s_c56e31c87cddde::t_43ccd8b4c9df03 3,19,27-30,38,55,61,99-120
+apps/android/app/src/main/kotlin/com/hushos/app/data/OneAfterAnother.kt
+  s_c56e31c87cddde::t_c39e9dadb17f55 3-5,9-11,13,17,29-35
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c56e31c87cddde::t_52c4b222bd6eef 1167
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_121fc05445b244 113-118,1332,1334-1335,1337-1338,1351-1352,1399,1403
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_c56e31c87cddde::t_60de02bdbf203b 76,194-195,197-204,261,271,290,419-420
+apps/android/app/src/test/kotlin/com/hushos/app/data/OneAfterAnotherTest.kt
+  s_c56e31c87cddde::t_cbbb6383d7f26b 3-5,19,27,36,42-59
+apps/android/app/src/test/kotlin/com/hushos/app/ui/TrashBatchTest.kt
+  s_c56e31c87cddde::t_d92f79e959a314 7,124,126,132-173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ff7a259ca7ac01e37e4145e73077dc01476ed09",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
