@@ -1,0 +1,29 @@
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_0402bd6d40a8b9 56
+docs/groups-design.md
+  s_566b8e0c4467a4::t_1a3d8f896e3af8 335,354
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_186e32486bc5b1 211,705-706
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_b6d1fc13234831 5529-5605
+packages/db/src/billing.groups.test.ts
+  s_566b8e0c4467a4::t_4ed8f031807c20 204-257
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_aa2c990f602eb2 636,925-931,947-948
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "27cf87b16f0e7e5fa9f62381dc436e6be06c1f55",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
