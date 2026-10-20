@@ -20,7 +20,6 @@ import { Cover } from '@/components/cover';
 export function AuthLayout({
     title,
     description,
-    icon,
     wide = false,
     art = 'HUSH',
     children,
@@ -28,8 +27,6 @@ export function AuthLayout({
 }: {
     title: string;
     description?: ReactNode;
-    /* A round mark above the title: the inbox, a lock. */
-    icon?: ReactNode;
     /* For the 24 words. */
     wide?: boolean;
     /* The word the panel beside the card spells in dots on a wide screen: the step's own. */
@@ -52,11 +49,6 @@ export function AuthLayout({
                             wide ? 'max-w-[600px]' : 'max-w-[420px]',
                         )}
                     >
-                        {icon && (
-                            <span className="flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground [&_svg]:size-6">
-                                {icon}
-                            </span>
-                        )}
                         <div className="flex flex-col gap-1.5">
                             <h1
                                 id="auth-title"
