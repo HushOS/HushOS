@@ -24,7 +24,7 @@ const tree: Record<string, string> = {
     b: ROOT,
     x: ROOT,
     ...Object.fromEntries(many('f', 10).map((id) => [id, ROOT])),
-    ...Object.fromEntries(many('n', 2 * MAX_TRASH_BATCH + 201).map((id) => [id, ROOT])),
+    ...Object.fromEntries(many('n', 2 * MAX_TRASH_BATCH + 101).map((id) => [id, ROOT])),
 };
 const node = (id: string, workspaceId = 'ws') =>
     ({ id, parentId: tree[id], workspaceId, name: id, kind: 'file' }) as DriveNode;
@@ -89,6 +89,14 @@ function server({
                             status: 'refused',
                             reason: 'not-trashed',
                             message: `refused ${id}`,
+                        };
+                    // Its folder is still in the trash: the server does not reparent on its own.
+                    if (chain(id).some((up) => trashed.has(up)))
+                        return {
+                            id,
+                            status: 'refused',
+                            reason: 'parent-trashed',
+                            message: `${id}'s folder is in the trash`,
                         };
                     trashed.delete(id);
                     return { id, status: 'restored', changeSeq: ++changeSeq };
@@ -178,7 +186,7 @@ describe('a selection to the trash', () => {
     });
 
     test(`over ${MAX_TRASH_BATCH} items go in requests of at most that many; one failing keeps none of the others back`, async () => {
-        const all = many('n', 2 * MAX_TRASH_BATCH + 201);
+        const all = many('n', 2 * MAX_TRASH_BATCH + 101);
         const { parts, sent, inTrash } = server({ failRequests: [1] });
         const told: number[] = [];
         const result = await trashBatch(
@@ -189,12 +197,12 @@ describe('a selection to the trash', () => {
         expect(sent.trash.map((request) => request.ids.length)).toEqual([
             MAX_TRASH_BATCH,
             MAX_TRASH_BATCH,
-            201,
+            101,
         ]);
         expect(sent.trash.flatMap((request) => request.ids)).toEqual(all);
         const failed = all.slice(MAX_TRASH_BATCH, 2 * MAX_TRASH_BATCH);
         const went = all.filter((id) => !failed.includes(id));
-        expect(told).toEqual([MAX_TRASH_BATCH, 201]);
+        expect(told).toEqual([MAX_TRASH_BATCH, 101]);
         expect(result.gone).toEqual(went);
         expect(ids(result.moved)).toEqual(went);
         expect((result.error as Error).message).toBe('request 1 failed');
@@ -240,6 +248,52 @@ describe('Undo', () => {
         expect(undone.back.every((n) => n.trashedAt === null)).toBe(true);
         expect(undone.error).toBeNull();
         expect(['a', 'b', 'F', 'c'].some(inTrash)).toBe(false);
+    });
+
+    test(`an item and the folder it is in, trashed in different requests, both come back`, async () => {
+        // This device did not know `c` is inside `F`, and they went in different requests.
+        const fill = many('n', MAX_TRASH_BATCH - 1);
+        const { parts, sent, inTrash } = server({ unknownFolders: ['c'] });
+        const picked = [blind('c'), ...fill.map((id) => node(id)), node('F')];
+        const trashed = await trashBatch(picked, parts);
+        expect(sent.trash.map((request) => request.ids.length)).toEqual([MAX_TRASH_BATCH, 1]);
+        expect(ids(trashed.moved)).toEqual(['c', ...fill, 'F']);
+        const told: string[] = [];
+        const undone = await restoreBatch(trashed.moved, parts, (back) => told.push(...ids(back)));
+        // `c` was refused while `F` was still in the trash, then tried again once it came back.
+        expect(sent.restore.map((request) => request.length)).toEqual([MAX_TRASH_BATCH, 1, 1]);
+        expect(sent.restore.at(-1)).toEqual(['c']);
+        expect(ids(undone.back)).toEqual(['c', ...fill, 'F']);
+        expect(sorted(told)).toEqual(sorted(['c', ...fill, 'F']));
+        expect(undone.error).toBeNull();
+        expect(['c', ...fill, 'F'].some(inTrash)).toBe(false);
+    });
+
+    test('folders this device knows go back before what is in them, whatever the order given', async () => {
+        const fill = many('n', MAX_TRASH_BATCH - 1);
+        const { parts, sent, inTrash } = server();
+        // Each in the trash on its own: the item first, then its folder.
+        await parts.trash('ws', ['c']);
+        await parts.trash('ws', ['F', ...fill]);
+        const given = [node('c'), ...fill.map((id) => node(id)), node('F')];
+        const undone = await restoreBatch(given, parts);
+        // No request was refused and tried again: the folder went in the first.
+        expect(sent.restore.map((request) => request.length)).toEqual([MAX_TRASH_BATCH, 1]);
+        expect(sent.restore[1]).toEqual(['c']);
+        expect(ids(undone.back)).toEqual(ids(given));
+        expect(undone.error).toBeNull();
+        expect(['c', 'F', ...fill].some(inTrash)).toBe(false);
+    });
+
+    test('an item whose folder stays in the trash is refused once retrying brings nothing back', async () => {
+        const { parts, sent, inTrash } = server({ refuseRestore: ['F'] });
+        await parts.trash('ws', ['c']);
+        await parts.trash('ws', ['F']);
+        const undone = await restoreBatch([node('c'), node('F')], parts);
+        expect(sent.restore).toEqual([['F', 'c'], ['c']]);
+        expect(undone.back).toEqual([]);
+        expect(undone.error).toMatchObject({ code: 'parent-trashed' });
+        expect(inTrash('c')).toBe(true);
     });
 
     test('says what came back when some of it cannot', async () => {

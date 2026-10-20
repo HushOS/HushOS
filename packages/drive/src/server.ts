@@ -775,6 +775,21 @@ async function requireBatch(userId: string, nodeIds: string[]) {
         throw new DriveError('conflict', 'Too many requests. Please try again shortly.', 429);
 }
 
+/* A batch that could not get or keep the workspace's lock in time moved nothing: try again. */
+async function busyAsConflict<T>(pending: Promise<T>) {
+    try {
+        return await pending;
+    } catch (error) {
+        if (error instanceof driveRepository.BatchBusyError)
+            throw new DriveError(
+                'conflict',
+                'Too many changes are being made here at once. Please try again.',
+                409,
+            );
+        throw error;
+    }
+}
+
 /*
  * A selection to the trash in one request: each item as trashNode would have
  * it, refused one by one (driveRepository.trashNodes). Someone with nothing to
@@ -784,7 +799,9 @@ async function requireBatch(userId: string, nodeIds: string[]) {
 export async function trashNodes(userId: string, workspaceId: string, nodeIds: string[]) {
     await requireBatch(userId, nodeIds);
     await requireEpochs(userId, workspaceId);
-    const outcomes = await driveRepository.trashNodes({ workspaceId, nodeIds, writer: userId });
+    const outcomes = await busyAsConflict(
+        driveRepository.trashNodes({ workspaceId, nodeIds, writer: userId }),
+    );
     return {
         results: outcomes.map((outcome) => {
             switch (outcome.status) {
@@ -813,7 +830,9 @@ export async function trashNodes(userId: string, workspaceId: string, nodeIds: s
 export async function restoreNodes(userId: string, workspaceId: string, nodeIds: string[]) {
     await requireBatch(userId, nodeIds);
     await requireMember(userId, workspaceId);
-    const outcomes = await driveRepository.restoreNodes({ workspaceId, nodeIds, writer: userId });
+    const outcomes = await busyAsConflict(
+        driveRepository.restoreNodes({ workspaceId, nodeIds, writer: userId }),
+    );
     return {
         results: outcomes.map((outcome) =>
             outcome.status === 'restored'

@@ -153,10 +153,14 @@ export async function trashBatch(
 }
 
 /*
- * Undo for trashBatch: puts back what it moved. None of those sits inside
- * another (only the outermost are sent), and the server would wait for a
- * folder in the same request anyway. `back` is what came back, in the order
- * given; `error` the first refusal. `onBack` hears them as they land.
+ * Undo for trashBatch: puts back what it moved. Those can sit inside one
+ * another when this device did not know it at trash time, and a selection over
+ * MAX_TRASH_BATCH goes in several requests: the server waits for a folder in
+ * the same request, but not for one in a later request. So folders go first,
+ * as far as this device knows, and an item refused as `parent-trashed` is tried
+ * again once the other requests have landed, for as long as that brings more
+ * back. `back` is what came back, in the order given; `error` the first
+ * refusal that stands. `onBack` hears them as they land.
  */
 export async function restoreBatch(
     nodes: DriveNode[],
@@ -169,9 +173,36 @@ export async function restoreBatch(
                 ? [{ ...node, trashedAt: null, changeSeq: item.changeSeq }]
                 : [],
         );
-    const answers = await sendEach(nodes, parts.restore, (landed) => {
+    const tell = (landed: Answer<RestoreBatchItem>[]) => {
         const returned = back(landed);
         if (returned.length) onBack?.(returned);
-    });
+    };
+    // Folders before what is in them: by how many of the others each sits inside.
+    const given = new Set(nodes.map((node) => node.id));
+    const inside = (node: DriveNode) =>
+        new Set(
+            [...parts.ancestorsOf(node).map((ancestor) => ancestor.id), node.parentId].filter(
+                (id): id is string => id !== null && id !== undefined && given.has(id),
+            ),
+        ).size;
+    const depth = new Map(nodes.map((node) => [node.id, inside(node)]));
+    const ordered = [...nodes].sort((a, b) => depth.get(a.id)! - depth.get(b.id)!);
+    const latest = new Map(
+        (await sendEach(ordered, parts.restore, tell)).map((answer) => [answer.node.id, answer]),
+    );
+    for (;;) {
+        const waited = [...latest.values()].filter(
+            ({ item }) => item?.status === 'refused' && item.reason === 'parent-trashed',
+        );
+        if (!waited.length) break;
+        const again = await sendEach(
+            waited.map(({ node }) => node),
+            parts.restore,
+            tell,
+        );
+        for (const answer of again) latest.set(answer.node.id, answer);
+        if (!again.some(({ item }) => item?.status === 'restored')) break;
+    }
+    const answers = nodes.map((node) => latest.get(node.id)!);
     return { back: back(answers), error: firstError(answers) };
 }

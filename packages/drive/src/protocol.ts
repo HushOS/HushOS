@@ -62,10 +62,11 @@ export const MAX_PART_URLS_PER_REQUEST = 64;
 export const MAX_FOLDER_BATCH = 64;
 /*
  * The most items one trash-batch or restore-batch request names. The server
- * walks each one under the workspace's lock, so this bounds how long a request
- * holds it; a client chunks a larger selection.
+ * walks each one under the workspace's lock, which every other write there
+ * waits for, so this bounds how long a request holds it; a client chunks a
+ * larger selection.
  */
-export const MAX_TRASH_BATCH = 500;
+export const MAX_TRASH_BATCH = 200;
 /* Batch trash and restore requests one account may make a minute, both together. */
 export const TRASH_BATCHES_PER_MINUTE = 60;
 

@@ -11,7 +11,7 @@ import {
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { driveNodes, groupHolds, groupMemberships, workspaceKeys } from './schema';
+import { driveNodes, driveShares, groupHolds, groupMemberships, workspaceKeys } from './schema';
 
 /*
  * A selection to the trash, and back, in one transaction (trashNodes,
@@ -342,8 +342,9 @@ describe('a selection to the trash', () => {
         }
     });
 
-    test('takes at most 500 items, each named once; a larger request moves nothing', async () => {
-        const many = await folders(root, 500);
+    // The documented cap (protocol.ts MAX_TRASH_BATCH): what one request may hold the lock for.
+    test('takes at most 200 items, each named once; a larger request moves nothing', async () => {
+        const many = await folders(root, 200);
         const ids = many.map((node) => node.id);
         await expect(trashAll([...ids, randomUUID()])).rejects.toThrow(RangeError);
         await expect(trashAll([ids[0]!, ids[1]!, ids[0]!])).rejects.toThrow(RangeError);
@@ -354,16 +355,202 @@ describe('a selection to the trash', () => {
         const outcomes = await trashAll(ids);
         const took = performance.now() - started;
         expect(outcomes.every((outcome) => outcome.status === 'trashed')).toBe(true);
-        expect(await trashedCount()).toBe(500);
-        expect(await workspaceSeq()).toBe(before + 500);
+        expect(await trashedCount()).toBe(200);
+        expect(await workspaceSeq()).toBe(before + 200);
         await expect(restoreAll([...ids, randomUUID()])).rejects.toThrow(RangeError);
-        expect(await trashedCount()).toBe(500);
+        expect(await trashedCount()).toBe(200);
         const back = await restoreAll(ids);
         expect(back.every((outcome) => outcome.status === 'restored')).toBe(true);
         expect(await trashedCount()).toBe(0);
-        // For the record: how long 500 hold the workspace's lock here.
-        console.info(`trashNodes: 500 items in ${Math.round(took)} ms`);
+        // For the record: how long the most one request may name hold the workspace's lock here.
+        console.info(`trashNodes: ${200} items in ${Math.round(took)} ms`);
     }, 60_000);
+
+    test('an id from another workspace is not found, and its node is left alone', async () => {
+        const other = await createTestAccount();
+        await createTestIdentity(other.userId);
+        await hold(other.workspaceId, other.userId);
+        const theirRoot = await makeRoot(other.workspaceId, other.userId);
+        const where = { workspaceId: other.workspaceId, userId: other.userId };
+        const [theirs, theirTrashed] = await folders(theirRoot, 2, where);
+        expect((await trashOne(theirTrashed!.id, other.userId, other.workspaceId)).status).toBe(
+            'ok',
+        );
+        const mine = await folder(root);
+        const before = await rows([theirs!.id, theirTrashed!.id]);
+        expect(summary(await trashAll([theirs!.id, mine.id]))).toEqual({
+            [theirs!.id]: 'refused not-found',
+            [mine.id]: 'trashed',
+        });
+        expect(summary(await restoreAll([theirTrashed!.id, mine.id]))).toEqual({
+            [theirTrashed!.id]: 'refused not-found',
+            [mine.id]: 'restored',
+        });
+        expect(await rows([theirs!.id, theirTrashed!.id])).toEqual(before);
+    });
+});
+
+/*
+ * The workspace's lock is what every other write there waits for, holding a
+ * pooled connection while it does: a batch must not take it for nothing, wait
+ * for it long, or keep it long.
+ */
+describe('the workspace’s lock', () => {
+    /* Another transaction holding the workspace's row, as a long write would, until released. */
+    async function holdingLock(workspaceId = owner.workspaceId) {
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => (release = resolve));
+        let locked!: () => void;
+        const holding = new Promise<void>((resolve) => (locked = resolve));
+        const done = db.transaction(async (tx) => {
+            await tx.execute(
+                sql`select id from workspaces where id = ${workspaceId}::uuid for update`,
+            );
+            locked();
+            await released;
+        });
+        await holding;
+        return async () => {
+            release();
+            await done;
+        };
+    }
+    const within = <T>(pending: Promise<T>, ms: number) =>
+        Promise.race([
+            pending.then((value) => ({ settled: true as const, value })),
+            new Promise<{ settled: false }>((resolve) =>
+                setTimeout(() => resolve({ settled: false }), ms),
+            ),
+        ]);
+
+    test('a guest who may trash none of the ids is answered without ever taking it', async () => {
+        const guest = await createTestAccount();
+        await createTestIdentity(guest.userId);
+        const [viewed, unshared] = await folders(root, 2);
+        const inViewed = await folders(viewed!, 3);
+        const inUnshared = await folders(unshared!, 3);
+        const shared = await drive.createShare({
+            workspaceId: owner.workspaceId,
+            nodeId: viewed!.id,
+            granterUserId: owner.userId,
+            granteeUserId: guest.userId,
+            role: 'viewer',
+            keyEpoch: viewed!.keyEpoch,
+            shareEnvelope: randomBytes(4565),
+        });
+        if (shared.status !== 'ok') throw new Error(shared.status);
+        const seq = await workspaceSeq();
+        const release = await holdingLock();
+        try {
+            // The lock is held elsewhere: anything that waited for it would not answer in time.
+            const answered = await within(
+                trashAll(
+                    [...inViewed, ...inUnshared, viewed!]
+                        .map((node) => node.id)
+                        .concat(randomUUID()),
+                    guest.userId,
+                ),
+                1_000,
+            );
+            expect(answered.settled).toBe(true);
+            if (!answered.settled) return;
+            expect(
+                answered.value.map((outcome) =>
+                    outcome.status === 'refused' ? outcome.reason : outcome.status,
+                ),
+            ).toEqual([
+                'forbidden',
+                'forbidden',
+                'forbidden',
+                'not-found',
+                'not-found',
+                'not-found',
+                'forbidden',
+                'not-found',
+            ]);
+        } finally {
+            await release();
+        }
+        expect(await workspaceSeq()).toBe(seq);
+    });
+
+    test('a share revoked while the batch waits for it counts: access is checked again under it', async () => {
+        const guest = await createTestAccount();
+        await createTestIdentity(guest.userId);
+        const [edited, kept] = await folders(root, 2);
+        const [inEdited] = await folders(edited!, 1);
+        const [inKept] = await folders(kept!, 1);
+        const shares = [];
+        for (const node of [edited!, kept!]) {
+            const shared = await drive.createShare({
+                workspaceId: owner.workspaceId,
+                nodeId: node.id,
+                granterUserId: owner.userId,
+                granteeUserId: guest.userId,
+                role: 'editor',
+                keyEpoch: node.keyEpoch,
+                shareEnvelope: randomBytes(4565),
+            });
+            if (shared.status !== 'ok') throw new Error(shared.status);
+            shares.push(shared.share.id);
+        }
+        const release = await holdingLock();
+        let pending: Promise<drive.TrashOutcome[]>;
+        try {
+            // Past the check without the lock, then queued for it.
+            pending = trashAll([inEdited!.id, inKept!.id], guest.userId);
+            for (let tries = 0; tries < 100; tries++) {
+                const { rows: waiting } = await db.execute<{ count: number }>(
+                    sql`select count(*)::int as count from pg_stat_activity
+                        where datname = current_database() and wait_event_type = 'Lock'`,
+                );
+                if (waiting[0]!.count > 0) break;
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            await db
+                .update(driveShares)
+                .set({ revokedAt: new Date() })
+                .where(eq(driveShares.id, shares[0]!));
+        } finally {
+            await release();
+        }
+        expect(summary(await pending!)).toEqual({
+            [inEdited!.id]: 'refused not-found',
+            [inKept!.id]: 'trashed',
+        });
+        expect(await inTrash(inEdited!.id)).toBe(false);
+    });
+
+    test('a batch waits for it only a few seconds, then gives up having moved nothing', async () => {
+        const [a] = await folders(root, 1);
+        expect((await trashOne(a!.id)).status).toBe('ok');
+        const [b] = await folders(root, 1);
+        const seq = await workspaceSeq();
+        const release = await holdingLock();
+        try {
+            for (const attempt of [() => trashAll([b!.id]), () => restoreAll([a!.id])]) {
+                const started = performance.now();
+                const answered = await within(
+                    attempt().then(
+                        () => 'answered',
+                        (error: unknown) => error,
+                    ),
+                    6_000,
+                );
+                expect(answered.settled).toBe(true);
+                if (!answered.settled) return;
+                expect(answered.value).toBeInstanceOf(drive.BatchBusyError);
+                // It did wait (a refusal at once would be another bug), and not for long.
+                expect(performance.now() - started).toBeGreaterThan(1_500);
+                expect(performance.now() - started).toBeLessThan(4_000);
+            }
+        } finally {
+            await release();
+        }
+        expect(await workspaceSeq()).toBe(seq);
+        expect(await inTrash(b!.id)).toBe(false);
+        expect(await inTrash(a!.id)).toBe(true);
+    }, 30_000);
 });
 
 describe('a family folder', () => {
@@ -411,9 +598,16 @@ describe('a family folder', () => {
                     expiresAt: new Date(Date.now() + 86_400_000),
                 });
             const seq = await workspaceSeq(areaId);
-            await expect(trashAll([a.id], ben.userId, areaId)).rejects.toBeInstanceOf(
-                drive.AccessEndedError,
-            );
+            if (change === 'has left')
+                // No longer a member, and no share: nothing here is theirs, so no lock either.
+                expect(summary(await trashAll([a.id], ben.userId, areaId))).toEqual({
+                    [a.id]: 'refused not-found',
+                });
+            // Still a member, but held: refused under the lock, as for one.
+            else
+                await expect(trashAll([a.id], ben.userId, areaId)).rejects.toBeInstanceOf(
+                    drive.AccessEndedError,
+                );
             await expect(restoreAll([b.id], ben.userId, areaId)).rejects.toBeInstanceOf(
                 drive.AccessEndedError,
             );
@@ -425,6 +619,46 @@ describe('a family folder', () => {
 });
 
 describe('Undo', () => {
+    test('a deep chain comes back with one walk an item, not one a level', async () => {
+        const levels = 62;
+        const chain: Folder[] = [];
+        for (let parent = root; chain.length < levels;) {
+            parent = await folder(parent);
+            chain.push(parent);
+        }
+        const leaves = await folders(chain.at(-1)!, drive.MAX_NODE_BATCH - levels);
+        // Each in the trash on its own: what is at the bottom first, then every folder from the
+        // deepest up, so each waits on every folder above it.
+        expect(
+            (await trashAll(leaves.map((node) => node.id))).every(
+                (outcome) => outcome.status === 'trashed',
+            ),
+        ).toBe(true);
+        for (const node of [...chain].reverse())
+            expect((await trashOne(node.id)).status).toBe('ok');
+        const asked = [...leaves, ...[...chain].reverse()].map((node) => node.id);
+        const started = performance.now();
+        const outcomes = await restoreAll(asked);
+        const took = performance.now() - started;
+        expect(outcomes.every((outcome) => outcome.status === 'restored')).toBe(true);
+        // Top down: each folder before the one inside it, the deepest before what is in it.
+        const seqOf = new Map(
+            outcomes.map((outcome) => [
+                outcome.id,
+                outcome.status === 'restored' ? outcome.changeSeq : 0,
+            ]),
+        );
+        for (let level = 1; level < levels; level++)
+            expect(seqOf.get(chain[level - 1]!.id)!).toBeLessThan(seqOf.get(chain[level]!.id)!);
+        for (const leaf of leaves)
+            expect(seqOf.get(chain.at(-1)!.id)!).toBeLessThan(seqOf.get(leaf.id)!);
+        // A walk a level for each waiting item is thousands of walks: seconds, not this.
+        expect(took).toBeLessThan(drive.BATCH_HOLD_MS);
+        console.info(
+            `restoreNodes: ${levels}-level chain and ${leaves.length} below it in ${Math.round(took)} ms`,
+        );
+    }, 120_000);
+
     test('puts back what it can, says why not for the rest, and waits for a folder in the same request', async () => {
         const [a, notTrashed, removed, outer, first, lone] = await folders(root, 6);
         const child = await folder(outer!);

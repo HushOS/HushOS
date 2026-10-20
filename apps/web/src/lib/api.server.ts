@@ -41,7 +41,7 @@ import {
     MAX_SEALS_PER_CALL,
 } from '@hushos/groups/protocol';
 import { createGroupRequestHandler } from '@/lib/group-requests';
-import { readCapped } from '@/lib/read-capped';
+import { boundTrashBatch } from '@/lib/trash-batch-request';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
 import { appEnv } from '@hushos/env/app';
@@ -2760,14 +2760,6 @@ export const apiApp = new Elysia({ prefix: '/api' })
 
 export type Api = typeof apiApp;
 
-/*
- * A batch trash or restore is read whole under a cap before anything parses it:
- * MAX_TRASH_BATCH ids are about 19.5 KB of JSON (`{"nodeIds":[...]}`, 39 bytes
- * an id), and nothing larger is one.
- */
-const TRASH_BATCH_PATH = /^\/api\/drive\/workspaces\/[^/]+\/(trash|restore)-batch\/?$/;
-const TRASH_BATCH_BODY_BYTES = 24 * 1024;
-
 // Bound auth bodies before JSON parsing; never log protocol messages or tokens.
 export async function handleApiRequest(request: Request): Promise<Response> {
     if (request.method === 'HEAD') {
@@ -2779,19 +2771,9 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
     if (/^\/api\/(groups|invitations)(\/|$)/.test(pathname)) return handleGroupRequest(request);
-    if (request.method === 'POST' && TRASH_BATCH_PATH.test(pathname)) {
-        const body = await readCapped(request, TRASH_BATCH_BODY_BYTES);
-        if (!body)
-            return Response.json(
-                { message: 'Request is too large.', code: 'too-large' },
-                { status: 413 },
-            );
-        request = new Request(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body,
-        });
-    }
+    const batch = await boundTrashBatch(request);
+    if (batch instanceof Response) return batch;
+    if (batch) request = batch;
     // Settings carry every pin and the sharing ledger: up to 64 KiB sealed, Base64url, in JSON.
     /*
      * Auth bodies are small, so they are read whole under a cap. A few carry

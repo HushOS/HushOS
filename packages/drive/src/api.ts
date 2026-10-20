@@ -272,8 +272,11 @@ export type TrashListing = {
  * refusal keeps none of the rest back, and an item inside a refused folder of
  * the request is judged on its own. Refusals: `not-found` (or no access),
  * `forbidden` (viewer), `root`, `trashed` (already, itself or through a
- * folder). A whole-request failure (signed out, a family manager's hold, too
- * many requests) is an error as for any route, and moves nothing.
+ * folder). A whole-request failure is an error as for any route, and moves
+ * nothing: signed out, a family manager's hold, 404 for someone with nothing
+ * to write here, 400 over MAX_TRASH_BATCH, 413 over the body cap, 429 over
+ * TRASH_BATCHES_PER_MINUTE, and 409 `conflict` when the workspace was too busy
+ * to lock, or keep locked, in time (try again).
  */
 export type TrashRefusal = 'not-found' | 'forbidden' | 'root' | 'trashed';
 export type TrashBatchItem =
