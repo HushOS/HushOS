@@ -15,7 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createBrowserDeviceIdentityStore,
     createBrowserDeviceKeyStore,
+    DeviceStorageBlocked,
     DeviceStorageTimeout,
+    DeviceStorageUnavailable,
 } from './device-storage';
 
 /*
@@ -84,32 +86,120 @@ describe.each(stores)('%s', (_, read) => {
         requests[0]!.onsuccess!();
         expect(late.close).toHaveBeenCalledTimes(1);
     });
+
+    it('lets go of an open connection when another tab deletes or upgrades the database', async () => {
+        void read().catch(() => {});
+        const db = {
+            ...connection(),
+            // The read itself stays pending: the store never answers it.
+            transaction: () => ({ objectStore: () => ({ get: () => ({}) }) }),
+        };
+        requests[0]!.result = db;
+        requests[0]!.onsuccess!();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(db.close).not.toHaveBeenCalled();
+
+        db.onversionchange!();
+        expect(db.close).toHaveBeenCalledTimes(1);
+    });
 });
 
 /*
- * At sign-in, only a store that answers "no key" lets this browser register as a new device.
- * A browser that keeps no IndexedDB for the page at all is such an answer; a store that fails
- * to open is not.
+ * At sign-in, only a store that answers "no key" lets this browser register as a new device
+ * without asking; anything else stops the sign-in with a reason (client.ts). Each way a browser
+ * can fail to open the store, and what it must be read as.
  */
-describe('the device identity store with nowhere to keep a key', () => {
-    it('answers that it holds none when the browser has no IndexedDB', async () => {
+describe('the device identity store when it cannot simply be read', () => {
+    const load = () => createBrowserDeviceIdentityStore().load();
+    /* The open fails after `upgraded` (the database was being created) with `name`. */
+    function failOpen(name: string, message: string, upgraded = false) {
+        const reading = load();
+        const request = requests[0]!;
+        if (upgraded) {
+            request.result = { createObjectStore: vi.fn() };
+            request.onupgradeneeded!();
+        }
+        Object.assign(request, { error: new DOMException(message, name) });
+        request.onerror!();
+        return reading;
+    }
+
+    it('holds no key where the browser has no IndexedDB', async () => {
         vi.stubGlobal('indexedDB', undefined);
-        await expect(createBrowserDeviceIdentityStore().load()).resolves.toBeNull();
+        await expect(load()).resolves.toBeNull();
     });
 
-    it('answers that it holds none when site storage is refused outright', async () => {
+    it('holds no key where reading indexedDB itself is refused', async () => {
+        vi.unstubAllGlobals();
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+        Object.defineProperty(globalThis, 'indexedDB', {
+            configurable: true,
+            get() {
+                throw new DOMException('The operation is insecure.', 'SecurityError');
+            },
+        });
+        try {
+            await expect(load()).resolves.toBeNull();
+        } finally {
+            if (descriptor) Object.defineProperty(globalThis, 'indexedDB', descriptor);
+            else delete (globalThis as { indexedDB?: unknown }).indexedDB;
+        }
+    });
+
+    it('holds no key where opening is refused outright with SecurityError', async () => {
         vi.stubGlobal('indexedDB', {
             open: () => {
                 throw new DOMException('The operation is insecure.', 'SecurityError');
             },
         });
-        await expect(createBrowserDeviceIdentityStore().load()).resolves.toBeNull();
+        await expect(load()).resolves.toBeNull();
     });
 
-    it('does not answer when the store fails to open', async () => {
-        const reading = createBrowserDeviceIdentityStore().load();
-        const failed = expect(reading).rejects.toThrow('Device storage is unavailable.');
-        requests[0]!.onerror!();
+    it('holds no key when a full disk fails the open that was creating the database', async () => {
+        await expect(
+            failOpen('QuotaExceededError', 'The quota has been exceeded.', true),
+        ).resolves.toBeNull();
+    });
+
+    it('holds no key when the open creating the database outlasts the wait', async () => {
+        const reading = load();
+        requests[0]!.result = { createObjectStore: vi.fn() };
+        requests[0]!.onupgradeneeded!();
+        const answered = expect(reading).resolves.toBeNull();
+        await vi.advanceTimersByTimeAsync(8_000);
+        await answered;
+    });
+
+    it.each([
+        [
+            'Chrome with site data blocked',
+            'UnknownError',
+            'The user denied permission to access the database.',
+        ],
+        [
+            'a corrupted database',
+            'UnknownError',
+            'Internal error opening backing store for indexedDB.open.',
+        ],
+        [
+            'Firefox before 115 in a private window',
+            'InvalidStateError',
+            'A mutation operation was attempted on a database that did not allow mutations.',
+        ],
+    ])('is unavailable, not empty, for %s', async (_, name, message) => {
+        await expect(failOpen(name, message)).rejects.toBeInstanceOf(DeviceStorageUnavailable);
+    });
+
+    it('is blocked when another tab holds the database across an upgrade', async () => {
+        const reading = load();
+        requests[0]!.onblocked!();
+        await expect(reading).rejects.toBeInstanceOf(DeviceStorageBlocked);
+    });
+
+    it('is slow when an existing database does not open in time', async () => {
+        const reading = load();
+        const failed = expect(reading).rejects.toBeInstanceOf(DeviceStorageTimeout);
+        await vi.advanceTimersByTimeAsync(8_000);
         await failed;
     });
 });

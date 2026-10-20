@@ -1083,9 +1083,10 @@ describe('journal and restore', () => {
 
 /*
  * A landed part's etag goes into the journal in the background. A write that fails must not
- * become an unhandled rejection, nor leave a row that claims less than the server holds: it is
- * tried once more, and if the journal still refuses, the row goes and the upload, finished here
- * or not, starts over after a reload instead of resuming from a journal that lost a write.
+ * become an unhandled rejection. It is tried once more; if the journal still refuses, the row
+ * stays as it is, upload id and all: a reload resumes the same upload and sends that part again,
+ * checked against its journaled digest, instead of leaving the server's upload open (holding
+ * quota and a pending node) while a fresh one reserves the size again.
  */
 describe('a journal that refuses a landed part', () => {
     /* A memory journal whose writes of an etag for `part` fail `times` times. */
@@ -1131,7 +1132,8 @@ describe('a journal that refuses a landed part', () => {
         expect(second.item(id!).partsDone).toBe(landed);
     });
 
-    test('refused twice, drops the row so a reload starts the file over instead of resuming', async () => {
+    test('refused twice, keeps the row: a reload resumes the same upload, sends that part again, and leaves nothing open', async () => {
+        const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const { journal, refused } = refusingJournal(1, 2);
         const first = harness({ journal });
         const [id] = first.manager.enqueue([
@@ -1141,27 +1143,35 @@ describe('a journal that refuses a landed part', () => {
         await first.manager.pause(id!);
         await settle(100);
         expect(refused()).toBe(2);
-        expect(first.item(id!).partsDone).toBeGreaterThan(0);
-        // No begun row is left to resume from; the queued row still names the file.
-        expect(journal.entries.has(id!)).toBe(false);
-        expect(journal.queued.has(id!)).toBe(true);
+        expect(warned).toHaveBeenCalledTimes(1);
+        const landed = first.item(id!).partsDone;
+        expect(landed).toBeGreaterThan(1);
+        // The row is kept with its upload id; only part 1's etag is missing from it.
+        const entry = journal.entries.get(id!)!;
+        expect(entry.uploadId).toBe('up-1');
+        expect(entry.parts[1]?.digest).toBeDefined();
+        expect(entry.parts[1]?.etag).toBeUndefined();
 
         const second = harness({ journal });
         second.server.uploads = first.server.uploads;
-        const [restored] = await second.manager.restore('ws');
-        expect(restored).toBe(id);
-        expect(second.item(id!).partsDone).toBe(0);
+        await second.manager.restore('ws');
         const result = await second.manager.attachFile(id!, fakeFile(6 * CHUNK, 'movie.mp4'));
-        expect(result).toEqual({ ok: true, resumed: false });
+        expect(result).toEqual({ ok: true, resumed: true });
         await settle(2_000);
         expect(second.item(id!).status).toBe('done');
-        // Started over: new keys, every part sent, nothing reopened from the dropped row.
-        expect(second.calls).toContain('driveUploadPrepare');
-        expect(second.calls).not.toContain('driveUploadReopen');
-        expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(6);
+        // The same upload, finished: part 1 sent again beside the ones that never landed, no
+        // second upload begun, nothing aborted, nothing left open on the server.
+        expect(second.calls).toContain('driveUploadReopen');
+        expect(second.calls).not.toContain('driveUploadPrepare');
+        expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(6 - landed + 1);
+        expect(second.server.completed).toEqual([{ id: 'up-1', parts: [1, 2, 3, 4, 5, 6] }]);
+        expect([...second.server.uploads.keys()]).toEqual(['up-1']);
+        expect(second.server.aborted).toEqual([]);
+        expect(journal.entries.size).toBe(0);
     });
 
     test('refused twice, the upload still finishes in this page', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
         const { journal } = refusingJournal(1, 2);
         const h = harness({ journal });
         const [id] = h.manager.enqueue([

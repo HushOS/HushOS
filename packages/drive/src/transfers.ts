@@ -255,11 +255,6 @@ type Internal = {
     keyEpoch: number;
     /* The journal row, once begin has succeeded; null before, and for finished uploads. */
     entry: JournalEntry | null;
-    /*
-     * Set when the journal would not take a landed part: the row is dropped, nothing more is
-     * written to it, and the upload finishes in this page or, after a reload, starts over.
-     */
-    unjournaled: boolean;
     /* The queued row, from enqueue until the upload is settled; the only row a waiting file has. */
     queued: QueuedEntry | null;
     stash: string | null;
@@ -659,7 +654,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         part: number,
         patch: Partial<JournalEntry['parts'][string]>,
     ) {
-        if (!journal || !u.entry || u.unjournaled) return;
+        if (!journal || !u.entry) return;
         await journal.update(u.entry.id, (entry) => ({
             ...entry,
             parts: {
@@ -669,11 +664,11 @@ export function createTransferManager(options: TransferManagerOptions) {
         }));
     }
     /*
-     * A landed part's etag, which a resume needs to know the part is on the server. Tried twice;
-     * a journal that still refuses it cannot be trusted to resume this upload (its row would claim
-     * less than the server holds, or the next write could fail the same way), so the begun row
-     * goes. This page carries on from what it holds in memory; after a reload the queued row
-     * brings the file back to start over. Never rejects: the part did land.
+     * A landed part's etag, written in the background. Tried twice; a journal that still refuses
+     * it is left as it is. The row keeps the upload id, so a reload still resumes this upload
+     * (dropping it would leave the server's upload holding quota while a restart reserved the
+     * size again), and a part with no etag is simply sent again, checked against its journaled
+     * digest first. Never rejects: the part did land.
      */
     async function journalLanded(
         u: Internal,
@@ -684,12 +679,14 @@ export function createTransferManager(options: TransferManagerOptions) {
             try {
                 await journalPart(u, part, landed);
                 return;
-            } catch {
-                // Tried once more, then given up on below.
+            } catch (error) {
+                if (attempt === 2)
+                    console.warn(
+                        `The upload journal did not record part ${part}; it will be sent again if this upload resumes.`,
+                        error instanceof Error ? error.name : error,
+                    );
             }
         }
-        u.unjournaled = true;
-        if (journal && u.entry) await journal.remove(u.entry.id).catch(() => {});
     }
     /* Drops the begun row only: the upload is starting over and stays queued. */
     async function journalRemove(u: Internal) {
@@ -1142,8 +1139,6 @@ export function createTransferManager(options: TransferManagerOptions) {
         keyChangeOver(u);
         u.uploadId = begun.upload.id;
         rememberUrls(u, begun.parts, begun.urlExpiresAt);
-        // A new begin writes a new row: the journal is trusted again until it refuses.
-        u.unjournaled = false;
         u.entry = {
             id: u.item.id,
             workspaceId,
@@ -1551,7 +1546,6 @@ export function createTransferManager(options: TransferManagerOptions) {
             uploadId: null,
             keyEpoch: 0,
             entry: null,
-            unjournaled: false,
             queued: null,
             stash: null,
             thumbnail: null,

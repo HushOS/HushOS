@@ -13,14 +13,32 @@ export class DeviceStorageTimeout extends Error {
     }
 }
 /*
- * This browser keeps no IndexedDB for the page at all (no API, or site storage refused outright
- * with SecurityError), so nothing can be stored here: unlike a store that is busy, slow or
- * failing, it is known to hold no key.
+ * A device store known to hold no key: the browser keeps no IndexedDB for the page at all (no
+ * API, or SecurityError), or the database did not exist until this open created it (whatever
+ * happened after that, nothing was ever stored in it).
  */
 export class NoDeviceStorage extends Error {
     constructor(options?: { cause?: unknown }) {
         super('This browser keeps no device storage for HushOS.', options);
         this.name = 'NoDeviceStorage';
+    }
+}
+/* Another tab holds the database open across an upgrade or a deletion. */
+export class DeviceStorageBlocked extends Error {
+    constructor() {
+        super('Device storage is busy in another tab.');
+        this.name = 'DeviceStorageBlocked';
+    }
+}
+/*
+ * The database exists, or may, and could not be opened: site data blocked (Chrome says
+ * UnknownError), a corrupted backing store, a full disk, an old private mode. Whether it holds a
+ * key is unknown.
+ */
+export class DeviceStorageUnavailable extends Error {
+    constructor(options?: { cause?: unknown }) {
+        super('Device storage is unavailable.', options);
+        this.name = 'DeviceStorageUnavailable';
     }
 }
 const STORAGE_TIMEOUT_MS = 8_000;
@@ -47,23 +65,26 @@ function withTimeout<T>(work: Promise<T>) {
  * when another tab wants to delete or upgrade the database.
  */
 function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
-    if (typeof indexedDB === 'undefined' || !indexedDB)
-        return Promise.reject(new NoDeviceStorage());
     let request: IDBOpenDBRequest;
     try {
-        request = indexedDB.open(name, 1);
+        // Reading `indexedDB` itself can throw (SecurityError where site storage is refused).
+        const factory = typeof indexedDB === 'undefined' ? undefined : indexedDB;
+        if (!factory) return Promise.reject(new NoDeviceStorage());
+        request = factory.open(name, 1);
     } catch (error) {
         return Promise.reject(
             error instanceof DOMException && error.name === 'SecurityError'
                 ? new NoDeviceStorage({ cause: error })
-                : error,
+                : new DeviceStorageUnavailable({ cause: error }),
         );
     }
+    // Set once this open created the database: until then it did not exist, so it holds no key.
+    let created = false;
     return new Promise((resolve, reject) => {
         let settled = false;
         const timer = setTimeout(() => {
             settled = true;
-            reject(new DeviceStorageTimeout());
+            reject(created ? new NoDeviceStorage() : new DeviceStorageTimeout());
         }, STORAGE_TIMEOUT_MS);
         const settle = () => {
             if (settled) return false;
@@ -71,7 +92,10 @@ function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
             clearTimeout(timer);
             return true;
         };
-        request.onupgradeneeded = () => request.result.createObjectStore(store);
+        request.onupgradeneeded = () => {
+            created = true;
+            request.result.createObjectStore(store);
+        };
         request.onsuccess = () => {
             const db = request.result;
             if (!settle()) {
@@ -82,10 +106,14 @@ function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
             resolve(db);
         };
         request.onerror = () => {
-            if (settle()) reject(new Error('Device storage is unavailable.'));
+            if (!settle()) return;
+            const cause = request.error;
+            reject(
+                created ? new NoDeviceStorage({ cause }) : new DeviceStorageUnavailable({ cause }),
+            );
         };
         request.onblocked = () => {
-            if (settle()) reject(new Error('Device storage is busy in another tab.'));
+            if (settle()) reject(new DeviceStorageBlocked());
         };
     });
 }

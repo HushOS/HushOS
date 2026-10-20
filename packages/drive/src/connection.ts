@@ -4,14 +4,8 @@ import { openDB, type DBSchema, type IDBPDatabase, type OpenDBCallbacks } from '
  * One IndexedDB connection, opened on first use and kept, which lets go whenever it can no
  * longer serve: another tab (or this one) deleting or upgrading the database, the browser
  * closing it on its own (WebKit does when its storage process goes away), or an open that
- * failed. The next call opens a fresh one.
- *
- * Only "close" can come from a connection that is no longer the cached one: a connection let
- * go on versionchange stays open until its transactions finish, and the browser can still
- * close it for good in that time (site data cleared, storage lost), after the next call
- * cached its successor. So only that handler checks which connection it belongs to.
- * versionchange never reaches a connection already closing, and an open that fails was never
- * replaced, since only its own success-time events replace it.
+ * failed. The next call opens a fresh one. A late event from a connection already replaced
+ * never drops its successor.
  */
 export function cachedConnection<Schema extends DBSchema>(
     name: string,
@@ -25,7 +19,7 @@ export function cachedConnection<Schema extends DBSchema>(
             upgrade,
             blocking(_current, _next, event) {
                 (event.target as IDBDatabase).close();
-                database = undefined;
+                if (database === opening) database = undefined;
             },
             terminated() {
                 if (database === opening) database = undefined;
@@ -33,7 +27,7 @@ export function cachedConnection<Schema extends DBSchema>(
         });
         database = opening;
         opening.catch(() => {
-            database = undefined;
+            if (database === opening) database = undefined;
         });
         return opening;
     };

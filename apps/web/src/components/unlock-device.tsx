@@ -1,5 +1,6 @@
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { DeviceStorageUnreadable } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthNote } from '@/components/auth-layout';
@@ -28,6 +29,9 @@ export function UnlockDevice({
 }) {
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    // This browser's device key could not be read: the person may unlock as a new device instead.
+    const [offerNewDevice, setOfferNewDevice] = useState(false);
+    const asNewDevice = useRef(false);
     const form = useForm({
         defaultValues: { password: '' },
         validationLogic: revalidateLogic(),
@@ -35,8 +39,10 @@ export function UnlockDevice({
         onSubmit: async ({ value }) => {
             setPending(true);
             setError('');
+            const newDevice = asNewDevice.current;
+            asNewDevice.current = false;
             try {
-                await authClient.login(user.email, value.password);
+                await authClient.login(user.email, value.password, { asNewDevice: newDevice });
                 cue('success');
                 // Kept, and busy, while what unlocking opens takes over; emptied after,
                 // in case this form stays on screen.
@@ -44,6 +50,7 @@ export function UnlockDevice({
                 form.reset();
             } catch (error) {
                 cue('error');
+                setOfferNewDevice(error instanceof DeviceStorageUnreadable);
                 setError(authError(error));
             } finally {
                 setPending(false);
@@ -92,8 +99,22 @@ export function UnlockDevice({
                             Cancel
                         </Button>
                     )}
+                    {offerNewDevice && (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size={onCancel ? 'default' : 'lg'}
+                            disabled={pending}
+                            onClick={() => {
+                                asNewDevice.current = true;
+                                void form.handleSubmit();
+                            }}
+                        >
+                            Unlock as a new device
+                        </Button>
+                    )}
                     <Button type="submit" size={onCancel ? 'default' : 'lg'} disabled={pending}>
-                        {pending ? 'Unlocking…' : 'Unlock'}
+                        {pending ? 'Unlocking…' : offerNewDevice ? 'Try again' : 'Unlock'}
                     </Button>
                 </div>
             </div>

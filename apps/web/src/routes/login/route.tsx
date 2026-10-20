@@ -6,7 +6,8 @@ import {
     type SearchSchemaInput,
 } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { DeviceStorageUnreadable } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
@@ -20,6 +21,8 @@ import { cardMeta, publicOrigin } from '@/lib/social';
 import { cue } from '@/lib/sounds';
 
 const securityChanged = oneOf(['password', 'master-key', 'recovery-key', 'uncertain']);
+/* Why the sign-in after a security change did not happen here: this browser's device key was unreadable. */
+const storage = oneOf(['blocked', 'timeout', 'unavailable']);
 
 const loginFields = z.object({
     email: emailValue,
@@ -28,9 +31,14 @@ const loginFields = z.object({
 
 export const Route = createFileRoute('/login')({
     validateSearch: (
-        search: { securityChanged?: unknown; redirect?: unknown } & SearchSchemaInput,
+        search: {
+            securityChanged?: unknown;
+            storage?: unknown;
+            redirect?: unknown;
+        } & SearchSchemaInput,
     ) => ({
         securityChanged: securityChanged(search.securityChanged),
+        storage: storage(search.storage),
         // Only ever a same-site path: anything else is dropped here, before any page reads it.
         redirect: safeReturnPath(search.redirect) ?? undefined,
     }),
@@ -75,9 +83,12 @@ export const Route = createFileRoute('/login')({
 });
 function LoginPage() {
     const router = useRouter();
-    const { securityChanged, redirect: returnTo } = Route.useSearch();
+    const { securityChanged, storage: unreadable, redirect: returnTo } = Route.useSearch();
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    // This browser's device key could not be read: the person may sign in as a new device instead.
+    const [offerNewDevice, setOfferNewDevice] = useState(false);
+    const asNewDevice = useRef(false);
     // A browser that lands here because its device was removed from the account (the
     // server rendered this page without a session) asks once: the auth client then clears
     // what this browser kept for that account.
@@ -95,8 +106,10 @@ function LoginPage() {
         onSubmit: async ({ value }) => {
             setError('');
             setPending(true);
+            const newDevice = asNewDevice.current;
+            asNewDevice.current = false;
             try {
-                await authClient.login(value.email, value.password);
+                await authClient.login(value.email, value.password, { asNewDevice: newDevice });
                 // The form keeps what was typed and stays busy until the app replaces it:
                 // emptied first, it would look for a moment as if signing in had failed.
                 cue('success');
@@ -120,6 +133,7 @@ function LoginPage() {
                 } else await router.navigate({ href: returnTarget(returnTo), replace: true });
             } catch (error) {
                 cue('error');
+                setOfferNewDevice(error instanceof DeviceStorageUnreadable);
                 setError(authError(error, { signIn: true }));
             } finally {
                 // Unmounted by now, unless the app sent this page back to itself (a session the
@@ -128,7 +142,15 @@ function LoginPage() {
             }
         },
     });
-    const notice = securityChanged ? notices[securityChanged] : null;
+    const notice = securityChanged
+        ? securityChanged === 'password' && unreadable
+            ? {
+                  ...notices.password,
+                  tone: 'warning' as const,
+                  text: `${new DeviceStorageUnreadable(unreadable).why.replace(/^./, (c) => c.toUpperCase())}, so you weren’t signed in here. Sign in with your new password.`,
+              }
+            : notices[securityChanged]
+        : null;
     return (
         <AuthLayout
             title="Welcome back"
@@ -210,10 +232,26 @@ function LoginPage() {
                     <AuthActions
                         action={
                             <Button type="submit" size="lg" disabled={pending}>
-                                {pending ? 'Signing in…' : 'Sign in'}
+                                {pending ? 'Signing in…' : offerNewDevice ? 'Try again' : 'Sign in'}
                             </Button>
                         }
-                    />
+                    >
+                        {offerNewDevice && (
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="lg"
+                                className="h-11 w-full text-[15px]"
+                                disabled={pending}
+                                onClick={() => {
+                                    asNewDevice.current = true;
+                                    void form.handleSubmit();
+                                }}
+                            >
+                                Sign in as a new device
+                            </Button>
+                        )}
+                    </AuthActions>
                 </AuthFields>
             </form>
         </AuthLayout>

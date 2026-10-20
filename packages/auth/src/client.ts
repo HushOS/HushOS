@@ -20,6 +20,7 @@ import {
     signDeviceSession,
 } from '@hushos/crypto/device-identity';
 import {
+    DeviceStorageBlocked,
     DeviceStorageTimeout,
     type DeviceIdentityStore,
     type DeviceKeyStore,
@@ -43,14 +44,44 @@ export type AuthClientOptions = {
 };
 
 const REMOVED_NOTICE = 'hushos-device-removed';
-/*
- * The sign-in's words when this browser's device key could not be read. Fixed, so the sign-in
- * page shows them as they are: a busy or slow store is never read as "no key here".
- */
-export const DEVICE_STORAGE_BUSY =
-    'This browser’s storage for HushOS is busy. Close other HushOS tabs, then sign in again.';
-/* How long a sign-in waits before reading a store that did not answer once more. */
+/* How long a sign-in waits before reading a busy or slow device store once more. */
 export const DEVICE_STORAGE_RETRY_MS = 1_000;
+
+/*
+ * Why this browser's device key could not be read at sign-in: another tab held the store open
+ * (`blocked`), it did not answer in time (`timeout`), or it could not be opened at all
+ * (`unavailable`: site data blocked, a corrupted or full store, an old private mode). None of
+ * these says the browser holds no key, so the sign-in stops before it begins and the person
+ * chooses: try again, or sign in as a new device (`login(..., { asNewDevice: true })`), which
+ * shows the new-device notice. Only `blocked` is about other tabs.
+ */
+export type DeviceStorageReason = 'blocked' | 'timeout' | 'unavailable';
+const STORAGE_WHY: Record<DeviceStorageReason, string> = {
+    blocked: 'another HushOS tab is using this browser’s storage',
+    timeout: 'this browser’s storage didn’t answer in time',
+    unavailable: 'this browser’s storage for HushOS can’t be read',
+};
+const STORAGE_NEXT: Record<DeviceStorageReason, string> = {
+    blocked: 'Close other HushOS tabs and try again, or sign in as a new device.',
+    timeout: 'Try again, or sign in as a new device.',
+    unavailable: 'Try again, or sign in as a new device.',
+};
+const sentence = (text: string) => text[0]!.toUpperCase() + text.slice(1);
+export class DeviceStorageUnreadable extends Error {
+    readonly reason: DeviceStorageReason;
+    /* The cause as a clause, for a flow that words its own message around it. */
+    readonly why: string;
+    constructor(reason: DeviceStorageReason, options?: { cause?: unknown }) {
+        super(`${sentence(STORAGE_WHY[reason])}. ${STORAGE_NEXT[reason]}`, options);
+        this.name = 'DeviceStorageUnreadable';
+        this.reason = reason;
+        this.why = STORAGE_WHY[reason];
+    }
+}
+export type LoginOptions = {
+    /* Skip reading the device key and sign in as a new device: the person's choice when it can't be read. */
+    asNewDevice?: boolean;
+};
 
 export function createAuthClient(
     createTransport: () => CryptoTransport,
@@ -193,9 +224,11 @@ export function createAuthClient(
      * quiet: a browser two people share never tells the server that one person's
      * device is now signing in as the other.
      */
-    async function deviceProof(email: string, attemptToken: string) {
-        if (!identities) return undefined;
-        const stored = await storedIdentity(identities);
+    async function deviceProof(
+        stored: StoredDeviceIdentity | null,
+        email: string,
+        attemptToken: string,
+    ) {
         if (!stored || stored.emailHash !== (await emailDigest(email))) return undefined;
         try {
             const signature = await signDeviceSession(stored.privateKey, {
@@ -211,21 +244,35 @@ export function createAuthClient(
         }
     }
     /*
-     * The stored device key, or null only when the store answered that it holds none. A store
-     * that is busy (another tab holding it), slow (the open gave up) or failing is read once more
-     * after a pause, and then the sign-in stops: going on would register this browser as a new
-     * device, with a notice and an email about a sign-in that was this device all along.
+     * The stored device key, or null only when the store answered that it holds none. Read before
+     * the sign-in begins, so a refused try costs no password check and none of the sign-in
+     * attempts the server allows. A store that was blocked or slow is read once more after a
+     * pause; one that could not be opened is not, since that rarely passes in a second. Either
+     * way, a store that did not answer stops the sign-in with DeviceStorageUnreadable: going on
+     * would register this browser as a new device, with a notice and an email about a sign-in
+     * that may have been this device all along.
      */
     async function storedIdentity(store: DeviceIdentityStore) {
+        const unreadable = (error: unknown) =>
+            new DeviceStorageUnreadable(
+                error instanceof DeviceStorageBlocked
+                    ? 'blocked'
+                    : error instanceof DeviceStorageTimeout
+                      ? 'timeout'
+                      : 'unavailable',
+                { cause: error },
+            );
         try {
             return await store.load();
-        } catch {
-            await new Promise((resolve) => setTimeout(resolve, DEVICE_STORAGE_RETRY_MS));
-            try {
-                return await store.load();
-            } catch (error) {
-                throw new Error(DEVICE_STORAGE_BUSY, { cause: error });
-            }
+        } catch (error) {
+            if (!(error instanceof DeviceStorageBlocked || error instanceof DeviceStorageTimeout))
+                throw unreadable(error);
+        }
+        await new Promise((resolve) => setTimeout(resolve, DEVICE_STORAGE_RETRY_MS));
+        try {
+            return await store.load();
+        } catch (error) {
+            throw unreadable(error);
         }
     }
     /*
@@ -346,12 +393,13 @@ export function createAuthClient(
         if (!result.user && result.removed && !busy) await forgetRemovedDevice().catch(() => {});
         return result;
     }
-    async function login(email: string, password: string) {
+    async function login(email: string, password: string, options: LoginOptions = {}) {
         const loginEpoch = epoch;
+        const stored = identities && !options.asNewDevice ? await storedIdentity(identities) : null;
         const start = await rpc('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
         const finish = await rpc('loginFinish', challenge);
-        const device = await deviceProof(email, challenge.attemptToken);
+        const device = await deviceProof(stored, email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
         const result = await api.loginFinish({
@@ -663,7 +711,13 @@ export function createAuthClient(
                 await deviceKeys.clear().catch(() => {});
                 try {
                     return await login(email, password);
-                } catch {
+                } catch (error) {
+                    // The new password is in place either way; say why it did not sign in here.
+                    if (error instanceof DeviceStorageUnreadable)
+                        throw new Error(
+                            `Your password was changed, but ${error.why}, so you weren’t signed in here. Sign in with your new password.`,
+                            { cause: error },
+                        );
                     throw new Error('Your password was changed. Sign in with your new password.');
                 }
             }),
@@ -713,16 +767,23 @@ export function createAuthClient(
                         /* Unknown either way. */
                     }
                     if (live && live.credentialVersion === user.credentialVersion) throw failure;
-                    return { signedIn: false, uncertain: true };
+                    return { signedIn: false, uncertain: true, storage: null };
                 }
+                // Committed: the server replaced the credentials and ended every session, so a
+                // sign-in that fails here leaves the person signed out, on the sign-in page, with
+                // this browser's device key kept. `storage` says when that was the reason.
                 try {
                     await login(
                         user.email,
                         action === 'password' ? (newPassword ?? password) : password,
                     );
-                    return { signedIn: true, uncertain: false };
-                } catch {
-                    return { signedIn: false, uncertain: false };
+                    return { signedIn: true, uncertain: false, storage: null };
+                } catch (error) {
+                    return {
+                        signedIn: false,
+                        uncertain: false,
+                        storage: error instanceof DeviceStorageUnreadable ? error.reason : null,
+                    };
                 }
             }),
         session: () => readSession(),
@@ -744,7 +805,8 @@ export function createAuthClient(
         removeOtherDevices: (password: string) =>
             withPassword(password, (proof) => api.removeOtherDevices(proof)),
         updateProfile: (name: string) => api.updateProfile(name),
-        login: (email: string, password: string) => exclusive(() => login(email, password)),
+        login: (email: string, password: string, options?: LoginOptions) =>
+            exclusive(() => login(email, password, options)),
         register: (email: string, name: string, password: string) =>
             exclusive(async () => {
                 const start = await rpc('registerStart', { password });
@@ -752,7 +814,8 @@ export function createAuthClient(
                 const finish = await rpc('registerFinish', challenge);
                 await api.registerFinish({ name, ...finish });
                 try {
-                    return await login(email, password);
+                    // A new account has no device here to prove: no need to read the store.
+                    return await login(email, password, { asNewDevice: true });
                 } catch {
                     throw new Error('Your account was created. Please sign in to unlock it.');
                 }
