@@ -13,10 +13,26 @@ import VerifyEmail from '../src/templates/verify-email';
 /*
  * The plain-text part leaves out the hidden marker at the end of every message:
  * it is only there so Gmail never folds the HTML's end away, and in text it would show.
+ * Headings keep their case: upper-casing them would turn a placeholder such as
+ * {{granterName}} into {{GRANTERNAME}}, which the server never fills, and a
+ * person's name is theirs to spell. Every placeholder in the text must be one the
+ * HTML has, and every one the HTML shows must reach the text.
  */
+const headings = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].map((selector) => ({
+    selector,
+    options: { uppercase: false },
+}));
 const plain = (html: string) => {
-    const text = toPlainText(html.replace(/<span data-marker=""[^>]*>[^<]*<\/span>/, ''));
+    const text = toPlainText(html.replace(/<span data-marker=""[^>]*>[^<]*<\/span>/, ''), {
+        selectors: headings,
+    });
     if (text.includes('{{marker}}')) throw new Error('The marker leaked into the plain text.');
+    for (const [token] of text.matchAll(/\{\{\w+\}\}/g))
+        if (!html.includes(token))
+            throw new Error(`The plain text has ${token}, which no one fills.`);
+    for (const [token] of html.matchAll(/\{\{\w+\}\}/g))
+        if (token !== '{{marker}}' && token !== '{{logoUrl}}' && !text.includes(token))
+            throw new Error(`The plain text lost ${token}.`);
     return text;
 };
 
