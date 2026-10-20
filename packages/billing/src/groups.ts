@@ -314,7 +314,7 @@ export async function reconcileGroup(
     // A group HushOS never made a customer for gets no pool from a stray delivery.
     if (!state && !(await billingRepository.getGroupCustomer(groupId))) return;
     const ids = new Set((state?.active_subscriptions ?? []).map((subscription) => subscription.id));
-    for (const id of await billingRepository.listLiveGroupSubscriptionIds(groupId)) ids.add(id);
+    for (const id of await billingRepository.listUnendedGroupSubscriptionIds(groupId)) ids.add(id);
     const subscriptions: billingRepository.GroupSubscriptionSnapshot[] = [];
     const unresolved: string[] = [];
     const stale: string[] = [];
@@ -337,7 +337,9 @@ export async function reconcileGroup(
             });
             continue;
         }
-        const ended = Boolean(subscription.ended_at);
+        // Only a live plan's orders and tier matter: one ended, unpaid, incomplete or paused gives
+        // no pool or places, and keeps what it last paid for until it is live again.
+        const ended = Boolean(subscription.ended_at) || !LIVE.has(subscription.status);
         const orders = ended ? null : await orderState(subscription.id);
         if (orders?.oldestAt != null && Date.now() - orders.oldestAt > STALE_RAISE_DAYS * DAY)
             stale.push(subscription.id);
@@ -577,8 +579,10 @@ const endingOrEnded = (subscription: models.Subscription) =>
  * claim raises and tier moves take), read again under it, and changed only when it still
  * isn't set to end: two runs, a retry and a webhook's job never set it twice.
  *
- * Polar's answers to the update (the errors its SDK declares for it): only 403
- * `InactiveSubscription`, a plan it won't change while it isn't active (past due, paused),
+ * A plan that isn't live (`unpaid`, `incomplete`, `paused`) is not asked about: Polar sets
+ * only an active plan to end, so it is refused on its status alone, recorded and listed as
+ * below. Polar's answers to the update (the errors its SDK declares for it): only 403
+ * `InactiveSubscription`, a plan it won't change while it isn't active (past due),
  * is a refusal no retry changes until the plan does. It is recorded with the plan's state
  * and listed for operators, and the plan is not tried again, by this job or any reconcile,
  * until Polar shows it in another state. 403 `AlreadyCanceledSubscription` is a plan set
@@ -641,6 +645,21 @@ async function setDissolvedToEnd(groupId: string, outcome: { cancelled: number; 
                     currentPeriodEnd: current.current_period_end,
                     cancelAtPeriodEnd: current.cancel_at_period_end,
                 });
+                // Unpaid, incomplete or paused: Polar sets only an active plan to end, and what it
+                // answers for one that isn't is not something to retry. Refused on its status
+                // alone, without asking, and listed for operators to revoke in Polar.
+                if (!LIVE.has(current.status)) {
+                    await billingRepository.recordDissolveRefusal(
+                        row.id,
+                        state,
+                        `status:${current.status}`,
+                    );
+                    log.error({
+                        message: 'Dissolved family’s plan isn’t active: revoke it in Polar',
+                        billing: { group: groupId, subscription: row.id, status: current.status },
+                    });
+                    return 'refused' as const;
+                }
                 // Before the call, so an answer lost to a timeout still counts as HushOS's.
                 await billingRepository.markDissolveAsked(row.id);
                 try {

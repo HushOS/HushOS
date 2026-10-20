@@ -94,6 +94,8 @@ const stuckReasons: Record<string, string> = {
     'not-kept': 'Polar accepted the change five times and kept none of it.',
     'dissolved-refused':
         'Its family was dissolved, and Polar refused to cancel the plan at the end of its period. Cancel it in Polar.',
+    'dissolved-inactive':
+        'Its family was dissolved, and the plan isn’t active (unpaid, incomplete or paused), so it can’t be set to end and may still be paid. Revoke it in Polar.',
     'dissolved-failing':
         'Its family was dissolved, and HushOS has failed for over a day, or close to its renewal, to cancel the plan at the end of its period. The worker’s log has Polar’s answer; check the access token. Cancel it in Polar.',
     'revert-unavailable':

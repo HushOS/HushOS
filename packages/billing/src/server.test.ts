@@ -2720,6 +2720,34 @@ describe('a new payer', () => {
         });
     });
 
+    test.each(['unpaid', 'incomplete'])(
+        'a plan kept while %s is no plan to buy against: another billing holder checks out and becomes the payer',
+        async (status) => {
+            const { groupId, subscription } = await familyOnPlan({ units: 6 });
+            const heir = await createTestAccount();
+            await setTestMember({
+                groupId,
+                userId: heir.userId,
+                state: 'active',
+                roles: ['billing'],
+            });
+            // Kept, not ended: Polar may still take a payment for it. But nothing is being
+            // charged, and it gives the family nothing, so it holds nobody to it.
+            subscription.status = status;
+            await billing.reconcileGroup(groupId);
+            expect(await billingRepository.getGroupSubscription(subscription.id)).toMatchObject({
+                status,
+                endedAt: null,
+            });
+            await billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY });
+            expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(
+                heir.userId,
+            );
+            expect(polar.customers.get(`group:${groupId}`)!.members).toEqual([heir.userId]);
+            expect(callsTo('checkouts.create')).toHaveLength(1);
+        },
+    );
+
     test('an abandoned checkout doesn’t lock the family to whoever started it', async () => {
         const organizer = await createTestAccount();
         const heir = await createTestAccount();
@@ -5526,58 +5554,103 @@ describe('a dissolved family’s plan', () => {
         expect(await groupsRepository.getGroupRow(groupId)).not.toBeNull();
     });
 
+    const listedAs = async () =>
+        (await billingRepository.listGivenUpReissues()).map((entry) => [
+            entry.subscriptionId,
+            entry.reason,
+        ]);
+    const purgeDue = async (groupId: string) => {
+        await rawSql(
+            `update groups set dissolved_at = now() - interval '31 days' where id = '${groupId}'`,
+        );
+        await rawSql(
+            `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${groupId}'`,
+        );
+        await groupsRepository.purgeDeletedAreas(30);
+    };
+    const quietly = async <T>(run: () => Promise<T>) => {
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            return await run();
+        } finally {
+            error.mockRestore();
+        }
+    };
+
     test.each(['unpaid', 'incomplete'])(
-        'a plan Polar answers as %s still counts: kept, left to operators when Polar refuses, and the purge waits until Polar ends it',
+        'a plan Polar answers as %s still counts: kept, refused on its status without asking Polar, listed until it ends, and the purge waits',
         async (status) => {
             const { groupId, subscription } = await dissolvedResumed();
             // Polar's retries ran out (`unpaid`), or a payment never went through
             // (`incomplete`): Polar hasn't ended it, and a payment can still bring it back.
             subscription.status = status;
-            polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
             await billing.reconcileGroup(groupId);
             expect(await row(subscription.id)).toMatchObject({ status, endedAt: null });
-            // The daily reconcile reads it again and still keeps it.
+            // The daily reconcile reads it again and still keeps it, without reading its orders.
+            polar.calls = [];
             await billing.reconcileGroup(groupId);
             expect(await row(subscription.id)).toMatchObject({ status, endedAt: null });
-            const error = vi.spyOn(log, 'error').mockImplementation(() => {});
-            try {
-                // The leave's job and each reconcile's: Polar refuses once, and isn't asked again.
-                expect(await runCancelJobs()).toEqual([
-                    { cancelled: 0, refused: 1 },
-                    { cancelled: 0, refused: 0 },
-                    { cancelled: 0, refused: 0 },
-                ]);
-            } finally {
-                error.mockRestore();
-            }
-            expect(setToEnd()).toHaveLength(1);
-            expect(await billingRepository.listGivenUpReissues()).toEqual([
-                expect.objectContaining({
-                    subscriptionId: subscription.id,
-                    reason: 'dissolved-refused',
-                }),
+            expect(polar.calls.filter((call) => call.startsWith('orders.'))).toEqual([]);
+            // The leave's job and each reconcile's: refused once, on its status alone. Polar
+            // would have kept the end (the fake refuses nothing), so it was never asked.
+            expect(await quietly(runCancelJobs)).toEqual([
+                { cancelled: 0, refused: 1 },
+                { cancelled: 0, refused: 0 },
+                { cancelled: 0, refused: 0 },
             ]);
-            await rawSql(
-                `update groups set dissolved_at = now() - interval '31 days' where id = '${groupId}'`,
-            );
-            await rawSql(
-                `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${groupId}'`,
-            );
-            expect(await groupsRepository.purgeDeletedAreas(30)).toBe(1);
+            expect(setToEnd()).toEqual([]);
+            expect(subscription.cancel_at_period_end).toBe(false);
+            expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
+            // Not queued again by the reconciles that follow.
+            await billing.reconcileGroup(groupId);
+            expect(cancelJobs).toEqual([]);
+            // An operator sets it to end instead of revoking it: it hasn't ended, so it stays
+            // listed, and the purge still waits.
+            subscription.cancel_at_period_end = true;
+            expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
+            expect(await row(subscription.id)).toMatchObject({ cancelAtPeriodEnd: true });
+            expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
+            await purgeDue(groupId);
             expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({
                 families: 0,
             });
             expect(await groupsRepository.getGroupRow(groupId)).not.toBeNull();
-            // An operator revokes it in Polar, and the delivery is reconciled: now the records go.
+            // Revoked in Polar, and the delivery reconciled: off the list, and the records go.
             subscription.status = 'canceled';
             subscription.ended_at = new Date().toISOString();
             expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
-            expect(await billingRepository.listGivenUpReissues()).toEqual([]);
+            expect(await listedAs()).toEqual([]);
             expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({
                 families: 1,
             });
         },
     );
+
+    test('a plan refused while past due that turns unpaid is asked about again, then left alone', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        subscription.status = 'past_due';
+        polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
+        await billing.reconcileGroup(groupId);
+        cancelJobs.splice(0);
+        await billing.queueDissolvedCancel(groupId);
+        expect(await quietly(runCancelJobs)).toEqual([{ cancelled: 0, refused: 1 }]);
+        expect(setToEnd()).toHaveLength(1);
+        expect(await listedAs()).toEqual([[subscription.id, 'dissolved-refused']]);
+        // Polar's retries run out: a new state, so the next reconcile queues the job again.
+        subscription.status = 'unpaid';
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([groupId]);
+        expect(await quietly(runCancelJobs)).toEqual([{ cancelled: 0, refused: 1 }]);
+        // Refused on its status this time, without asking Polar.
+        expect(setToEnd()).toHaveLength(1);
+        expect(await row(subscription.id)).toMatchObject({
+            dissolveRefusal: 'status:unpaid',
+            dissolveRefusedState: expect.stringMatching(/^unpaid\|/),
+        });
+        expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([]);
+    });
 
     test('an unpaid plan Polar no longer has is recorded as ended, and the purge goes ahead', async () => {
         const { groupId, subscription } = await dissolvedResumed();
