@@ -204,12 +204,19 @@ export const groupBillingSubscriptions = pgTable(
         changeClaimUntil: timestamp('change_claim_until', { withTimezone: true }),
         /*
          * How many times HushOS set this plan to end at its period's end because its family
-         * was dissolved (a payer may take that back in Polar's portal), when it last did, and
-         * when it stopped asking (MAX_DISSOLVE_CANCELS) and left the plan to an operator.
+         * was dissolved (a payer may take that back in Polar's portal, every time), and when
+         * it last did. Its payer is emailed once per period: the period end last mailed.
          */
         dissolveCancels: integer('dissolve_cancels').notNull().default(0),
         dissolveCancelledAt: timestamp('dissolve_cancelled_at', { withTimezone: true }),
-        dissolveGaveUpAt: timestamp('dissolve_gave_up_at', { withTimezone: true }),
+        dissolveMailedPeriodEnd: timestamp('dissolve_mailed_period_end', { withTimezone: true }),
+        /*
+         * Polar refused to set it to end (a 4xx): when, its status code, and the plan's state
+         * then (dissolveStateOf). Listed for operators; not tried again until the state differs.
+         */
+        dissolveRefusedAt: timestamp('dissolve_refused_at', { withTimezone: true }),
+        dissolveRefusal: text('dissolve_refusal'),
+        dissolveRefusedState: text('dissolve_refused_state'),
         /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.

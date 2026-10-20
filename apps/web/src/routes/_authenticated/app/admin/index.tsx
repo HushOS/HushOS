@@ -92,8 +92,8 @@ const count = (value: number) => value.toLocaleString();
 /* Why a family's plan change is stuck, by the reason billing records. */
 const stuckReasons: Record<string, string> = {
     'not-kept': 'Polar accepted the change five times and kept none of it.',
-    'dissolved-resumed':
-        'Its family was dissolved, and its payer took the plan’s cancellation back three times. Cancel it in Polar.',
+    'dissolved-refused':
+        'Its family was dissolved, and Polar refused to cancel the plan at the end of its period. Cancel it in Polar.',
     'revert-unavailable':
         'An upgrade unpaid for over a week, and the plan it was paid for is no longer offered, so it can’t be moved back. The family keeps the smaller storage meanwhile.',
 };

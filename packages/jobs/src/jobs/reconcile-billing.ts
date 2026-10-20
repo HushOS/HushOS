@@ -96,7 +96,7 @@ export async function cancelDissolvedFamilyPlan(
     const event = createLogger({ job: { id: job.id, queue: job.name } });
     try {
         const result = await cancelDissolvedPlan(job.data.groupId);
-        event.set({ outcome: 'done', cancelled: result.cancelled, gaveUp: result.gaveUp });
+        event.set({ outcome: 'done', cancelled: result.cancelled, refused: result.refused });
     } catch (error) {
         event.set({ failure: sanitizeFailure(error) });
         throw error;

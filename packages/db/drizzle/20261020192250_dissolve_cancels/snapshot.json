@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "23784100-6ab9-430f-936f-6d9d10372410",
+    "id": "f4ab74b6-ce69-4012-a406-69430ed53d8e",
     "prevIds": ["de395e99-a2db-4efd-9eb4-e10e32d8dfad"],
     "ddl": [
         {
@@ -6058,7 +6058,46 @@
             "default": null,
             "generated": null,
             "identity": null,
-            "name": "dissolve_gave_up_at",
+            "name": "dissolve_mailed_period_end",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "dissolve_refused_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "dissolve_refusal",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "dissolve_refused_state",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

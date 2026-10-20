@@ -589,10 +589,10 @@ export async function releaseReissueRetry(subscriptionId: string) {
 /*
  * Live family plans HushOS gave up on, the operators' list: a scheduled change Polar
  * won't keep or can't be moved back (`reissueStuckReason`), or a dissolved family's plan
- * its payer kept taking back from ending (`dissolved-resumed`), which an operator cancels.
+ * Polar refused to set to end (`dissolved-refused`), which an operator cancels.
  */
 export async function listGivenUpReissues() {
-    const since = sql<Date>`coalesce(${groupBillingSubscriptions.dissolveGaveUpAt}, ${groupBillingSubscriptions.reissueGaveUpAt})`;
+    const since = sql`coalesce(${groupBillingSubscriptions.dissolveRefusedAt}, ${groupBillingSubscriptions.reissueGaveUpAt})`;
     return db
         .select({
             groupId: groupBillingSubscriptions.groupId,
@@ -600,14 +600,14 @@ export async function listGivenUpReissues() {
             wanted: groupBillingSubscriptions.reissuedState,
             reason: sql<
                 string | null
-            >`case when ${groupBillingSubscriptions.dissolveGaveUpAt} is not null then 'dissolved-resumed' else ${groupBillingSubscriptions.reissueStuckReason} end`,
-            since: sql<Date>`${since}`.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
+            >`case when ${groupBillingSubscriptions.dissolveRefusedAt} is not null then 'dissolved-refused' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            since: since.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${groupBillingSubscriptions.dissolveGaveUpAt} is not null)`,
+                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${groupBillingSubscriptions.dissolveRefusedAt} is not null)`,
             ),
         )
         .orderBy(desc(since));
@@ -615,7 +615,7 @@ export async function listGivenUpReissues() {
 
 /*
  * The statuses after which a subscription can never charge again. Anything else not
- * ended (`active`, `trialing`, `past_due`, `unpaid`, `incomplete`) still can.
+ * ended (`active`, `trialing`, `past_due`, `unpaid`, `incomplete`, `paused`) still can.
  */
 export const ENDED_SUBSCRIPTION_STATUSES = ['canceled', 'incomplete_expired'] as const;
 const canStillCharge = and(
@@ -624,17 +624,33 @@ const canStillCharge = and(
 );
 
 /*
+ * What says whether setting a plan to end could go differently now: its status, its
+ * period and whether it is set to end. A refusal is recorded with it, and the plan is
+ * tried again only once it differs (a renewal, a status change, a resume).
+ */
+export function dissolveStateOf(subscription: {
+    status: string;
+    currentPeriodEnd: Date | string;
+    cancelAtPeriodEnd: boolean;
+}) {
+    return `${subscription.status}|${new Date(subscription.currentPeriodEnd).toISOString()}|${subscription.cancelAtPeriodEnd}`;
+}
+
+/*
  * A dissolved family's subscriptions that can still charge (docs/groups-design.md 3.3), as
- * the mirror holds them: `ending` when set to end at the period's end, with how many times
- * HushOS set it so and whether it gave up. Empty for a family that isn't dissolved.
+ * the mirror holds them: `ending` when set to end at the period's end, how many times
+ * HushOS set it so, its state now and the state Polar last refused in. Empty for a family
+ * that isn't dissolved.
  */
 export async function listDissolvedChargeable(groupId: string) {
-    return db
+    const rows = await db
         .select({
             id: groupBillingSubscriptions.id,
+            status: groupBillingSubscriptions.status,
+            currentPeriodEnd: groupBillingSubscriptions.currentPeriodEnd,
             ending: groupBillingSubscriptions.cancelAtPeriodEnd,
             cancels: groupBillingSubscriptions.dissolveCancels,
-            gaveUpAt: groupBillingSubscriptions.dissolveGaveUpAt,
+            refusedState: groupBillingSubscriptions.dissolveRefusedState,
         })
         .from(groupBillingSubscriptions)
         .innerJoin(groups, eq(groups.id, groupBillingSubscriptions.groupId))
@@ -646,33 +662,77 @@ export async function listDissolvedChargeable(groupId: string) {
             ),
         )
         .orderBy(groupBillingSubscriptions.id);
+    return rows.map((row) => ({
+        ...row,
+        state: dissolveStateOf({
+            status: row.status,
+            currentPeriodEnd: row.currentPeriodEnd,
+            cancelAtPeriodEnd: row.ending,
+        }),
+    }));
 }
 
-/* HushOS set a dissolved family's plan to end: one more, now. */
+/* HushOS set a dissolved family's plan to end: one more, now, and no refusal stands. */
 export async function recordDissolveCancel(subscriptionId: string) {
     await db
         .update(groupBillingSubscriptions)
         .set({
             dissolveCancels: sql`${groupBillingSubscriptions.dissolveCancels} + 1`,
             dissolveCancelledAt: new Date(),
+            dissolveRefusedAt: null,
+            dissolveRefusal: null,
+            dissolveRefusedState: null,
             updatedAt: new Date(),
         })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* HushOS stops setting it to end; the operators' list shows it. Once. */
-export async function setDissolveGaveUp(subscriptionId: string) {
+/* Polar refused to set it to end, in `state`: listed for operators until it is set or ends. */
+export async function recordDissolveRefusal(
+    subscriptionId: string,
+    state: string,
+    refusal: string,
+) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            dissolveRefusedAt: new Date(),
+            dissolveRefusal: refusal,
+            dissolveRefusedState: state,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/*
+ * The plan-ending mail for the period ending at `periodEnd`, claimed: true only for the
+ * first claim of that period, so a plan resumed and set to end again mails once.
+ */
+export async function claimDissolveMail(subscriptionId: string, periodEnd: Date) {
     const rows = await db
         .update(groupBillingSubscriptions)
-        .set({ dissolveGaveUpAt: new Date(), updatedAt: new Date() })
+        .set({ dissolveMailedPeriodEnd: periodEnd })
         .where(
             and(
                 eq(groupBillingSubscriptions.id, subscriptionId),
-                isNull(groupBillingSubscriptions.dissolveGaveUpAt),
+                sql`${groupBillingSubscriptions.dissolveMailedPeriodEnd} is distinct from ${periodEnd.toISOString()}::timestamptz`,
             ),
         )
         .returning({ id: groupBillingSubscriptions.id });
     return rows.length > 0;
+}
+
+/* The mail was not sent: the claim goes, so the next time it is set to end tries again. */
+export async function releaseDissolveMail(subscriptionId: string, periodEnd: Date) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ dissolveMailedPeriodEnd: null })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                sql`${groupBillingSubscriptions.dissolveMailedPeriodEnd} = ${periodEnd.toISOString()}::timestamptz`,
+            ),
+        );
 }
 
 /* One group subscription's row, live or not: what it had paid for before a change. */
@@ -799,9 +859,14 @@ export async function applyGroupState(input: {
                     },
                 });
         }
+        // Kept as not ended: what is live, and a plan Polar just answered as paused, which its
+        // payer may resume and which may charge again (a dissolved family's purge waits for it).
+        // `unpaid` and `incomplete` are still swept as ended here.
         const liveIds = input.subscriptions
             .filter(
-                (subscription) => !subscription.endedAt && LIVE_STATUSES.has(subscription.status),
+                (subscription) =>
+                    !subscription.endedAt &&
+                    (LIVE_STATUSES.has(subscription.status) || subscription.status === 'paused'),
             )
             .map((subscription) => subscription.id)
             .concat(input.keepIds ?? []);

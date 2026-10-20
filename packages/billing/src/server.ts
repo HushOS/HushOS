@@ -51,7 +51,6 @@ export {
     ensureGroupSeat,
     familyHasPlan,
     getGroupBilling,
-    MAX_DISSOLVE_CANCELS,
     MAX_REISSUES,
     paysForGroup,
     queueDissolvedCancel,
