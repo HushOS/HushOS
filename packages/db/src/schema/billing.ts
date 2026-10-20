@@ -205,14 +205,16 @@ export const groupBillingSubscriptions = pgTable(
         /*
          * How many times HushOS set this plan to end at its period's end because its family
          * was dissolved (a payer may take that back in Polar's portal, every time), and when
-         * it last did. Its payer is emailed once per period: the period end last mailed.
+         * it last asked Polar to (written before the call, so an answer lost to a timeout
+         * still counts). Its payer is emailed once per period: the period end last mailed.
          */
         dissolveCancels: integer('dissolve_cancels').notNull().default(0),
         dissolveCancelledAt: timestamp('dissolve_cancelled_at', { withTimezone: true }),
         dissolveMailedPeriodEnd: timestamp('dissolve_mailed_period_end', { withTimezone: true }),
         /*
-         * Polar refused to set it to end (a 4xx): when, its status code, and the plan's state
-         * then (dissolveStateOf). Listed for operators; not tried again until the state differs.
+         * Polar refused to set it to end (403 `InactiveSubscription`): when, Polar's error name,
+         * and the plan's state then (dissolveStateOf). Listed for operators while the plan is
+         * not set to end; not tried again until the state differs.
          */
         dissolveRefusedAt: timestamp('dissolve_refused_at', { withTimezone: true }),
         dissolveRefusal: text('dissolve_refusal'),

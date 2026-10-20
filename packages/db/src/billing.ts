@@ -589,10 +589,13 @@ export async function releaseReissueRetry(subscriptionId: string) {
 /*
  * Live family plans HushOS gave up on, the operators' list: a scheduled change Polar
  * won't keep or can't be moved back (`reissueStuckReason`), or a dissolved family's plan
- * Polar refused to set to end (`dissolved-refused`), which an operator cancels.
+ * Polar refused to set to end (`dissolved-refused`), which an operator cancels. That one
+ * goes from the list once the plan is set to end, whoever set it (the operator in Polar,
+ * or its payer), as soon as the mirror shows it.
  */
 export async function listGivenUpReissues() {
-    const since = sql`coalesce(${groupBillingSubscriptions.dissolveRefusedAt}, ${groupBillingSubscriptions.reissueGaveUpAt})`;
+    const refused = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is not null and not ${groupBillingSubscriptions.cancelAtPeriodEnd})`;
+    const since = sql`coalesce(case when ${refused} then ${groupBillingSubscriptions.dissolveRefusedAt} end, ${groupBillingSubscriptions.reissueGaveUpAt})`;
     return db
         .select({
             groupId: groupBillingSubscriptions.groupId,
@@ -600,14 +603,14 @@ export async function listGivenUpReissues() {
             wanted: groupBillingSubscriptions.reissuedState,
             reason: sql<
                 string | null
-            >`case when ${groupBillingSubscriptions.dissolveRefusedAt} is not null then 'dissolved-refused' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            >`case when ${refused} then 'dissolved-refused' else ${groupBillingSubscriptions.reissueStuckReason} end`,
             since: since.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${groupBillingSubscriptions.dissolveRefusedAt} is not null)`,
+                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${refused})`,
             ),
         )
         .orderBy(desc(since));
@@ -639,8 +642,9 @@ export function dissolveStateOf(subscription: {
 /*
  * A dissolved family's subscriptions that can still charge (docs/groups-design.md 3.3), as
  * the mirror holds them: `ending` when set to end at the period's end, how many times
- * HushOS set it so, its state now and the state Polar last refused in. Empty for a family
- * that isn't dissolved.
+ * HushOS set it so, its state now and the state Polar last refused in, and `mailOwed`
+ * when it is set to end, HushOS asked for that in this period, and its payer has not been
+ * mailed for this period. Empty for a family that isn't dissolved.
  */
 export async function listDissolvedChargeable(groupId: string) {
     const rows = await db
@@ -648,8 +652,11 @@ export async function listDissolvedChargeable(groupId: string) {
             id: groupBillingSubscriptions.id,
             status: groupBillingSubscriptions.status,
             currentPeriodEnd: groupBillingSubscriptions.currentPeriodEnd,
+            currentPeriodStart: groupBillingSubscriptions.currentPeriodStart,
             ending: groupBillingSubscriptions.cancelAtPeriodEnd,
             cancels: groupBillingSubscriptions.dissolveCancels,
+            askedAt: groupBillingSubscriptions.dissolveCancelledAt,
+            mailedPeriodEnd: groupBillingSubscriptions.dissolveMailedPeriodEnd,
             refusedState: groupBillingSubscriptions.dissolveRefusedState,
         })
         .from(groupBillingSubscriptions)
@@ -664,6 +671,11 @@ export async function listDissolvedChargeable(groupId: string) {
         .orderBy(groupBillingSubscriptions.id);
     return rows.map((row) => ({
         ...row,
+        mailOwed:
+            row.ending &&
+            row.askedAt !== null &&
+            row.askedAt.getTime() >= row.currentPeriodStart.getTime() &&
+            row.mailedPeriodEnd?.getTime() !== row.currentPeriodEnd.getTime(),
         state: dissolveStateOf({
             status: row.status,
             currentPeriodEnd: row.currentPeriodEnd,
@@ -672,13 +684,23 @@ export async function listDissolvedChargeable(groupId: string) {
     }));
 }
 
-/* HushOS set a dissolved family's plan to end: one more, now, and no refusal stands. */
+/*
+ * HushOS is about to ask Polar to set a dissolved family's plan to end: written before the
+ * call, so a set whose answer was lost still owes its payer the mail once Polar shows it.
+ */
+export async function markDissolveAsked(subscriptionId: string) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ dissolveCancelledAt: new Date(), updatedAt: new Date() })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* HushOS set a dissolved family's plan to end: one more, and no refusal stands. */
 export async function recordDissolveCancel(subscriptionId: string) {
     await db
         .update(groupBillingSubscriptions)
         .set({
             dissolveCancels: sql`${groupBillingSubscriptions.dissolveCancels} + 1`,
-            dissolveCancelledAt: new Date(),
             dissolveRefusedAt: null,
             dissolveRefusal: null,
             dissolveRefusedState: null,
@@ -722,7 +744,7 @@ export async function claimDissolveMail(subscriptionId: string, periodEnd: Date)
     return rows.length > 0;
 }
 
-/* The mail was not sent: the claim goes, so the next time it is set to end tries again. */
+/* The mail was not sent: the claim goes, so the next run for the family sends it. */
 export async function releaseDissolveMail(subscriptionId: string, periodEnd: Date) {
     await db
         .update(groupBillingSubscriptions)

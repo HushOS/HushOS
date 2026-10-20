@@ -169,9 +169,9 @@ export default function FamilyPlanEnding({
                                 color: '#5a6380',
                             }}
                         >
-                            The family you pay for was dissolved: its last member left it. HushOS
-                            has cancelled its plan at the end of the period you paid for, so you
-                            won’t be charged again. Nothing is refunded for the rest of that period.
+                            The family you pay for was dissolved: it has no members left. HushOS has
+                            cancelled its plan at the end of the period you paid for, so you won’t
+                            be charged again. Nothing is refunded for the rest of that period.
                         </Text>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 28px' }}>

@@ -256,8 +256,13 @@ const polar = {
     cancelFailures: 0,
     /* Run inside the next call that sets a plan to end, before Polar keeps it. */
     beforeCancel: null as null | (() => Promise<void>),
-    /* Setting a plan to end is refused with a 403 and this body while set (a past-due plan). */
-    cancelRefusal: null as null | Record<string, unknown>,
+    /*
+     * Setting a plan to end is answered with this status and error name while set: 403
+     * `InactiveSubscription` (a past-due plan), 409 `SubscriptionLocked` (a renewal under way).
+     */
+    cancelRefusal: null as null | { status: number; error: string },
+    /* The next set-to-end is kept at Polar but its answer is lost (a timeout). */
+    cancelAnswerLost: false,
     /* The next product change's order is made but not listed yet. */
     ordersLag: false,
     /* Each family subscription's checkout order (kept apart so tests can index `orders`). */
@@ -767,11 +772,19 @@ const fakeClient = {
                     polar.cancelFailures -= 1;
                     throw new PolarClientError(503, { error: 'ServiceUnavailable' });
                 }
-                if (polar.cancelRefusal) throw new PolarClientError(403, polar.cancelRefusal);
+                if (polar.cancelRefusal)
+                    throw new PolarClientError(polar.cancelRefusal.status, {
+                        error: polar.cancelRefusal.error,
+                        detail: 'Refused.',
+                    });
                 const hook = polar.beforeCancel;
                 polar.beforeCancel = null;
                 await hook?.();
                 subscription.cancel_at_period_end = body.cancel_at_period_end;
+                if (polar.cancelAnswerLost) {
+                    polar.cancelAnswerLost = false;
+                    throw new Error('The request timed out.');
+                }
             }
             return structuredClone(subscription);
         },
@@ -903,8 +916,14 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
 
 /* The plan-ending mail a dissolved family's payer was sent, in order (its words are the template's). */
 const planEndingMail: { to: string; endsOn: string }[] = [];
+/* How many plan-ending mails fail (the provider down, no email settings) before one is sent. */
+const mailer = { failures: 0 };
 vi.mock('@hushos/emails/server', () => ({
     sendFamilyPlanEnding: async (to: string, input: { endsOn: string }) => {
+        if (mailer.failures > 0) {
+            mailer.failures -= 1;
+            throw new Error('Email is not configured.');
+        }
         planEndingMail.push({ to, endsOn: input.endsOn });
     },
 }));
@@ -1026,7 +1045,9 @@ beforeEach(async () => {
     polar.cancelFailures = 0;
     polar.beforeCancel = null;
     polar.cancelRefusal = null;
+    polar.cancelAnswerLost = false;
     planEndingMail.length = 0;
+    mailer.failures = 0;
     cancelJobs.length = 0;
     billing.setDissolveCancelQueue(async (groupId) => {
         cancelJobs.push(groupId);
@@ -5209,7 +5230,7 @@ describe('a dissolved family’s plan', () => {
 
     test('a refusal at Polar is listed for operators and not asked again until the plan changes', async () => {
         const { groupId, subscription } = await dissolvedResumed();
-        polar.cancelRefusal = { error: 'SubscriptionPastDue' };
+        polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
         const error = vi.spyOn(log, 'error');
         try {
             // Not thrown, so pg-boss doesn't retry it for ever.
@@ -5248,6 +5269,140 @@ describe('a dissolved family’s plan', () => {
         expect(await billingRepository.listGivenUpReissues()).toEqual([]);
     });
 
+    test('an answer that can pass (409 SubscriptionLocked during a renewal, 401, 402, a 403 for a plan still renewing) throws for a retry and is never recorded as a refusal', async () => {
+        const { payer, groupId, subscription } = await dissolvedResumed();
+        cancelJobs.length = 0;
+        for (const refusal of [
+            { status: 409, error: 'SubscriptionLocked' },
+            { status: 401, error: 'Unauthorized' },
+            { status: 402, error: 'PaymentFailed' },
+            // Polar says it is already set to end, but a read shows it renewing.
+            { status: 403, error: 'AlreadyCanceledSubscription' },
+        ]) {
+            polar.cancelRefusal = refusal;
+            await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeInstanceOf(
+                billing.BillingError,
+            );
+            expect(await row(subscription.id)).toMatchObject({
+                cancelAtPeriodEnd: false,
+                dissolveRefusedAt: null,
+                dissolveRefusedState: null,
+            });
+            expect(await billingRepository.listGivenUpReissues()).toEqual([]);
+            // Still to be set: the next delivery queues it again, as it would a refused one not.
+            await billing.handleWebhook(await resumedWebhook(groupId));
+            expect(cancelJobs.splice(0)).toEqual([groupId]);
+        }
+        // The renewal went through and the lock cleared: the retry sets it to end.
+        polar.cancelRefusal = null;
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 1, refused: 0 });
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(planEndingMail).toEqual([
+            { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
+        ]);
+    });
+
+    test('a refused plan leaves the operators’ list once it is set to end in Polar', async () => {
+        const { payer, groupId, subscription } = await dissolvedResumed();
+        polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 1 }]);
+        } finally {
+            error.mockRestore();
+        }
+        expect(await billingRepository.listGivenUpReissues()).toEqual([
+            expect.objectContaining({
+                subscriptionId: subscription.id,
+                reason: 'dissolved-refused',
+            }),
+        ]);
+        // An operator cancels it in Polar's dashboard, and its delivery is reconciled: the row
+        // goes, though nothing cleared the refusal.
+        subscription.cancel_at_period_end = true;
+        expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
+        expect((await row(subscription.id)).dissolveRefusedAt).not.toBeNull();
+        expect(await billingRepository.listGivenUpReissues()).toEqual([]);
+        // HushOS asked this period, so the payer is told the date.
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(planEndingMail).toEqual([
+            { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
+        ]);
+        // Resumed again, in the state Polar refused: back on the list, and not asked again.
+        subscription.cancel_at_period_end = false;
+        polar.calls = [];
+        await billing.handleWebhook(await resumedWebhook(groupId));
+        expect(await billingRepository.listGivenUpReissues()).toEqual([
+            expect.objectContaining({
+                subscriptionId: subscription.id,
+                reason: 'dissolved-refused',
+            }),
+        ]);
+        await runCancelJobs();
+        expect(setToEnd()).toEqual([]);
+    });
+
+    test('a mail that fails is sent by a later run, which every reconcile queues while it is owed', async () => {
+        const { payer, groupId, subscription } = await dissolvedResumed();
+        mailer.failures = 1;
+        const warn = vi.spyOn(log, 'warn');
+        try {
+            expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0 }]);
+            expect(warn).toHaveBeenCalledWith(
+                expect.objectContaining({ message: 'Plan ending email not sent' }),
+            );
+        } finally {
+            warn.mockRestore();
+        }
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(planEndingMail).toEqual([]);
+        // The plan already ends, and still a delivery (or the daily reconcile) queues the job.
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([groupId]);
+        polar.calls = [];
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(setToEnd()).toEqual([]);
+        expect(planEndingMail).toEqual([
+            { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
+        ]);
+        // Sent: nothing more is queued or mailed.
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([]);
+        await billing.queueDissolvedCancel(groupId);
+        await runCancelJobs();
+        expect(planEndingMail).toHaveLength(1);
+    });
+
+    test('a set whose answer was lost is mailed by the retry that finds the plan ending', async () => {
+        const { payer, groupId, subscription } = await dissolvedResumed();
+        polar.cancelAnswerLost = true;
+        await expect(billing.cancelDissolvedPlan(groupId)).rejects.toMatchObject({ status: 503 });
+        // Polar kept it; HushOS never heard.
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(planEndingMail).toEqual([]);
+        // pg-boss's retry: it reads the plan ending, sets nothing, and tells the payer.
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 0, refused: 0 });
+        expect(setToEnd()).toHaveLength(1);
+        expect(planEndingMail).toEqual([
+            { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
+        ]);
+    });
+
+    test('a payer who sets the plan to end themselves in a later period is not mailed for it', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        await runCancelJobs();
+        expect(planEndingMail).toHaveLength(1);
+        // Resumed with no delivery, renewed, then set to end by the payer: HushOS asked for none of it.
+        subscription.cancel_at_period_end = false;
+        renew(subscription, subscription.product_id);
+        subscription.cancel_at_period_end = true;
+        expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
+        expect(cancelJobs).toEqual([]);
+        await billing.queueDissolvedCancel(groupId);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(planEndingMail).toHaveLength(1);
+    });
+
     test('a plan set to end after the job read Polar is not set again', async () => {
         const { groupId, subscription } = await dissolvedResumed();
         // The reconcile's read sees it renewing; the payer sets it to end just after.
@@ -5264,7 +5419,7 @@ describe('a dissolved family’s plan', () => {
         const { groupId, subscription } = await dissolvedResumed();
         // Paused in the portal (customer pause enabled): it may be resumed and charge again.
         subscription.status = 'paused';
-        polar.cancelRefusal = { error: 'SubscriptionPaused' };
+        polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
         await billing.reconcileGroup(groupId);
         expect(await row(subscription.id)).toMatchObject({ status: 'paused', endedAt: null });
         await runCancelJobs();
