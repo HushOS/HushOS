@@ -200,7 +200,7 @@ export function StorageCard({ userId }: { userId: string }) {
             )}
             <p className="text-[13px] text-muted-foreground">
                 {pool &&
-                    'The family’s figures count each person’s files and the family folders in whole GB. '}
+                    'The family’s figures count each person’s files and the family folders separately, each rounded up to the whole GB. '}
                 Trash and earlier versions count until they’re removed. Trash empties itself after
                 30 days.
             </p>

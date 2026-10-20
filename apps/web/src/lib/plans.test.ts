@@ -260,7 +260,7 @@ describe('pricingLede', () => {
         expect(pricingLede(offers('month', 'usd', []))).toBe(off);
         expect(pricingLede(familyOffers({ enabled: false, families }, 'month', 'usd'))).toBe(off);
         expect(pricingLede(offers('month', 'usd'))).toBe(
-            'Every plan protects your files the same way. Paid plans add space; a family plan adds folders you share with up to 20 members.',
+            'Every plan protects your files the same way. Paid plans add space; a family plan covers up to 20 people, with folders you share.',
         );
     });
 });

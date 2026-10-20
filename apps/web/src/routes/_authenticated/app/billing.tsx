@@ -33,6 +33,7 @@ import {
     familyPairs,
     familyPrice,
     familyTierName,
+    FAMILY_POOL_LINE,
     personalPairs,
     priceOf,
     tiersOf,
@@ -617,10 +618,7 @@ function BillingPage() {
                 )}
 
                 {offerFamilies && familyShown.length > 0 && (
-                    <SettingsGroup
-                        title="Family plans"
-                        description="One pool for the whole family: everyone’s own files and the family folders. Each person’s files stay private to them."
-                    >
+                    <SettingsGroup title="Family plans" description={FAMILY_POOL_LINE}>
                         <ul
                             className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
                             data-family-plans

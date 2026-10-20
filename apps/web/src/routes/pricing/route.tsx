@@ -730,11 +730,11 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
                     <div className="flex flex-col gap-3">
                         <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
-                            Family folders for up to {maxMembers} people.
+                            Storage for up to {maxMembers} people, and folders you share.
                         </p>
                         <p className="max-w-[40em] text-base leading-relaxed">
                             Each plan includes {includedMembers} members, and every member can open
-                            the folders. {FAMILY_POOL_LINE}
+                            the family folders. {FAMILY_POOL_LINE}
                         </p>
                     </div>
                     <FamilyAction hasSession={hasSession} />

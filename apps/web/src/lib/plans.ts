@@ -220,18 +220,22 @@ export function familyOffers(
     });
 }
 
-/* The pool counts only family folders; a member's own drive keeps its own allowance. */
+/*
+ * One pool covers every member's own files and the family folders (docs/families-shared-pool.md),
+ * said the same way on the pricing page and on Plans. "Storage", never "pool", in what people read.
+ */
 export const FAMILY_POOL_LINE =
-    'The storage is for family folders; each member’s own files stay on their own plan, Free included.';
+    'A family’s storage covers everyone’s own files and the family folders. Each person’s own files stay private to them.';
 
 /*
  * The pricing page's lede. "Nothing else" holds only while no family plan is
- * offered: a family plan adds family folders, so with one shown the lede says so.
+ * offered: a family plan covers everyone in it and adds folders they share, so
+ * with one shown the lede says so.
  */
 export function pricingLede(family: readonly FamilyOffer[]) {
     const same = 'Every plan protects your files the same way.';
     const max = Math.max(0, ...family.map((offer) => offer.plan.maxMembers));
     return family.length
-        ? `${same} Paid plans add space; a family plan adds folders you share with up to ${max} members.`
+        ? `${same} Paid plans add space; a family plan covers up to ${max} people, with folders you share.`
         : `${same} Paid plans add space, and nothing else.`;
 }

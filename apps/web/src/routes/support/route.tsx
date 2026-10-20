@@ -136,7 +136,7 @@ function SupportPage() {
                     Your files, folders, versions, shares, links and keys are deleted, your sessions
                     end on every device, and any paid plan is cancelled. What the apps kept on a
                     phone is removed from it. The{' '}
-                    <PageLink to="/privacy#8-how-long-data-is-kept" className="text-link">
+                    <PageLink to="/privacy#9-how-long-data-is-kept" className="text-link">
                         privacy policy
                     </PageLink>{' '}
                     says how long anything else is kept.
