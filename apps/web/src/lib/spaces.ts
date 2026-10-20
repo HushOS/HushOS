@@ -512,6 +512,10 @@ export function useAreaFeed(
                 cursor.current = page.nextCursor;
                 const folders = new Set<string>();
                 let rootTouched = false;
+                // What this person shares from a family folder leaves "By me" when it is
+                // trashed and comes back when it is restored (see feed.ts).
+                if (page.changes.length > 0)
+                    void queryClient.invalidateQueries({ queryKey: driveKeys.mine });
                 for (const change of page.changes) {
                     if (change.kind === 'node') {
                         if (change.node.parentId) folders.add(change.node.parentId);

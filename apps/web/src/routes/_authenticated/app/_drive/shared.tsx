@@ -401,7 +401,9 @@ type Stop =
 
 function ByMe() {
     const queryClient = useQueryClient();
-    const mine = useQuery(mySharingQueryOptions);
+    // Fetched again each time the page opens: an item trashed a moment ago leaves the list,
+    // without waiting for the feed's next poll.
+    const mine = useQuery({ ...mySharingQueryOptions, refetchOnMount: 'always' });
     const [previewing, setPreviewing] = useState<DriveNode | null>(null);
     const [sharing, setSharing] = useState<DriveNode | null>(null);
     const [stopping, setStopping] = useState<Stop | null>(null);

@@ -15,10 +15,17 @@ import { driveClient, driveKeys, sharedQueryOptions } from '@/lib/drive';
 
 export const FEED_INTERVAL_MS = 8_000;
 
-/* What a page of changes makes stale: the parents of changed nodes, the folders themselves, the trash. */
-function apply(queryClient: QueryClient, changes: (NodeChange | ShareChange)[]) {
+/*
+ * What a page of changes makes stale: the parents of changed nodes, the folders
+ * themselves, the trash, and (for this person's own changes) what they share:
+ * the server leaves out what is in the trash, and a change can't say whether it
+ * put an item back, so any of one's own changes refreshes "By me" and the rows'
+ * who-can-open marks.
+ */
+function apply(queryClient: QueryClient, changes: (NodeChange | ShareChange)[], own = false) {
     const folders = new Set<string>();
     let trash = false;
+    const sharing = own && changes.length > 0;
     for (const change of changes) {
         switch (change.kind) {
             case 'node':
@@ -40,6 +47,7 @@ function apply(queryClient: QueryClient, changes: (NodeChange | ShareChange)[]) 
     for (const id of folders)
         void queryClient.invalidateQueries({ queryKey: driveKeys.folder(id) });
     if (trash) void queryClient.invalidateQueries({ queryKey: driveKeys.trash });
+    if (sharing) void queryClient.invalidateQueries({ queryKey: driveKeys.mine });
     return folders.size > 0 || trash;
 }
 
@@ -76,13 +84,13 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
                 let page = await driveClient.changesSince(workspaceId!, cursor.since);
                 // A sign-out began while it was on its way: the page being left stays as drawn.
                 if (isLeaving()) return;
-                apply(queryClient, page.changes);
+                apply(queryClient, page.changes, true);
                 cursor.since = page.nextCursor;
                 // A backlog after a long sleep: drain it in a few more pages, then rest.
                 for (let more = 0; page.hasMore && more < 5; more++) {
                     page = await driveClient.changesSince(workspaceId!, cursor.since);
                     if (isLeaving()) return;
-                    apply(queryClient, page.changes);
+                    apply(queryClient, page.changes, true);
                     cursor.since = page.nextCursor;
                 }
                 cursor.failures = 0;
