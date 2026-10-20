@@ -1,0 +1,21 @@
+apps/web/src/content/legal/privacy.mdx
+  s_c56e31c87cddde::t_a92ff904ba6a79 52,117
+apps/web/src/content/security.mdx
+  s_c56e31c87cddde::t_d3d1893c0cfe55 490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9cc986b4b97b597d0ba1869fa5d4aff0e25aa082",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
