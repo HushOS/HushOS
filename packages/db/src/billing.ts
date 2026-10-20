@@ -633,6 +633,7 @@ export async function listGivenUpReissues() {
  * ended (`active`, `trialing`, `past_due`, `unpaid`, `incomplete`, `paused`) still can.
  */
 export const ENDED_SUBSCRIPTION_STATUSES = ['canceled', 'incomplete_expired'] as const;
+const ENDED = new Set<string>(ENDED_SUBSCRIPTION_STATUSES);
 const canStillCharge = and(
     isNull(groupBillingSubscriptions.endedAt),
     notInArray(groupBillingSubscriptions.status, [...ENDED_SUBSCRIPTION_STATUSES]),
@@ -921,15 +922,13 @@ export async function applyGroupState(input: {
                     },
                 });
         }
-        // Kept as not ended: what is live, and a plan Polar just answered as paused, which its
-        // payer may resume and which may charge again (a dissolved family's purge waits for it).
-        // `unpaid` and `incomplete` are still swept as ended here.
-        const liveIds = input.subscriptions
-            .filter(
-                (subscription) =>
-                    !subscription.endedAt &&
-                    (LIVE_STATUSES.has(subscription.status) || subscription.status === 'paused'),
-            )
+        // Kept as not ended: every subscription Polar just answered for that it hasn't ended
+        // itself (no `ended_at`, not `canceled` or `incomplete_expired`), whatever its status:
+        // `paused`, `unpaid` and `incomplete` too, which can still charge, so a dissolved
+        // family's job and purge see them. They give no pool or places (liveGroupSubscription
+        // below). What Polar no longer lists, or has ended without saying when, ends here.
+        const keptIds = input.subscriptions
+            .filter((subscription) => !subscription.endedAt && !ENDED.has(subscription.status))
             .map((subscription) => subscription.id)
             .concat(input.keepIds ?? []);
         if (input.complete !== false)
@@ -945,8 +944,8 @@ export async function applyGroupState(input: {
                         eq(groupBillingSubscriptions.groupId, input.groupId),
                         eq(groupBillingSubscriptions.provider, input.provider),
                         isNull(groupBillingSubscriptions.endedAt),
-                        liveIds.length
-                            ? notInArray(groupBillingSubscriptions.id, liveIds)
+                        keptIds.length
+                            ? notInArray(groupBillingSubscriptions.id, keptIds)
                             : undefined,
                     ),
                 );

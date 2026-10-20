@@ -201,6 +201,60 @@ describe('the pool', () => {
     });
 });
 
+describe('what a full reconcile ends', () => {
+    test.each(['unpaid', 'incomplete', 'paused'])(
+        'a plan Polar answers as %s stays unended with its status, and gives no pool or places at once',
+        async (status) => {
+            const { userId } = await createTestAccount();
+            const { groupId, areaIds } = await createTestFamily({
+                organizerId: userId,
+                pooled: true,
+            });
+            await apply(groupId, [plan({ units: 8 })]);
+            expect((await getStorage(areaIds[0]!))?.allowance).toBe(100n);
+            // Mid-period: the grace days are for a period that ran out, not for a lapsed payment.
+            await apply(groupId, [plan({ units: 8, status })]);
+            expect(await billing.getGroupSubscription('sub_family')).toMatchObject({
+                status,
+                endedAt: null,
+            });
+            // Still read again by the next reconcile, and still able to charge.
+            expect(await billing.listLiveGroupSubscriptionIds(groupId)).toEqual(['sub_family']);
+            expect((await getStorage(areaIds[0]!))?.allowance).toBe(0n);
+            expect(await seatLimit(groupId)).toBeNull();
+            expect(await billing.getLiveGroupSubscription(groupId)).toBeNull();
+            // Paid after all: back to active, and the pool with it.
+            await apply(groupId, [plan({ units: 8 })]);
+            expect((await getStorage(areaIds[0]!))?.allowance).toBe(100n);
+            expect(await seatLimit(groupId)).toBe(8);
+        },
+    );
+
+    test('one Polar no longer lists is ended, whatever it was last seen as', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan({ status: 'unpaid' })]);
+        await apply(groupId, []);
+        expect(await billing.getGroupSubscription('sub_family')).toMatchObject({
+            status: 'unpaid',
+            endedAt: expect.any(Date),
+        });
+        expect(await billing.listLiveGroupSubscriptionIds(groupId)).toEqual([]);
+    });
+
+    test('one Polar answers as canceled or expired, without saying when it ended, is ended', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [
+            plan({ id: 'sub_a', status: 'canceled' }),
+            plan({ id: 'sub_b', status: 'incomplete_expired' }),
+        ]);
+        for (const id of ['sub_a', 'sub_b'])
+            expect((await billing.getGroupSubscription(id))?.endedAt).toBeInstanceOf(Date);
+        expect(await billing.listLiveGroupSubscriptionIds(groupId)).toEqual([]);
+    });
+});
+
 describe('tier moves', () => {
     test('a move to a smaller tier changes neither the pool nor the seats until Polar applies it', async () => {
         const { userId } = await createTestAccount();
