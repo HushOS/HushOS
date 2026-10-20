@@ -24,7 +24,7 @@ import {
     writeRefusal,
     type AreaState,
 } from '@/lib/groups/sync';
-import { backoffDelay, ownReasonToWalk, stillRunning, walkToEnd } from '@/lib/groups/walks';
+import { ownReasonToWalk, stillRunning, walkRetries, walkToEnd } from '@/lib/groups/walks';
 import { groupWriters } from '@/lib/groups/writers';
 
 /*
@@ -312,12 +312,12 @@ export function walkArea(
  * once each finishes, so the family is synced again and the folders see it.
  */
 /*
- * Runs walked (or tried) in this tab, by folder and run: the next walk of the
- * same run waits longer each time (walks.ts backoffDelay), so a run that comes
- * back right after a walk said it finished, or that keeps failing, does not
- * spin walk, sync, walk.
+ * Runs walked (or tried) in this tab: the next walk of the same run waits longer each time
+ * (walks.ts walkRetries), so a run that comes back right after a walk said it finished, or that
+ * keeps failing, does not spin walk, sync, walk; and one that failed is walked again when its
+ * wait is over, on its own timer, whatever the pages render or sync meanwhile.
  */
-const walkBackoff = new Map<string, { attempts: number; until: number }>();
+const retries = walkRetries();
 export function walkPending(
     userId: string,
     groupId: string,
@@ -330,23 +330,24 @@ export function walkPending(
         // server's word alone, since a walk closes every share and link its own ledger lacks.
         if (!rotation || !ownReasonToWalk(state)) continue;
         const key = `${state.workspaceId}:${rotation.id}`;
-        const backoff = walkBackoff.get(key);
-        if (backoff && Date.now() < backoff.until) continue;
-        const ended = () => {
-            const attempts = (walkBackoff.get(key)?.attempts ?? 0) + 1;
-            walkBackoff.set(key, { attempts, until: Date.now() + backoffDelay(attempts) });
-        };
-        void walkArea(userId, groupId, {
-            workspaceId: state.workspaceId,
-            rotationId: rotation.id,
-            nodeId: rotation.nodeId,
-            targetEpoch: rotation.targetEpoch,
-            // A walk that stopped is tried again at a later sync, never straight away, and the same
-            // run back again waits longer each time: one that always fails must not spin.
-        }).then(() => {
-            ended();
-            onSettled();
-        }, ended);
+        // A walk that stopped is tried again once its wait is over (a sync of the family, which
+        // walks what is still running), never straight away, and the same run back again waits
+        // longer each time: one that always fails must not spin.
+        const retry = () =>
+            void refreshFamily(userId, groupId, { due: true }).catch(() =>
+                retries.ended(key, retry),
+            );
+        retries.run(
+            key,
+            () =>
+                walkArea(userId, groupId, {
+                    workspaceId: state.workspaceId,
+                    rotationId: rotation.id,
+                    nodeId: rotation.nodeId,
+                    targetEpoch: rotation.targetEpoch,
+                }),
+            { walked: onSettled, retry },
+        );
     }
 }
 
@@ -362,10 +363,15 @@ export function walkPending(
  */
 const REFRESH_GAP_MS = 4_000;
 const refreshes = new Map<string, { at: number; pending: Promise<void> | null }>();
-function refreshFamily(userId: string, groupId: string): Promise<void> {
+function refreshFamily(
+    userId: string,
+    groupId: string,
+    options: { due?: boolean } = {},
+): Promise<void> {
     const held = refreshes.get(groupId);
     if (held?.pending) return held.pending;
-    if (held && Date.now() - held.at < REFRESH_GAP_MS) return Promise.resolve();
+    // A walk's retry is already spaced out by its own wait: never skipped for being close to another.
+    if (!options.due && held && Date.now() - held.at < REFRESH_GAP_MS) return Promise.resolve();
     const pending = (async () => {
         const result = await syncGroup(familyContext(userId), groupId);
         familySynced(groupId, result);

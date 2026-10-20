@@ -84,3 +84,90 @@ export async function walkToEnd(deps: {
 export function backoffDelay(attempts: number, base = 30_000, cap = 10 * 60_000) {
     return Math.min(cap, base * 2 ** Math.max(0, attempts - 1));
 }
+
+/*
+ * How long a family page waits before checking a running key change again: `base` at first,
+ * then twice as long for each doubling of the time it has been found running, never more than
+ * `cap`. A function of the clock alone: TanStack Query asks a query's `refetchInterval` on every
+ * render and every update of the query, so a count kept there moved with renders, and a page
+ * that rendered often (a storage figure refreshed, a dialog) pushed its next check out to ten
+ * minutes while a walk waited on it.
+ */
+export function walkPollDelay(walkingSince: number, now: number, base: number, cap = 10 * 60_000) {
+    const elapsed = Math.max(0, now - walkingSince);
+    return Math.min(cap, base * 2 ** Math.floor(Math.log2(elapsed / base + 1)));
+}
+
+/*
+ * When this tab walks each key change run again (keyed by folder and run). A walk that ended
+ * leaves the run alone for backoffDelay of its attempts so far; one that failed (a batch the
+ * client's 30 s timeout cut off, a flaky network) is also tried again at the end of that wait,
+ * on a timer of its own: never only "at the next sync", whose timing pages and renders decide.
+ * Asking whether a run is due, or syncing, any number of times meanwhile moves nothing.
+ */
+export function walkRetries(
+    clock: {
+        now: () => number;
+        schedule: (run: () => void, ms: number) => unknown;
+        cancel: (handle: unknown) => void;
+    } = {
+        now: () => Date.now(),
+        schedule: (run, ms) => setTimeout(run, ms),
+        cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    },
+) {
+    const runs = new Map<string, { attempts: number; until: number; timer: unknown }>();
+    const inFlight = new Set<string>();
+    const ended = (key: string, retry?: () => void) => {
+        const previous = runs.get(key);
+        if (previous?.timer !== undefined) clock.cancel(previous.timer);
+        const attempts = (previous?.attempts ?? 0) + 1;
+        const delay = backoffDelay(attempts);
+        const entry = { attempts, until: clock.now() + delay, timer: undefined as unknown };
+        if (retry)
+            entry.timer = clock.schedule(() => {
+                entry.timer = undefined;
+                retry();
+            }, delay);
+        runs.set(key, entry);
+    };
+    /* Whether the run may be walked now: not while it waits out its last walk. */
+    const due = (key: string) => {
+        const run = runs.get(key);
+        return !run || clock.now() >= run.until;
+    };
+    return {
+        due,
+        /* When it may be walked again (null: now). */
+        nextAt(key: string) {
+            return runs.get(key)?.until ?? null;
+        },
+        /* A walk of the run ended; with `retry` (it failed), that runs once when the wait is over. */
+        ended,
+        /*
+         * Walks the run unless it waits out its last walk or is being walked already, and
+         * counts the walk once, however many syncs asked for it meanwhile: a sync that finds the
+         * run while this tab walks it joins nothing, so one failed walk is one attempt, never
+         * one per page that synced during it (which once sent a run's next try minutes out).
+         */
+        run(
+            key: string,
+            walk: () => Promise<unknown>,
+            then: { walked: () => void; retry: () => void },
+        ) {
+            if (inFlight.has(key) || !due(key)) return;
+            inFlight.add(key);
+            void walk().then(
+                () => {
+                    inFlight.delete(key);
+                    ended(key);
+                    then.walked();
+                },
+                () => {
+                    inFlight.delete(key);
+                    ended(key, then.retry);
+                },
+            );
+        },
+    };
+}
