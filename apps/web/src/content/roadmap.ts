@@ -228,6 +228,11 @@ export const sections: RoadmapSection[] = [
                 links: [
                     {
                         kind: 'docs',
+                        path: 'docs/two-step-design.md',
+                        label: 'Read the two-step design',
+                    },
+                    {
+                        kind: 'docs',
                         path: 'docs/devices-design.md',
                         label: 'Read the devices design',
                     },
