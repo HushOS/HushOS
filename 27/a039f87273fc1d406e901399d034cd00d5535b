@@ -1,0 +1,38 @@
+packages/auth/src/device-storage.test.ts
+  s_c56e31c87cddde::t_75212f401ab9a4 1-90
+packages/drive/src/connection.test.ts
+  s_c56e31c87cddde::t_9e1649cf750d3a 1-149
+  s_c56e31c87cddde::t_475b478581d50f 150
+apps/web/src/lib/stash.test.ts
+  s_c56e31c87cddde::t_e3a7994366cacd 80,295-349
+apps/web/src/lib/stash.ts
+  s_c56e31c87cddde::t_3f6c0c733529d8 41-44,69-87,89,93,102,109,111,120-121,124,201-206
+bun.lock
+  s_c56e31c87cddde::t_8cbe8f7bcbd244 210
+packages/auth/src/device-storage.ts
+  s_c56e31c87cddde::t_ef1f37d3eb524c 32-70,78,155
+packages/drive/package.json
+  s_c56e31c87cddde::t_90a8b31a9370e8 39
+packages/drive/src/connection.ts
+  s_c56e31c87cddde::t_4cf4d5afff26bb 1-34
+packages/drive/src/journal.ts
+  s_c56e31c87cddde::t_5e9eaab74b8d62 1-2,134-145
+packages/drive/src/mirror.ts
+  s_c56e31c87cddde::t_60db7171258acd 1-2,35-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "27a039f87273fc1d406e901399d034cd00d5535b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
