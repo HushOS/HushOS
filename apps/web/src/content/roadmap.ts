@@ -156,7 +156,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Families',
                 title: 'Family plans',
-                body: 'One storage pool for the whole family, covering everyone’s own files and the family folders, for up to 20 people, with each newcomer checked with their twelve words before they join. Built on the web; it switches on once the shared pool is ready.',
+                body: 'One storage pool for the whole family, covering everyone’s own files and the family folders, for up to 20 people, with each newcomer checked with their twelve words before they join. Built on the web, shared pool included; it switches on at hushos.com once the last billing checks are done.',
             },
             {
                 id: 'phone-apps',
