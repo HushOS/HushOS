@@ -839,7 +839,9 @@ export type NewFolder = { id: string; envelopes: NodeEnvelopes };
  * Creates folders under one parent in one transaction, in the order given. A
  * folder may name an earlier folder in the same batch as its parent, which is how
  * "one/two/three" becomes a chain in one request. Every envelope states the parent
- * key epoch it wrapped under and is refused if that epoch has moved.
+ * key epoch it wrapped under and is refused if that epoch has moved. Each folder
+ * takes its own change number, in that order, so parents precede children in the
+ * feed; `changeSeq` is the last.
  */
 export async function createFolders(input: {
     workspaceId: string;
@@ -847,7 +849,12 @@ export async function createFolders(input: {
     folders: (NewFolder & { parentId: string })[];
 }) {
     return transactionKeeping(['created'], async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
+        // One number per folder: a feed page may end between any two of them (see listChanges).
+        const firstSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
+        const changeSeq =
+            input.folders.length > 1
+                ? await moreChangeSeqs(tx, input.workspaceId, input.folders.length - 1)
+                : firstSeq;
         // Every folder's signature first: a batch lands whole or not at all.
         if (
             !(await signedBy(
@@ -864,7 +871,7 @@ export async function createFolders(input: {
             { depth: number; keyEpoch: number; ancestors: Ancestor[] }
         >();
         const ids: string[] = [];
-        for (const folder of input.folders) {
+        for (const [index, folder] of input.folders.entries()) {
             const inBatch = created.get(folder.parentId);
             let parentDepth: number;
             let parentEpoch: number;
@@ -908,9 +915,10 @@ export async function createFolders(input: {
                     ...folder.envelopes,
                     metadataSignerId: input.userId,
                     createdBy: input.userId,
-                    changeSeq,
+                    changeSeq: firstSeq + index,
                 })
-                .onConflictDoNothing()
+                // The id only: any other clash is a bug to surface, never "already exists".
+                .onConflictDoNothing({ target: driveNodes.id })
                 .returning({ id: driveNodes.id });
             if (!row) return { status: 'conflict' as const, id: folder.id };
             ids.push(row.id);
@@ -2827,7 +2835,8 @@ async function copyFileOnce(input: CopyFile) {
                 createdBy: input.userId,
                 changeSeq,
             })
-            .onConflictDoNothing()
+            // The id only: any other clash is a bug to surface, never "already exists".
+            .onConflictDoNothing({ target: driveNodes.id })
             .returning({ id: driveNodes.id });
         if (!node) return { status: 'conflict' as const };
         const [inserted] = await tx
@@ -4324,7 +4333,11 @@ export type Change =
 
 /*
  * Nodes changed since a cursor, in order, tombstones included; the cursor is
- * the last sequence examined. A node without a sequence is invisible here.
+ * the last sequence examined. A node without a sequence is invisible here. The
+ * page ends after any row, which is sound only because no two rows of a
+ * workspace share a sequence (every write takes one per node it changes): a
+ * page ending between two that did would have the next one, asking for what
+ * follows, skip the other.
  */
 export async function listChanges(input: { workspaceId: string; since: number; limit?: number }) {
     const limit = Math.min(input.limit ?? 200, 500);
@@ -4389,7 +4402,8 @@ export const SHARE_FEED_SCAN = 2000;
  * shown). The cursor is sealed (see share-cursor.ts), so neither the changes
  * nor the cursor tell a grantee what the owner did elsewhere or how often; a
  * missing cursor starts from the beginning and a tampered one is refused.
- * Each poll looks at a bounded number of the owner's changes. Revoked means
+ * Each poll looks at a bounded number of the owner's changes and may stop
+ * after any of them, sound for the reason listChanges gives. Revoked means
  * there is nothing more to say.
  */
 export async function listShareChanges(input: {
