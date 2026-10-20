@@ -1,0 +1,35 @@
+CONTRIBUTING.md
+  s_c56e31c87cddde::t_f48f4f6b611fe0 88
+packages/db/test/global-setup.ts
+  s_c56e31c87cddde::t_69e0d404ff11b1 35-36
+  s_c56e31c87cddde::t_bdf4922091fc24 17,19,27-34,37-66,68,74
+  s_c56e31c87cddde::t_3f4d4b086938e2 3-4
+  s_c56e31c87cddde::t_deccb7cdbb6e3f 110-112
+  s_c56e31c87cddde::t_3e9e215017d001 67
+  s_c56e31c87cddde::t_d84d744b27b90d 69-73
+  s_0e0907a51954c9::t_5da403fbcd8fff 115,117,119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2531026737d47ad4436443e0f32228a79d81bfdb",
+  "prompts": {},
+  "sessions": {
+    "s_0e0907a51954c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a4d711d8dfc65917b",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
