@@ -10,6 +10,8 @@ import { hydrated, landedOnHome, newFolder, newPage, PASSWORD, registerAccount }
  */
 
 type Frame = {
+    /* performance.now() when the frame was read. */
+    t: number;
     app: boolean;
     email: string | null;
     rows: number;
@@ -34,6 +36,7 @@ function record() {
     const shown = (element: Element) => element.getClientRects().length > 0;
     const tick = () => {
         frames.push({
+            t: performance.now(),
             app: document.querySelector('button[aria-label="Account menu"]') !== null,
             email: document.querySelector<HTMLInputElement>('#email')?.value ?? null,
             rows: [...document.querySelectorAll('[data-node-id]')].filter(shown).length,
@@ -54,17 +57,34 @@ const watch = (page: Page) => page.evaluate(record);
 const frames = (page: Page) =>
     page.evaluate(() => (window as unknown as { __frames: Frame[] }).__frames);
 
+/* When the line says "Still opening" and the page shows as it is, placeholders and all. */
+const LATE_MS = 4_000;
+/* The line is mounted before the first frame that shows it, later still on a loaded runner. */
+const MARGIN_MS = 1_000;
+
 /*
- * From the moment the app is on screen until its list is: one line ("Opening your files"),
- * never skeleton rows after it, and never the page without its list.
+ * From the moment the app is on screen until its list is: never the page with neither its
+ * list nor skeleton rows, and never the line and skeleton rows at once. When the list came
+ * well within the line's four seconds, one step: the line, then the list, with no skeleton
+ * rows and no page before it. When it came later (a slow runner), the page may show with its
+ * skeleton rows once the line has had about its four seconds, never sooner, and then the list.
  */
-function openedInOneStep(recorded: Frame[]) {
+function openedWithoutSwap(recorded: Frame[]) {
     const app = recorded.filter((frame) => frame.app && !frame.locked);
     const listed = app.findIndex((frame) => frame.rows > 0);
     expect(listed).toBeGreaterThan(-1);
     const before = app.slice(0, listed);
-    expect(before.filter((frame) => frame.skeleton)).toEqual([]);
-    expect(before.filter((frame) => frame.page)).toEqual([]);
+    expect(before.filter((frame) => frame.page && !frame.skeleton)).toEqual([]);
+    expect(before.filter((frame) => frame.opening && frame.skeleton)).toEqual([]);
+    const line = (app.find((frame) => frame.opening) ?? app[0]!).t;
+    if (app[listed]!.t - line < LATE_MS - MARGIN_MS) {
+        expect(before.filter((frame) => frame.skeleton || frame.page)).toEqual([]);
+    } else {
+        const early = (frame: Frame) => frame.t - line < LATE_MS - MARGIN_MS;
+        expect(before.filter((frame) => (frame.skeleton || frame.page) && early(frame))).toEqual(
+            [],
+        );
+    }
 }
 
 test('signing out and back in never redraws the page being left', async ({ browser }) => {
@@ -102,7 +122,7 @@ test('signing out and back in never redraws the page being left', async ({ brows
     // The form kept what was typed until the app replaced it.
     expect(signingIn.filter((frame) => frame.email !== email)).toEqual([]);
     // Then the drive appeared in one step: the line, then the list.
-    openedInOneStep(recorded);
+    openedWithoutSwap(recorded);
 
     // A reload opens it again from the saved unlock, in one step too.
     await page.addInitScript(record);
@@ -110,5 +130,5 @@ test('signing out and back in never redraws the page being left', async ({ brows
     await expect(page.locator('[data-node-id]')).toHaveCount(1, { timeout: 60_000 });
     const reloaded = await frames(page);
     expect(reloaded.some((frame) => frame.opening)).toBe(true);
-    openedInOneStep(reloaded);
+    openedWithoutSwap(reloaded);
 });
