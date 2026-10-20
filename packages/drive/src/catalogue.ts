@@ -332,12 +332,18 @@ export function parentsFirst(rows: NodeView[]) {
 /*
  * Orders a batch of changes so a node comes after its parent whenever the parent is in the
  * batch too, keeping change order otherwise; what is not in the batch is taken as opened.
+ * A node the batch holds twice (it changed again between two pages of one pull, or a pull
+ * went back over what it had) is kept at its last copy, in the place of that copy.
  */
 export function parentsBefore(rows: NodeView[]) {
-    const byId = new Map(rows.map((row) => [row.id, row]));
+    const byId = new Map<string, NodeView>();
+    for (const row of rows) {
+        byId.delete(row.id);
+        byId.set(row.id, row);
+    }
     const placed = new Set<string>();
     const ordered: NodeView[] = [];
-    for (const row of rows) {
+    for (const row of byId.values()) {
         // Up the chain to the first ancestor placed or outside the batch, then back down.
         const chain: NodeView[] = [];
         for (

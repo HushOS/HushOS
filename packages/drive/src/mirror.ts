@@ -43,7 +43,9 @@ export interface TreeMirror {
      * tombstone). One read of the whole workspace in a write transaction, so the caller asks
      * only when something can be below: a folder `apply` took off, or a tombstoned node that
      * rows of the same pull name as their parent. The fan-out's own tombstones, of rows already
-     * dropped, ask for nothing.
+     * dropped, ask for nothing. Only the tab whose `apply` took the folder off asks: if it is
+     * closed or locked before it does, the rows stay until the fan-out tombstones them or the
+     * next build finds them without a parent and starts over.
      */
     dropBelow(workspaceId: string, nodeIds: string[]): Promise<void>;
     /* The rows and the cursor they stand at, read together: another tab may clear in between. */

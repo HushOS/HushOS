@@ -637,7 +637,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             let first = true;
             // What was inside a folder deleted forever leaves with it (TreeMirror.dropBelow), for
             // every page applied, even when a later one fails: no later pull names that deletion
-            // again. A tab closed mid-pull leaves the rows until the server's fan-out tombstones them.
+            // again. A tab closed or locked mid-pull leaves the rows until the server's fan-out
+            // tombstones them, or the next build finds them without a parent and starts over:
+            // only the tab whose page took the folder off sweeps, and the others skip a
+            // tombstone the mirror already holds.
             // Only where something can be below: a folder the mirror took off, or a tombstoned
             // node that rows of this pull name as their parent (a pull from nothing gets a
             // purged folder's contents, and the folder only as its tombstone).

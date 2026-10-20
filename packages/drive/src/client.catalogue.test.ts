@@ -600,3 +600,27 @@ describe('a folder changed just before what held it was deleted forever', () => 
         expect(client.localListing('taxes')).toBeNull();
     });
 });
+
+describe('a node that changes again between two pages of one pull', () => {
+    test('is filed as it last was', async () => {
+        const s = drive();
+        const client = tab(s.api, createMemoryMirror());
+        await client.buildCatalogue(WS);
+        // A backlog of two pages; once the first is served, the first file in it is trashed.
+        for (let index = 0; index < 600; index++) s.file(`f${index}`, 'root');
+        const changes = s.api.changes.bind(s.api);
+        let served = 0;
+        s.api.changes = async (ws, since, limit) => {
+            const page = await changes(ws, since, limit);
+            if (++served === 1) s.trash('f0');
+            return page;
+        };
+        await client.catchUp();
+
+        expect(served).toBe(2);
+        const recent = client.recent(1000).map((node) => node.id);
+        expect(recent).toHaveLength(600);
+        expect(recent).not.toContain('f0');
+        expect(client.search('f0')).toEqual([]);
+    });
+});
