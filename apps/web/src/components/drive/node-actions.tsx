@@ -305,6 +305,7 @@ export function NodeSelectionBar({
     const [held, setHeld] = useState({ key, selection });
     if (!trashing && held.key !== key) setHeld({ key, selection });
     const items = trashing ? held.selection : selection;
+    const [moreOpen, setMoreOpen] = useState(false);
     const single = items.length === 1 ? items[0]! : null;
     /* What More holds on a wide screen: Versions, Info, Select all. */
     const moreWide = items.length === 1 || !allSelected;
@@ -373,13 +374,18 @@ export function NodeSelectionBar({
                 />
             )}
             {/* The less common actions, and on a phone every action the bar has no room for. */}
-            <DropdownMenu>
+            {/* Refused, and closed, while a batch is trashing: none of it may act on items mid-way. */}
+            <DropdownMenu
+                open={moreOpen && !trashing}
+                onOpenChange={(open) => setMoreOpen(open && !trashing)}
+            >
                 <DropdownMenuTrigger
                     render={
                         <SelectionAction
                             icon={EllipsisIcon}
                             label="More actions"
                             iconOnly
+                            disabled={trashing}
                             // On a wide screen everything else has its own button; with
                             // nothing left to offer there, More would open empty.
                             className={moreWide ? undefined : 'sm:hidden'}

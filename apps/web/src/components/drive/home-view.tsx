@@ -51,7 +51,8 @@ import {
     driveError,
     folderQueryOptions,
     formatWhen,
-    invalidateFolders,
+    refreshFolders,
+    restoreNodes,
     trashNodes,
     useCatalogueState,
 } from '@/lib/drive';
@@ -109,8 +110,10 @@ export function HomeView() {
     const [tagId, setTagId] = useState<string | null>(null);
     // A tag removed elsewhere stops filtering here.
     const tag = tags.find((entry) => entry.id === tagId) ?? null;
-    // Trashed from here: gone at once, before the change feed tells the catalogue.
-    const [gone, setGone] = useState<Set<string>>(new Set());
+    // Trashed from here, or put back by Undo: the list changes as each lands, ahead of the
+    // catalogue, until the one refresh after the batch has the catalogue say so itself.
+    const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+    const [back, setBack] = useState<ReadonlyMap<string, DriveNode>>(new Map());
 
     // The catalogue knows every folder; the top folder's own listing is fresher right
     // after something is added here, so it wins for the items it holds.
@@ -120,6 +123,7 @@ export function HomeView() {
             matchesType(node, type) &&
             (!tag || (registry !== null && tagsOf(registry, node.id).includes(tag.id)));
         const found = new Map<string, DriveNode>();
+        for (const node of back.values()) if (keep(node)) found.set(node.id, node);
         for (const node of driveClient.recent(LIMIT, keep)) found.set(node.id, node);
         for (const node of top.data?.children ?? [])
             if (!node.trashedAt && keep(node)) found.set(node.id, node);
@@ -128,7 +132,7 @@ export function HomeView() {
             .slice(0, LIMIT);
         // The catalogue state stands in for the catalogue's contents, which it follows.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [catalogue, top.data, type, tag, registry, gone]);
+    }, [catalogue, top.data, type, tag, registry, gone, back]);
     const ids = useMemo(() => rows.map((row) => row.id), [rows]);
     const dropRef = useRef<HTMLDivElement>(null);
     const mobile = useIsMobile();
@@ -225,58 +229,67 @@ export function HomeView() {
     function download(nodes: DriveNode[]) {
         if (nodes.length) downloadNodes(nodes);
     }
-    /* Puts trashed items back where they were: the toast's Undo. */
-    async function undoTrash(nodes: DriveNode[]) {
-        let back = 0;
-        try {
-            for (const node of nodes) {
-                await driveClient.restore(node);
-                back++;
-            }
+    /*
+     * The toast's Undo: puts back what moved, a few at a time, each row returning as it
+     * lands. The toast itself says it is working, and then how it went.
+     */
+    async function undoTrash(nodes: DriveNode[], toastId: string) {
+        const one = nodes.length === 1;
+        toast.update(toastId, {
+            type: 'loading',
+            title: one ? `Putting “${nodes[0]!.name}” back` : `Putting ${nodes.length} items back`,
+            description: undefined,
+            actionProps: undefined,
+            timeout: 0,
+        });
+        const { back: returned, error } = await restoreNodes(nodes, (landed) => {
+            const ids = new Set(landed.map((node) => node.id));
+            setGone((current) => new Set([...current].filter((id) => !ids.has(id))));
+            setBack(
+                (current) =>
+                    new Map([...current, ...landed.map((node) => [node.id, node] as const)]),
+            );
+        });
+        if (returned.length === nodes.length) {
             cue('success');
-            toast.add({
+            toast.update(toastId, {
                 type: 'success',
-                title: back === 1 ? `“${nodes[0]!.name}” is back` : `${back} items are back`,
+                title: one ? `“${nodes[0]!.name}” is back` : `${returned.length} items are back`,
+                timeout: 3_500,
             });
-        } catch (error) {
+        } else {
             cue('error');
-            toast.add({
+            toast.update(toastId, {
                 type: 'error',
                 title:
-                    back === 0 ? 'Couldn’t bring it back' : `${back} of ${nodes.length} are back`,
+                    returned.length === 0
+                        ? 'Couldn’t bring it back'
+                        : `${returned.length} of ${nodes.length} are back`,
                 description: `${driveError(error)} The rest are still in Trash.`,
+                timeout: 8_000,
             });
-        } finally {
-            // What came back, and what was hidden because it went inside a folder that came back.
-            const restored = new Set(nodes.slice(0, back).map((node) => node.id));
-            setGone(
-                (current) =>
-                    new Set(
-                        [...current].filter(
-                            (id) =>
-                                !restored.has(id) &&
-                                !driveClient
-                                    .ancestorsOf(id)
-                                    .some((ancestor) => restored.has(ancestor.id)),
-                        ),
-                    ),
-            );
-            await invalidateFolders(queryClient, ...nodes.map((node) => node.parentId));
         }
+        // One refresh for the whole batch, in the background; then the catalogue holds them,
+        // and whatever came back inside them, itself.
+        const ids = new Set(returned.map((node) => node.id));
+        void refreshFolders(queryClient, ...nodes.map((node) => node.parentId)).then(() =>
+            setBack((current) => new Map([...current].filter(([id]) => !ids.has(id)))),
+        );
     }
     async function trash(nodes: DriveNode[]) {
         if (!nodes.length || trashing) return;
         setTrashing(true);
         let went: string[] = [];
         try {
-            const result = await trashNodes(nodes, (ids) =>
-                setGone((current) => new Set([...current, ...ids])),
-            );
+            const result = await trashNodes(nodes, (ids) => {
+                setGone((current) => new Set([...current, ...ids]));
+                setBack((current) => new Map([...current].filter(([id]) => !ids.includes(id))));
+            });
             const { moved, tried } = result;
             went = result.gone;
             if (moved.length === tried) {
                 cue('droplet');
-                toast.add({
+                const id = toast.add({
                     type: 'success',
                     title:
                         nodes.length === 1
@@ -287,11 +300,11 @@ export function HomeView() {
                             ? 'It stays in Trash for 30 days.'
                             : 'They stay in Trash for 30 days.',
                     timeout: 8_000,
-                    actionProps: { children: 'Undo', onClick: () => void undoTrash(moved) },
+                    actionProps: { children: 'Undo', onClick: () => void undoTrash(moved, id) },
                 });
             } else {
                 cue('error');
-                toast.add({
+                const id = toast.add({
                     type: 'error',
                     title:
                         moved.length === 0
@@ -300,27 +313,37 @@ export function HomeView() {
                     description: driveError(result.error),
                     ...(moved.length > 0 && {
                         timeout: 8_000,
-                        actionProps: { children: 'Undo', onClick: () => void undoTrash(moved) },
+                        actionProps: {
+                            children: 'Undo',
+                            onClick: () => void undoTrash(moved, id),
+                        },
                     }),
                 });
             }
         } finally {
             setTrashing(false);
-            setGone((current) => new Set([...current, ...went]));
-            // One refresh for the whole batch, in the background: the rows have already gone.
-            void invalidateFolders(queryClient, ...nodes.map((node) => node.parentId));
+            // One refresh for the whole batch, in the background: the rows have already gone,
+            // and once the catalogue has caught up it leaves them out itself.
+            const ids = new Set(went);
+            void refreshFolders(queryClient, ...nodes.map((node) => node.parentId)).then(() =>
+                setGone((current) => new Set([...current].filter((id) => !ids.has(id)))),
+            );
         }
     }
 
-    useHotkey('F2', () => selection.length === 1 && setRenaming(selection[0]!), { enabled });
-    useHotkey('M', () => selection.length > 0 && setMoving(selection), { enabled });
-    useHotkey('C', () => selection.length > 0 && setCopying(selection), { enabled });
-    useHotkey('D', () => download(selection), { enabled });
+    // Nothing else acts on a selection while part of it is on its way to the trash.
+    const idle = enabled && !trashing;
+    useHotkey('F2', () => selection.length === 1 && setRenaming(selection[0]!), {
+        enabled: idle,
+    });
+    useHotkey('M', () => selection.length > 0 && setMoving(selection), { enabled: idle });
+    useHotkey('C', () => selection.length > 0 && setCopying(selection), { enabled: idle });
+    useHotkey('D', () => download(selection), { enabled: idle });
     useHotkey('I', toggleInfo, { enabled });
     useHotkey('Shift+N', () => setCreating(true), {
         enabled: enabled && Boolean(top.data?.folder),
     });
-    useHotkey('T', () => selection.length > 0 && setTagging(selection), { enabled });
+    useHotkey('T', () => selection.length > 0 && setTagging(selection), { enabled: idle });
     useHotkey('Backspace', () => void trash(selection), { enabled });
     useHotkey('Delete', () => void trash(selection), { enabled });
     // Enter on a focused link or button is that control's, not the selection's.
