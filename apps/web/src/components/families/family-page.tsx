@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { CheckingLine, ForkAlert, NoticeList } from '@/components/families/family-alerts';
-import { FamilyPlan, useFamilyPlanGate } from '@/components/families/family-billing';
+import { FamilyPlan, FamilyStorage, useFamilyPlanGate } from '@/components/families/family-billing';
 import { InviteDialog } from '@/components/families/invite-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
 import { InvitationList, MemberList, PendingList } from '@/components/families/members';
@@ -25,7 +25,7 @@ import {
 import { Button, buttonVariants } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import {
-    afterFamilyChange,
+    afterMembershipChange,
     canManage,
     familiesQueryOptions,
     familiesSyncQueryOptions,
@@ -44,6 +44,7 @@ import type { GroupNotice } from '@/lib/groups/context';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
 import { paymentNeedsYou, placesOf } from '@/lib/family-billing';
+import { formatQuota, formatSpace, storageQueryOptions } from '@/lib/queries';
 import { leaveBlocker } from '@/lib/family-leave';
 import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
@@ -338,6 +339,7 @@ export function FamilyPage({
                 roles={summary.roles}
                 onCheckoutSeen={() => undefined}
             />
+            <FamilyStorage userId={userId} groupId={groupId} family={family} />
 
             <section className="flex flex-col gap-3 px-5 pt-8 sm:px-8">
                 <details className="group rounded-xl border border-rule px-4 py-3 text-[13px]">
@@ -447,6 +449,17 @@ function LeaveDialog({
     const navigate = useNavigate();
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    // While their files draw from this family's pool, what leaving does to them
+    // (docs/families-shared-pool.md 3.4): back on the allowance they have on their own, and
+    // over it, readable but closed to uploads. Nothing is deleted.
+    const storage = useQuery(storageQueryOptions);
+    const own = storage.data?.pool?.groupId === groupId ? storage.data.own : null;
+    const over = own !== null && BigInt(own.usedBytes) > BigInt(own.allowanceBytes);
+    const ownLine = !own
+        ? null
+        : over
+          ? `Your files take ${formatSpace(own.usedBytes)}. After you leave you have ${formatQuota(own.allowanceBytes)} of your own: you’ll be able to open and download everything, but not upload, until you make room or choose a plan.`
+          : `Your files take ${formatSpace(own.usedBytes)}. After you leave they count against the ${formatQuota(own.allowanceBytes)} you have of your own.`;
 
     async function leave() {
         setBusy(true);
@@ -463,7 +476,15 @@ function LeaveDialog({
             familySynced(groupId, { status: 'wiped' });
             cue('droplet');
             // The leave landed either way; a wipe that failed is said, not hidden behind it.
-            if (wiped) toast.add({ type: 'success', title: `You left ${family}` });
+            if (wiped)
+                toast.add({
+                    type: 'success',
+                    title: `You left ${family}`,
+                    description:
+                        own && over
+                            ? `Your files take more than the ${formatQuota(own.allowanceBytes)} you have of your own, so uploads are off until you make room or choose a plan.`
+                            : undefined,
+                });
             else
                 toast.add({
                     type: 'error',
@@ -472,7 +493,7 @@ function LeaveDialog({
                         'HushOS couldn’t clear the family’s keys and saved records on this device. Lock or sign out to clear them.',
                 });
             onOpenChange(false);
-            await afterFamilyChange(queryClient, userId);
+            await afterMembershipChange(queryClient, userId);
             await navigate({ to: '/app/drive', replace: true });
         } catch (cause) {
             cue('error');
@@ -493,6 +514,11 @@ function LeaveDialog({
                             : 'You’ll lose the family folders. Your own files stay yours.'}
                     </AlertDialogDescription>
                 </AlertDialogHeader>
+                {ownLine && (
+                    <p className="text-sm" data-leave-storage={over ? 'over' : 'fits'}>
+                        {ownLine}
+                    </p>
+                )}
                 {error && (
                     <p role="alert" className="text-sm text-destructive">
                         {error}

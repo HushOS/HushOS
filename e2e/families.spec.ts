@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
     expect,
     test,
+    type APIRequestContext,
     type Browser,
     type Locator,
     type Page,
@@ -1574,7 +1575,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         const ending = maya.page.locator('[data-plan-notice="ending"]');
         await expect(ending).toContainText(`${family}’s plan ends on`, { timeout: 60_000 });
         await expect(ending).toContainText(
-            'After that, nobody can upload to the family folders. Nothing is deleted.',
+            'After that, nobody can upload to the family folders, and everyone’s own files count against their own storage again. Nothing is deleted.',
         );
         const billing = maya.page.locator('[data-family-plan="billing"]');
         await expect(
@@ -1631,19 +1632,82 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             maya.page.getByRole('button', { name: 'Manage payment and invoices' }),
         ).toHaveCount(0);
     });
+
+    test('who stores what: a manager sees each person’s own files rounded up, a member only their own', async () => {
+        const GIB = 1024 ** 3;
+        // Maya's own id, as the family's member list names her: her row reads You.
+        const detail = (await (
+            await maya.page.request.get(`/api/groups/${groupId}`, {
+                headers: { 'HushOS-Client': 'web/1' },
+            })
+        ).json()) as {
+            members: { userId: string; name: string }[];
+        };
+        const mayaId = detail.members.find((member) => member.name === 'Maya Ekström')!.userId;
+        // As the server rounds it for someone who manages the family (3.9): whole GB, rounded
+        // up, largest first, "0" for anything under 1 GB. An id the member list doesn't name
+        // (someone who joined since this page read it) reads as someone in the family.
+        await show({
+            ...live(),
+            usage: {
+                ownBytes: String(Math.round(0.4 * GIB)),
+                foldersBytes: String(40 * GIB),
+                members: [
+                    { userId: 'not-on-this-list', ownBytesRounded: String(12 * GIB) },
+                    { userId: mayaId, ownBytesRounded: '0' },
+                ],
+            },
+        });
+        const usage = maya.page.locator('[data-family-usage="manager"]');
+        await expect(usage.locator('[data-usage-member]')).toHaveText(
+            ['Someone in the family12 GB', 'YouUnder 1 GB'],
+            { timeout: 60_000 },
+        );
+        await expect(usage.locator('[data-usage-folders]')).toHaveText('Family folders40 GB');
+        // 2 TB less the 300 GB the family stores.
+        await expect(usage.locator('[data-usage-free]')).toHaveText('Free1.71 TB');
+        await expect(usage).toContainText(
+            'How much each person’s own files take, rounded up to the whole GB. You can’t see what the files are.',
+        );
+        // Nothing of anyone's own exact bytes, not even the manager's, in the list.
+        await expect(usage.locator('[data-usage-own]')).toHaveCount(0);
+
+        // A member: their own files exactly, the folders and what is free; nobody else's.
+        await show({
+            enabled: true,
+            view: 'member',
+            hasPlan: true,
+            planName: 'Family Pro (monthly)',
+            storage: { usedBytes: String(2048 * GIB), quotaBytes: String(2048 * GIB) },
+            usage: { ownBytes: String(1.5 * GIB), foldersBytes: '0', members: null },
+        });
+        const own = maya.page.locator('[data-family-usage="member"]');
+        await expect(own.locator('[data-usage-own]')).toHaveText('Your files1.5 GB', {
+            timeout: 60_000,
+        });
+        await expect(own.locator('[data-usage-member]')).toHaveCount(0);
+        await expect(own.locator('[data-usage-folders]')).toHaveText('Family foldersNone');
+        await expect(own.locator('[data-usage-free]')).toHaveText(
+            'FreeThe family’s storage is full',
+        );
+        await expect(own).toContainText(
+            `The people who manage ${family} see how much your files take, rounded up to the whole GB, never what they are.`,
+        );
+    });
 });
 
 /*
  * The pricing page's Create a family, pressed signed out: it signs up first and lands on
- * Account → Family, through the return it keeps in this browser (rememberReturn, for an hour). The
+ * Plans, where the family tiers sit beside the personal ones (docs/families-shared-pool.md 7.4),
+ * through the return it keeps in this browser (rememberReturn, for an hour). The
  * section shows only where the server sells plans and lists a family plan, so this skips
  * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
  * (verify-hushos `launch --billing polar`).
  */
-test.describe('creating a family from the pricing page', () => {
+test.describe.serial('creating a family from the pricing page', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 
-    test('someone without an account signs up from Create a family and lands on Account → Family', async ({
+    test('someone without an account signs up from Create a family and lands on Plans, at the family tiers', async ({
         browser,
         request,
     }) => {
@@ -1667,10 +1731,13 @@ test.describe('creating a family from the pricing page', () => {
         await expect(page).toHaveURL(/\/register$/);
         await registerAccount(page, 'Rosa Ekström', undefined, {
             viaCurrentPage: true,
-            landsOn: /\/app\/family$/,
+            landsOn: /\/app\/billing$/,
         });
         await expect(
-            page.locator('[data-no-family]').getByRole('button', { name: 'Create a family' }),
+            page
+                .locator('[data-family-plans]')
+                .getByRole('button', { name: /^Create a family with Family / })
+                .first(),
         ).toBeVisible({ timeout: 60_000 });
     });
 });
@@ -1976,7 +2043,391 @@ test.describe.serial('moving between My files and a family folder', () => {
     });
 });
 
-test.describe('families off', () => {
+/* A family plan as the public catalogue lists it, for a plan written as billing writes it. */
+type CatalogueFamily = {
+    id: string;
+    name: string;
+    interval: 'month' | 'year';
+    tier: string | null;
+    quotaBytes: string;
+    includedMembers: number;
+};
+
+/* Whether this server sells family plans, and which: only then is anyone's storage pooled. */
+async function familyCatalogue(request: APIRequestContext) {
+    const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
+        enabled?: boolean;
+        families?: CatalogueFamily[];
+    };
+    return catalogue.enabled ? (catalogue.families ?? []) : [];
+}
+
+async function sellsPlans(request: APIRequestContext) {
+    const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
+        enabled?: boolean;
+    };
+    return catalogue.enabled === true;
+}
+
+/* The family's id, from Family folders in the sidebar (its page is /app/family). */
+async function familyIdOf(who: Person) {
+    const href = await who.page
+        .getByRole('link', { name: 'Family folders', exact: true })
+        .first()
+        .getAttribute('href');
+    return href!.split('/').at(-1)!;
+}
+
+/*
+ * The family's plan goes live as billing writes it from Polar's webhook: the subscription's
+ * row, the family's places and the pool's, for a month. A real checkout can't be paid here (nothing may call
+ * Polar), so the rows are written in the server's own database, as the move test writes the
+ * pool. No customer row: the daily reconcile lists families by customer, so it never asks
+ * Polar about this one. Places: what the plan includes, so letting someone in buys nothing.
+ */
+async function makePlanLive(groupId: string, plan: CatalogueFamily) {
+    const database = new SQL(e2eDatabase().url);
+    try {
+        await database`
+            insert into group_billing_subscriptions (
+                id, group_id, provider, product_id, product_name, status, recurring_interval,
+                amount, currency, units, paid_units, paid_product_id, paid_quota_bytes,
+                included_members, quota_bytes, current_period_start, current_period_end
+            ) values (
+                ${`e2e-${randomUUID()}`}, ${groupId}, 'polar', ${plan.id}, ${plan.name}, 'active',
+                ${plan.interval}, 1000, 'usd', ${plan.includedMembers}, ${plan.includedMembers},
+                ${plan.id}, ${plan.quotaBytes}, ${plan.includedMembers}, ${plan.quotaBytes},
+                now(), now() + interval '30 days'
+            )`;
+        await database`
+            update groups set seat_limit = ${plan.includedMembers}, updated_at = now()
+            where id = ${groupId}`;
+        await database`
+            insert into group_storage (group_id, quota_bytes, expires_at)
+            values (${groupId}, ${plan.quotaBytes}, now() + interval '30 days')
+            on conflict (group_id) do update
+                set quota_bytes = excluded.quota_bytes, expires_at = excluded.expires_at`;
+    } finally {
+        await database.close();
+    }
+}
+
+async function storageOf(who: Person) {
+    const answer = await who.page.request.get('/api/auth/storage');
+    return (
+        (await answer.json()) as {
+            storage: {
+                usedBytes: string;
+                quotaBytes: string;
+                pool: { groupId: string; name: string } | null;
+                own: { usedBytes: string; allowanceBytes: string } | null;
+            };
+        }
+    ).storage;
+}
+
+/*
+ * One view for a family member (docs/families-shared-pool.md 7.1-7.4, step 6), driven as the
+ * people in it. A personal account has no family in its sidebar. Where plans are sold, Plans
+ * shows the family tiers beside the personal ones; one creates a family and goes to its
+ * checkout, which is answered here with the family's own page (Polar can't be paid in a test),
+ * and the plan then goes live as billing writes it. From then on the organizer's meter is the
+ * family's pool on every page, and Plans says their storage comes from the family's plan. A
+ * newcomer is told before accepting that their files will use the family's storage, with their
+ * own figure; once in, the manager sees each person's own files rounded up to the whole GB and
+ * the member only their own, which no answer to the member gives away for anyone else. The
+ * member's leave dialog says what leaving does to their storage, and Trash shows My files'
+ * and the family folders' as two sections. The pooled tests run only against a server that
+ * sells family plans (verify-hushos `launch --groups --billing polar`); CI runs the first.
+ */
+test.describe.serial('one view for a family member, with one pool', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    const family = 'Lindgren family';
+    let rosa: Person;
+    let theo: Person;
+    let plans: CatalogueFamily[] = [];
+    let groupId: string;
+
+    test.beforeAll(async ({ browser, request }) => {
+        test.setTimeout(300_000);
+        plans = await familyCatalogue(request);
+        rosa = await person(browser, 'Rosa Lindgren');
+    });
+    test.afterAll(async () => {
+        await rosa?.page.context().close();
+        await theo?.page.context().close();
+    });
+
+    const sellsFamilies = () => plans.some((plan) => plan.interval === 'month');
+
+    test('a personal account sees no family in the sidebar, and its storage is its own', async () => {
+        // Asked once the families are known, so the absence means something.
+        const listed = rosa.page.waitForResponse(
+            (response) => new URL(response.url()).pathname === '/api/groups' && response.ok(),
+        );
+        await rosa.page.goto('/app/drive');
+        await listed;
+        await expect(rosa.page.getByRole('link', { name: 'My files' }).first()).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(rosa.page.locator('[data-family-header]')).toHaveCount(0);
+        await expect(rosa.page.getByRole('link', { name: 'Family folders' })).toHaveCount(0);
+        const meter = rosa.page.locator('[data-storage-meter="own"]');
+        await expect(meter).toContainText(/ of .+ used/);
+        // Not labelled: there is no family's storage it could be mistaken for.
+        await expect(meter).not.toContainText('My files');
+        await expect(rosa.page.locator('[data-storage-meter="pool"]')).toHaveCount(0);
+    });
+
+    test('Plans shows the family tiers beside the personal ones; one creates a family and goes to its checkout, and the meter then shows the pool', async () => {
+        test.skip(!sellsFamilies(), 'This server sells no family plans: nothing is pooled.');
+        test.setTimeout(300_000);
+        const plus =
+            plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus') ??
+            plans.find((plan) => plan.interval === 'month')!;
+        const tier = plus.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+        await rosa.page.goto('/app/billing');
+        const section = rosa.page.locator('[data-family-plans]');
+        await expect(section.locator('[data-plan]')).toHaveCount(
+            plans.filter((plan) => plan.interval === 'month').length,
+            { timeout: 60_000 },
+        );
+        // Beside the personal plans, not instead of them.
+        await expect(rosa.page.locator('[data-plan="Free"]')).toBeVisible();
+        // Polar's checkout can't be paid here: the checkout answers with the family's page.
+        let asked: { productId?: string } | null = null;
+        const checkout = /\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/;
+        await rosa.page.route(checkout, async (route: Route) => {
+            asked = route.request().postDataJSON() as { productId?: string };
+            await route.fulfill({ json: { url: '/app/family#from-checkout' } });
+        });
+        await section.getByRole('button', { name: `Create a family with ${tier}` }).click();
+        const dialog = rosa.page.getByRole('dialog', { name: 'Create a family' });
+        const gib = Number(plus.quotaBytes) / 1024 ** 3;
+        await expect(dialog).toContainText(
+            `Then you pay for ${tier}, ${gib >= 1024 ? `${gib / 1024} TB` : `${gib} GB`} for everyone’s own files and the family folders`,
+        );
+        await dialog.getByLabel('Name').fill(family);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        // Where the checkout sent it, not the page a checkout that didn't open falls back to.
+        await expect(rosa.page).toHaveURL(/\/app\/family#from-checkout$/, { timeout: 90_000 });
+        await expect(rosa.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 90_000,
+        });
+        expect(asked).toMatchObject({ productId: plus.id });
+        await rosa.page.unroute(checkout);
+        groupId = await familyIdOf(rosa);
+
+        // Before the plan is live nothing is pooled: her meter is her own, labelled My files.
+        expect((await storageOf(rosa)).pool).toBeNull();
+        await expect(rosa.page.locator('[data-storage-meter="own"]')).toContainText('My files');
+
+        await makePlanLive(groupId, plus);
+        await expect.poll(async () => (await storageOf(rosa)).pool?.name).toBe(family);
+        await rosa.page.goto('/app/drive');
+        const meter = rosa.page.locator('[data-storage-meter="pool"]');
+        await expect(meter).toContainText(family, { timeout: 60_000 });
+        const quota = (await storageOf(rosa)).quotaBytes;
+        expect(quota).toBe(plus.quotaBytes);
+        await expect(meter).toContainText(/ of .+ used/);
+        await expect(meter).toContainText(/\d \S+ free/);
+        await expect(meter).not.toContainText('The family’s storage is full');
+        // The same pool in the family folders: one meter for both.
+        await rosa.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+        await expect(rosa.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+        await expect(meter).toContainText(family);
+
+        // Plans: her storage comes from the family's plan, and no personal plan is offered.
+        await rosa.page.goto('/app/billing');
+        await expect(rosa.page.locator('[data-pooled-plan]')).toContainText(
+            `Your storage comes from ${family}’s plan.`,
+            { timeout: 60_000 },
+        );
+        await expect(rosa.page.locator('[data-plan="Free"]')).toHaveCount(0);
+        await expect(rosa.page.locator('[data-family-plans]')).toHaveCount(0);
+        await expect(rosa.page.locator('[data-pool-line]')).toContainText(
+            `${family}’s storage, for everyone’s own files and the family folders.`,
+        );
+    });
+
+    test('a member joins: the manager sees each person’s own files rounded up, the member only their own, and leaving says what it does to their storage', async ({
+        browser,
+    }) => {
+        test.skip(!sellsFamilies(), 'This server sells no family plans: nothing is pooled.');
+        test.setTimeout(420_000);
+        theo = await person(browser, 'Theo Lindgren');
+        await theo.page.goto('/app/drive');
+        await upload(theo, 'theo-notes.txt', 'Theo’s own notes\n');
+        await expect.poll(async () => (await storageOf(theo)).usedBytes).not.toBe('0');
+        const theoBytes = (await storageOf(theo)).usedBytes;
+
+        await rosa.page.goto('/app/family');
+        await invite(rosa, theo.email);
+        // Before accepting: his files will use the family's storage, with his own figure.
+        await theo.page.goto(await invitationPath(theo.email));
+        await expect(theo.page.locator('[data-join-storage]')).toHaveText(
+            new RegExp(
+                `^Once you’re let in, your files use ${family}’s storage\\. They take \\S+ \\S+ now\\.$`,
+            ),
+            { timeout: 60_000 },
+        );
+        await acceptOpened(theo, family);
+        const dialog = await checkWords(rosa, theo);
+        const code = await letIn(dialog, 'Theo', family);
+        await typeHidden(theo, await newcomerCode(theo, code), code);
+        await expect(theo.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 90_000,
+        });
+        await dialog.getByRole('button', { name: 'Done' }).click();
+
+        // His own files now draw from the pool: the figures are the family's, his own beside them.
+        await expect.poll(async () => (await storageOf(theo)).pool?.name).toBe(family);
+        const pooled = await storageOf(theo);
+        expect(pooled.quotaBytes).not.toBe(theoBytes);
+        expect(BigInt(pooled.own!.usedBytes)).toBeGreaterThanOrEqual(BigInt(theoBytes));
+
+        // The family folders hold something too.
+        await openFamilyFolder(rosa, family, 'Family');
+        await upload(rosa, 'household.txt', 'Bins on Tuesday\n');
+
+        // The manager: one row each, rounded up to the whole GB, largest first; then the folders.
+        await rosa.page.goto('/app/family');
+        const managed = rosa.page.locator('[data-family-usage="manager"]');
+        await expect(managed.locator('[data-usage-member]')).toHaveCount(2, { timeout: 60_000 });
+        await expect(managed.locator('[data-usage-member]').filter({ hasText: 'You' })).toHaveText(
+            'YouUnder 1 GB',
+        );
+        await expect(
+            managed.locator('[data-usage-member]').filter({ hasText: 'Theo Lindgren' }),
+        ).toHaveText('Theo LindgrenUnder 1 GB');
+        await expect(managed.locator('[data-usage-folders]')).toHaveText('Family folders1 GB');
+
+        // The member: his own files exactly, the folders, what is free; nobody else's.
+        await theo.page.goto('/app/family');
+        const own = theo.page.locator('[data-family-usage="member"]');
+        await expect(own.locator('[data-usage-own]')).toContainText('Your files', {
+            timeout: 60_000,
+        });
+        await expect(own.locator('[data-usage-member]')).toHaveCount(0);
+        await expect(own.locator('[data-usage-folders]')).toHaveText('Family folders1 GB');
+        // And no answer to him carries anyone else's usage: the family's summary names his own.
+        const summary = (await (
+            await theo.page.request.get(`/api/billing/groups/${groupId}`, {
+                headers: { 'HushOS-Client': 'web/1' },
+            })
+        ).json()) as { view: string; usage: { ownBytes: string; members: unknown } };
+        expect(summary.view).toBe('member');
+        expect(summary.usage).toEqual({
+            ownBytes: (await storageOf(theo)).own!.usedBytes,
+            foldersBytes: String(1024 ** 3),
+            members: null,
+        });
+        await expect(theo.page.locator('[data-storage-meter="pool"]')).toContainText(family);
+
+        // Leaving says what it does to his files: back on his own allowance, which they fit.
+        await theo.page.getByText('Technical details and leaving').click();
+        await theo.page.getByRole('button', { name: 'Leave family' }).click();
+        const leave = theo.page.getByRole('alertdialog', { name: `Leave ${family}?` });
+        await expect(leave.locator('[data-leave-storage="fits"]')).toHaveText(
+            /^Your files take \S+ \S+\. After you leave they count against the \S+ \S+ you have of your own\.$/,
+        );
+        await leave.getByRole('button', { name: 'Cancel' }).click();
+
+        // Trash: My files' and the family folders', two sections of one page.
+        await theo.page.goto('/app/trash');
+        await expect(theo.page.getByRole('heading', { level: 2, name: 'My files' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(
+            theo.page.getByRole('heading', { level: 2, name: 'Family folders' }),
+        ).toBeVisible();
+        await expect(theo.page.locator('[data-family-trash]')).toBeVisible({ timeout: 90_000 });
+    });
+});
+
+/*
+ * Someone already in a family opens an invitation to another (3.2): the page says to leave
+ * theirs first and offers no way to accept; the invitation stays open. Where plans are sold,
+ * the inviting family needs a live plan to invite anyone, written as billing writes it.
+ */
+test.describe
+    .serial('an invitation to someone already in a family, and the family folders’ Trash', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let ivy: Person;
+    let ben: Person;
+    let benFamily: string;
+
+    test.afterAll(async () => {
+        await ivy?.page.context().close();
+        await ben?.page.context().close();
+    });
+
+    test('an invitee in another family sees the leave-first notice and can’t accept', async ({
+        browser,
+        request,
+    }) => {
+        test.setTimeout(300_000);
+        const plans = await familyCatalogue(request);
+        const monthly = plans.find((plan) => plan.interval === 'month');
+        test.skip(
+            (await sellsPlans(request)) && !monthly,
+            'This server sells plans but no family plan: nobody can be invited.',
+        );
+        ivy = await person(browser, 'Ivy Strand');
+        ben = await person(browser, 'Ben Aalto');
+        await createFamily(ben, 'Aalto family');
+        benFamily = await familyIdOf(ben);
+        await createFamily(ivy, 'Strand family');
+        if (monthly) {
+            // Ben's own family's folders hold files only with a plan (the next test adds one).
+            await makePlanLive(benFamily, monthly);
+            await makePlanLive(await familyIdOf(ivy), monthly);
+            await ivy.page.reload();
+        }
+        await invite(ivy, ben.email);
+        await ben.page.goto(await invitationPath(ben.email));
+        await expect(
+            ben.page.getByRole('heading', { name: /invited you to Strand family/ }),
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(
+            ben.page.getByText(
+                'You’re in Aalto family. To join Strand family, leave yours first, from its page.',
+                { exact: false },
+            ),
+        ).toBeVisible();
+        await expect(ben.page.getByRole('button', { name: 'Accept' })).toBeDisabled();
+        // Nothing about storage for someone who can't join yet.
+        await expect(ben.page.locator('[data-join-storage]')).toHaveCount(0);
+    });
+
+    test('Trash: the family folders’ Trash is a section of Trash, beside My files’, and restores', async () => {
+        test.setTimeout(300_000);
+        await openFamilyFolder(ben, 'Aalto family', 'Family');
+        await upload(ben, 'shopping.txt', 'Milk, bread\n');
+        await ben.page.getByRole('button', { name: 'More for shopping.txt' }).click();
+        await ben.page.getByRole('menuitem', { name: /^Move to Trash/ }).click();
+        await expect(fileRow(ben.page, 'shopping.txt')).toHaveCount(0, { timeout: 60_000 });
+        // Its old address leads to the section.
+        await ben.page.goto(`/app/s/${benFamily}/trash`);
+        await expect(ben.page).toHaveURL(/\/app\/trash#family$/, { timeout: 60_000 });
+        await expect(ben.page.getByRole('heading', { level: 2, name: 'My files' })).toBeVisible();
+        await expect(
+            ben.page.getByRole('heading', { level: 2, name: 'Family folders' }),
+        ).toBeVisible();
+        // My files' Trash holds nothing of it; the family folders' does.
+        await expect(ben.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+        const section = ben.page.locator('[data-family-trash]');
+        const row = section.locator('[data-node-id]').filter({ hasText: 'shopping.txt' });
+        await expect(row).toBeVisible({ timeout: 90_000 });
+        await expect(row).toContainText('Family');
+        await row.getByRole('button', { name: 'Restore' }).click();
+        await expect(row).toHaveCount(0, { timeout: 60_000 });
+        await openFamilyFolder(ben, 'Aalto family', 'Family');
+        await expect(fileRow(ben.page, 'shopping.txt')).toBeVisible({ timeout: 60_000 });
+    });
+});
+
+test.describe.serial('families off', () => {
     test.skip(familiesOn, 'Families are on (GROUPS_ENABLED).');
 
     test('families stay out of sight on a server that does not serve them', async ({ browser }) => {

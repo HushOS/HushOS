@@ -59,8 +59,8 @@ function FamilySpacePage() {
                     Members
                 </Link>
                 <Link
-                    to="/app/s/$groupId/trash"
-                    params={{ groupId: space.groupId }}
+                    to="/app/trash"
+                    hash="family"
                     className={buttonVariants({ variant: 'outline' })}
                 >
                     Trash

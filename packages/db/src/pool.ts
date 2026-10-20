@@ -356,6 +356,18 @@ export async function storageFigures(
     return own ? ownFigures(tx, workspaceId, own, new Date()) : null;
 }
 
+/*
+ * A workspace's own figures, whatever pool it draws from now, read once for display: what
+ * it stores and the allowance it would have on its own (its base and every grant in force),
+ * which is what a pooled member keeps if they leave (docs/families-shared-pool.md 3.4).
+ */
+export async function ownStorage(tx: Conn, workspaceId: string) {
+    const own = await readOwn(tx, workspaceId, false);
+    if (!own) return null;
+    const figures = await ownFigures(tx, workspaceId, own, new Date());
+    return { used: figures.used, allowance: figures.allowance };
+}
+
 /* The family a pool belongs to, by name, for the account's storage figures. */
 export async function poolName(tx: Conn, groupId: string) {
     const [row] = await tx.select({ name: groups.name }).from(groups).where(eq(groups.id, groupId));

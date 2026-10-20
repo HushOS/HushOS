@@ -242,6 +242,21 @@ export function afterFamilyChange(queryClient: QueryClient, userId: string) {
     return queryClient.invalidateQueries({ queryKey: familyKeys.user(userId) });
 }
 
+/*
+ * After someone joins, leaves or is removed: as afterFamilyChange, and, since that moves a
+ * person's own files into or out of the family's pool, the account's storage figures and the
+ * plan Plans shows too. Not on every family change: a key change's walk reports progress often.
+ */
+export function afterMembershipChange(queryClient: QueryClient, userId: string) {
+    return Promise.all([
+        afterFamilyChange(queryClient, userId),
+        // storageQueryOptions and billingQueryOptions (lib/queries), by key: importing them here
+        // would pull the billing server functions into this module's tests.
+        queryClient.invalidateQueries({ queryKey: ['auth', 'storage'] }),
+        queryClient.invalidateQueries({ queryKey: ['billing', 'summary'] }),
+    ]);
+}
+
 export function canManage(roles: readonly string[] | undefined) {
     return Boolean(roles?.includes('members'));
 }

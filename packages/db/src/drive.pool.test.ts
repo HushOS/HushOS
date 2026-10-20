@@ -417,6 +417,9 @@ describe('pool usage', () => {
             reservedBytes: '0',
             availableBytes: String(6n * GIB),
             pool: { groupId, name: 'The Family' },
+            // Beside the pool's: Sam's own 400 bytes, exactly, and his own 100-byte allowance,
+            // never anyone else's bytes.
+            own: { usedBytes: '400', allowanceBytes: '100' },
         });
         expect((await billing.getPoolUsage(groupId)).used).toBe(4n * GIB);
         // The leaver and the outsider keep their own allowances, counting only their own bytes.
@@ -425,6 +428,7 @@ describe('pool usage', () => {
             usedBytes: '800',
             availableBytes: '0',
             pool: null,
+            own: null,
         });
     });
 
@@ -512,6 +516,14 @@ describe('pool usage', () => {
             used: 300n,
             free: 9n * GIB,
         });
+        // What the leave dialog reads: the allowance she'd have on her own, her bonus and grant
+        // included, beside the pool's figures, and her own files only.
+        await setBytes(ana.workspaceId, 40n);
+        expect(await auth.getStorageAllowance(ana.userId)).toMatchObject({
+            quotaBytes: String(10n * GIB),
+            own: { usedBytes: '40', allowanceBytes: '175' },
+        });
+        await setBytes(ana.workspaceId, 0n);
         expect(await groups.leaveGroup(groupId, ana.userId)).toEqual({ status: 'left' });
         expect(await drive.getStorage(ana.workspaceId)).toMatchObject({
             allowance: 175n,
@@ -546,6 +558,8 @@ describe('what one member sees', () => {
             reservedBytes: '0',
             availableBytes: String(87n * GIB),
             pool: { groupId, name: 'The Family' },
+            // Her own files exactly, which she knows; nothing of Sam's.
+            own: { usedBytes: String(2n * GIB + 7n), allowanceBytes: '100' },
         });
         // Sam stores half a gigabyte more and starts a 300 MB upload: Maya's figures don't move.
         await setBytes(sam.workspaceId, 5n * GIB + 500n * MIB + 12n, 300n * MIB);

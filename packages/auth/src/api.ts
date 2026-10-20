@@ -57,6 +57,13 @@ export type StorageAllowance = {
      * they never give away another member's usage (3.9); uploads are still checked exactly.
      */
     pool: { groupId: string; name: string } | null;
+    /*
+     * While `pool` is set, the account's own figures beside the pool's: what its files take
+     * (My files with its Trash and earlier versions), exact, and the allowance it would have
+     * on its own (Free and any grants), which is what it keeps after leaving the family.
+     * Null on the account's own allowance, where the figures above are already its own.
+     */
+    own: { usedBytes: string; allowanceBytes: string } | null;
 };
 
 export type ContactIdentity = {

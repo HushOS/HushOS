@@ -1,9 +1,10 @@
+import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Segmented, SettingsGroup } from '@/components/settings';
 import { StorageCard } from '@/components/storage-card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
@@ -24,7 +25,19 @@ import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
-import { currenciesOf, personalPairs, priceOf, tiersOf, twoMonthsFree } from '@/lib/plans';
+import { useUnlocked } from '@/lib/families';
+import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
+import { familyCurrencies } from '@/lib/family-billing';
+import {
+    currenciesOf,
+    familyPairs,
+    familyPrice,
+    familyTierName,
+    personalPairs,
+    priceOf,
+    tiersOf,
+    twoMonthsFree,
+} from '@/lib/plans';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -41,7 +54,7 @@ import {
     SUPPORT_LABEL,
 } from '@/lib/checkout-return';
 import { cue } from '@/lib/sounds';
-import type { BillingSubscription, BillingSummary, Plan } from '@hushos/billing/api';
+import type { BillingSubscription, BillingSummary, FamilyPlan, Plan } from '@hushos/billing/api';
 import {
     CANCELLATION_REASONS,
     cancellationReasonLabels,
@@ -308,6 +321,46 @@ function BillingPage() {
     }, [intendedPlan, plans, summaryLoaded]);
 
     const selling = catalogue.data?.enabled !== false;
+    // While the person's files draw from their family's pool, their storage is the family's
+    // plan: no personal plan is offered (the server refuses one, 3.3).
+    const pooled = summary.data?.family ?? null;
+    // The family tiers sit beside the personal plans for someone in no family (one per
+    // account): each creates a family and goes to its checkout (docs/families-shared-pool.md
+    // 7.4). Nothing shows until the families are known, so it never offers what the server
+    // would refuse. The catalogue lists family plans only where families are served.
+    const groups = useGroupsEnabled();
+    const families = useQuery({ ...familiesQueryOptions(user.id), enabled: groups });
+    const familyPlans = catalogue.data?.families ?? [];
+    const offerFamilies =
+        selling &&
+        groups &&
+        familyPlans.length > 0 &&
+        families.isSuccess &&
+        !activeFamily(families.data);
+    const familyCurrencyList = familyCurrencies(familyPlans);
+    const familyCurrency = pickCurrency({
+        requested: live?.currency,
+        hint: hint.data,
+        available: familyCurrencyList,
+        fallback: familyCurrencyList[0] ?? 'usd',
+    });
+    const familySaving = twoMonthsFree(familyPairs(familyPlans, familyCurrency));
+    const familyShown = familyPlans
+        .filter((plan) => plan.interval === period)
+        .sort((a, b) => (BigInt(a.quotaBytes) < BigInt(b.quotaBytes) ? -1 : 1));
+    const [creating, setCreating] = useState<FamilyPlan | null>(null);
+    // A family's keys are made on this device, which needs the account unlocked. Plans is
+    // outside the drive (which asks for it), so a locked device goes to Account → Family,
+    // which unlocks first, with the tier it chose.
+    const unlocked = useUnlocked(user.id);
+    const createFamilyWith = (plan: FamilyPlan) => {
+        if (unlocked) setCreating(plan);
+        else
+            void navigate({
+                to: '/app/family',
+                search: { create: plan.id, currency: familyCurrency },
+            });
+    };
     const livePlan = live ? plans?.find((plan) => plan.id === live.productId) : undefined;
     const overdue = live?.status === 'past_due';
     const shown =
@@ -342,7 +395,46 @@ function BillingPage() {
                     </div>
                 </SettingsGroup>
 
-                {selling && (
+                {selling && pooled && (
+                    <SettingsGroup title="Your plan">
+                        <div
+                            className="mt-4 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 rounded-xl border border-rule p-5"
+                            data-pooled-plan
+                        >
+                            <div className="flex min-w-0 flex-col gap-1">
+                                <span className="text-xl font-bold">
+                                    {pooled.planName
+                                        ? familyTierName({ name: pooled.planName })
+                                        : pooled.name}
+                                </span>
+                                <span className="text-sm text-muted-foreground">
+                                    Your storage comes from {pooled.name}’s plan.
+                                </span>
+                            </div>
+                            <div className="flex shrink-0 flex-wrap gap-2">
+                                {/* A plan ended when they joined keeps its invoices and refund there. */}
+                                {summary.data?.hasCustomer && (
+                                    <Button
+                                        variant="outline"
+                                        disabled={busy !== null}
+                                        onClick={() => void portal()}
+                                    >
+                                        {busy === 'portal' ? 'Opening…' : 'Card and invoices'}
+                                        <ArrowUpRightIcon />
+                                    </Button>
+                                )}
+                                <Link
+                                    to="/app/family"
+                                    className={buttonVariants({ variant: 'outline' })}
+                                >
+                                    Open {pooled.name}
+                                </Link>
+                            </div>
+                        </div>
+                    </SettingsGroup>
+                )}
+
+                {selling && !summary.isPending && !pooled && (
                     <SettingsGroup title="Your plan">
                         <div
                             className={cn(
@@ -432,7 +524,7 @@ function BillingPage() {
                     </SettingsGroup>
                 )}
 
-                {selling && (
+                {selling && !summary.isPending && !pooled && (
                     <SettingsGroup
                         title="Plans"
                         action={
@@ -523,7 +615,62 @@ function BillingPage() {
                         </p>
                     </SettingsGroup>
                 )}
+
+                {offerFamilies && familyShown.length > 0 && (
+                    <SettingsGroup
+                        title="Family plans"
+                        description="One pool for the whole family: everyone’s own files and the family folders. Each person’s files stay private to them."
+                    >
+                        <ul
+                            className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+                            data-family-plans
+                        >
+                            {familyShown.map((plan) => {
+                                const price = familyPrice(plan, familyCurrency);
+                                if (!price) return null;
+                                const name = familyTierName(plan);
+                                return (
+                                    <PlanCard
+                                        key={plan.id}
+                                        name={name}
+                                        size={formatQuota(plan.quotaBytes)}
+                                        price={`${formatMoney(price.base, price.currency)} ${per[plan.interval]}${plan.interval === 'year' && familySaving ? ' · 2 months free' : ''}`}
+                                        detail={`For up to ${plan.includedMembers} people, then ${formatMoney(price.perMember, price.currency)} ${per[plan.interval]} for each person after that, up to ${plan.maxMembers}.`}
+                                        current={false}
+                                        recommended={plan.recommended}
+                                        footer={
+                                            <Button
+                                                className="w-full"
+                                                variant="outline"
+                                                aria-label={`Create a family with ${name}`}
+                                                disabled={busy !== null || activating}
+                                                onClick={() => createFamilyWith(plan)}
+                                            >
+                                                Create a family
+                                            </Button>
+                                        }
+                                    />
+                                );
+                            })}
+                        </ul>
+                        <p className="mt-3 text-[13px] text-muted-foreground">
+                            You name the family, then pay for it. Plus tax where it applies; Polar
+                            adds it at checkout. Someone in a family invites you by email, and you
+                            join from the link in it.
+                        </p>
+                    </SettingsGroup>
+                )}
             </div>
+
+            {(offerFamilies || creating) && (
+                <CreateFamilyDialog
+                    userId={user.id}
+                    open={creating !== null}
+                    onOpenChange={(open) => !open && setCreating(null)}
+                    plan={creating ? { plan: creating, currency: familyCurrency } : undefined}
+                    personalPlan={live ? familyTierName({ name: live.productName }) : null}
+                />
+            )}
 
             {live && (
                 <CancelDialog
@@ -587,6 +734,7 @@ function PlanCard({
     name,
     size,
     price,
+    detail,
     current,
     recommended,
     footer,
@@ -594,6 +742,7 @@ function PlanCard({
     name: string;
     size: string;
     price: string;
+    detail?: string;
     current: boolean;
     recommended?: boolean;
     footer?: ReactNode;
@@ -620,6 +769,7 @@ function PlanCard({
                 {size}
             </span>
             <span className="text-sm text-muted-foreground">{price}</span>
+            {detail && <span className="text-sm text-muted-foreground">{detail}</span>}
             <div className="mt-auto pt-1">
                 {current ? (
                     <span className="flex h-9 items-center text-sm font-semibold text-muted-foreground">

@@ -150,7 +150,15 @@ function PartialBanner({
     );
 }
 
-export function TrashView() {
+export function TrashView({
+    section,
+    followed = false,
+}: {
+    /* A heading for My files' items, when another section follows (the family folders'). */
+    section?: string;
+    /* Another section follows the list (the family folders' Trash): the list doesn't fill the page. */
+    followed?: boolean;
+} = {}) {
     const { rootId, userId } = useDrive();
     const queryClient = useQueryClient();
     const trash = useQuery(trashQueryOptions);
@@ -431,8 +439,8 @@ export function TrashView() {
                     action: 'Delete forever',
                 }
               : {
-                    title: 'Empty the Trash?',
-                    text: `All ${rows.length} ${rows.length === 1 ? 'item is' : 'items are'} deleted for good. This can’t be undone.`,
+                    title: section ? `Empty ${section}’ Trash?` : 'Empty the Trash?',
+                    text: `All ${rows.length} ${rows.length === 1 ? 'item is' : 'items are'} deleted for good. This can’t be undone.${section ? ' The family folders’ Trash isn’t touched.' : ''}`,
                     action: 'Empty Trash',
                 };
 
@@ -443,7 +451,8 @@ export function TrashView() {
             // the name column keeps at least 320px; Was in goes first (its words move under the
             // name), then Size, then the action labels, then Trashed.
             className={cn(
-                '@container/list relative flex flex-1 flex-col',
+                '@container/list relative flex flex-col',
+                !followed && 'flex-1',
                 marquee && 'select-none',
             )}
         >
@@ -485,6 +494,11 @@ export function TrashView() {
                     onRetry={() => void restoreMany(partial.failed.map((entry) => entry.item))}
                     onDismiss={() => setPartial(null)}
                 />
+            )}
+            {section && (
+                <h2 className="px-5 pb-2 text-lg font-bold tracking-[-0.01em] sm:px-8">
+                    {section}
+                </h2>
             )}
             {trash.isPending && <SkeletonRows />}
             {trash.isError && (

@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { ownFingerprintQueryOptions } from '@/lib/contacts';
 import {
-    afterFamilyChange,
+    afterMembershipChange,
     familiesQueryOptions,
     familyContext,
     familyQueryOptions,
@@ -104,7 +104,7 @@ function JoinFamily() {
     async function joined() {
         cue('success');
         toast.add({ type: 'success', title: `You’re in ${family}` });
-        await afterFamilyChange(queryClient, userId);
+        await afterMembershipChange(queryClient, userId);
         await navigate({ to: '/app/family', replace: true });
     }
 

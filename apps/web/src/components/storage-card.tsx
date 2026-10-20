@@ -90,12 +90,18 @@ export function StorageCard({ userId }: { userId: string }) {
         );
     const used = Number(storage.data.usedBytes);
     const quota = Number(storage.data.quotaBytes);
+    // While the person's files draw from their family's pool, the figures above are the pool's
+    // (every member's files and the family folders, counted in whole GB); the breakdown is of
+    // their own files, from their own exact bytes (docs/families-shared-pool.md 3.9).
+    const pool = storage.data.pool;
+    const own = storage.data.own ? Number(storage.data.own.usedBytes) : used;
     const trash = breakdown.data ? Number(breakdown.data.trashBytes) : null;
     const versions = breakdown.data ? Number(breakdown.data.supersededBytes) : null;
     const parts =
         trash !== null && versions !== null
-            ? { files: Math.max(0, used - trash - versions), versions, trash }
+            ? { files: Math.max(0, own - trash - versions), versions, trash }
             : null;
+    const full = pool !== null && BigInt(storage.data.availableBytes) <= 0n;
 
     async function remove() {
         setRemoving(true);
@@ -130,13 +136,28 @@ export function StorageCard({ userId }: { userId: string }) {
                     of {formatQuota(quota)} used
                 </span>
             </p>
-            <StorageMeter used={used} quota={quota} parts={parts} className="h-2.5" />
+            {pool && (
+                <p
+                    className={cn(
+                        '-mt-2 text-sm',
+                        full ? 'text-destructive' : 'text-muted-foreground',
+                    )}
+                    data-pool-line
+                >
+                    {pool.name}’s storage, for everyone’s own files and the family folders. Your
+                    files take {formatSpace(own)}.{' '}
+                    {full
+                        ? 'The family’s storage is full.'
+                        : `${formatSpace(storage.data.availableBytes)} free.`}
+                </p>
+            )}
+            <StorageMeter used={used} quota={quota} parts={pool ? null : parts} className="h-2.5" />
             {parts && (
                 <dl className="grid gap-4 text-sm sm:grid-cols-3">
                     <div className="flex flex-col gap-1">
                         <dt className="flex items-center gap-2 font-semibold">
-                            <Swatch kind="files" />
-                            Files
+                            {!pool && <Swatch kind="files" />}
+                            {pool ? 'Your files' : 'Files'}
                         </dt>
                         <dd className="text-muted-foreground tabular-nums">
                             {formatBytes(parts.files)}
@@ -144,7 +165,7 @@ export function StorageCard({ userId }: { userId: string }) {
                     </div>
                     <div className="flex flex-col gap-1">
                         <dt className="flex items-center gap-2 font-semibold">
-                            <Swatch kind="versions" />
+                            {!pool && <Swatch kind="versions" />}
                             Earlier versions
                         </dt>
                         <dd className="flex items-center gap-2 text-muted-foreground tabular-nums">
@@ -162,7 +183,7 @@ export function StorageCard({ userId }: { userId: string }) {
                     </div>
                     <div className="flex flex-col gap-1">
                         <dt className="flex items-center gap-2 font-semibold">
-                            <Swatch kind="trash" />
+                            {!pool && <Swatch kind="trash" />}
                             Trash
                         </dt>
                         <dd className="flex items-center gap-2 text-muted-foreground tabular-nums">
@@ -178,6 +199,8 @@ export function StorageCard({ userId }: { userId: string }) {
                 </dl>
             )}
             <p className="text-[13px] text-muted-foreground">
+                {pool &&
+                    'The family’s figures count each person’s files and the family folders in whole GB. '}
                 Trash and earlier versions count until they’re removed. Trash empties itself after
                 30 days.
             </p>
