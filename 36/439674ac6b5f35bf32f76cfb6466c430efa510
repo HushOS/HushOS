@@ -1,0 +1,29 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_c56e31c87cddde::t_ceb393cff67448 77-78,225-226,228-237,394-415,417,419-420,422,424,427-429,431,434-438,443,445-450,453,464,468,477-480,486-491,495-496,499-505,507,509,593-597,603-604,611
+apps/web/src/components/drive/home-view.tsx
+  s_c56e31c87cddde::t_e15d6bfd739f15 54-55,113-116,126,135,232-253,255,257-258,260,262,265-267,269,272-277,284-287,292,303,307,316-319,325-330,334-341,346
+apps/web/src/components/drive/node-actions.tsx
+  s_c56e31c87cddde::t_d48d7f113623c8 308,377-381,388
+apps/web/src/lib/drive.ts
+  s_c56e31c87cddde::t_feffb6cb3eac64 25,144-151,163-167,170-172,174-189
+apps/web/src/lib/trash-batch.test.ts
+  s_c56e31c87cddde::t_e7d781434d6903 1-135
+apps/web/src/lib/trash-batch.ts
+  s_c56e31c87cddde::t_12d0cc6b41c76f 1-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "36439674ac6b5f35bf32f76cfb6466c430efa510",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
