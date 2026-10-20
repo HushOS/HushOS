@@ -1,0 +1,43 @@
+packages/db/src/groups.purge.test.ts
+  s_c56e31c87cddde::t_4ced89b80f0ef0 354-361
+  s_c56e31c87cddde::t_98ff17763e4723 1-353,362-636,638-654
+  s_c56e31c87cddde::t_ae0707b7a57b97 637,655-708
+packages/drive/src/jobs.dissolved.test.ts
+  s_c56e31c87cddde::t_c2c1c42196a991 1-90
+docs/groups-design.md
+  s_c56e31c87cddde::t_299fe08a04a3cb 335
+docs/self-hosting.md
+  s_c56e31c87cddde::t_96a2daeaf71427 75,690-709
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/migration.sql
+  s_c56e31c87cddde::t_371e22dd28b748 1-8
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/snapshot.json
+  s_c56e31c87cddde::t_f63a4cabf99a18 1-13462
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_123a98971ebdb6 30,3343-3466
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_43785ac6466d7d 14
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_4fee473a1c10ca 89-92,97,123
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_fd8fee3d2a8d1d 27,54,140-151
+packages/jobs/src/jobs/groups.ts
+  s_c56e31c87cddde::t_0ca572ea2405db 1-43
+packages/jobs/src/worker.ts
+  s_c56e31c87cddde::t_da34287525361a 8,80-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "809843d134b419f1ab219806569dd40df693bc2e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
