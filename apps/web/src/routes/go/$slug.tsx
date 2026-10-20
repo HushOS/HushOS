@@ -10,6 +10,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { localeHintQueryOptions } from '@/lib/billing';
 import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
+import { moneyFontLinks } from '@/lib/fonts';
 import { authError } from '@/lib/form';
 import { formatQuota, formatMoney } from '@/lib/format';
 import { usePageRestored } from '@/lib/page-restore';
@@ -79,6 +80,8 @@ export const Route = createFileRoute('/go/$slug')({
                           description: `${describeDiscount(loaderData.landing.terms)}. Private storage that is simple to use.`,
                       }),
                   ],
+                  // Opened cold from a link: prices in rupees need the rest of the font up front.
+                  links: moneyFontLinks(loaderData.currency),
               }
             : {},
     component: OfferPage,

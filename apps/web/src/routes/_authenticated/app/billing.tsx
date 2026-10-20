@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { billingApi } from '@/lib/billing-api';
-import { pickCurrency } from '@/lib/currency';
+import { pickCurrency, type LocaleHint } from '@/lib/currency';
 import { moneyFontLinks } from '@/lib/fonts';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
@@ -56,7 +56,13 @@ import {
     SUPPORT_LABEL,
 } from '@/lib/checkout-return';
 import { cue } from '@/lib/sounds';
-import type { BillingSubscription, BillingSummary, FamilyPlan, Plan } from '@hushos/billing/api';
+import type {
+    BillingSubscription,
+    BillingSummary,
+    Catalogue,
+    FamilyPlan,
+    Plan,
+} from '@hushos/billing/api';
 import {
     CANCELLATION_REASONS,
     cancellationReasonLabels,
@@ -77,27 +83,28 @@ import { formatDay } from '@/lib/drive';
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 export const Route = createFileRoute('/_authenticated/app/billing')({
-    loader: ({ context }) =>
-        Promise.all([
+    loader: async ({ context }) => {
+        // Each on its own: one that fails leaves the others for the page head.
+        const [catalogue, summary, hint] = await Promise.allSettled([
             context.queryClient.ensureQueryData(catalogueQueryOptions),
             context.queryClient.ensureQueryData(billingQueryOptions),
             context.queryClient.ensureQueryData(localeHintQueryOptions),
-        ]).catch(() => null),
+        ]);
+        const value = <T,>(result: PromiseSettledResult<T>) =>
+            result.status === 'fulfilled' ? result.value : undefined;
+        return { catalogue: value(catalogue), summary: value(summary), hint: value(hint) };
+    },
     head: ({ loaderData }) => {
-        // Prices drawn in a currency the preloaded font lacks (₹) preload the rest of it.
-        const [catalogue, summary, hint] = loaderData ?? [];
-        const live =
-            summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
-        const currencies = currenciesOf(catalogue?.plans ?? []);
-        const currency = pickCurrency({
-            requested: live?.currency,
-            hint,
-            available: currencies,
-            fallback: currencies[0] ?? 'usd',
-        });
+        // Prices drawn in a currency the preloaded font lacks (₹) preload the rest of it:
+        // the plans', the family plans', and what a subscriber pays, which can differ.
+        const { live, currency, familyCurrency } = billingCurrencies(
+            loaderData?.catalogue,
+            loaderData?.summary,
+            loaderData?.hint,
+        );
         return {
             meta: [{ title: 'Plan and storage · HushOS' }],
-            links: moneyFontLinks(currency),
+            links: moneyFontLinks(currency, familyCurrency, live?.currency),
         };
     },
     validateSearch: (search: Record<string, unknown>): { checkout_id?: string; plan?: string } => ({
@@ -187,6 +194,36 @@ function paying(live: BillingSubscription, plan: Plan | undefined, currency: str
     return plan ? priceLine(plan, currency) : null;
 }
 
+/*
+ * The currencies the page draws in, read by the page and its head alike: a
+ * subscriber sees every plan in the currency they already pay in, anyone else
+ * in the one their country or language suggests, as on the pricing page; the
+ * family plans pick theirs the same way among their own currencies.
+ */
+function billingCurrencies(
+    catalogue: Catalogue | undefined,
+    summary: BillingSummary | undefined,
+    hint: LocaleHint | undefined,
+) {
+    const subscription = summary?.subscription;
+    const live = subscription && !subscription.endedAt ? subscription : null;
+    const currencies = currenciesOf(catalogue?.plans ?? []);
+    const currency = pickCurrency({
+        requested: live?.currency,
+        hint,
+        available: currencies,
+        fallback: currencies[0] ?? 'usd',
+    });
+    const familyCurrencyList = familyCurrencies(catalogue?.families ?? []);
+    const familyCurrency = pickCurrency({
+        requested: live?.currency,
+        hint,
+        available: familyCurrencyList,
+        fallback: familyCurrencyList[0] ?? 'usd',
+    });
+    return { live, currency, familyCurrency };
+}
+
 function BillingPage() {
     const { user } = Route.useRouteContext();
     const { checkout_id: checkoutId, plan: intendedPlan } = Route.useSearch();
@@ -198,19 +235,13 @@ function BillingPage() {
     const [busy, setBusy] = useState<string | null>(null);
     const [cancelling, setCancelling] = useState(false);
     const [notice, setNotice] = useState<{ tone: Tone; text: string; busy?: boolean } | null>(null);
-    const subscription = summary.data?.subscription;
-    const live = subscription && !subscription.endedAt ? subscription : null;
+    const { live, currency, familyCurrency } = billingCurrencies(
+        catalogue.data,
+        summary.data,
+        hint.data,
+    );
     const activating = Boolean(checkoutId) && !live;
-    // A subscriber sees every plan in the currency they already pay in; anyone else
-    // in the one their country or language suggests, as on the pricing page.
     const plans = catalogue.data?.plans;
-    const currencies = currenciesOf(plans ?? []);
-    const currency = pickCurrency({
-        requested: live?.currency,
-        hint: hint.data,
-        available: currencies,
-        fallback: currencies[0] ?? 'usd',
-    });
     const tiers = tiersOf(plans ?? []);
     // Said beside a yearly price only while every plan's year is at most ten of its months.
     const saving = twoMonthsFree(personalPairs(plans ?? [], currency));
@@ -355,13 +386,6 @@ function BillingPage() {
         familyPlans.length > 0 &&
         families.isSuccess &&
         !activeFamily(families.data);
-    const familyCurrencyList = familyCurrencies(familyPlans);
-    const familyCurrency = pickCurrency({
-        requested: live?.currency,
-        hint: hint.data,
-        available: familyCurrencyList,
-        fallback: familyCurrencyList[0] ?? 'usd',
-    });
     const familySaving = twoMonthsFree(familyPairs(familyPlans, familyCurrency));
     const familyShown = familyPlans
         .filter((plan) => plan.interval === period)
