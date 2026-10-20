@@ -480,7 +480,7 @@ Every grant, seal, roster and succession is checked by the server for shape and 
 
 Who is in which group and their roles, which accounts are child accounts with their `adult_from` dates and guardians, when guardians fetch a child's seal, who invited and admitted whom and when, who signed each roster, invitation addresses until accepted or expired, how many areas a group has and their padded sizes, and the group's name. Rosters and successions carry only public keys, which the server already serves.
 
-The group name is plaintext because it appears in invitation emails and on bills. A group that does not want its name known can choose a neutral one.
+The group name is plaintext because it appears in invitation emails (Polar is only told "HushOS family"). A group that does not want its name known can choose a neutral one.
 
 ## 7. Tests that must exist
 

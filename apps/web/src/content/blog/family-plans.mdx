@@ -32,9 +32,9 @@ On a phone, your own files work as before, and the storage the app shows is the 
 
 ## If you already pay for a plan
 
-When you are let into a family that has a plan, your own plan ends at that moment and the days you paid for but won't use are refunded, prorated, through Polar. The join page tells you this before you accept. You don't pay twice for storage.
+When you are let into a family that has a plan, your own plan ends at that moment and the days you paid for but won't use are refunded, prorated, through Polar. The join page tells you this before you accept.
 
-While you are in a family you can't buy a plan of your own. If you leave later, the plan that ended doesn't come back: you are on Free until you choose one.
+While your files use the family's storage, you can't buy a plan of your own. If you leave later, the plan that ended doesn't come back: you are on Free until you choose one.
 
 The same goes for whoever starts the family: their own plan ends, with the unused days refunded, when the family's plan starts.
 
@@ -58,19 +58,19 @@ A newcomer's own files join the family's storage when they are let in, so they h
 
 ## When someone leaves
 
-Someone who manages the family chooses Remove from family. The person removed loses the family folders straight away, and HushOS replaces the keys of every family folder, which can take a few minutes. Someone who leaves on their own loses the folders straight away too, and their keys are replaced the next time a manager opens the family. Either way, their own files stay theirs.
+Someone who manages the family chooses Remove from family. The person removed loses the family folders straight away, and the device of whoever removed them replaces the keys of every family folder, which can take a few minutes. Someone who leaves on their own loses the folders straight away too, and their keys are replaced the next time a manager opens the family. Either way, their own files stay theirs.
 
 Their own files go back to their own storage: Free, unless they choose a plan. If the files take more than that, they can still open, download and delete everything, but can't upload until they make room. Nothing is deleted.
 
-Nothing they kept opens anything new. Files from before they left stay sealed under the keys they had, so anything they could open then stays readable to them if they ever got a copy of the server's data.
+Once their keys are replaced, nothing they kept opens anything new. Until then (for someone who leaves on their own, until a manager next opens the family), files added to the family folders are still locked under keys they had. Files from before they left stay sealed under the keys they had, so anything they could open then stays readable to them if they ever got a copy of the server's data.
 
-Files keep their authors through all of that. Every file in a family folder carries a signature from whoever wrote it. Replacing keys means locking every file again, and the easy way would sign each file as the work of whoever replaced the keys. HushOS keeps the writer's original signature instead, and the person replacing the keys signs only that they locked it again. Info on the file shows both: Written by Sam, Keys replaced by Maya. Your device opens the original and the copy locked again and compares them itself, so nobody can attach Sam's signature to something Sam did not write.
+Files keep their authors through all of that. Every file in a family folder carries a signature from whoever wrote it. Replacing keys means sealing every file's keys again, and the easy way would sign each file as the work of whoever replaced the keys. HushOS keeps the writer's original signature instead, and the person replacing the keys signs only that they sealed it again. Info on the file shows both: Written by Sam, Keys replaced by Maya. Your device opens the original and the copy sealed again and compares them itself, so nobody can attach Sam's signature to something Sam did not write.
 
 A file written by someone who has since been removed reads "Written by Sam, who has left Lindqvist family." That mark is on purpose. Someone who has left may still hold the keys they had, and a signature carries no date anyone can trust, so HushOS cannot tell an old file of theirs from one made to look old. It says what it knows instead of vouching for them.
 
 ## When a plan or a family ends
 
-Whoever pays can cancel the plan from the family's page. It stays until the end of the time paid for, and its storage for three days after that. Then everyone's own files go back to their own storage, as when someone leaves, and nobody can upload to the family folders until someone chooses a plan again. Nothing is deleted.
+Whoever pays can cancel the plan from the family's page. It stays until the end of the time paid for. When it ends, everyone's own files go back to their own storage, as when someone leaves, and until someone chooses a plan again nobody can upload to the family folders or be let in. Nothing is deleted.
 
 A family ends when its last member leaves it or deletes their account. If its plan is still renewing, whoever pays cancels it first; it then runs to the end of the time paid for, with no refund, and HushOS keeps it set to end. 30 days after a family ends, its folders and everything in them are deleted from our servers, and then, once its plan has ended, its member lists, key changes, memberships and invitations. The family's billing records are kept for accounting, and the [privacy policy](/privacy) has the exceptions.
 
@@ -122,7 +122,7 @@ The [security page](/security) lists what the server learns about everything els
 - **Limits for each person.** One member's own files can fill the family's storage for everyone, and then uploads stop for the whole family until there is room. A manager can see whose files take the space, but can't set a limit yet.
 - **Handing over the bill.** While a plan is running, whoever pays for it can't hand it to another member, so they can't leave the family without cancelling it.
 - **Large moves.** A move between My files and a family folder goes down to your device and back up, and a file over 256 MB can't be moved that way yet: download it, then upload it where it should go.
-- **What someone already has.** A member who is removed keeps anything they already downloaded or kept on a device. New keys protect what is written after they go; they cannot reach into copies someone already made.
+- **What someone already has.** A member who is removed keeps anything they already downloaded or kept on a device. New keys protect what is written after the keys are replaced; they cannot reach into copies someone already made.
 
 <Cta title="Make a family">
     Choose a family plan in Plan and storage, or open Account, then Family. You choose a plan before
