@@ -332,9 +332,10 @@ export function walkPending(
         const key = `${state.workspaceId}:${rotation.id}`;
         // A walk that stopped is tried again once its wait is over (a sync of the family, which
         // walks what is still running), never straight away, and the same run back again waits
-        // longer each time: one that always fails must not spin.
+        // longer each time: one that always fails must not spin. A retry that walks it to its end
+        // says so as the first walk would have (`onSettled`), so the family page stops showing it.
         const retry = () =>
-            void refreshFamily(userId, groupId, { due: true }).catch(() =>
+            void refreshFamily(userId, groupId, { due: true, onSettled }).catch(() =>
                 retries.ended(key, retry),
             );
         retries.run(
@@ -366,7 +367,7 @@ const refreshes = new Map<string, { at: number; pending: Promise<void> | null }>
 function refreshFamily(
     userId: string,
     groupId: string,
-    options: { due?: boolean } = {},
+    options: { due?: boolean; onSettled?: () => void } = {},
 ): Promise<void> {
     const held = refreshes.get(groupId);
     if (held?.pending) return held.pending;
@@ -375,7 +376,8 @@ function refreshFamily(
     const pending = (async () => {
         const result = await syncGroup(familyContext(userId), groupId);
         familySynced(groupId, result);
-        if (result.status === 'accepted') walkPending(userId, groupId, result.areas, () => {});
+        if (result.status === 'accepted')
+            walkPending(userId, groupId, result.areas, options.onSettled ?? (() => {}));
     })().finally(() => refreshes.set(groupId, { at: Date.now(), pending: null }));
     refreshes.set(groupId, { at: held?.at ?? 0, pending });
     return pending;
