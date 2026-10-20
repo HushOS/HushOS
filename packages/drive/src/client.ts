@@ -1899,6 +1899,19 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return (await decorate([result.node]))[0]!;
     }
 
+    /*
+     * A selection in this workspace to the trash, or back in place, in one
+     * request of at most MAX_TRASH_BATCH ids (api.ts trashBatch): the server's
+     * answer for each, in the order sent. The caller merges what moved into
+     * the nodes it holds, as `withPlace` does for one.
+     */
+    function trashMany(workspaceId: string, nodeIds: string[]) {
+        return api.trashBatch(workspaceId, nodeIds);
+    }
+    function restoreMany(workspaceId: string, nodeIds: string[]) {
+        return api.restoreBatch(workspaceId, nodeIds);
+    }
+
     /* Delete forever. The server refuses anything not itself in the trash. */
     async function purge(node: DriveNode) {
         await api.purge(node.workspaceId, node.id);
@@ -2068,6 +2081,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         workspaceFor,
         trash,
         restore,
+        trashMany,
+        restoreMany,
         purge,
         emptyTrash,
         storageBreakdown,

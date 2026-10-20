@@ -22,7 +22,7 @@ import {
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 import { keyChangeWords } from '@/lib/key-change-words';
-import { restoreBatch, trashBatch } from '@/lib/trash-batch';
+import { restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
 import { createSpaceRegistry } from '@/lib/space-registry';
 
 /*
@@ -176,11 +176,11 @@ export async function refreshFolders(queryClient: QueryClient, ...folderIds: (st
     await catchUpCatalogues();
 }
 
-/* Trash and Undo for a selection, sent through the Drive client that holds each item (lib/trash-batch.ts). */
-const trashParts = {
-    trash: (node: DriveNode) => clientFor(node.workspaceId).trash(node),
-    restore: (node: DriveNode) => clientFor(node.workspaceId).restore(node),
-    ancestorsOf: (node: DriveNode) => clientFor(node.workspaceId).ancestorsOf(node.id),
+/* Trash and Undo for a selection, sent through the Drive client of each item's workspace (lib/trash-batch.ts). */
+const trashParts: TrashParts = {
+    trash: (workspaceId, nodeIds) => clientFor(workspaceId).trashMany(workspaceId, nodeIds),
+    restore: (workspaceId, nodeIds) => clientFor(workspaceId).restoreMany(workspaceId, nodeIds),
+    ancestorsOf: (node) => clientFor(node.workspaceId).ancestorsOf(node.id),
 };
 export function trashNodes(nodes: DriveNode[], onMoved?: (ids: string[]) => void) {
     return trashBatch(nodes, trashParts, onMoved);

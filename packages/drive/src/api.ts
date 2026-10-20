@@ -262,6 +262,40 @@ export type TrashListing = {
     nextCursor: string | null;
 };
 
+/*
+ * POST /api/drive/workspaces/:id/trash-batch, body `{ nodeIds }` (1 to
+ * MAX_TRASH_BATCH ids, none twice): one transaction, one answer per id in the
+ * order sent. `trashed` is exactly what moved: its own trashedAt and change
+ * number, which the client merges into the node it holds. `covered` moved
+ * only because `by`, a folder of the same request, did: Undo restores `by`,
+ * never it. `refused` did not move, with the single route's words for why; one
+ * refusal keeps none of the rest back, and an item inside a refused folder of
+ * the request is judged on its own. Refusals: `not-found` (or no access),
+ * `forbidden` (viewer), `root`, `trashed` (already, itself or through a
+ * folder). A whole-request failure is an error as for any route, and moves
+ * nothing: signed out, a family manager's hold, 404 for someone with nothing
+ * to write here, 400 over MAX_TRASH_BATCH, 413 over the body cap, 429 over
+ * TRASH_BATCHES_PER_MINUTE, and 409 `conflict` when the workspace was too busy
+ * to lock, or keep locked, in time (try again).
+ */
+export type TrashRefusal = 'not-found' | 'forbidden' | 'root' | 'trashed';
+export type TrashBatchItem =
+    | { id: string; status: 'trashed'; trashedAt: string; changeSeq: number }
+    | { id: string; status: 'covered'; by: string }
+    | { id: string; status: 'refused'; reason: TrashRefusal; message: string };
+/*
+ * POST /api/drive/workspaces/:id/restore-batch, the same body: Undo for a
+ * batch, in place only (restoring to the top folder re-wraps a key, so it
+ * stays the single route's). A node whose folder is still in the trash is
+ * refused as `parent-trashed`, unless that folder comes back in the same
+ * request. Refusals: `not-found`, `not-trashed`, `removed` (by the operator),
+ * `parent-trashed`.
+ */
+export type RestoreRefusal = 'not-found' | 'not-trashed' | 'removed' | 'parent-trashed';
+export type RestoreBatchItem =
+    | { id: string; status: 'restored'; changeSeq: number }
+    | { id: string; status: 'refused'; reason: RestoreRefusal; message: string };
+
 /* A server refusal the client can act on. */
 export class DriveApiError extends Error {
     constructor(
@@ -530,6 +564,8 @@ export interface DriveApi {
         nodeId: string,
         toRoot?: { parentKeyEpoch: number; keyEnvelope: string },
     ): Promise<{ node: NodeView }>;
+    trashBatch(workspaceId: string, nodeIds: string[]): Promise<{ results: TrashBatchItem[] }>;
+    restoreBatch(workspaceId: string, nodeIds: string[]): Promise<{ results: RestoreBatchItem[] }>;
     trashListing(workspaceId: string, after?: string): Promise<TrashListing>;
     purge(workspaceId: string, nodeId: string): Promise<{ purged: boolean }>;
     emptyTrash(workspaceId: string): Promise<{ purged: number; remaining: number }>;

@@ -285,9 +285,10 @@ export function HomeView() {
                 setGone((current) => new Set([...current, ...ids]));
                 setBack((current) => new Map([...current].filter(([id]) => !ids.includes(id))));
             });
-            const { moved, tried } = result;
+            const { moved } = result;
             went = result.gone;
-            if (moved.length === tried) {
+            // Everything picked is in the trash, itself or inside a folder that went.
+            if (went.length === nodes.length) {
                 cue('droplet');
                 const id = toast.add({
                     type: 'success',
