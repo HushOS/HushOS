@@ -25,6 +25,7 @@ import {
     familyContext,
 } from '@/lib/families';
 import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
+import { familyKeys } from '@/lib/families-shell';
 import { createFamily } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
 
@@ -95,11 +96,16 @@ export function CreateFamilyDialog({
         setError('');
         try {
             const { groupId, outcome } = await createFamily(familyContext(userId), trimmed);
-            // Read again before anything else, the checkout included: whatever page comes back
-            // (a reload, Back from Polar) knows the family exists. This dialog stays while it does.
-            await afterFamilyChange(queryClient, userId);
             if (outcome.status === 'landed') {
                 if (plan) {
+                    // On to the checkout with the families marked stale but not read again: read
+                    // now, the page under this dialog would become the family's (Account →
+                    // Family) or lose its tiers (Plans) while the checkout opens, and this dialog
+                    // with it. A reload reads them afresh; Back from Polar does it here (above).
+                    await queryClient.invalidateQueries({
+                        queryKey: familyKeys.user(userId),
+                        refetchType: 'none',
+                    });
                     try {
                         const { url } = await groupBillingApi.checkout(
                             groupId,
@@ -120,10 +126,12 @@ export function CreateFamilyDialog({
                         onOpenChange(false);
                         setName('');
                         setPending(false);
+                        await afterFamilyChange(queryClient, userId);
                         await navigate({ to: '/app/family' });
                         return;
                     }
                 }
+                void afterFamilyChange(queryClient, userId);
                 cue('success');
                 toast.add({ type: 'success', title: `${trimmed} created` });
                 onOpenChange(false);
@@ -132,6 +140,7 @@ export function CreateFamilyDialog({
                 await navigate({ to: '/app/family' });
                 return;
             }
+            void afterFamilyChange(queryClient, userId);
             if (outcome.status === 'pending') {
                 toast.add({
                     type: 'info',

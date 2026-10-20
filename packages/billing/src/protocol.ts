@@ -170,6 +170,30 @@ export function spaceOf(bytes: bigint, round: 'nearest' | 'up' = 'nearest') {
     return `${whole}${fraction ? `.${fraction}` : ''} ${label}`;
 }
 
+/* A plan's name without its billing period: "Family Pro (monthly)" is "Family Pro". */
+export const planTierName = (plan: { name: string }) =>
+    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+
+/* Bytes in whole GiB, rounded up: nothing is 0, and anything up to 1 GiB is 1 GiB. */
+const wholeGibUp = (bytes: bigint) => (bytes <= 0n ? 0n : ((bytes + GIB - 1n) / GIB) * GIB);
+
+/*
+ * Why a family's first plan (or one bought again) is refused: it would be smaller than what its
+ * pool holds the moment it goes live, everyone's own files and the family folders
+ * (docs/families-shared-pool.md 3.2, 5.2). Compared exactly, said in whole GiB rounded up. The
+ * server refuses the checkout with these words, and Plans says them before a family is made.
+ */
+export function firstPlanTooSmall(input: {
+    usedBytes: bigint;
+    plan: { name: string; quotaBytes: string | bigint };
+    /* More than one person in the family: what "it" stores is everyone's. */
+    family: boolean;
+}) {
+    const room = BigInt(input.plan.quotaBytes);
+    if (input.usedBytes <= room) return null;
+    return `${input.family ? 'Your family stores' : 'Your files take'} ${spaceOf(wholeGibUp(input.usedBytes))}, more than ${planTierName(input.plan)}’s ${spaceOf(room)}. Choose a bigger plan or free at least ${spaceOf(wholeGibUp(input.usedBytes - room))}.`;
+}
+
 /* The organisation's default payment currency at the provider; every plan has a price in it. */
 export const DEFAULT_CURRENCY = 'usd';
 

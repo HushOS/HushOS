@@ -26,6 +26,8 @@ import {
     MAX_MEMBERS_PER_RAISE,
     STALE_RAISE_DAYS,
     UNPAID_GROUP_SEATS,
+    firstPlanTooSmall,
+    planTierName,
     quoteUnitsChange,
     spaceOf,
 } from './protocol';
@@ -1193,12 +1195,8 @@ export async function startGroupCheckout(
     // bought again) smaller than what they store is refused, as a downgrade is (3.2, 5.2).
     // Checked exactly, said in whole GiB rounded up, as the downgrade guard says it.
     const { used } = await billingRepository.getPoolUsage(groupId);
-    const room = BigInt(plan.quotaBytes);
-    if (used > room)
-        throw new BillingError(
-            `${seats > 1 ? 'Your family stores' : 'Your files take'} ${spaceOf(billingRepository.wholeGibUp(used))}, more than ${tierName(plan)}’s ${spaceOf(room)}. Choose a bigger plan or free at least ${spaceOf(billingRepository.wholeGibUp(used - room))}.`,
-            409,
-        );
+    const tooSmall = firstPlanTooSmall({ usedBytes: used, plan, family: seats > 1 });
+    if (tooSmall) throw new BillingError(tooSmall, 409);
     const floor = Math.max(plan.includedMembers, seats);
     const units = input.units ?? floor;
     if (units < floor)
@@ -1619,8 +1617,7 @@ async function withPlanChange<T>(subscriptionId: string, busy: () => T, work: ()
 /* Tiers                                                                      */
 /* ------------------------------------------------------------------------- */
 
-const tierName = (plan: { name: string }) =>
-    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+const tierName = planTierName;
 
 export type PlanChange = {
     billing: GroupBillingSummary;

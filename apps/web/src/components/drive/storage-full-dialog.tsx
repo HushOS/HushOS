@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
+import { planTierName } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import {
@@ -203,7 +204,7 @@ export function StorageFullDialog() {
                         <Way
                             icon={SparklesIcon}
                             label="Get more room"
-                            detail={`${bigger.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '')} is ${formatQuota(bigger.quotaBytes)}`}
+                            detail={`${planTierName({ name: bigger.name })} is ${formatQuota(bigger.quotaBytes)}`}
                             primary
                             disabled={working !== null}
                             onClick={() => {

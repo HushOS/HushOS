@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { planTierName } from '@hushos/billing/protocol';
 import { readFileSync } from 'node:fs';
 import {
     expect,
@@ -953,14 +954,8 @@ test.describe.serial('removal, leaving and key changes', () => {
         browser,
     }) => {
         // About 1.3 minutes on CI's dev server, and up to half a minute more waiting on route 2's
-        // poll below: a wait that never ends fails in three, not ten. WebKit runs every step
-        // here slower (two to three minutes on a local dev server), so the walk stays held
-        // longer, and Maya's page, which checks a running walk from 15 s and twice as long each
-        // time it still finds it, may next look two or four minutes after it is released: route
-        // 2's 30 s poll and the held listing's waits add to that. It gets seven, and the wait for
-        // the walk's end below gets five.
-        const webkit = test.info().project.name === 'webkit';
-        test.setTimeout(webkit ? 420_000 : 180_000);
+        // poll below: a wait that never ends fails in three, not ten.
+        test.setTimeout(180_000);
         // Sam adds a file after Replace keys, so the removal's walk is the first to re-key it.
         await openFamilyFolder(sam, family, 'Family');
         await upload(sam, 'sam-notes.txt', 'Notes by Sam\n');
@@ -1134,7 +1129,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         // "Re-keyed records"): after it his file still reads as a former member's, never as
         // re-locked by Maya, and Info names her only as the one who replaced the keys.
         await walk.release();
-        await waitForRotation(maya.page, before, webkit ? 300_000 : 120_000);
+        await waitForRotation(maya.page, before);
         for (const other of others) await other.release();
         // Ana's upload goes by itself, sealed again under Trips' new key: nobody pressed Retry,
         // it never failed, and it opens byte for byte.
@@ -2191,7 +2186,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
         const plus =
             plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus') ??
             plans.find((plan) => plan.interval === 'month')!;
-        const tier = plus.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+        const tier = planTierName({ name: plus.name });
         await rosa.page.goto('/app/billing');
         const section = rosa.page.locator('[data-family-plans]');
         await expect(section.locator('[data-plan]')).toHaveCount(
@@ -2367,8 +2362,7 @@ test.describe.serial('creating a family from Plans: where it stops', () => {
     let plans: CatalogueFamily[] = [];
     const monthly = (tier: string) =>
         plans.find((plan) => plan.interval === 'month' && plan.tier === tier)!;
-    const tierOf = (plan: CatalogueFamily) =>
-        plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+    const tierOf = (plan: CatalogueFamily) => planTierName({ name: plan.name });
 
     test.beforeAll(async ({ browser, request }) => {
         test.setTimeout(300_000);
@@ -2500,6 +2494,97 @@ test.describe.serial('creating a family from Plans: where it stops', () => {
         await expect(nora.page.locator('[data-plan="Free"]')).toBeVisible({ timeout: 60_000 });
         await expect(nora.page.locator('[data-family-plans]')).toHaveCount(0);
     });
+});
+
+/*
+ * While Polar's checkout opens, after the family was made: the page under the dialog stays as it
+ * was (Plans keeps its tiers, Account → Family stays "no family" with the dialog over it), so
+ * nothing jumps and the dialog is there when the browser brings the page back. Back from Polar
+ * restores the page from the browser's back-forward cache; Playwright's browsers don't keep one,
+ * so that return is the `pageshow` event a restore fires (persisted), dispatched here, with the
+ * checkout's address changing only the fragment so the page never left. Runs only against a
+ * server that sells family plans.
+ */
+test.describe.serial('creating a family from Plans: while the checkout opens, and back', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let plans: CatalogueFamily[] = [];
+    const people: Person[] = [];
+
+    test.beforeAll(async ({ request }) => {
+        plans = await familyCatalogue(request);
+        test.skip(
+            !plans.some((plan) => plan.interval === 'month' && plan.tier === 'plus'),
+            'This server sells no Family Plus plan.',
+        );
+    });
+    test.afterAll(async () => {
+        for (const who of people) await who.page.context().close();
+    });
+
+    /* Holds the checkout until `answer` is called with where it sends the browser. */
+    async function holdCheckout(page: Page) {
+        let answer!: (url: string) => void;
+        const url = new Promise<string>((resolve) => (answer = resolve));
+        await page.route(/\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/, async (route) =>
+            route.fulfill({ json: { url: await url } }),
+        );
+        return answer;
+    }
+
+    /* What the browser does when Back restores the page from its back-forward cache. */
+    const restored = (page: Page) =>
+        page.evaluate(() =>
+            window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
+        );
+
+    for (const from of ['Plans', 'Account → Family'] as const)
+        test(`from ${from}: the page stays as it was while the checkout opens, and Back goes to the family`, async ({
+            browser,
+        }) => {
+            test.setTimeout(240_000);
+            const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+            const tier = planTierName({ name: plus.name });
+            const family = from === 'Plans' ? 'Lund family' : 'Moen family';
+            const who = await person(browser, from === 'Plans' ? 'Pia Lund' : 'Olga Moen');
+            people.push(who);
+            const answer = await holdCheckout(who.page);
+            const path =
+                from === 'Plans' ? '/app/billing' : `/app/family?create=${plus.id}&currency=usd`;
+            await who.page.goto(path);
+            if (from === 'Plans')
+                await who.page
+                    .locator('[data-family-plans]')
+                    .getByRole('button', { name: `Create a family with ${tier}` })
+                    .click({ timeout: 60_000 });
+            const dialog = who.page.getByRole('dialog', { name: 'Create a family' });
+            await dialog.getByLabel('Name').fill(family, { timeout: 60_000 });
+            const made = who.page.waitForResponse(
+                (response) =>
+                    response.request().method() === 'POST' &&
+                    new URL(response.url()).pathname === '/api/groups' &&
+                    response.ok(),
+            );
+            await dialog.getByRole('button', { name: 'Create and pay' }).click();
+            await made;
+            // The family exists and the checkout is opening: nothing under the dialog moves.
+            await who.page.waitForTimeout(3_000);
+            await expect(dialog).toBeVisible();
+            await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeVisible();
+            await expect(
+                who.page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]'),
+            ).toBeVisible();
+            // The checkout answers; its address only changes the fragment, so the page stays.
+            answer(`${path}#checkout`);
+            await expect(who.page).toHaveURL(/#checkout$/);
+            // Back from Polar: the page is restored as it was, and goes on to the family's page.
+            await restored(who.page);
+            await expect(who.page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });
+            await expect(dialog).toHaveCount(0);
+            await expect(who.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+                timeout: 60_000,
+            });
+            await expect(who.page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+        });
 });
 
 /*
