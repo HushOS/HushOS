@@ -116,6 +116,8 @@ final class DriveStore {
     var mountsError: String?
     var mountsLoaded = false
     var busy = false
+    /* A Move to Trash batch is under way: the selection bar shows it pending and keeps the selection. */
+    var trashing = false
     /* Transfers in flight and just finished, each with its own bar, as the web's panel shows them. */
     struct TransferItem: Identifiable, Equatable {
         enum Kind { case upload, download, copy, keep }
@@ -1129,20 +1131,27 @@ final class DriveStore {
 
     /*
      * Move to Trash, one item or many (HushOSKit's TrashBatch): the batch goes through
-     * `Vault.trashMany`; then the moved rows leave every list, the notice says what moved with an Undo for exactly that, and
-     * the feed, the listings and Files follow once, in the background.
+     * `Vault.trashMany` and each row leaves every list as the server confirms it; then the notice
+     * says what moved, with an Undo for exactly that, and the feed, the listings and Files follow
+     * once, in the background.
      */
     func trash(_ items: [Opened]) async {
         guard !items.isEmpty else { return }
         let vault = vault
         busy = true
+        trashing = true
         let result = await TrashBatch.trash(items, TrashBatch.Steps(
-            send: { batch in await vault.trashMany(batch.map(\.id)) },
-            drop: { [weak self] moved in self?.dropRows(Set(moved.map(\.id))) },
+            send: { batch, moved in
+                let byId = Dictionary(batch.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                return await vault.trashMany(batch.map(\.id)) { id in if let item = byId[id] { await moved(item) } }
+            },
+            drop: { [weak self] item in self?.dropRows([item.id]) },
             announce: { [weak self] text, undo in self?.announceTrash(text, undo) },
+            restore: { [weak self] moved in Task { await self?.undoTrash(moved) } },
             settle: { [weak self] folders in Task { await self?.settle(folders) } }
         ))
         busy = false
+        trashing = false
         reportFailures(result.failed.map(\.error), single: items.count == 1)
     }
 
@@ -1215,11 +1224,9 @@ final class DriveStore {
     }
 
     /* Says what went to the trash and offers to bring exactly that straight back; no Undo when nothing moved. */
-    private func announceTrash(_ text: String, _ moved: [Opened]) {
-        guard !moved.isEmpty else { notify(text); return }
-        notify(text) { [weak self] in
-            Task { @MainActor in await self?.undoTrash(moved) }
-        }
+    private func announceTrash(_ text: String, _ undo: (@MainActor () -> Void)?) {
+        guard let undo else { notify(text); return }
+        notify(text) { MainActor.assumeIsolated { undo() } }
     }
 
     /*

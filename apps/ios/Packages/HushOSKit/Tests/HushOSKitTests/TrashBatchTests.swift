@@ -3,11 +3,11 @@ import Testing
 @testable import HushOSKit
 
 /*
- * Move to Trash for many: only what the server moved is counted, offered back and taken off the
- * lists; the batch reaches the data layer in one call (`Vault.trashMany`, the seam a batch route
- * replaces), which sends one request after another and stops when no later one can succeed; and
- * the follow-up (feed, listings, Files) runs once for the batch, after the rows are gone and the
- * notice is up.
+ * Move to Trash for many: only what the server moved is counted, offered back by the notice's
+ * Undo and taken off the lists, each row as its request is confirmed; the batch reaches the data
+ * layer in one call (`Vault.trashMany`, the seam a batch route replaces), which sends one request
+ * after another and stops when no later one can succeed; and the follow-up (feed, listings,
+ * Files) runs once for the batch, after the last answer and the notice.
  */
 @MainActor
 @Suite struct TrashBatchTests {
@@ -24,22 +24,32 @@ import Testing
     @MainActor final class Recorder {
         var events: [String] = []
         var batches: [[String]] = []
-        var dropped: [[String]] = []
-        var notices: [(text: String, undo: [String])] = []
+        var dropped: [String] = []
+        /* Each notice's text, and what tapping its Undo restores (nil: the notice has no Undo). */
+        var notices: [(text: String, undo: [String]?)] = []
         var settled: [Set<String>] = []
+        private var restored: [String]?
 
         /* `send` answers for one item, as the server would; the batch goes through the kit's sequencing. */
         func steps(_ send: @escaping @Sendable (Opened) async throws -> Void) -> TrashBatch.Steps {
             TrashBatch.Steps(
-                send: { batch in
+                send: { batch, moved in
                     await MainActor.run { self.batches.append(batch.map(\.id)) }
                     return await TrashBatch.oneAfterAnother(batch) { item in
                         try await send(item)
                         await MainActor.run { self.events.append("sent \(item.id)") }
+                        await moved(item)
                     }
                 },
-                drop: { moved in self.events.append("drop"); self.dropped.append(moved.map(\.id)) },
-                announce: { text, undo in self.events.append("announce"); self.notices.append((text, undo.map(\.id))) },
+                drop: { item in self.events.append("drop \(item.id)"); self.dropped.append(item.id) },
+                announce: { text, undo in
+                    self.events.append("announce")
+                    // Tap Undo at once: what reaches `restore` is what the person gets back.
+                    self.restored = nil
+                    undo?()
+                    self.notices.append((text, undo == nil ? nil : self.restored))
+                },
+                restore: { moved in self.restored = moved.map(\.id) },
                 settle: { folders in self.events.append("settle"); self.settled.append(folders) }
             )
         }
@@ -64,16 +74,15 @@ import Testing
         _ = await TrashBatch.trash(thirteen, recorder.steps(failsSome))
         #expect(recorder.notices.map(\.undo) == [movedIds])
         // Rows that stayed are not taken off the lists either.
-        #expect(recorder.dropped == [movedIds])
+        #expect(recorder.dropped == movedIds)
     }
 
-    @Test func theFollowUpRunsOnceAfterEveryRequestNotOncePerItem() async {
+    @Test func eachRowLeavesAsItIsConfirmedAndTheFollowUpRunsOnceAtTheEnd() async {
         let recorder = Recorder()
         _ = await TrashBatch.trash(thirteen, recorder.steps { _ in })
         #expect(recorder.settled == [["work", "photos"]])
-        // Every request answered, then the rows go, then the notice, then the follow-up.
-        #expect(recorder.events.prefix(13).allSatisfy { $0.hasPrefix("sent ") })
-        #expect(Array(recorder.events.dropFirst(13)) == ["drop", "announce", "settle"])
+        // Each row goes right after its own answer; the notice and one follow-up come after the last.
+        #expect(recorder.events == thirteen.flatMap { ["sent \($0.id)", "drop \($0.id)"] } + ["announce", "settle"])
     }
 
     @Test func theWholeBatchReachesTheDataLayerInOneCall() async {
@@ -136,7 +145,7 @@ import Testing
         let recorder = Recorder()
         _ = await TrashBatch.trash(thirteen, recorder.steps { _ in throw DriveAPIError.transport("offline") })
         #expect(recorder.notices.map(\.text) == ["Couldn’t move to Trash. You’re offline. Try again once you’re connected."])
-        #expect(recorder.notices.map(\.undo) == [[]])
+        #expect(recorder.notices.map(\.undo) == [nil])
         #expect(recorder.dropped.isEmpty && recorder.settled.isEmpty)
     }
 

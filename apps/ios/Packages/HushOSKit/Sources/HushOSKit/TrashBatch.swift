@@ -2,9 +2,10 @@ import Foundation
 
 /*
  * Move to Trash for one item or many, as the app runs it: the batch sent in one call
- * (`Vault.trashMany`), then, in this order, the moved rows off the lists, the notice, and one follow-up that runs on its own. A
- * follow-up that fails leaves the lists as they are: the moved rows were taken off from the
- * server's answers, not from a listing. The decisions live here so the tests can reach them.
+ * (`Vault.trashMany`), each row off the lists as the server confirms it, then the notice, and
+ * one follow-up that runs on its own. A follow-up that fails leaves the lists as they are: the
+ * rows were taken off from the server's answers, not from a listing. The decisions live here so
+ * the tests can reach them.
  */
 public enum TrashBatch {
     /*
@@ -84,29 +85,43 @@ public enum TrashBatch {
     }
 
     public struct Steps {
-        /* The whole batch in one call (`Vault.trashMany`): one outcome per item, in order. */
-        public var send: @Sendable ([Opened]) async -> [Result<Void, Error>]
-        /* Takes the moved rows off every list, the moment the server has agreed to all of them. */
-        public var drop: @MainActor ([Opened]) -> Void
-        /* The notice; the list is exactly what moved, and empty when nothing did (no Undo then). */
-        public var announce: @MainActor (String, [Opened]) -> Void
+        /*
+         * The whole batch in one call (`Vault.trashMany`): one outcome per item, in order, and
+         * `moved` told of each item the moment the server confirms it.
+         */
+        public var send: @Sendable ([Opened], _ moved: @escaping @Sendable (Opened) async -> Void) async -> [Result<Void, Error>]
+        /* Takes one confirmed row off every list, as soon as the server confirms it. */
+        public var drop: @MainActor @Sendable (Opened) -> Void
+        /* The notice; the closure brings back exactly what moved, and is nil when nothing did. */
+        public var announce: @MainActor (String, (@MainActor () -> Void)?) -> Void
+        /* What the notice's Undo runs, with exactly the items that moved. */
+        public var restore: @MainActor ([Opened]) -> Void
         /* The feed, the listings and Files, once for the batch and in the background. */
         public var settle: @MainActor (Set<String>) -> Void
 
         public init(
-            send: @escaping @Sendable ([Opened]) async -> [Result<Void, Error>], drop: @escaping @MainActor ([Opened]) -> Void,
-            announce: @escaping @MainActor (String, [Opened]) -> Void, settle: @escaping @MainActor (Set<String>) -> Void
+            send: @escaping @Sendable ([Opened], _ moved: @escaping @Sendable (Opened) async -> Void) async -> [Result<Void, Error>],
+            drop: @escaping @MainActor @Sendable (Opened) -> Void,
+            announce: @escaping @MainActor (String, (@MainActor () -> Void)?) -> Void,
+            restore: @escaping @MainActor ([Opened]) -> Void,
+            settle: @escaping @MainActor (Set<String>) -> Void
         ) {
             self.send = send
             self.drop = drop
             self.announce = announce
+            self.restore = restore
             self.settle = settle
         }
     }
 
+    /*
+     * Each row leaves the lists as the server confirms it; after the last answer come the notice
+     * and one follow-up that runs on its own.
+     */
     @MainActor
     public static func trash(_ items: [Opened], _ steps: Steps) async -> Outcome {
-        let outcomes = await steps.send(items)
+        let drop = steps.drop
+        let outcomes = await steps.send(items) { item in await drop(item) }
         precondition(outcomes.count == items.count, "One outcome per item")
         var moved: [Opened] = []
         var failed: [(item: Opened, error: Error)] = []
@@ -117,8 +132,11 @@ public enum TrashBatch {
             }
         }
         let result = Outcome(tried: items, moved: moved, failed: failed)
-        if !moved.isEmpty { steps.drop(moved) }
-        if let notice = result.notice { steps.announce(notice, moved) }
+        let restore = steps.restore
+        let back = moved
+        var undo: (@MainActor () -> Void)?
+        if !back.isEmpty { undo = { restore(back) } }
+        if let notice = result.notice { steps.announce(notice, undo) }
         if !moved.isEmpty { steps.settle(result.folders) }
         return result
     }

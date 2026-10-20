@@ -425,8 +425,10 @@ struct FolderView: View {
         if selecting {
             let all = !children.isEmpty && selection.count == children.count
             Button { selection = all ? [] : Set(children.map(\.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
+                .disabled(store.trashing)
                 .buttonStyle(.plain)
             Button { endSelecting() } label: { HeaderWord(text: "Done") }
+                .disabled(store.trashing)
                 .buttonStyle(.plain)
         } else {
             // A folder you can only view takes nothing new.
@@ -576,18 +578,20 @@ private struct SelectBar: View {
     @Binding var action: NodeAction?
     @Binding var moving: Bool
     let done: () -> Void
+    /* A Move to Trash under way: the bar stays, pending, with the selection, until the last request answers. */
+    private var trashing: Bool { store.trashing }
 
     /* A family folder's items are never shared or tagged (the web hides both there). */
     private var family: Bool { items.contains { store.isFamily($0) } }
 
     var body: some View {
         HStack(spacing: 0) {
-            slot("Share", "person.badge.plus", disabled: items.count != 1 || family) {
+            slot("Share", "person.badge.plus", disabled: items.count != 1 || family || trashing) {
                 if let item = items.first { action = .share(item) }
                 done()
             }
-            slot("Move", "folder", disabled: items.isEmpty) { moving = true }
-            slot("Copy", "doc.on.doc", disabled: items.isEmpty) {
+            slot("Move", "folder", disabled: items.isEmpty || trashing) { moving = true }
+            slot("Copy", "doc.on.doc", disabled: items.isEmpty || trashing) {
                 // The paste bar that appears is the confirmation; a notice would only cover it.
                 store.copy(items)
                 done()
@@ -603,12 +607,15 @@ private struct SelectBar: View {
             } label: {
                 label("More", "ellipsis")
             }
-            .disabled(items.isEmpty)
-            .foregroundStyle(items.isEmpty ? Alpine.primary.opacity(0.35) : Alpine.primary)
-            slot("Move to Trash", "trash", disabled: items.isEmpty, danger: true) {
+            .disabled(items.isEmpty || trashing)
+            .foregroundStyle(items.isEmpty || trashing ? Alpine.primary.opacity(0.35) : Alpine.primary)
+            // Every slot is the same width, so the pending label and ring move nothing in the bar.
+            slot(trashing ? "Moving to Trash" : "Move to Trash", "trash", disabled: items.isEmpty || trashing, danger: true, pending: trashing) {
                 let picked = items
-                done()
-                Task { await store.trash(picked) }
+                Task {
+                    await store.trash(picked)
+                    done()
+                }
             }
         }
         .padding(4)
@@ -618,16 +625,19 @@ private struct SelectBar: View {
         .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
     }
 
-    private func slot(_ title: String, _ symbol: String, disabled: Bool, danger: Bool = false, run: @escaping () -> Void) -> some View {
-        Button(action: run) { label(title, symbol) }
+    private func slot(_ title: String, _ symbol: String, disabled: Bool, danger: Bool = false, pending: Bool = false, run: @escaping () -> Void) -> some View {
+        Button(action: run) { label(title, symbol, pending: pending) }
             .buttonStyle(.plain)
-            .foregroundStyle((danger ? Alpine.danger : Alpine.primary).opacity(disabled ? 0.35 : 1))
+            .foregroundStyle((danger ? Alpine.danger : Alpine.primary).opacity(disabled && !pending ? 0.35 : 1))
             .disabled(disabled)
     }
 
-    private func label(_ title: String, _ symbol: String) -> some View {
+    private func label(_ title: String, _ symbol: String, pending: Bool = false) -> some View {
         VStack(spacing: 3) {
-            Image(systemName: symbol).font(.system(size: 19, weight: .medium)).frame(height: 22)
+            Group {
+                if pending { ProgressView().controlSize(.small) } else { Image(systemName: symbol).font(.system(size: 19, weight: .medium)) }
+            }
+            .frame(height: 22)
             Text(title).font(.system(size: 10, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, minHeight: 54)

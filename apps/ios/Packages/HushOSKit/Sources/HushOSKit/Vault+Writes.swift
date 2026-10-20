@@ -239,11 +239,15 @@ extension Vault {
     }
 
     /*
-     * Move to Trash for many, one outcome per id in order: the one place a batch reaches the
-     * server. One request each, one after another, until the server takes a batch in one request.
+     * Move to Trash for many, one outcome per id in order, `moved` told of each id as the server
+     * confirms it: the one place a batch reaches the server. One request each, one after another,
+     * until the server takes a batch in one request.
      */
-    public func trashMany(_ ids: [String]) async -> [Result<Void, Error>] {
-        await TrashBatch.oneAfterAnother(ids) { id in try await self.trash(id) }
+    public func trashMany(_ ids: [String], moved: @escaping @Sendable (String) async -> Void = { _ in }) async -> [Result<Void, Error>] {
+        await TrashBatch.oneAfterAnother(ids) { id in
+            try await self.trash(id)
+            await moved(id)
+        }
     }
 
     /* Back where it was, or under the root when its old folder is in the trash too. */
