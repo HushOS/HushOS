@@ -387,12 +387,11 @@ describe('familyWalks', () => {
             time,
             user: 'u1' as string | null,
             online: true,
-            progressed: false,
             walks: 0,
             syncs: 0,
             heard: 0,
             /* What each walk of the folder does, in turn; then each walks to its end. */
-            outcomes: [] as (() => Promise<void>)[],
+            outcomes: [] as ((progress: (done: number) => void) => Promise<void>)[],
             /* What each sync answers: the folder still walking, unless a test holds one. */
             syncAnswer: (): Promise<readonly unknown[] | null> => Promise.resolve([state]),
             scheduled: [] as (number | 'online' | null)[],
@@ -400,9 +399,9 @@ describe('familyWalks', () => {
         const endings = walkEndings();
         endings.subscribe(GROUP, () => h.heard++);
         const walks = familyWalks({
-            walkFolder: async () => {
+            walkFolder: async (_userId, _groupId, _target, progress) => {
                 h.walks++;
-                await (h.outcomes.shift() ?? (async () => {}))();
+                await (h.outcomes.shift() ?? (async () => {}))(progress);
             },
             sync: async () => {
                 h.syncs++;
@@ -412,7 +411,6 @@ describe('familyWalks', () => {
             },
             unlockedUser: () => h.user,
             online: () => h.online,
-            progressed: () => h.progressed,
             scheduled: (_workspaceId, next) => h.scheduled.push(next),
             endings,
             clock: time,
@@ -545,6 +543,126 @@ describe('familyWalks', () => {
         walks.online();
         await settle();
         expect([h.syncs, h.walks, h.heard]).toEqual([1, 2, 1]);
+    });
+});
+
+describe('familyWalks, round two', () => {
+    // The same harness, reached through the tests above: re-declared for these, kept apart.
+    const state = {
+        workspaceId: WS,
+        opened: { version: 2 },
+        rootListed: true,
+        view: {
+            rotation: { id: 'run-1', nodeId: 'root', targetEpoch: 40 },
+            root: { id: 'root', keyEpoch: 40 },
+        },
+    } as never;
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    function harness() {
+        const time = testClock();
+        const h = {
+            time,
+            online: true,
+            walks: 0,
+            syncs: 0,
+            heard: 0,
+            failSyncs: false,
+            answerNothing: false,
+            outcomes: [] as ((progress: (done: number) => void) => Promise<void>)[],
+            scheduled: [] as (number | 'online' | null)[],
+        };
+        const endings = walkEndings();
+        endings.subscribe(GROUP, () => h.heard++);
+        const walks = familyWalks({
+            walkFolder: async (_userId, _groupId, _target, progress) => {
+                h.walks++;
+                await (h.outcomes.shift() ?? (async () => {}))(progress);
+            },
+            sync: async () => {
+                h.syncs++;
+                if (h.failSyncs) throw new Error('HushOS couldn’t do that just now.');
+                return h.answerNothing ? [] : [state];
+            },
+            unlockedUser: () => 'u1',
+            online: () => h.online,
+            scheduled: (_workspaceId, next) => h.scheduled.push(next),
+            endings,
+            clock: time,
+            random: even,
+        });
+        return { h, walks };
+    }
+
+    test('a walk that got somewhere, then a server whose syncs keep failing: the waits still grow', async () => {
+        const { h, walks } = harness();
+        // It re-keyed 5 items, then a batch was cut off: its count starts over (30 s).
+        h.outcomes.push(async (progress) => {
+            progress(5);
+            throw new Error('signal timed out');
+        });
+        walks.pending('u1', GROUP, [state]);
+        await settle();
+        h.failSyncs = true;
+        for (const wait of [30_000, 60_000, 120_000]) {
+            h.time.advance(wait);
+            await settle();
+        }
+        // Each retry's sync failed and re-keyed nothing: 60 s after the first, 120 s after the second.
+        expect(h.scheduled).toEqual([30_000, 60_000, 120_000, 240_000]);
+        expect(h.syncs).toBe(3);
+    });
+
+    test('back online leaves a run that failed on the server’s side waiting', async () => {
+        const { h, walks } = harness();
+        h.outcomes.push(() => Promise.reject(new Error('signal timed out')));
+        walks.pending('u1', GROUP, [state]);
+        await settle();
+        walks.online();
+        await settle();
+        expect([h.syncs, h.walks]).toEqual([0, 1]);
+        h.time.advance(30_000);
+        await settle();
+        expect([h.syncs, h.walks]).toEqual([1, 2]);
+    });
+
+    test('back online walks what failed offline once, not again at every later online', async () => {
+        const { h, walks } = harness();
+        h.online = false;
+        h.outcomes.push(() => Promise.reject(new Error('Failed to fetch')));
+        walks.pending('u1', GROUP, [state]);
+        await settle();
+        expect(h.scheduled).toEqual(['online']);
+        // Back online; the sync answers, and the run has meanwhile ended elsewhere.
+        h.online = true;
+        h.answerNothing = true;
+        walks.online();
+        await settle();
+        expect(h.syncs).toBe(1);
+        walks.online();
+        walks.online();
+        await settle();
+        expect(h.syncs).toBe(1);
+    });
+
+    test('a walk running when the account locked is let go: the first sync after unlock walks afresh', async () => {
+        const { h, walks } = harness();
+        let fail!: (error: Error) => void;
+        h.outcomes.push(() => new Promise((_resolve, reject) => (fail = reject)));
+        walks.pending('u1', GROUP, [state]);
+        await settle();
+        walks.clear();
+        // Unlocked again while the old walk still hangs: a walk of its own, not that one joined.
+        walks.pending('u1', GROUP, [state]);
+        await settle();
+        expect([h.walks, h.heard]).toEqual([2, 1]);
+        // The old walk fails at last: nothing waits for it, nothing is lined up.
+        fail(new Error('Unlock your account first.'));
+        await settle();
+        expect(h.scheduled).toEqual([]);
+        walks.pending('u1', GROUP, [state]);
+        await settle();
+        // The run just ended well: the next walk of it waits its first 30 s, nothing more.
+        expect(h.walks).toBe(2);
     });
 });
 

@@ -136,7 +136,15 @@ const RETRY_CAP_MS = 10 * 60_000;
  * of times meanwhile moves nothing.
  */
 export function walkRetries(clock: WalkClock = systemClock, random: () => number = Math.random) {
-    type Entry = { attempts: number; until: number; timer: unknown; retry: (() => void) | null };
+    type Entry = {
+        attempts: number;
+        until: number;
+        timer: unknown;
+        /* Lined up to run once: when the timer fires, or (offline) when the device is back online. */
+        retry: (() => void) | null;
+        /* It failed while the device was offline: only such a run is walked again on `online`. */
+        offline: boolean;
+    };
     const runs = new Map<string, Entry>();
     const inFlight = new Set<string>();
     // Bumped by clear(): a walk that settles after it (signed out meanwhile) leaves nothing.
@@ -168,6 +176,7 @@ export function walkRetries(clock: WalkClock = systemClock, random: () => number
                 until: clock.now(),
                 timer: undefined,
                 retry: options.retry ?? null,
+                offline: true,
             });
             return null;
         }
@@ -181,11 +190,14 @@ export function walkRetries(clock: WalkClock = systemClock, random: () => number
             until: clock.now() + delay,
             timer: undefined,
             retry: options.retry ?? null,
+            offline: false,
         };
         const retry = options.retry;
         if (retry)
             entry.timer = clock.schedule(() => {
                 entry.timer = undefined;
+                // Used once: a retry whose sync fails lines up the next itself (ended again).
+                entry.retry = null;
                 // The wait is over, whatever the clock reads now: the retry walks.
                 entry.until = -Infinity;
                 retry();
@@ -217,15 +229,22 @@ export function walkRetries(clock: WalkClock = systemClock, random: () => number
             runs.clear();
             inFlight.clear();
         },
-        /* Back online: what failed waits no longer, and its count starts over. */
+        /*
+         * Back online: what failed because the device was offline is walked again now, its count
+         * started over, once. A run waiting out a failure while online (the server's, a timeout)
+         * keeps its wait: the device coming back says nothing about the server.
+         */
         online() {
-            const waiting = [...runs.values()].filter((entry) => entry.retry !== null);
-            for (const entry of waiting) {
-                stop(entry);
+            const waiting: (() => void)[] = [];
+            for (const entry of runs.values()) {
+                if (!entry.offline || entry.retry === null) continue;
+                waiting.push(entry.retry);
+                entry.retry = null;
+                entry.offline = false;
                 entry.attempts = 0;
                 entry.until = -Infinity;
             }
-            for (const entry of waiting) entry.retry?.();
+            for (const retry of waiting) retry();
         },
         /*
          * Walks the run unless it waits out its last walk or is being walked already, and
@@ -314,15 +333,21 @@ export const familyWalkEndings = walkEndings();
  * with its parts injected.
  */
 export function familyWalks(deps: {
-    /* Walks the run in its folder to its end: the folder's client, its lock, its progress. */
-    walkFolder: (userId: string, groupId: string, target: WalkTarget) => Promise<void>;
+    /*
+     * Walks the run in its folder to its end (the folder's client, its lock), saying how many
+     * items this walk has re-keyed so far as it goes.
+     */
+    walkFolder: (
+        userId: string,
+        groupId: string,
+        target: WalkTarget,
+        progress: (done: number) => void,
+    ) => Promise<void>;
     /* A sync of the family: its folders' states when it was accepted, else null. */
     sync: (userId: string, groupId: string) => Promise<readonly AreaState[] | null>;
     /* Whose keys this tab holds now (null: locked or signed out). */
     unlockedUser: () => string | null;
     online: () => boolean;
-    /* Whether the folder's last walk re-keyed anything before it stopped. */
-    progressed: (workspaceId: string) => boolean;
     /* A failed walk's next try: in `ms`, once back online, or not from here (null). */
     scheduled?: (workspaceId: string, next: number | 'online' | null) => void;
     endings?: ReturnType<typeof walkEndings>;
@@ -334,25 +359,40 @@ export function familyWalks(deps: {
     const endings = deps.endings ?? familyWalkEndings;
     const gap = deps.refreshGapMs ?? 4_000;
     const retries = walkRetries(clock, deps.random);
-    const walking = new Map<string, Promise<void>>();
+    // The walk of each folder this tab runs, and how many items it has re-keyed: a failure counts
+    // as `progressed` only when this very walk got somewhere.
+    const walking = new Map<string, { settled: Promise<void>; done: number }>();
     const refreshes = new Map<string, { at: number; pending: Promise<void> | null }>();
 
-    function walk(userId: string, groupId: string, target: WalkTarget): Promise<void> {
-        const held = walking.get(target.workspaceId);
+    function track(userId: string, groupId: string, target: WalkTarget) {
+        const workspaceId = target.workspaceId;
+        const held = walking.get(workspaceId);
         if (held) return held;
-        const settled = deps
-            .walkFolder(userId, groupId, target)
+        const entry = { settled: Promise.resolve(), done: 0 };
+        entry.settled = deps
+            .walkFolder(userId, groupId, target, (done) => {
+                entry.done = done;
+            })
             .then(() => endings.emit(groupId))
-            .finally(() => walking.delete(target.workspaceId));
-        walking.set(target.workspaceId, settled);
-        return settled;
+            .finally(() => {
+                // Only its own: clear() may have let a newer walk of the folder start meanwhile.
+                if (walking.get(workspaceId) === entry) walking.delete(workspaceId);
+            });
+        walking.set(workspaceId, entry);
+        return entry;
+    }
+    function walk(userId: string, groupId: string, target: WalkTarget): Promise<void> {
+        return track(userId, groupId, target).settled;
     }
 
-    /* Why a walk or a retry's sync failed, as walkRetries counts it. */
-    function failureOf(userId: string, workspaceId: string): WalkFailure {
+    /*
+     * Why a walk or a retry's sync failed, as walkRetries counts it. `progressed` only for a
+     * walk that itself re-keyed something; a sync that failed re-keyed nothing.
+     */
+    function failureOf(userId: string, progressed: boolean): WalkFailure {
         if (deps.unlockedUser() !== userId) return 'gone';
         if (!deps.online()) return 'offline';
-        return deps.progressed(workspaceId) ? 'progressed' : 'counted';
+        return progressed ? 'progressed' : 'counted';
     }
     const nextOf = (failure: WalkFailure, wait: number | null) =>
         wait ?? (failure === 'offline' ? ('online' as const) : null);
@@ -373,23 +413,31 @@ export function familyWalks(deps: {
             };
             // Once the wait is over: a sync of the family, which walks what still runs. Never for
             // an account that locked or left meanwhile (its sync would reopen what signing out
-            // deleted), and a sync that fails waits again, counted as the walk would be.
+            // deleted), and a sync that fails waits again, counted: a sync re-keys nothing.
             const retry = () => {
                 if (deps.unlockedUser() !== userId) {
                     retries.forget(key);
                     return;
                 }
                 refresh(userId, groupId, { due: true }).catch(() => {
-                    const failure = failureOf(userId, workspaceId);
+                    const failure = failureOf(userId, false);
                     const wait = retries.ended(key, { retry, failure });
                     deps.scheduled?.(workspaceId, nextOf(failure, wait));
                 });
             };
-            retries.run(key, () => walk(userId, groupId, target), {
-                retry,
-                judge: () => failureOf(userId, workspaceId),
-                failed: (failure, wait) => deps.scheduled?.(workspaceId, nextOf(failure, wait)),
-            });
+            let attempt: ReturnType<typeof track> | null = null;
+            retries.run(
+                key,
+                () => {
+                    attempt = track(userId, groupId, target);
+                    return attempt.settled;
+                },
+                {
+                    retry,
+                    judge: () => failureOf(userId, (attempt?.done ?? 0) > 0),
+                    failed: (failure, wait) => deps.scheduled?.(workspaceId, nextOf(failure, wait)),
+                },
+            );
         }
     }
 
@@ -424,6 +472,9 @@ export function familyWalks(deps: {
         clear() {
             retries.clear();
             refreshes.clear();
+            // A walk still running for the account that left is doomed: the first sync after an
+            // unlock starts its own rather than joining it and being counted with its failure.
+            walking.clear();
         },
         /* Back online: what failed offline (or waits) is walked again now. */
         online: () => retries.online(),

@@ -23,6 +23,8 @@ const memory = vi.hoisted(() => ({
     thumbnails: vi.fn(),
     previews: vi.fn(),
 }));
+/* Family work stopped at the start of a sign-out: no memory a page draws from goes with it. */
+const stopSpaces = vi.hoisted(() => vi.fn());
 const auth = vi.hoisted(() => ({
     store: undefined as unknown as StoreApi<{ unlockedUserId: string | null }>,
     logout: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@/lib/stash', () => ({ forgetStash: stores.stash }));
 vi.mock('@/lib/drive', () => ({
     driveClient: { forgetMirror: stores.mirror, close: memory.close },
     closeSpaces: memory.spaces,
+    stopSpaces,
 }));
 vi.mock('@/lib/thumbnails', () => ({ forgetThumbnails: memory.thumbnails }));
 vi.mock('@/lib/previews', () => ({ forgetPreviews: memory.previews }));
@@ -43,7 +46,7 @@ vi.mock('@/lib/session', () => ({ forgetSession }));
 const loadPage = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/load-page', () => ({ loadPage }));
 
-const { clearDevice, forgetDevice, leaveApp, NAVIGATE_TIMEOUT_MS, SIGN_OUT_TIMEOUT_MS } =
+const { clearDevice, forgetDevice, leaveApp, signOut, NAVIGATE_TIMEOUT_MS, SIGN_OUT_TIMEOUT_MS } =
     await import('./sign-out');
 const { useAuthView } = await import('./auth-view');
 const {
@@ -426,5 +429,19 @@ describe('signing out of the app', () => {
         expect(memory.spaces).toHaveBeenCalledOnce();
         expect(clear).toHaveBeenCalledOnce();
         expect(logged).toHaveBeenCalled();
+    });
+});
+
+describe('signing out, before the device is cleared', () => {
+    test('family work stops first, while still unlocked, so no retry syncs into a store being deleted', async () => {
+        const order: string[] = [];
+        stopSpaces.mockImplementation(() => {
+            order.push(`stop (unlocked: ${auth.store.getState().unlockedUserId})`);
+        });
+        stores.groups.mockImplementation(async () => {
+            order.push('families store deleted');
+        });
+        await signOut();
+        expect(order).toEqual(['stop (unlocked: maya)', 'families store deleted']);
     });
 });

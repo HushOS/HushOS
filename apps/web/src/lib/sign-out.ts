@@ -48,6 +48,12 @@ export async function clearDevice() {
 
 /* Signing out of this browser: whatever the device cleanup does, the session and device key go. */
 export async function signOut() {
+    // First, while this tab is still unlocked: no family key-change retry may sync now, since a
+    // sync opens the families' store (hushos-groups) that forgetDevice is deleting, and could
+    // hold up its deletion or make it again.
+    await import('@/lib/drive')
+        .then(({ stopSpaces }) => stopSpaces())
+        .catch((error: unknown) => console.error('Family work could not be stopped here.', error));
     try {
         await forgetDevice();
     } finally {

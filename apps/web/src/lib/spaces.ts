@@ -248,9 +248,29 @@ function areaWalkLock<T>(workspaceId: string, work: () => Promise<T>): Promise<T
  * write lock when it is the outbox finishing a walk a member list change met). Joining a walk
  * this tab runs already, the retries and telling the pages it ended are walks.ts familyWalks'.
  */
-function walkFolder(userId: string, groupId: string, rotation: WalkTarget): Promise<void> {
+// The walk of each folder whose progress the pages show: one cut loose by a lock or a sign-out
+// (familyWalks clear) may still settle after a newer one started, and must not write over it.
+const walkAttempts = new Map<string, object>();
+function walkFolder(
+    userId: string,
+    groupId: string,
+    rotation: WalkTarget,
+    progress: (done: number) => void,
+): Promise<void> {
     const workspaceId = rotation.workspaceId;
+    const attempt = {};
+    const mine = () => walkAttempts.get(workspaceId) === attempt;
+    const show = (walk: FamilyWalk | null) => {
+        if (!mine()) return;
+        if (walk) walkState.set(workspaceId, walk);
+        else walkState.delete(workspaceId);
+        publishWalks();
+    };
     const run = areaWalkLock(workspaceId, async () => {
+        // This walk's own count from its first step: one that fails before it re-keys anything
+        // (the folder not open, a sync refused) shows and reports nothing re-keyed.
+        walkAttempts.set(workspaceId, attempt);
+        show({ groupId, workspaceId, done: 0, error: null, retry: null });
         let area = areas.get(workspaceId);
         if (!area || area.groupId !== groupId) {
             await syncLocked(familyContext(userId), groupId, { flush: false });
@@ -258,8 +278,6 @@ function walkFolder(userId: string, groupId: string, rotation: WalkTarget): Prom
         }
         if (!area || area.groupId !== groupId)
             throw new Error('Open the family’s folders first, then try again.');
-        walkState.set(workspaceId, { groupId, workspaceId, done: 0, error: null, retry: null });
-        publishWalks();
         await area.client.open(userId);
         const client = area.client;
         const outcome = await walkToEnd({
@@ -267,14 +285,8 @@ function walkFolder(userId: string, groupId: string, rotation: WalkTarget): Prom
                 client.walkRotation(
                     { nodeId: rotation.nodeId, targetEpoch: rotation.targetEpoch },
                     (done) => {
-                        walkState.set(workspaceId, {
-                            groupId,
-                            workspaceId,
-                            done,
-                            error: null,
-                            retry: null,
-                        });
-                        publishWalks();
+                        progress(done);
+                        show({ groupId, workspaceId, done, error: null, retry: null });
                     },
                 ),
             running: async () => stillRunning((await groupsApi.spaces()).spaces, groupId, rotation),
@@ -282,23 +294,22 @@ function walkFolder(userId: string, groupId: string, rotation: WalkTarget): Prom
         // Counted only when this tab walked it to its end, never when another finished it.
         if (outcome === 'walked') countFinishedRotation();
     });
-    return run
-        .then(
-            () => {
-                walkState.delete(workspaceId);
-            },
-            (error: unknown) => {
-                walkState.set(workspaceId, {
-                    groupId,
-                    workspaceId,
-                    done: walkState.get(workspaceId)?.done ?? 0,
-                    error: errorCopy(error),
-                    retry: null,
-                });
-                throw error;
-            },
-        )
-        .finally(publishWalks);
+    return run.then(
+        () => {
+            show(null);
+            if (mine()) walkAttempts.delete(workspaceId);
+        },
+        (error: unknown) => {
+            show({
+                groupId,
+                workspaceId,
+                done: walkState.get(workspaceId)?.done ?? 0,
+                error: errorCopy(error),
+                retry: null,
+            });
+            throw error;
+        },
+    );
 }
 
 /*
@@ -319,7 +330,6 @@ const walks = familyWalks({
     },
     unlockedUser: () => authClient.store.getState().unlockedUserId,
     online: () => typeof navigator === 'undefined' || navigator.onLine !== false,
-    progressed: (workspaceId) => (walkState.get(workspaceId)?.done ?? 0) > 0,
     scheduled: (workspaceId, next) => {
         const walk = walkState.get(workspaceId);
         if (!walk?.error) return;

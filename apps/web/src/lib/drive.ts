@@ -75,6 +75,8 @@ export const refreshKeyChange = spaces.refreshKeyChange;
 export const closeSpaces = spaces.closeAll;
 /* What the families layer stops with them: its walks' retries (lib/spaces.ts). */
 export const onSpacesClosed = spaces.onClose;
+/* That alone, the clients left open: a sign-out starting, before the device's stores go. */
+export const stopSpaces = spaces.stopAll;
 /* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
 export const forgetSpace = spaces.forget;
 export const pruneSpaces = spaces.prune;

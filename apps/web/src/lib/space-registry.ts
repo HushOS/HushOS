@@ -90,6 +90,13 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
             for (const { client } of entries.values()) client.close();
             for (const closer of closers) closer();
         },
+        /*
+         * Only what goes with them, the clients left as they are: at the start of a sign-out,
+         * before the device's stores are deleted (lib/sign-out.ts).
+         */
+        stopAll: () => {
+            for (const closer of closers) closer();
+        },
         /* What else goes with them (lib/spaces.ts: the key-change walks' retries). */
         onClose: (closer: () => void) => {
             closers.add(closer);
