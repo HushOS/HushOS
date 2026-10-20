@@ -1,0 +1,25 @@
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_c2b10c7945a71a 27
+apps/ios/App/AccountView.swift
+  s_c56e31c87cddde::t_0d11323356359c 297-298,304-308,331,452-453
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_c56e31c87cddde::t_40558b400671aa 19-24,83,87-97,107,114,128
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/StoragePoolTests.swift
+  s_c56e31c87cddde::t_a5a9df7f8bd582 16-21,24,43,51,57,61-79,124,128-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "abdb4315cb945f8ac07863e7afd99764dd632dc4",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
