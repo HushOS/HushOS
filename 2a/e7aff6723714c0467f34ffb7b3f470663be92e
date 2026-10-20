@@ -1,0 +1,23 @@
+DESIGN.md
+  s_c56e31c87cddde::t_339e258a31e120 476
+apps/web/src/content/legal/privacy.mdx
+  s_c56e31c87cddde::t_6c508633522073 48-52,90,94,111-113,117-118
+apps/web/src/lib/pricing-faq.ts
+  s_c56e31c87cddde::t_171e51da2d78ae 75,79,91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ae7aff6723714c0467f34ffb7b3f470663be92e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
