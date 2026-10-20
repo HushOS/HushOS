@@ -1,0 +1,67 @@
+apps/web/src/content/legal/privacy.mdx
+  s_baeaf85a832ef5::t_a9632fc01c053a 112
+apps/web/src/lib/api.server.ts
+  s_baeaf85a832ef5::t_a9362616fbf448 650-657
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_baeaf85a832ef5::t_7da62afb8c0e4e 95-96
+bun.lock
+  s_baeaf85a832ef5::t_c7de6411824ccb 136
+compose.yaml
+  s_baeaf85a832ef5::t_931bda6f139653 163-176
+docs/groups-design.md
+  s_baeaf85a832ef5::t_ee7273c2485f61 335
+docs/self-hosting.md
+  s_baeaf85a832ef5::t_b972a337e09a2b 70,86,208,698-701,712-714
+packages/billing/package.json
+  s_baeaf85a832ef5::t_fca7504e605683 20
+packages/billing/src/groups.ts
+  s_baeaf85a832ef5::t_97ad65b0f4488f 302-305,367-375,500-653
+packages/billing/src/server.test.ts
+  s_baeaf85a832ef5::t_1af6e2be15064c 255-258,763-770,772,901-908,929,934-935,1023-1029,5102-5308
+packages/billing/src/server.ts
+  s_baeaf85a832ef5::t_f8a5889aa22e54 47,50,54,57,63
+packages/db/drizzle/20261020182001_dissolve_cancels/migration.sql
+  s_baeaf85a832ef5::t_55db8eaf3c0169 1-8
+packages/db/drizzle/20261020182001_dissolve_cancels/snapshot.json
+  s_baeaf85a832ef5::t_eabb28d6f658f6 1-13501
+packages/db/src/billing.ts
+  s_baeaf85a832ef5::t_22bb3b136812a3 589-593,595,601-604,610-645,648-675
+packages/db/src/groups.ts
+  s_baeaf85a832ef5::t_78c8b0b3f0863c 14,3470-3473
+packages/db/src/readiness.ts
+  s_baeaf85a832ef5::t_59c97e333c1439 14
+packages/db/src/schema/billing.ts
+  s_baeaf85a832ef5::t_3674c0e0d4c91b 205-212
+packages/emails/scripts/render.tsx
+  s_baeaf85a832ef5::t_b679b37914a210 2,165-191
+packages/emails/src/rendered/family-plan-ending.ts
+  s_baeaf85a832ef5::t_f627ae0581b4a1 1-5
+packages/emails/src/service.ts
+  s_baeaf85a832ef5::t_3f9ce409c00462 6,260-276
+packages/emails/src/templates/family-plan-ending.tsx
+  s_baeaf85a832ef5::t_711b3873e50062 1-259
+packages/groups/src/server.ts
+  s_baeaf85a832ef5::t_d5d367277aad2c 33,2082-2083
+packages/jobs/src/client.ts
+  s_baeaf85a832ef5::t_05d69ecf100f99 16,44,154-170
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_baeaf85a832ef5::t_30c97711400e2a 2,89-107
+packages/jobs/src/worker.ts
+  s_baeaf85a832ef5::t_3ed4247457a231 1-6,27-32,138-148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d92eb8733bcd4f66dfcdc56871b35cdd5b49427",
+  "prompts": {},
+  "sessions": {
+    "s_baeaf85a832ef5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a8531ac1efdda7a7c",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
