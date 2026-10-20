@@ -115,7 +115,10 @@ function escapeHtml(value: string) {
 function fillTemplate(template: string, values: Record<string, string>, html: boolean) {
     return template.replace(/\{\{(\w+)\}\}/g, (_token, name: string) => {
         const value = Object.hasOwn(values, name) ? values[name] : undefined;
-        if (value === undefined) throw new Error(`No value fills the email placeholder ${name}.`);
+        if (value === undefined)
+            throw Object.assign(new Error(`No value fills the email placeholder ${name}.`), {
+                name: 'EmailPlaceholderError',
+            });
         return html ? escapeHtml(value) : value;
     });
 }
