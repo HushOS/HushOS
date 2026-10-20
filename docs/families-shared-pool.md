@@ -1,6 +1,6 @@
 # Families: one storage pool for each member's own files and the family folders
 
-An addendum to `docs/groups-design.md` 3.5 (Storage and the payer), decided by the owner on 19 October 2026, the day families launched on the web with no subscribers. Where this and 3.5 disagree, this wins; 3.5 points here, and is rewritten to match when the docs step (section 11, step 7) lands.
+An addendum to `docs/groups-design.md` 3.5 (Storage and the payer), decided by the owner on 19 October 2026, the day families launched on the web with no subscribers. Where this and 3.5 disagree, this wins; 3.5 points here, and was rewritten to match by the docs step (section 11, step 7) on 20 October 2026.
 
 Families are switched off on hushos.com (`GROUPS_ENABLED=false`) from today until this ships. The last step of the plan (section 9) switches them back on.
 

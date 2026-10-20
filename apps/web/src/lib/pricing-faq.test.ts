@@ -48,6 +48,7 @@ describe('faqFor', () => {
             'What happens when I cancel?',
             'Can I switch between monthly and yearly?',
             'What is a family plan?',
+            'Can the family see my files?',
             'Can a family change plans?',
             'Who pays for a family plan?',
             'What happens if a member leaves or is removed?',
@@ -71,7 +72,7 @@ describe('faqFor', () => {
                 ({ q }) => q === 'What is a family plan?',
             )?.a;
         expect(answer('usd')).toBe(
-            'One plan with 4 members included. Each member after that is $1.50 a month, up to 20. It gives family folders that every member can open, end-to-end encrypted. Family Plus has 800 GB, Family Pro 2 TB and Family Max 4 TB; that storage is for family folders, and each member’s own files stay on their own plan, Free included. Family folders are on the web for now.',
+            'One plan with 4 members included. Each member after that is $1.50 a month, up to 20. It gives family folders that every member can open, end-to-end encrypted. Family Plus has 800 GB, Family Pro 2 TB and Family Max 4 TB, and that storage covers everyone’s own files and the family folders together. You can be in one family. Family folders are on the web for now.',
         );
         expect(answer('gbp')).toContain('Each member after that is £1.20 a month, up to 20.');
     });

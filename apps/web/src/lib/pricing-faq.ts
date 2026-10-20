@@ -63,28 +63,32 @@ export function faqFor(
     return [
         {
             q: paidPlans.q,
-            a: `On a personal plan, more storage. On a family plan, family folders with storage for its members to share. Every plan protects your files the same way: your password never leaves your device and your keys are made on it.`,
+            a: `On a personal plan, more storage. On a family plan, storage that covers everyone’s own files and the family folders. Every plan protects your files the same way: your password never leaves your device and your keys are made on it.`,
         },
         ...middle(twoMonths),
         {
             q: 'What is a family plan?',
-            a: `One plan with ${includedMembers} members included.${extra} It gives family folders that every member can open, end-to-end encrypted. ${poolsLine(family)}; that storage is for family folders, and each member’s own files stay on their own plan, Free included. Family folders are on the web for now.`,
+            a: `One plan with ${includedMembers} members included.${extra} It gives family folders that every member can open, end-to-end encrypted. ${poolsLine(family)}, and that storage covers everyone’s own files and the family folders together. You can be in one family. Family folders are on the web for now.`,
+        },
+        {
+            q: 'Can the family see my files?',
+            a: 'No. Nobody else in the family can open your own files unless you share them. The people who manage the family see how much space your files take, rounded up to the whole GB, never their names, how many there are or what is in them. Everyone in the family can open the family folders.',
         },
         {
             q: 'Can a family change plans?',
-            a: 'Yes. The member who pays moves the family to a bigger plan straight away, and pays the difference for the rest of the period. A smaller plan starts at the next renewal, once the family folders fit in it; nothing is refunded. Members and places stay as they are.',
+            a: 'Yes. The member who pays moves the family to a bigger plan straight away, and pays the difference for the rest of the period. A smaller plan starts at the next renewal, once everything the family stores fits in it; nothing is refunded. Members and places stay as they are.',
         },
         {
             q: 'Who pays for a family plan?',
-            a: 'The member who chooses the plan pays for it, through Polar, and is the one who changes the plan or adds and removes places. Every other member needs only a HushOS account, and Free is enough.',
+            a: 'The member who chooses the plan pays for it, through Polar, and is the one who changes the plan or adds and removes places. Every other member needs only a HushOS account. Anyone who already pays for a plan of their own stops paying for it once their files use the family’s storage, and the unused days are refunded.',
         },
         {
             q: 'What happens if a member leaves or is removed?',
-            a: 'They lose the family folders straight away, and their own files stay theirs. When a member is removed, the device of whoever removed them replaces the family folders’ keys at once. When a member leaves, the keys are replaced the next time someone who manages the family opens it. The member who pays for a live plan has to cancel it before they can leave.',
+            a: 'They lose the family folders straight away. Their own files stay theirs and go back to their own storage, Free unless they choose a plan. If the files take more than that, they can still open, download and delete everything, but can’t upload until they make room. Nothing is deleted. When a member is removed, the device of whoever removed them replaces the family folders’ keys at once. When a member leaves, the keys are replaced the next time someone who manages the family opens it. The member who pays for a live plan has to cancel it before they can leave.',
         },
         {
             q: 'What happens when a family plan is cancelled?',
-            a: 'The member who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for. After that, nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
+            a: 'The member who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for. After that, everyone’s own files go back to their own storage, as when someone leaves. Nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
         },
         selfHosting,
     ];

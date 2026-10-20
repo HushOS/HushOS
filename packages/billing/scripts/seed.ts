@@ -148,7 +148,8 @@ for (const tier of familyTiers) {
     for (const interval of ['month', 'year'] as const) {
         const name = `${tier.name} (${interval === 'month' ? 'monthly' : 'yearly'})`;
         familyNames.push(name);
-        const description = `${storage} of end-to-end encrypted storage for the whole family, ${familyIncluded} members included.`;
+        // One pool covers every member's own files and the family folders (docs/families-shared-pool.md).
+        const description = `${storage} of end-to-end encrypted storage for the whole family: everyone’s own files and the family folders, ${familyIncluded} members included.`;
         const metadata = {
             [PLAN_METADATA_KEY]: 'family',
             [GROUP_KIND_METADATA_KEY]: 'family',
