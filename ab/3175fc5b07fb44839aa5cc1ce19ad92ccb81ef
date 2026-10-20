@@ -1,0 +1,106 @@
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/migration.sql
+  s_c56e31c87cddde::t_371e22dd28b748 11-12
+  s_c56e31c87cddde::t_4699c5f7183ffd 1-10,13-15
+packages/db/src/schema/billing.ts
+  s_c56e31c87cddde::t_4fee473a1c10ca 89-92,97,123
+  s_baeaf85a832ef5::t_3674c0e0d4c91b 205-212
+packages/jobs/src/jobs/groups.ts
+  s_c56e31c87cddde::t_f671f3f43b7f81 7-10,13-16,24,28,30,33-34
+  s_c56e31c87cddde::t_0ca572ea2405db 1-6,17-23,25-27,29,31-32,35-45
+  s_c56e31c87cddde::t_34482fed06880a 11-12
+packages/jobs/src/worker.ts
+  s_c56e31c87cddde::t_da34287525361a 13,90-103
+  s_baeaf85a832ef5::t_3ed4247457a231 1-6,27-32,138-148
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_fbf68229c91720 3,1941-1943,3367-3368,3376-3380,3382-3400,3404-3412,3415-3416,3425-3432,3434-3436,3440-3460,3462,3464-3469,3474,3478,3482-3486,3488-3489,3496-3498
+  s_c56e31c87cddde::t_123a98971ebdb6 3359-3366,3369-3375,3381,3401-3403,3433,3437-3439,3463,3475-3477,3479-3481,3499-3500
+  s_c56e31c87cddde::t_8bf515aedf3345 45,50,1285-1295,3413-3414,3417-3424,3461,3487,3490-3495
+  s_baeaf85a832ef5::t_78c8b0b3f0863c 14,3470-3473
+packages/drive/src/jobs.dissolved.test.ts
+  s_c56e31c87cddde::t_c2c1c42196a991 1-11,13-15,21-64,70,73-74,78-83,85-88,90-98
+  s_c56e31c87cddde::t_6f5ed2dce6d9ca 12,16-20,65-69,71-72,75-77,84,89
+docs/self-hosting.md
+  s_c56e31c87cddde::t_96a2daeaf71427 693-694,696,704-707,709-711,715-719
+  s_c56e31c87cddde::t_c951c177418cf4 75-76,695,697,708
+  s_c56e31c87cddde::t_08049e8abd3457 207,702-703
+  s_baeaf85a832ef5::t_b972a337e09a2b 70,86,208,698-701,712-714
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/snapshot.json
+  s_c56e31c87cddde::t_f63a4cabf99a18 1-13462
+docs/groups-design.md
+  s_c56e31c87cddde::t_71af447f7da217 334
+  s_baeaf85a832ef5::t_ee7273c2485f61 335
+docs/groups-server.md
+  s_c56e31c87cddde::t_50f780feeb2fb6 96
+packages/db/src/groups.purge.test.ts
+  s_c56e31c87cddde::t_214111a77fc0a7 2,313-316,322-336,338,387,389-395,407,412,427-449,451,453-458,460,462,468-471,479-482,534,538-542,607,624,660-664,672-673,676,691-692,699,708,716,734,745,747,752,806
+  s_c56e31c87cddde::t_4ced89b80f0ef0 375-382
+  s_c56e31c87cddde::t_ae0707b7a57b97 749,763-803,805,807-809,811-812,885
+  s_c56e31c87cddde::t_98ff17763e4723 1,3,5-84,86-99,101-275,277-278,280-312,317-321,337,339-374,383-386,388,396-406,408-411,413-426,523-533,535-537,543-606,608-623,625-646,648-654,656-659,670-671,674-675,677-690,693-698,700-707,709-715,717-733,735-744,746,748,750-751,753-762
+  s_c56e31c87cddde::t_54146f99e2e906 4,85,100,276,279,450,452,459,461,463-467,472-478,483-522,647,655,665-669,804,810,813-884
+packages/jobs/src/client.ts
+  s_c56e31c87cddde::t_fd8fee3d2a8d1d 28,56,142-153
+  s_baeaf85a832ef5::t_05d69ecf100f99 16,44,154-170
+apps/web/src/content/legal/privacy.mdx
+  s_c56e31c87cddde::t_d96e2669f653c5 117
+  s_baeaf85a832ef5::t_a9632fc01c053a 112
+apps/web/src/lib/api.server.ts
+  s_baeaf85a832ef5::t_a9362616fbf448 658-665
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_baeaf85a832ef5::t_7da62afb8c0e4e 95-96
+bun.lock
+  s_baeaf85a832ef5::t_c7de6411824ccb 137
+compose.yaml
+  s_baeaf85a832ef5::t_931bda6f139653 163-176
+packages/billing/package.json
+  s_baeaf85a832ef5::t_fca7504e605683 20
+packages/billing/src/groups.ts
+  s_baeaf85a832ef5::t_97ad65b0f4488f 302-305,367-375,500-653
+packages/billing/src/server.test.ts
+  s_baeaf85a832ef5::t_1af6e2be15064c 255-258,763-770,772,901-908,929,934-935,1023-1029,5102-5308
+packages/billing/src/server.ts
+  s_baeaf85a832ef5::t_f8a5889aa22e54 47,50,54,57,63
+packages/db/drizzle/20261020182001_dissolve_cancels/migration.sql
+  s_baeaf85a832ef5::t_55db8eaf3c0169 1-8
+packages/db/drizzle/20261020182001_dissolve_cancels/snapshot.json
+  s_baeaf85a832ef5::t_eabb28d6f658f6 1-13501
+packages/db/src/billing.ts
+  s_baeaf85a832ef5::t_22bb3b136812a3 589-593,595,601-604,610-645,648-675
+packages/db/src/readiness.ts
+  s_baeaf85a832ef5::t_59c97e333c1439 14
+packages/emails/scripts/render.tsx
+  s_baeaf85a832ef5::t_b679b37914a210 2,187-213
+packages/emails/src/rendered/family-plan-ending.ts
+  s_baeaf85a832ef5::t_f627ae0581b4a1 1-5
+packages/emails/src/service.ts
+  s_baeaf85a832ef5::t_3f9ce409c00462 6,267-283
+packages/emails/src/templates/family-plan-ending.tsx
+  s_baeaf85a832ef5::t_711b3873e50062 1-259
+packages/groups/src/server.ts
+  s_baeaf85a832ef5::t_d5d367277aad2c 33,2082-2083
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_baeaf85a832ef5::t_30c97711400e2a 2,89-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab3175fc5b07fb44839aa5cc1ce19ad92ccb81ef",
+  "prompts": {},
+  "sessions": {
+    "s_baeaf85a832ef5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a8531ac1efdda7a7c",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
