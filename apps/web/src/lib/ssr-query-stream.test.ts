@@ -73,7 +73,37 @@ describe('the SSR query stream on the client', () => {
         expect(releases).not.toHaveBeenCalled();
     });
 
-    it('cancels a stream that failed without releasing its reader', async () => {
+    it('cancels the stream when a batch fails to hydrate while it is still open, without releasing the reader', async () => {
+        const { router, queryClient } = clientRouter();
+        const watched = watchReaders();
+        const { releases } = watched;
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        let push!: ReadableStreamDefaultController;
+        const cancelled = vi.fn();
+        const stream = new ReadableStream({
+            start: (controller) => void (push = controller),
+            cancel: cancelled,
+        });
+
+        await router.options.hydrate!({ query: { stream } });
+        push.enqueue(await batch('first', { n: 1 }));
+        // Not a list of queries: hydrating it throws, and the stream is still open behind it.
+        push.enqueue(42);
+        // The integration logs the failure, then cancels; wait for the log, not for a close that a
+        // missing cancel would never bring.
+        await vi.waitFor(() => expect(errors).toHaveBeenCalled());
+        await settle();
+
+        expect(queryClient.getQueryData(['first'])).toEqual({ n: 1 });
+        // The server's side is told to stop, with the error that stopped the reading.
+        expect(cancelled).toHaveBeenCalledTimes(1);
+        expect(cancelled.mock.calls[0]![0]).toBeInstanceOf(TypeError);
+        // Nothing more is read: a later batch would only be dropped.
+        expect(() => push.enqueue([])).toThrow(TypeError);
+        expect(releases).not.toHaveBeenCalled();
+    });
+
+    it('leaves a stream that errored on its own without releasing the reader', async () => {
         const { router } = clientRouter();
         const watched = watchReaders();
         const { releases } = watched;
