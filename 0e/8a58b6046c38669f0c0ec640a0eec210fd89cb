@@ -1,0 +1,33 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SharingRefreshTests.swift
+  s_566b8e0c4467a4::t_f348954668c36a 1-89
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SharingRefresh.swift
+  s_566b8e0c4467a4::t_d04b86bbe839d9 1-45
+apps/android/app/src/test/kotlin/com/hushos/app/ui/SharingRefreshTest.kt
+  s_566b8e0c4467a4::t_74f0e60edf6056 1-85
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharingRefresh.kt
+  s_566b8e0c4467a4::t_8245cdfafd08b3 1-34
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_9880b2294ca622 135-136,183-184,618-623,625-635,750-752,754,764,1383-1384,1416,1550-1551,1594
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_566b8e0c4467a4::t_366f59e1e52fa8 116-117
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_4f753be62a4b69 65-68,355-367,377,379,384,395,405-408,411,1197-1198,1231,1377,1391,1398,1443
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_d5546a551f064f 63-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0e8a58b6046c38669f0c0ec640a0eec210fd89cb",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
