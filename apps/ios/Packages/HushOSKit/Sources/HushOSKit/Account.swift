@@ -1,13 +1,58 @@
 import Foundation
 
+/*
+ * `/api/auth/storage`. While the account's own files draw from a family's pool
+ * (docs/families-shared-pool.md 3.1) the figures are the pool's, counted part by
+ * part in whole GiB so they give away no one member's usage (3.9), and `pool`
+ * names the family; on the account's own allowance, or on a server older than
+ * the pool or without billing, `pool` is null or absent.
+ */
 public struct StorageAllowance: Codable, Sendable {
     public let workspaceId: String
     public let quotaBytes: String
     public let usedBytes: String
     public let reservedBytes: String
     public let availableBytes: String
+    public let pool: StoragePool?
     public var quota: Int64 { Int64(quotaBytes) ?? 0 }
     public var used: Int64 { Int64(usedBytes) ?? 0 }
+    /*
+     * What an upload can still take, as the server checks it. Never quota less used: in a pool
+     * the server leaves other members' uploads in flight out of `usedBytes` (they would give
+     * away one member's activity) and takes them off `availableBytes` only.
+     */
+    public var free: Int64 { max(0, Int64(availableBytes) ?? 0) }
+
+    private enum CodingKeys: String, CodingKey { case workspaceId, quotaBytes, usedBytes, reservedBytes, availableBytes, pool }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceId = try container.decode(String.self, forKey: .workspaceId)
+        quotaBytes = try container.decode(String.self, forKey: .quotaBytes)
+        usedBytes = try container.decode(String.self, forKey: .usedBytes)
+        reservedBytes = try container.decode(String.self, forKey: .reservedBytes)
+        availableBytes = try container.decode(String.self, forKey: .availableBytes)
+        // A pool this build can't read is no pool: the figures still show, under today's words,
+        // rather than the whole allowance failing to decode and the card going blank.
+        pool = (try? container.decodeIfPresent(StoragePool.self, forKey: .pool)) ?? nil
+    }
+}
+
+/* The family whose pool the storage figures are. Both fields must be there and not empty. */
+public struct StoragePool: Codable, Sendable, Equatable {
+    public let groupId: String
+    public let name: String
+
+    private enum CodingKeys: String, CodingKey { case groupId, name }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        groupId = try container.decode(String.self, forKey: .groupId)
+        name = try container.decode(String.self, forKey: .name)
+        guard !groupId.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath, debugDescription: "A pool names its family."))
+        }
+    }
 }
 
 public struct BillingSubscription: Codable, Sendable {
@@ -22,6 +67,74 @@ public struct BillingSubscription: Codable, Sendable {
 public struct BillingSummary: Codable, Sendable {
     public let enabled: Bool
     public let subscription: BillingSubscription?
+    /* The family whose plan the storage comes from while pooled; absent on older servers. */
+    public let family: BillingFamily?
+
+    private enum CodingKeys: String, CodingKey { case enabled, subscription, family }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        subscription = try container.decodeIfPresent(BillingSubscription.self, forKey: .subscription)
+        family = (try? container.decodeIfPresent(BillingFamily.self, forKey: .family)) ?? nil
+    }
+}
+
+/* The family whose plan a pooled person's storage comes from: a name that isn't blank, as for a pool. */
+public struct BillingFamily: Codable, Sendable, Equatable {
+    public let name: String
+    public let planName: String?
+
+    private enum CodingKeys: String, CodingKey { case name, planName }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        planName = try container.decodeIfPresent(String.self, forKey: .planName)
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath, debugDescription: "A family has a name."))
+        }
+    }
+}
+
+/*
+ * What Account says about the plan (docs/families-shared-pool.md 9). Read only,
+ * as all billing on the phone is: no way to buy or change a plan here (App
+ * Review 3.1.3(f), and Google Play the same).
+ *
+ * While the storage figures are a family's pool, the plan is the family's: its
+ * name from `/api/billing`'s `family` ("Family plan" until that answers) and
+ * the line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal subscription is never shown then,
+ * since the person no longer draws from it (billing ends it, 5.1). Without a
+ * readable `pool` it is today's display: the personal plan, or Free.
+ */
+public struct PlanDisplay: Sendable {
+    /* The plan's name, the card's heading. */
+    public let name: String
+    /* "Shared with Lindqvist family" while pooled, else nil. */
+    public let source: String?
+    /* The family's name while pooled, for labels that would otherwise read as the person's own. */
+    public let family: String?
+    /* The personal plan whose renewal and status the card shows; nil while pooled. */
+    public let subscription: BillingSubscription?
+
+    public init(allowance: StorageAllowance?, billing: BillingSummary?) {
+        // The storage answer decides; the billing one only when storage didn't answer at all,
+        // so a failed read never puts back a personal plan the person no longer draws from.
+        let family = allowance.map { $0.pool?.name } ?? billing?.family?.name
+        if let family {
+            let planName = billing?.family?.planName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            name = planName.flatMap { $0.isEmpty ? nil : $0 } ?? "Family plan"
+            source = "Shared with \(family)"
+            self.family = family
+            subscription = nil
+        } else {
+            name = billing?.subscription?.productName ?? "Free"
+            source = nil
+            self.family = nil
+            subscription = billing?.subscription
+        }
+    }
 }
 
 /*

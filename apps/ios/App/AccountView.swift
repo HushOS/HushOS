@@ -9,7 +9,9 @@ import UIKit
  * recovery, Advanced for the rare and heavy things, and Sign out last, away from
  * Delete. The app sells nothing and never points to where plans are bought
  * (App Review 3.1.3(f)): it shows the plan's name and storage, and the ways to
- * make room are Empty Trash and Remove earlier versions.
+ * make room are Empty Trash and Remove earlier versions. A family member whose
+ * files draw from the family's pool sees the family's plan and the pool's
+ * figures (PlanDisplay, docs/families-shared-pool.md 9).
  */
 struct AccountView: View {
     @Environment(AppModel.self) private var model
@@ -144,24 +146,27 @@ struct AccountView: View {
         .padding(.vertical, Alpine.Space.s2)
     }
 
-    /* The plan at a glance: its name, how full, when it renews. The breakdown is one tap in. */
+    private var plan: PlanDisplay { PlanDisplay(allowance: allowance, billing: billing) }
+
+    /* The plan at a glance: its name, how full, when it renews or whose it is. The breakdown is one tap in. */
     private var planCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(billing?.subscription?.productName ?? "Free").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+                Text(plan.name).font(Theme.Text.headline).foregroundStyle(Alpine.ink)
                 Spacer()
                 if let allowance {
                     Text("\(formatSpace(allowance.used)) of \(formatQuota(allowance.quota))").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
                 }
             }
             StorageMeter(used: allowance?.used ?? 0, quota: allowance?.quota ?? 1, simple: true, height: 6)
-            Text(planLine).font(Theme.Text.footnote).foregroundStyle(billing?.subscription?.status == "past_due" ? Alpine.danger : Alpine.inkMuted)
+            Text(planLine).font(Theme.Text.footnote).foregroundStyle(plan.subscription?.status == "past_due" ? Alpine.danger : Alpine.inkMuted)
         }
         .padding(.vertical, Alpine.Space.s1)
     }
 
     private var planLine: String {
-        guard let subscription = billing?.subscription else { return "Trash and earlier versions count too" }
+        if let source = plan.source { return "\(source) · Trash and earlier versions count too" }
+        guard let subscription = plan.subscription else { return "Trash and earlier versions count too" }
         if subscription.status == "past_due" { return "Payment overdue" }
         let date = parseDate(subscription.currentPeriodEnd).map { $0.formatted(.dateTime.day().month(.abbreviated).locale(.dayMonth)) } ?? ""
         return "\(subscription.cancelAtPeriodEnd ? "Ends" : "Renews") \(date) · Trash and earlier versions count too"
@@ -277,6 +282,7 @@ struct PlansView: View {
     private var versions: Int64 { Int64(breakdown?.supersededBytes ?? "0") ?? 0 }
     private var trash: Int64 { Int64(breakdown?.trashBytes ?? "0") ?? 0 }
     private var used: Int64 { allowance?.used ?? 0 }
+    private var plan: PlanDisplay { PlanDisplay(allowance: allowance, billing: billing) }
 
     var body: some View {
         List {
@@ -288,13 +294,18 @@ struct PlansView: View {
                         Text("of \(formatQuota(allowance?.quota ?? 0)) used").font(.body).foregroundStyle(Alpine.inkMuted)
                     }
                     .padding(.horizontal, Alpine.Space.s1)
-                    StorageMeter(used: used, quota: allowance?.quota ?? 1, versions: versions, trash: trash).padding(.horizontal, Alpine.Space.s1)
+                    // In a pool the total is counted in whole GB, part by part, and is everyone's: one plain bar.
+                    StorageMeter(used: used, quota: allowance?.quota ?? 1, versions: versions, trash: trash, simple: plan.family != nil).padding(.horizontal, Alpine.Space.s1)
                 }
                 .textCase(nil)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: Alpine.Space.s2, trailing: 0))
             }
             Section {
-                line(Alpine.primary, "Files", nil, trailing: Text(formatSpace(max(0, used - versions - trash))))
+                // No Files row in a pool: the rest is everyone's (the family folders and each member's
+                // own files), and this person's exact bytes taken off a rounded total mean nothing.
+                if plan.family == nil {
+                    line(Alpine.primary, "Files", nil, trailing: Text(formatSpace(max(0, used - versions - trash))))
+                }
                 HStack {
                     swatch(Alpine.primary.opacity(0.45))
                     VStack(alignment: .leading, spacing: 2) {
@@ -316,10 +327,20 @@ struct PlansView: View {
                 }
                 .alpineRow()
             } footer: {
-                Text("Trash and earlier versions count until they’re removed. Trash empties itself after 30 days.")
+                if let family = plan.family {
+                    Text("Shared with \(family), counted in whole GB. Your trash and earlier versions count until they’re removed. Trash empties itself after 30 days.")
+                } else {
+                    Text("Trash and earlier versions count until they’re removed. Trash empties itself after 30 days.")
+                }
             }
             Section {
-                if let subscription = billing?.subscription {
+                if let source = plan.source {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(plan.name).font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+                        Text("\(source) · \(formatQuota(allowance?.quota ?? 0))").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                    }
+                    .alpineRow()
+                } else if let subscription = plan.subscription {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(subscription.productName).font(Theme.Text.headline).foregroundStyle(Alpine.ink)
                         Text(planDetail(subscription)).font(Theme.Text.footnote).foregroundStyle(subscription.status == "past_due" ? Alpine.danger : Alpine.inkMuted)
@@ -428,7 +449,8 @@ struct StorageFullSheet: View {
     }
 
     private var explanation: String {
-        let free = allowance.map { formatSpace(max(0, $0.quota - $0.used)) } ?? "little room"
+        // What the server checks uploads against (StorageAllowance.free), never quota less used.
+        let free = allowance.map { formatSpace($0.free) + ($0.pool == nil ? "" : " in the family’s storage") } ?? "little room"
         let needed = waiting.compactMap(\.size).reduce(0, +)
         let what = waiting.count == 1 ? "“\(waiting[0].name)”" : waiting.isEmpty ? "This upload" : "These \(waiting.count) files"
         let needs = needed > 0 ? " need\(waiting.count == 1 ? "s" : "") \(formatSpace(needed))," : " doesn’t fit, "
