@@ -119,7 +119,11 @@ export function ChangePasswordDialog({
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
-                    search: { securityChanged: result.uncertain ? 'uncertain' : 'password' },
+                    search: {
+                        securityChanged: result.uncertain ? 'uncertain' : 'password',
+                        // Signed out because this browser's device key could not be read: said there.
+                        storage: result.storage ?? undefined,
+                    },
                     replace: true,
                 });
                 return;
@@ -338,7 +342,10 @@ export function NewKeyDialog({
             if (!result.signedIn) {
                 await router.navigate({
                     to: '/login',
-                    search: { securityChanged: result.uncertain ? 'uncertain' : action },
+                    search: {
+                        securityChanged: result.uncertain ? 'uncertain' : action,
+                        storage: result.storage ?? undefined,
+                    },
                     replace: true,
                 });
                 return;

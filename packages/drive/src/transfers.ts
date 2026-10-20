@@ -663,6 +663,31 @@ export function createTransferManager(options: TransferManagerOptions) {
             },
         }));
     }
+    /*
+     * A landed part's etag, written in the background. Tried twice; a journal that still refuses
+     * it is left as it is. The row keeps the upload id, so a reload still resumes this upload
+     * (dropping it would leave the server's upload holding quota while a restart reserved the
+     * size again), and a part with no etag is simply sent again, checked against its journaled
+     * digest first. Never rejects: the part did land.
+     */
+    async function journalLanded(
+        u: Internal,
+        part: number,
+        landed: { etag: string; bytes: number },
+    ) {
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                await journalPart(u, part, landed);
+                return;
+            } catch (error) {
+                if (attempt === 2)
+                    console.warn(
+                        `The upload journal did not record part ${part}; it will be sent again if this upload resumes.`,
+                        error instanceof Error ? error.name : error,
+                    );
+            }
+        }
+    }
     /* Drops the begun row only: the upload is starting over and stays queued. */
     async function journalRemove(u: Internal) {
         if (!journal || !u.entry) return;
@@ -1224,7 +1249,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.parts.set(part, { etag: result.etag, bytes: result.bytes });
             u.completedBytes += result.bytes;
             set(u, { partsDone: u.parts.size, loaded: loadedOf(u) });
-            void journalPart(u, part, { etag: result.etag, bytes: result.bytes });
+            void journalLanded(u, part, { etag: result.etag, bytes: result.bytes });
             void schedule();
             return;
         }

@@ -1081,6 +1081,109 @@ describe('journal and restore', () => {
     });
 });
 
+/*
+ * A landed part's etag goes into the journal in the background. A write that fails must not
+ * become an unhandled rejection. It is tried once more; if the journal still refuses, the row
+ * stays as it is, upload id and all: a reload resumes the same upload and sends that part again,
+ * checked against its journaled digest, instead of leaving the server's upload open (holding
+ * quota and a pending node) while a fresh one reserves the size again.
+ */
+describe('a journal that refuses a landed part', () => {
+    /* A memory journal whose writes of an etag for `part` fail `times` times. */
+    function refusingJournal(part: number, times: number) {
+        const journal = createMemoryJournal();
+        const update = journal.update.bind(journal);
+        let refused = 0;
+        journal.update = async (id, patch) => {
+            const current = journal.entries.get(id);
+            if (
+                current &&
+                patch(current).parts[part]?.etag &&
+                !current.parts[part]?.etag &&
+                refused < times
+            ) {
+                refused++;
+                throw new DOMException('The transaction was aborted.', 'AbortError');
+            }
+            return update(id, patch);
+        };
+        return { journal, refused: () => refused };
+    }
+
+    test('is written on the second try, and the upload resumes after a reload as usual', async () => {
+        const { journal, refused } = refusingJournal(1, 1);
+        const first = harness({ journal });
+        const [id] = first.manager.enqueue([
+            { file: fakeFile(6 * CHUNK, 'movie.mp4'), parent: node('root', null) },
+        ]);
+        await settle(150);
+        await first.manager.pause(id!);
+        await settle(100);
+        expect(refused()).toBe(1);
+        const landed = first.item(id!).partsDone;
+        expect(landed).toBeGreaterThan(0);
+        const entry = journal.entries.get(id!)!;
+        expect(entry.parts[1]?.etag).toBeDefined();
+        expect(Object.values(entry.parts).filter((part) => part.etag)).toHaveLength(landed);
+
+        const second = harness({ journal });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        expect(second.item(id!).partsDone).toBe(landed);
+    });
+
+    test('refused twice, keeps the row: a reload resumes the same upload, sends that part again, and leaves nothing open', async () => {
+        const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const { journal, refused } = refusingJournal(1, 2);
+        const first = harness({ journal });
+        const [id] = first.manager.enqueue([
+            { file: fakeFile(6 * CHUNK, 'movie.mp4'), parent: node('root', null) },
+        ]);
+        await settle(150);
+        await first.manager.pause(id!);
+        await settle(100);
+        expect(refused()).toBe(2);
+        expect(warned).toHaveBeenCalledTimes(1);
+        const landed = first.item(id!).partsDone;
+        expect(landed).toBeGreaterThan(1);
+        // The row is kept with its upload id; only part 1's etag is missing from it.
+        const entry = journal.entries.get(id!)!;
+        expect(entry.uploadId).toBe('up-1');
+        expect(entry.parts[1]?.digest).toBeDefined();
+        expect(entry.parts[1]?.etag).toBeUndefined();
+
+        const second = harness({ journal });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        const result = await second.manager.attachFile(id!, fakeFile(6 * CHUNK, 'movie.mp4'));
+        expect(result).toEqual({ ok: true, resumed: true });
+        await settle(2_000);
+        expect(second.item(id!).status).toBe('done');
+        // The same upload, finished: part 1 sent again beside the ones that never landed, no
+        // second upload begun, nothing aborted, nothing left open on the server.
+        expect(second.calls).toContain('driveUploadReopen');
+        expect(second.calls).not.toContain('driveUploadPrepare');
+        expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(6 - landed + 1);
+        expect(second.server.completed).toEqual([{ id: 'up-1', parts: [1, 2, 3, 4, 5, 6] }]);
+        expect([...second.server.uploads.keys()]).toEqual(['up-1']);
+        expect(second.server.aborted).toEqual([]);
+        expect(journal.entries.size).toBe(0);
+    });
+
+    test('refused twice, the upload still finishes in this page', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const { journal } = refusingJournal(1, 2);
+        const h = harness({ journal });
+        const [id] = h.manager.enqueue([
+            { file: fakeFile(6 * CHUNK, 'movie.mp4'), parent: node('root', null) },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.server.completed.at(-1)?.parts).toEqual([1, 2, 3, 4, 5, 6]);
+        expect(journal.entries.size).toBe(0);
+    });
+});
+
 describe('a key change the server says nothing of (design 2.10, F14)', () => {
     test('the worker refusing the folder’s old key is waited out like a 409, and the upload lands under the new key', async () => {
         // The server serves the folder under its old key and refuses nothing; only the worker,

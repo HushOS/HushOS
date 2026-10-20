@@ -6,7 +6,14 @@ import {
 import { describe, expect, test } from 'vitest';
 import type { AuthApi } from './api';
 import type { CryptoTransport } from './crypto-transport';
-import type { DeviceIdentityStore, DeviceKeyStore, StoredDeviceIdentity } from './device-storage';
+import {
+    DeviceStorageBlocked,
+    DeviceStorageTimeout,
+    DeviceStorageUnavailable,
+    type DeviceIdentityStore,
+    type DeviceKeyStore,
+    type StoredDeviceIdentity,
+} from './device-storage';
 import type { SessionUser } from './protocol';
 
 /*
@@ -43,7 +50,7 @@ Object.defineProperty(globalThis, 'window', {
     },
 });
 
-const { createAuthClient } = await import('./client');
+const { createAuthClient, DeviceStorageUnreadable } = await import('./client');
 
 const user = { id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4', credentialVersion: 1 } as SessionUser;
 const bundle = {
@@ -237,6 +244,207 @@ describe('the device key at sign-in', () => {
         expect(stored()?.deviceId).toBe(deviceId);
         await auth.logout();
         expect(stored()).toBeNull();
+    });
+});
+
+/*
+ * A device store that is blocked (another tab holding it), slow (the open gave up) or could not
+ * be opened is not a store without a key. Signing in past it would register this browser as a
+ * new device, with a notice and an email about a sign-in that may have been this device all
+ * along. So the store is read before the sign-in begins, and a store that did not answer stops
+ * it with a reason and a choice; only "no key" signs in as a new device without asking.
+ */
+describe('a device store that does not answer at sign-in', () => {
+    const deviceId = '5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d';
+    const blocked = async () => {
+        throw new DeviceStorageBlocked();
+    };
+    const slow = async () => {
+        throw new DeviceStorageTimeout();
+    };
+    const unavailable = async () => {
+        throw new DeviceStorageUnavailable({
+            cause: new DOMException('Internal error opening backing store.', 'UnknownError'),
+        });
+    };
+
+    async function client(answers: (() => Promise<StoredDeviceIdentity | null>)[]) {
+        items.clear();
+        const key = await createDeviceSigningKey();
+        if (!key) throw new Error('This runtime has no Ed25519 in Web Crypto.');
+        const stored: StoredDeviceIdentity = {
+            userId: user.id,
+            emailHash: await emailDigest('maya@example.com'),
+            deviceId,
+            privateKey: key.privateKey,
+            publicKey: key.publicKey,
+        };
+        let reads = 0;
+        let cleared = 0;
+        const identities: DeviceIdentityStore = {
+            load: async () => {
+                const answer = answers[reads++] ?? (async () => stored);
+                return answer();
+            },
+            save: async () => {},
+            clear: async () => void cleared++,
+        };
+        const calls: string[] = [];
+        const finished: { device?: { id: string } }[] = [];
+        let registered = 0;
+        const signing = {
+            ...api,
+            loginStart: async () => {
+                calls.push('loginStart');
+                return { attemptToken: 'attempt' };
+            },
+            loginFinish: async (input: (typeof finished)[number]) => {
+                finished.push(input);
+                return {
+                    user: { ...user, email: 'maya@example.com' },
+                    envelope: { keyVersion: 1, credentialVersion: 1 },
+                    // A sign-in without a proof is a new device the server has not described yet.
+                    device: input.device
+                        ? { id: deviceId, attached: true, registered: true }
+                        : { id: 'new-device', attached: false, registered: false },
+                };
+            },
+            session: async () => ({
+                user: { ...user, email: 'maya@example.com' },
+                device: { id: 'new-device', registered: false },
+            }),
+            registerDevice: async () => {
+                registered++;
+                return { device: { id: 'new-device' } };
+            },
+            registerStart: async () => ({}),
+            registerFinish: async () => ({}),
+            recoverStart: async () => ({
+                userId: user.id,
+                attemptToken: 'recover',
+                credentialVersion: 1,
+            }),
+            recoverFinish: async () => ({}),
+            securityStart: async ({ action }: { action: string }) => ({
+                userId: user.id,
+                action,
+                attemptToken: 'security',
+            }),
+            securityFinish: async () => ({}),
+        } as unknown as AuthApi;
+        const auth = createAuthClient(() => transport, keyStore([]).store, signing, {
+            identities,
+            describeDevice: () => ({ kind: 'web', name: 'Test browser' }),
+        });
+        return {
+            auth,
+            calls,
+            finished,
+            reads: () => reads,
+            registered: () => registered,
+            cleared: () => cleared,
+        };
+    }
+    async function refused(promise: Promise<unknown>) {
+        const error = await promise.then(
+            () => {
+                throw new Error('expected the sign-in to stop');
+            },
+            (caught: unknown) => caught,
+        );
+        expect(error).toBeInstanceOf(DeviceStorageUnreadable);
+        return error as InstanceType<typeof DeviceStorageUnreadable>;
+    }
+
+    test.each([
+        ['blocked', blocked, true],
+        ['timeout', slow, false],
+    ] as const)(
+        'read again once when %s, then stops before the password is checked',
+        async (reason, fail, blamesTabs) => {
+            const { auth, calls, finished, reads, registered } = await client([fail, fail]);
+            const error = await refused(auth.login('maya@example.com', 'correct horse'));
+            expect(error.reason).toBe(reason);
+            expect(error.message.includes('other HushOS tabs')).toBe(blamesTabs);
+            expect(error.message).toContain('sign in as a new device');
+            expect(reads()).toBe(2);
+            // Read before the sign-in began: no password check, no attempt spent, no session.
+            expect(calls).toEqual([]);
+            expect(finished).toEqual([]);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(registered()).toBe(0);
+            expect(auth.store.getState().unlockedUserId).toBeNull();
+        },
+    );
+
+    test('a store that could not be opened is not read again and does not blame other tabs', async () => {
+        const { auth, calls, reads } = await client([unavailable, unavailable]);
+        const error = await refused(auth.login('maya@example.com', 'correct horse'));
+        expect(error.reason).toBe('unavailable');
+        expect(error.message).not.toContain('tabs');
+        expect(reads()).toBe(1);
+        expect(calls).toEqual([]);
+    });
+
+    test('signs in as this device when the store answers the second time', async () => {
+        const { auth, finished, reads, registered } = await client([blocked]);
+        await auth.login('maya@example.com', 'correct horse');
+        expect(reads()).toBe(2);
+        expect(finished).toHaveLength(1);
+        expect(finished[0]!.device?.id).toBe(deviceId);
+        expect(registered()).toBe(0);
+    });
+
+    test('signs in as a new device, without asking, when the store answers it holds no key', async () => {
+        const { auth, finished, registered } = await client([async () => null]);
+        await auth.login('maya@example.com', 'correct horse');
+        expect(finished).toHaveLength(1);
+        expect(finished[0]!.device).toBeUndefined();
+        await expect.poll(registered).toBe(1);
+    });
+
+    test('signs in as a new device when the person chooses it, without reading the store', async () => {
+        const { auth, finished, reads, registered } = await client([unavailable]);
+        await auth.login('maya@example.com', 'correct horse', { asNewDevice: true });
+        expect(reads()).toBe(0);
+        expect(finished[0]!.device).toBeUndefined();
+        await expect.poll(registered).toBe(1);
+    });
+
+    test('a new account signs in without reading the store', async () => {
+        const { auth, reads, finished } = await client([unavailable]);
+        await auth.register('maya@example.com', 'Maya', 'correct horse');
+        expect(reads()).toBe(0);
+        expect(finished).toHaveLength(1);
+    });
+
+    test('a reset with the recovery phrase says why it did not sign in here', async () => {
+        const { auth, calls } = await client([unavailable]);
+        const error = await auth.recover('maya@example.com', 'new horse', 'words').then(
+            () => null,
+            (caught: unknown) => caught as Error,
+        );
+        expect(error?.message).toBe(
+            'Your password was changed, but this browser’s storage for HushOS can’t be read, so you weren’t signed in here. Sign in with your new password.',
+        );
+        expect(calls).toEqual([]);
+    });
+
+    test('a password change that cannot sign in here leaves the person signed out with the reason, the device key kept', async () => {
+        const { auth, calls, cleared } = await client([blocked, blocked]);
+        const result = await auth.changeSecurity(
+            { ...user, email: 'maya@example.com' } as SessionUser,
+            'password',
+            'correct horse',
+            'new horse',
+        );
+        expect(result).toEqual({ signedIn: false, uncertain: false, storage: 'blocked' });
+        expect(calls).toEqual([]);
+        const state = auth.store.getState();
+        expect(state.unlockedUserId).toBeNull();
+        expect(state.device).toBeNull();
+        // The device's own key stays: the next sign-in here can still prove this device.
+        expect(cleared()).toBe(0);
     });
 });
 

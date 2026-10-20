@@ -124,6 +124,7 @@
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",
+        "fake-indexeddb": "6.2.5",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
       },
