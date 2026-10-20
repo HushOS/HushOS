@@ -1,0 +1,47 @@
+DESIGN.md
+  s_c56e31c87cddde::t_f7306339484a98 476,501-503,506
+apps/web/src/components/storage-card.tsx
+  s_c56e31c87cddde::t_b7bf4f808b5775 203
+apps/web/src/content/legal/privacy.mdx
+  s_c56e31c87cddde::t_bddcc120188b46 3,66,88-94,98,111,115
+apps/web/src/lib/plans.test.ts
+  s_c56e31c87cddde::t_d3f4343011cb3f 263
+apps/web/src/lib/plans.ts
+  s_c56e31c87cddde::t_6899ca32fce62f 223-226,228,232-233,239
+apps/web/src/lib/pricing-faq.test.ts
+  s_c56e31c87cddde::t_3102e4bb725088 51,75
+apps/web/src/lib/pricing-faq.ts
+  s_c56e31c87cddde::t_2bddcadfcf4b6b 66,71-75,79,83,87,91
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_c56e31c87cddde::t_233ce12fd47914 36,621
+apps/web/src/routes/pricing/route.tsx
+  s_c56e31c87cddde::t_a641641873a5f9 733,737
+apps/web/src/routes/support/route.tsx
+  s_c56e31c87cddde::t_c026ed36fb518b 139
+docs/families-shared-pool.md
+  s_c56e31c87cddde::t_1e7c7520a974fb 3
+docs/groups-design.md
+  s_c56e31c87cddde::t_3e3ff4e0760c12 333,349-359,362,554-557,576,582
+docs/release/privacy-answers.md
+  s_c56e31c87cddde::t_a2ca5c396b4d26 16
+docs/self-hosting.md
+  s_c56e31c87cddde::t_f1562917177472 568,661
+packages/billing/scripts/seed.ts
+  s_c56e31c87cddde::t_5d9641ebb02361 151-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1ea733b573e17711e3fd1b7c6019d4cff8955adb",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
