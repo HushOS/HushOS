@@ -1,0 +1,37 @@
+apps/web/src/components/account-dialogs.tsx
+  s_c56e31c87cddde::t_923f53ae4521cc 122-126,345-348
+apps/web/src/components/unlock-device.tsx
+  s_c56e31c87cddde::t_c7b430d923782c 2-3,32-34,42-43,45,53,102-115,117
+apps/web/src/routes/login/route.tsx
+  s_c56e31c87cddde::t_207078baf4d5cd 9-10,24-25,34-38,41,86,89-91,109-110,112,136,145-153,235,238-254
+packages/auth/src/client.test.ts
+  s_c56e31c87cddde::t_52ec15665cce51 10,12,53,251-255,259-269,283,290,292,297-300,320-333,339-356,360-369,371-372,380-388,390,398,405-448
+packages/auth/src/client.ts
+  s_c56e31c87cddde::t_2d90a90a960bb6 23,47-49,51-56,58-84,227-231,247-253,256-264,267-275,396,398,402,714-720,770,772-774,780-786,808-809,817-818
+packages/auth/src/device-storage.test.ts
+  s_c56e31c87cddde::t_604596d8b0573e 18,20,89-104,108-110,112-127,129,132-149,155-190,193-202
+packages/auth/src/device-storage.ts
+  s_c56e31c87cddde::t_1c6aef34a03612 16-18,26-43,70-73,78,81-82,87,95-98,109-113,116
+packages/drive/src/connection.ts
+  s_c56e31c87cddde::t_28cec830c4d4bc 7-8,22,30
+packages/drive/src/transfers.test.ts
+  s_c56e31c87cddde::t_1ae1b7be76b168 1086-1089,1135-1136,1146-1153,1157,1159,1162-1170,1174
+packages/drive/src/transfers.ts
+  s_c56e31c87cddde::t_8c6e78ec94c3af 657,667-671,682-687
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "46d4b53924afff8d4a9f09bab0160438b3265475",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
