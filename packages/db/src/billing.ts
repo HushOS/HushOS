@@ -586,16 +586,23 @@ export async function releaseReissueRetry(subscriptionId: string) {
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
+/* How long setting a dissolved family's plan to end may keep failing before operators see it. */
+export const DISSOLVE_FAILING_LISTED_HOURS = 24;
+
 /*
  * Live family plans HushOS gave up on, the operators' list: a scheduled change Polar
  * won't keep or can't be moved back (`reissueStuckReason`), or a dissolved family's plan
- * Polar refused to set to end (`dissolved-refused`), which an operator cancels. That one
- * goes from the list once the plan is set to end, whoever set it (the operator in Polar,
- * or its payer), as soon as the mirror shows it.
+ * Polar refused to set to end (`dissolved-refused`), or that HushOS has failed to set to
+ * end for over a day (`dissolved-failing`: a token error, Polar down), which an operator
+ * cancels. Those go from the list once the plan is set to end, whoever set it (the
+ * operator in Polar, or its payer), as soon as the mirror shows it.
  */
 export async function listGivenUpReissues() {
     const refused = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is not null and not ${groupBillingSubscriptions.cancelAtPeriodEnd})`;
-    const since = sql`coalesce(case when ${refused} then ${groupBillingSubscriptions.dissolveRefusedAt} end, ${groupBillingSubscriptions.reissueGaveUpAt})`;
+    // Not filtered on `cancel_at_period_end`: a run fails before it can read Polar (a revoked
+    // token), so the mirror's may be stale. It clears once a reconcile sees the plan ending.
+    const failing = sql`(${groupBillingSubscriptions.dissolveFailingSince} < now() - make_interval(hours => ${DISSOLVE_FAILING_LISTED_HOURS}) and ${groupBillingSubscriptions.dissolveRefusedAt} is null)`;
+    const since = sql`coalesce(case when ${refused} then ${groupBillingSubscriptions.dissolveRefusedAt} when ${failing} then ${groupBillingSubscriptions.dissolveFailingSince} end, ${groupBillingSubscriptions.reissueGaveUpAt})`;
     return db
         .select({
             groupId: groupBillingSubscriptions.groupId,
@@ -603,14 +610,14 @@ export async function listGivenUpReissues() {
             wanted: groupBillingSubscriptions.reissuedState,
             reason: sql<
                 string | null
-            >`case when ${refused} then 'dissolved-refused' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            >`case when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
             since: since.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${refused})`,
+                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${refused} or ${failing})`,
             ),
         )
         .orderBy(desc(since));
@@ -701,6 +708,7 @@ export async function recordDissolveCancel(subscriptionId: string) {
         .update(groupBillingSubscriptions)
         .set({
             dissolveCancels: sql`${groupBillingSubscriptions.dissolveCancels} + 1`,
+            dissolveFailingSince: null,
             dissolveRefusedAt: null,
             dissolveRefusal: null,
             dissolveRefusedState: null,
@@ -721,9 +729,32 @@ export async function recordDissolveRefusal(
             dissolveRefusedAt: new Date(),
             dissolveRefusal: refusal,
             dissolveRefusedState: state,
+            dissolveFailingSince: null,
             updatedAt: new Date(),
         })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/*
+ * A run of the job for a dissolved family failed in a way pg-boss retries: its plans that
+ * can still charge and weren't refused are failing, since the first such run (kept by later
+ * ones). Whatever the mirror says of their ending, since a run that fails may not have read
+ * Polar. Cleared once a plan is set to end, seen ending by a reconcile, or refused.
+ */
+export async function recordDissolveFailing(groupId: string) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            dissolveFailingSince: sql`coalesce(${groupBillingSubscriptions.dissolveFailingSince}, now())`,
+        })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                canStillCharge,
+                isNull(groupBillingSubscriptions.dissolveRefusedAt),
+                sql`exists (select 1 from ${groups} where ${groups.id} = ${groupBillingSubscriptions.groupId} and ${groups.dissolvedAt} is not null)`,
+            ),
+        );
 }
 
 /*
@@ -876,6 +907,10 @@ export async function applyGroupState(input: {
                             : {}),
                         ...(subscription.tierMismatchSince !== undefined
                             ? { tierMismatchSince: subscription.tierMismatchSince }
+                            : {}),
+                        // Seen ending: a dissolved family's plan is no longer failing to be set so.
+                        ...(subscription.cancelAtPeriodEnd || subscription.endedAt
+                            ? { dissolveFailingSince: null }
                             : {}),
                         updatedAt: now,
                     },

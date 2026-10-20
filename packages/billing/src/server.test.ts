@@ -263,6 +263,8 @@ const polar = {
     cancelRefusal: null as null | { status: number; error: string },
     /* The next set-to-end is kept at Polar but its answer is lost (a timeout). */
     cancelAnswerLost: false,
+    /* Every customer-state and subscription call is refused with a 401 (a revoked token). */
+    unauthorized: false,
     /* The next product change's order is made but not listed yet. */
     ordersLag: false,
     /* Each family subscription's checkout order (kept apart so tests can index `orders`). */
@@ -424,6 +426,7 @@ const fakeClient = {
     customers: {
         async getStateExternal(externalId: string) {
             polar.calls.push(`customers.getStateExternal:${externalId}`);
+            if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
             const customer = polar.customers.get(externalId);
             if (!customer) throw notFound();
             return {
@@ -639,6 +642,7 @@ const fakeClient = {
     subscriptions: {
         async get(id: string) {
             polar.calls.push(`subscriptions.get:${id}`);
+            if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
             const subscription = polar.subscriptions.get(id);
             if (!subscription) throw notFound();
             // A copy, as an API answer is: later changes at Polar don't reach it.
@@ -656,6 +660,7 @@ const fakeClient = {
          */
         async update(id: string, body: Record<string, unknown>) {
             polar.calls.push(`subscriptions.update:${id}:${JSON.stringify(body)}`);
+            if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
             const subscription = polar.subscriptions.get(id);
             if (!subscription) throw notFound();
             if ('pending_update' in body && body.pending_update === null) {
@@ -1046,6 +1051,7 @@ beforeEach(async () => {
     polar.beforeCancel = null;
     polar.cancelRefusal = null;
     polar.cancelAnswerLost = false;
+    polar.unauthorized = false;
     planEndingMail.length = 0;
     mailer.failures = 0;
     cancelJobs.length = 0;
@@ -5300,6 +5306,47 @@ describe('a dissolved family’s plan', () => {
         expect(planEndingMail).toEqual([
             { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
         ]);
+    });
+
+    test('a failure Polar keeps repeating (a revoked token) lists the plan for operators after a day, not before, until it is set to end', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        polar.unauthorized = true;
+        const listed = async () =>
+            (await billingRepository.listGivenUpReissues()).map((row) => [
+                row.subscriptionId,
+                row.reason,
+            ]);
+        // Time passes between runs (pg-boss's backoff, then the daily reconcile's re-queue).
+        const later = (hours: number) =>
+            rawSql(
+                `update group_billing_subscriptions set dissolve_failing_since = dissolve_failing_since - interval '${hours} hours' where id = '${subscription.id}'`,
+            );
+        const run = () =>
+            expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeInstanceOf(
+                billing.BillingError,
+            );
+        await run();
+        expect((await row(subscription.id)).dissolveFailingSince).not.toBeNull();
+        expect(await listed()).toEqual([]);
+        await later(23);
+        await run();
+        expect(await listed()).toEqual([]);
+        // A day after the first failure, though later runs failed too: listed, from the first.
+        await later(2);
+        await run();
+        expect(await listed()).toEqual([[subscription.id, 'dissolved-failing']]);
+        const since = (await billingRepository.listGivenUpReissues())[0]!.since!;
+        expect(Date.now() - since.getTime()).toBeGreaterThan(25 * 60 * 60 * 1000 - 60_000);
+        await later(23);
+        await run();
+        expect(await listed()).toEqual([[subscription.id, 'dissolved-failing']]);
+        // The token is fixed and an operator cancels it in Polar: its delivery clears the row.
+        polar.unauthorized = false;
+        subscription.cancel_at_period_end = true;
+        expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
+        expect(await listed()).toEqual([]);
+        expect((await row(subscription.id)).dissolveFailingSince).toBeNull();
+        expect(setToEnd()).toEqual([]);
     });
 
     test('a refused plan leaves the operators’ list once it is set to end in Polar', async () => {

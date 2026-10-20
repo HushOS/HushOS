@@ -584,7 +584,10 @@ const endingOrEnded = (subscription: models.Subscription) =>
  * until Polar shows it in another state. 403 `AlreadyCanceledSubscription` is a plan set
  * to end since the read, read again to be sure. Everything else throws, for pg-boss to
  * retry with backoff: 409 `SubscriptionLocked` (a pending update, as Polar holds one
- * during a renewal), 402, 422, 401, 429, a 5xx, a timeout, a held claim.
+ * during a renewal), 402, 422, a token error (401, or a 403 of another name), 429, a 5xx,
+ * a timeout, a held claim. Such a failure is recorded (`dissolve_failing_since`, from the
+ * first), so one Polar keeps repeating lists the plan for operators after a day
+ * (`dissolved-failing`) instead of being retried unseen while the plan renews.
  *
  * The payer is emailed once per plan per period (`dissolve_mailed_period_end`), last, from
  * the mirror: for every plan set to end this period that HushOS asked to end this period
@@ -597,6 +600,18 @@ export async function cancelDissolvedPlan(groupId: string) {
     const outcome = { cancelled: 0, refused: 0 };
     if (!billingEnabled() || !UUID.test(groupId)) return outcome;
     if ((await billingRepository.listDissolvedChargeable(groupId)).length === 0) return outcome;
+    try {
+        return await setDissolvedToEnd(groupId, outcome);
+    } catch (error) {
+        // Retried by pg-boss, but recorded: a failure Polar keeps repeating (a token without
+        // write access, a revoked one) is listed for operators after a day, not retried unseen.
+        if (!(error instanceof DissolveCancelBusyError))
+            await billingRepository.recordDissolveFailing(groupId).catch(() => {});
+        throw error;
+    }
+}
+
+async function setDissolvedToEnd(groupId: string, outcome: { cancelled: number; refused: number }) {
     await reconcileGroup(groupId, { fromDissolveCancel: true });
     let asked = false;
     for (const row of await billingRepository.listDissolvedChargeable(groupId)) {

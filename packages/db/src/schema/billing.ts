@@ -217,6 +217,13 @@ export const groupBillingSubscriptions = pgTable(
          * not set to end; not tried again until the state differs.
          */
         dissolveRefusedAt: timestamp('dissolve_refused_at', { withTimezone: true }),
+        /*
+         * When setting it to end first failed in a way pg-boss retries (a token error, a
+         * 409, a 5xx, Polar unreachable), since the last time it was set to end, seen ending
+         * by a reconcile, or refused. A failure Polar keeps repeating would otherwise be retried for ever and
+         * never listed: past a day the plan is listed for operators (`dissolved-failing`).
+         */
+        dissolveFailingSince: timestamp('dissolve_failing_since', { withTimezone: true }),
         dissolveRefusal: text('dissolve_refusal'),
         dissolveRefusedState: text('dissolve_refused_state'),
         /*
