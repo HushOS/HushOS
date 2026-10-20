@@ -298,7 +298,7 @@ describe('deleting a selection forever', () => {
         expect(await workspaceSeq()).toBe(start + 3);
     });
 
-    test('takes at most 200 items, each named once; 200 files go within the lock’s limit, over as many requests as that takes', async () => {
+    test('takes at most 200 items, each named once; 200 files split by the lock’s budget, the rest sent again until all are gone', async () => {
         const many: Awaited<ReturnType<typeof file>>[] = [];
         for (let i = 0; i < 200; i++) many.push(await file(root));
         const ids = many.map((entry) => entry.id);
@@ -311,28 +311,48 @@ describe('deleting a selection forever', () => {
         await expect(purgeAll([ids[0]!, ids[1]!, ids[0]!])).rejects.toThrow(RangeError);
         await expect(purgeAll([])).rejects.toThrow(RangeError);
         expect(await purgedCount()).toBe(0);
-        // As the web sends them: what a request had no time for, again, while that gets further.
+        const before = await used();
+        const isBusy = (outcome: drive.PurgeOutcome) =>
+            outcome.status === 'refused' && outcome.reason === 'busy';
+        // A budget no database purges 200 files in: the split is certain, not the machine's luck.
+        const first = await drive.purgeNodes({
+            workspaceId: owner.workspaceId,
+            nodeIds: ids,
+            writer: owner.userId,
+            budgetMs: 50,
+        });
+        const purged = first.filter((outcome) => outcome.status === 'purged').length;
+        expect(purged).toBeGreaterThan(0);
+        expect(purged).toBeLessThan(200);
+        // In the order given: what went is the front, every one after it waits.
+        expect(first.map((outcome) => outcome.status)).toEqual([
+            ...Array<string>(purged).fill('purged'),
+            ...Array<string>(200 - purged).fill('refused'),
+        ]);
+        expect(first.slice(purged).every(isBusy)).toBe(true);
+        // What it purged stays purged: committed, its bytes freed, nothing of the rest touched.
+        expect(await purgedCount()).toBe(purged);
+        expect(await used()).toBe(before - BigInt(purged) * many[0]!.ciphertext);
+        expect((await inOutbox(many.map((entry) => entry.objectId))).size).toBe(purged);
+        // As the web sends them, with the real budget: the busy ones again, while that gets further.
         const took: number[] = [];
-        for (let left = ids; left.length;) {
+        let left = first.filter(isBusy).map((outcome) => outcome.id);
+        while (left.length) {
             const started = performance.now();
             const outcomes = await purgeAll(left);
             took.push(performance.now() - started);
             expect(
+                outcomes.every((outcome) => outcome.status === 'purged' || isBusy(outcome)),
+            ).toBe(true);
+            expect(
                 outcomes.filter((outcome) => outcome.status === 'purged').length,
             ).toBeGreaterThan(0);
-            left = outcomes.flatMap((outcome) =>
-                outcome.status === 'refused' && outcome.reason === 'busy' ? [outcome.id] : [],
-            );
-            expect(
-                outcomes.every(
-                    (outcome) =>
-                        outcome.status === 'purged' ||
-                        (outcome.status === 'refused' && outcome.reason === 'busy'),
-                ),
-            ).toBe(true);
+            left = outcomes.filter(isBusy).map((outcome) => outcome.id);
         }
         expect(await purgedCount()).toBe(200);
         expect((await inOutbox(many.map((entry) => entry.objectId))).size).toBe(200);
+        expect(await used()).toBe(before - 200n * many[0]!.ciphertext);
+        // The budget keeps each request inside the lock's limit, so none rolls back.
         for (const ms of took) expect(ms).toBeLessThan(drive.BATCH_HOLD_MS);
     }, 120_000);
 

@@ -3185,6 +3185,8 @@ export async function purgeNodes(input: {
     return inBatch(async (tx, holding) => {
         const firstSeq = await nextChangeSeq(tx, workspaceId, writer);
         const inTime = holding();
+        // The budget counts from the lock, so the walks below spend it too.
+        const since = performance.now();
         const checked: { id: string; chain: Walk | null; refusal: PurgeRefusal | null }[] = [];
         for (const id of nodeIds) {
             const chain = await walk(tx, id);
@@ -3203,7 +3205,6 @@ export async function purgeNodes(input: {
                 else going.push(id);
             }
         }
-        const since = performance.now();
         const left = new Set<string>();
         for (const [index, id] of going.entries()) {
             // Past the budget, with at least one done: the rest wait for the next request.
