@@ -45,7 +45,11 @@ does not receive any data from instances it does not run.
         ],
         [
             'Billing',
-            'If you buy a plan: your Polar customer ID, subscription ID, plan, status, and renewal date; a record of each billing notification received',
+            'If you buy a plan: your Polar customer ID, subscription ID, plan, status, and renewal date; a record of each billing notification received. For a family plan: the family’s Polar customer ID, who pays, its subscription, the places paid for and the family’s storage. If a plan of your own was ended because you joined a family: which family, when you were let in, when the plan ended, and each refund with its amount and state',
+        ],
+        [
+            'Families',
+            'If you are in a family or were invited to one: the family’s name; your membership, roles, and when you accepted, were let in or left; who invited and let in whom; the email address an invitation went to; the family’s signed member lists, which name every member’s account ID, public keys and roles, people who have left included, and who signed each one; the family’s keys and its folders’ keys, sealed so that only members’ devices can open them; how many family folders there are and their sizes, padded as your own files are; and, while someone who manages the family is removing you, a hold on your changes in its folders',
         ],
         [
             'Sign-up choices',
@@ -83,11 +87,11 @@ Verification and recovery emails are sent through the email provider the Operato
 
 If the Operator offers paid plans, purchases are made through Polar Software, Inc. (“Polar”), which sells the plan as merchant of record and is responsible for the payment itself. Polar collects what it needs to take payment and issue invoices: your name, email address, billing address, tax ID where you give one, and your payment method. Your card details go to Polar and its payment processor and never reach the Service. Polar processes this data under its own [privacy policy](https://polar.sh/legal/privacy), in the United States.
 
-The Service sends Polar only your account ID, name, and email address, so that a purchase can be matched to your account. It never sends file names, content, or any encryption key. Polar sends the Service notifications about your subscription, which the Service uses to set your storage allowance. Your invoices and payment method are managed in Polar’s customer portal, reached from Billing.
+The Service sends Polar your account ID, name, and email address, so that a purchase can be matched to your account; at checkout, your network address, which Polar uses to work out tax; which discount applies, if you signed up with a creator’s code; and, if you cancel a plan and give one, your reason and comment. For a family plan, the Service makes a separate Polar customer, named “HushOS family” and identified by the family’s ID, whose owner is the member who pays: that member’s account ID, name, and email address go to Polar, with the number of places paid for. Polar is not told the family’s name or who else is in it. If a plan of your own is ended because you joined a family, each refund carries a note saying so (“Moved to a HushOS family plan”, or, on an earlier payment, that it returns credit from a plan ended when its owner joined a family) and a reference made of your account ID, the family’s ID, when you were let in, and the order’s ID. The Service never sends file names, content, or any encryption key. Polar sends the Service notifications about your subscription, which the Service uses to set your storage allowance. Your invoices and payment method are managed in Polar’s customer portal, reached from Billing.
 
 ## 7. Families
 
-If the Operator offers families, the Service stores each family’s name, who is in it and what each person can do, who invited and let in whom, and the email addresses invitations were sent to. It cannot open the family folders.
+If the Operator offers families, the Service stores what section 2 lists under Families. It cannot open the family folders. A family’s member lists are signed history: every member’s device checks the family against all of them, so the entries of people who have left stay on them.
 
 Where the Operator sells family plans, a family’s storage covers everyone’s own files and the family folders. The people who manage a family you are in see how much space your own files take, rounded up to the whole gigabyte. They never see your files’ names, how many there are, or what is in them. Everyone in the family sees how much the family stores in all, counted the same way, so nobody sees exactly how much another person stores.
 
@@ -104,9 +108,13 @@ Anyone who can see an item through a share or a link can report it. When they do
 - Files you delete go to the trash and are purged after 30 days, or at once if you delete them forever; a replaced version is kept for 30 days. Encrypted bytes named by an open report are kept until it is closed.
 - Stopped shares and links are removed at once; link use counts go with them.
 - Report records are kept while the report is open or on hold, and after that for as long as the Operator's obligations require; evidence copies follow the retention set on the evidence store.
-- Billing records are kept while you have an account. Polar keeps invoices and payment records for as long as tax and accounting law requires.
+- A family invitation’s email address is forgotten 30 days after the invitation stops being open (accepted, cancelled, or expired).
+- A family’s signed member lists and key changes are kept for as long as the family’s records are. Nothing deletes them today, including after a family is dissolved, because they are the history every member’s device checks the family against.
+- Billing records are kept while you have an account, except the record of a plan ended because you joined a family and its refunds, which are kept after your account is deleted so that a refund still owed can be finished. Polar keeps invoices and payment records for as long as tax and accounting law requires.
 
 Deleting your account from Account settings cancels any paid plan, asks Polar to delete your customer record, and removes your profile, workspace, storage and billing records, key bundles, and sessions immediately. Backups taken before deletion are overwritten on the Operator’s normal backup rotation.
+
+If you are in a family, deleting your account takes you out of it, and some records keep your account ID afterwards, without your name or email address, because the family’s trust depends on them: the signed member lists and key changes that name you or that you signed, with your public keys and roles; the family’s keys and folder keys you sealed for other members; the record that you have gone, until someone who manages the family marks you as left; and, if you created the family, its creator’s ID. Files you added to the family folders stay with the family, and where a key change has re-sealed one, the record of who first wrote it keeps your account ID. If you pay for a family’s live plan, you must cancel it before deleting your account. The family’s customer at Polar, which names whoever paid as its owner, is not deleted with your account.
 
 ## 10. Your rights
 

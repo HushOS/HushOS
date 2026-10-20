@@ -72,11 +72,11 @@ export function faqFor(
         },
         {
             q: 'Can the family see my files?',
-            a: 'No. Nobody else in the family can open your own files unless you share them. The people who manage the family see how much space your files take, rounded up to the whole GB, never their names, how many there are or what is in them. Everyone in the family can open the family folders.',
+            a: 'No. Nobody else in the family can open your own files unless you share them. The people who manage the family see how much space your files take, rounded up to the whole GB, never your files’ names, how many there are or what is in them. Everyone in the family can open the family folders.',
         },
         {
             q: 'Can a family change plans?',
-            a: 'Yes. The member who pays moves the family to a bigger plan straight away, and pays the difference for the rest of the period. A smaller plan starts at the next renewal, once everything the family stores fits in it; nothing is refunded. Members and places stay as they are.',
+            a: 'Yes. The member who pays moves the family to a bigger plan straight away, and pays the difference for the rest of the period. A smaller plan starts at the next renewal, and nothing is refunded. It can be chosen only while everything the family stores fits in it; if the family stores more by the time it starts, uploads pause for everyone until there is room. Nothing is deleted. Members and places stay as they are.',
         },
         {
             q: 'Who pays for a family plan?',
@@ -88,7 +88,7 @@ export function faqFor(
         },
         {
             q: 'What happens when a family plan is cancelled?',
-            a: 'The member who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for. After that, everyone’s own files go back to their own storage, as when someone leaves. Nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
+            a: 'The member who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for, and its storage for three days after that. Then everyone’s own files go back to their own storage, as when someone leaves. Nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
         },
         selfHosting,
     ];
