@@ -23,6 +23,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
+import { moneyFontLinks } from '@/lib/fonts';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { useUnlocked } from '@/lib/families';
@@ -82,7 +83,23 @@ export const Route = createFileRoute('/_authenticated/app/billing')({
             context.queryClient.ensureQueryData(billingQueryOptions),
             context.queryClient.ensureQueryData(localeHintQueryOptions),
         ]).catch(() => null),
-    head: () => ({ meta: [{ title: 'Plan and storage · HushOS' }] }),
+    head: ({ loaderData }) => {
+        // Prices drawn in a currency the preloaded font lacks (₹) preload the rest of it.
+        const [catalogue, summary, hint] = loaderData ?? [];
+        const live =
+            summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
+        const currencies = currenciesOf(catalogue?.plans ?? []);
+        const currency = pickCurrency({
+            requested: live?.currency,
+            hint,
+            available: currencies,
+            fallback: currencies[0] ?? 'usd',
+        });
+        return {
+            meta: [{ title: 'Plan and storage · HushOS' }],
+            links: moneyFontLinks(currency),
+        };
+    },
     validateSearch: (search: Record<string, unknown>): { checkout_id?: string; plan?: string } => ({
         ...(typeof search.checkout_id === 'string' ? { checkout_id: search.checkout_id } : {}),
         ...(typeof search.plan === 'string' ? { plan: search.plan } : {}),

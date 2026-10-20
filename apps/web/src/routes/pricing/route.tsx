@@ -53,6 +53,7 @@ import {
     type Tier,
 } from '@/lib/plans';
 import { useQuery } from '@tanstack/react-query';
+import { moneyFontLinks } from '@/lib/fonts';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CheckIcon } from 'lucide-react';
@@ -125,7 +126,7 @@ export const Route = createFileRoute('/pricing')({
                 { name: 'twitter:description', content: description },
                 { name: 'twitter:image', content: `${origin}/og/pricing.jpg` },
             ],
-            links: [{ rel: 'canonical', href: `${origin}/pricing` }],
+            links: [{ rel: 'canonical', href: `${origin}/pricing` }, ...moneyFontLinks(currency)],
             scripts: [
                 {
                     type: 'application/ld+json',
