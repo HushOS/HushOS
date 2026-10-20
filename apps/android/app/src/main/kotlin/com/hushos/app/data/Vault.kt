@@ -1159,6 +1159,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
         forget(item.node.workspaceId, id)
     }
 
+    /*
+     * Move to Trash for many, one outcome per id in order, `moved` told of each id as the server
+     * confirms it: the one place a batch reaches the server. One request each, one after another,
+     * until the server takes a batch in one request.
+     */
+    suspend fun trashMany(ids: List<String>, moved: (String) -> Unit = {}): List<Result<Unit>> = trashEach(ids, ::trash, moved)
+
     fun restore(entry: TrashItem): Opened {
         val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")

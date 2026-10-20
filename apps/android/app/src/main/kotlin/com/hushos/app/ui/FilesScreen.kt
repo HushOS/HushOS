@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -190,9 +191,18 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     LaunchedEffect(isTop) { if (isTop) model.refreshStorage() }
     var query by rememberSaveable { mutableStateOf("") }
     var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Kept across a rotation, as the pending Move to Trash it may belong to is.
+    var picked by rememberSaveable(stateSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })) { mutableStateOf(emptySet()) }
     var selecting by rememberSaveable { mutableStateOf(false) }
-    val clearSelection = { picked = emptySet(); selecting = false }
+    // A Move to Trash of this selection under way (the view model holds it): the bar stays, pending,
+    // with the selection, until the last request answers; then the selection ends.
+    val trashing = picked.any { it in state.trashing }
+    var awaitingTrash by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(trashing) {
+        if (trashing) awaitingTrash = true
+        else if (awaitingTrash) { awaitingTrash = false; picked = emptySet(); selecting = false }
+    }
+    val clearSelection = { if (!trashing) { picked = emptySet(); selecting = false } }
     var movingMany by remember { mutableStateOf(false) }
     var sendingMany by remember { mutableStateOf<List<Opened>?>(null) }
     var taggingMany by remember { mutableStateOf<List<Opened>?>(null) }
@@ -249,16 +259,22 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                 // The contextual bar: the same actions, in the same order, as iOS and the web.
                 TopAppBar(
                     title = { Text("${picked.size} selected") },
-                    navigationIcon = { IconButton(onClick = clearSelection) { Icon(Icons.Outlined.Close, "Clear selection") } },
+                    navigationIcon = { IconButton(enabled = !trashing, onClick = clearSelection) { Icon(Icons.Outlined.Close, "Clear selection") } },
                     actions = {
                         val one = chosen.singleOrNull()
                         // Each icon says what it does, aloud and on a long press.
-                        if (owner == Owner.ME) Labelled("Share") { IconButton(enabled = one != null, onClick = { sharing = one }) { Icon(Icons.Outlined.Share, "Share") } }
-                        if (owner != Owner.VIEW) Labelled("Move") { IconButton(enabled = chosen.isNotEmpty(), onClick = { movingMany = true }) { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, "Move") } }
-                        Labelled("Copy") { IconButton(enabled = chosen.isNotEmpty(), onClick = { /* The paste bar is the confirmation: no notice over it. */ model.copy(chosen); clearSelection() }) { Icon(Icons.Outlined.ContentCopy, "Copy") } }
-                        if (owner != Owner.VIEW) Labelled("Move to Trash") { IconButton(enabled = chosen.isNotEmpty(), onClick = { model.trashAll(chosen); clearSelection() }) { Icon(Icons.Outlined.Delete, "Move to Trash") } }
+                        if (owner == Owner.ME) Labelled("Share") { IconButton(enabled = one != null && !trashing, onClick = { sharing = one }) { Icon(Icons.Outlined.Share, "Share") } }
+                        if (owner != Owner.VIEW) Labelled("Move") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { movingMany = true }) { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, "Move") } }
+                        Labelled("Copy") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { /* The paste bar is the confirmation: no notice over it. */ model.copy(chosen); clearSelection() }) { Icon(Icons.Outlined.ContentCopy, "Copy") } }
+                        // While it runs, the same slot holds a ring the icon's size, so nothing in the bar moves.
+                        if (owner != Owner.VIEW) Labelled(if (trashing) "Moving to Trash" else "Move to Trash") {
+                            IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { model.trashAll(chosen) }) {
+                                if (trashing) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Outlined.Delete, "Move to Trash")
+                            }
+                        }
                         Box {
-                            IconButton(onClick = { selectMenu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
+                            IconButton(enabled = !trashing, onClick = { selectMenu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                             DropdownMenu(expanded = selectMenu, onDismissRequest = { selectMenu = false }, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu) {
                                 // Several files go out together; folders can't be sent.
                                 DropdownMenuItem(text = { Text("Send a copy") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Send, null) }, enabled = chosen.isNotEmpty() && chosen.none { it.isFolder },
@@ -271,7 +287,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                     onClick = { selectMenu = false; model.saveCopy(chosen); clearSelection() })
                                 val all = here.isNotEmpty() && picked.size == here.size
                                 DropdownMenuItem(text = { Text(if (all) "Deselect all" else "Select all") }, leadingIcon = { Icon(Icons.Outlined.CheckCircleOutline, null) },
-                                    onClick = { selectMenu = false; picked = if (all) emptySet() else here.map { it.id }.toSet() })
+                                    enabled = !trashing, onClick = { selectMenu = false; picked = if (all) emptySet() else here.map { it.id }.toSet() })
                             }
                         }
                     },
@@ -400,7 +416,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                             if (item.isFolder) { query = ""; stack.add(item) }
                             else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } }
                         }
-                        fun toggle(item: Opened) { picked = if (item.id in picked) picked - item.id else picked + item.id }
+                        // While this selection's batch runs, taps that would change it are ignored.
+                        fun toggle(item: Opened) { if (!trashing) picked = if (item.id in picked) picked - item.id else picked + item.id }
                         // Offline, a file that isn't on this phone can't open: it dims and says so.
                         fun away(item: Opened) = state.unreachable && !item.isFolder && state.offline.none { it.id == item.id }
                         if (grid) items(items.chunked(columns), key = { "tiles:" + it.first().id }) { line ->

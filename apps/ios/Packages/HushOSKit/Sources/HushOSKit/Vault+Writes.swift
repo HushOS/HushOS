@@ -238,6 +238,15 @@ extension Vault {
         forget(nodeId)
     }
 
+    /*
+     * Move to Trash for many, one outcome per id in order, `moved` told of each id as the server
+     * confirms it: the one place a batch reaches the server. One request each, one after another,
+     * until the server takes a batch in one request.
+     */
+    public func trashMany(_ ids: [String], moved: @escaping @Sendable (String) async -> Void = { _ in }) async -> [Result<Void, Error>] {
+        await TrashBatch.trashEach(ids, trash: { id in try await self.trash(id) }, moved: moved)
+    }
+
     /* Back where it was, or under the root when its old folder is in the trash too. */
     public func restore(_ item: Opened, parentTrashed: Bool) async throws -> Opened {
         // In a family folder only back where it was (a trash's Undo): under the top folder would re-wrap under the family's root.

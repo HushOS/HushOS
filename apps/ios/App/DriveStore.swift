@@ -116,6 +116,12 @@ final class DriveStore {
     var mountsError: String?
     var mountsLoaded = false
     var busy = false
+    /*
+     * Ids in a Move to Trash batch under way, every batch's together: a selection whose ids are here
+     * shows its bar pending, and an id already here is never sent again. Each batch takes out only
+     * its own ids, so a single trash from another tab can't end a selection's pending early.
+     */
+    private(set) var trashingIds: Set<String> = []
     /* Transfers in flight and just finished, each with its own bar, as the web's panel shows them. */
     struct TransferItem: Identifiable, Equatable {
         enum Kind { case upload, download, copy, keep }
@@ -1127,10 +1133,90 @@ final class DriveStore {
         return false
     }
 
-    func trash(_ items: [Opened]) async {
-        var moved: [Opened] = []
-        for item in items where await trashOne(item) { moved.append(item) }
-        announceTrash(moved)
+    /*
+     * Move to Trash, one item or many (HushOSKit's TrashBatch): the batch goes through
+     * `Vault.trashMany` and each row leaves every list as the server confirms it; then the notice
+     * says what moved, with an Undo for exactly that, and the feed, the listings and Files follow
+     * once, in the background.
+     */
+    func trash(_ requested: [Opened]) async {
+        // Items already on their way to the Trash in another batch aren't sent twice.
+        let items = requested.filter { !trashingIds.contains($0.id) }
+        guard !items.isEmpty else { return }
+        let ids = Set(items.map(\.id))
+        let vault = vault
+        busy = true
+        trashingIds.formUnion(ids)
+        defer { trashingIds.subtract(ids) }
+        let result = await TrashBatch.trash(items, TrashBatch.Steps(
+            send: { batch, moved in
+                let byId = Dictionary(batch.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                return await vault.trashMany(batch.map(\.id)) { id in if let item = byId[id] { await moved(item) } }
+            },
+            drop: { [weak self] item in self?.dropRows([item.id]) },
+            announce: { [weak self] text, undo in self?.announceTrash(text, undo) },
+            restore: { [weak self] moved in Task { await self?.undoTrash(moved) } },
+            settle: { [weak self] folders in Task { await self?.settle(folders) } }
+        ))
+        busy = false
+        reportFailures(result.failed.map(\.error), single: items.count == 1)
+    }
+
+    /* Rows the server agreed are gone: off every folder on screen, Recent and search, without a listing. */
+    private func dropRows(_ ids: Set<String>) {
+        for (id, rows) in folders where rows.contains(where: { ids.contains($0.id) }) { folders[id] = rows.filter { !ids.contains($0.id) } }
+        recents.removeAll { ids.contains($0.id) }
+        for id in ids { catalogue[id] = nil }
+        catalogueVersion += 1
+    }
+
+    /*
+     * After a batch of writes, once: the feed (it already holds them), each changed folder read
+     * again and Files told. Quiet: a failure here raises nothing and leaves the lists as the write
+     * left them.
+     */
+    private func settle(_ changed: Set<String>) async {
+        await sync()
+        for id in changed {
+            if let children = try? await vault.children(of: id) {
+                folders[id] = children
+                for child in children { names[child.id] = child.name }
+                await judgeFamilyItems(children)
+            }
+            FilesDomain.signal(folderId: id)
+        }
+    }
+
+    /*
+     * What a batch's failures mean beyond its notice: an ended session or no network is reported
+     * as ever (the sign-in, the offline line), and a single item that failed says so as a single
+     * write always did.
+     */
+    private func reportFailures(_ errors: [Error], single: Bool) {
+        let worth = errors.filter { !ErrorWords.isCancellation($0) }
+        guard let first = worth.first else { return }
+        if let ended = worth.first(where: endsSession) { report(ended); return }
+        if worth.contains(where: { TrashBatch.failure(of: $0) == .offline }) { offline = true }
+        if single { report(first) }
+    }
+
+    /* The notice's Undo: exactly what moved comes back, then each row goes into its folder at once and the follow-up runs once. */
+    private func undoTrash(_ items: [Opened]) async {
+        let vault = vault
+        busy = true
+        let outcomes = await TrashBatch.oneAfterAnother(items) { item in try await vault.restore(item, parentTrashed: false) }
+        busy = false
+        let back = outcomes.compactMap { try? $0.get() }
+        (folders, trash) = TrashBatch.afterUndo(back, folders: folders, trash: trash)
+        for item in back { catalogue[item.id] = item }
+        if !back.isEmpty { catalogueVersion += 1; Task { await settle(Set(back.compactMap(\.node.parentId))) } }
+        let errors = outcomes.compactMap { outcome -> Error? in if case .failure(let error) = outcome { return error } else { return nil } }
+        reportFailures(errors, single: items.count == 1)
+        if errors.isEmpty {
+            notify(back.count == 1 ? "Restored “\(back[0].name)”" + (wasIn(back[0]).map { " to \($0)" } ?? "") : "Restored \(back.count) items")
+        } else if !errors.contains(where: endsSession), let problem = TrashBatch.undoProblem(back: back.count, tried: items.count) {
+            notify(problem)
+        }
     }
 
     /* A short line after an action, with a way to take it back; shown above any sheet (NoticeCenter). */
@@ -1138,16 +1224,10 @@ final class DriveStore {
         NoticeCenter.shared.show(text, undo: undo, actionLabel: actionLabel, important: important)
     }
 
-    /* Says what went to the trash and offers to bring it straight back. */
-    private func announceTrash(_ items: [Opened]) {
-        guard !items.isEmpty else { return }
-        notify(items.count == 1 ? "Moved “\(items[0].name)” to Trash" : "Moved \(items.count) items to Trash") { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                for item in items { await self.restore(item, parentTrashed: false) }
-                await self.refreshRecents()
-            }
-        }
+    /* Says what went to the trash and offers to bring exactly that straight back; no Undo when nothing moved. */
+    private func announceTrash(_ text: String, _ undo: (@MainActor () -> Void)?) {
+        guard let undo else { notify(text); return }
+        notify(text) { MainActor.assumeIsolated { undo() } }
     }
 
     /*
@@ -1271,15 +1351,7 @@ final class DriveStore {
         await perform(in: nil) { try await vault.api.discardVersion(version.id, workspaceId: item.node.workspaceId) }
     }
 
-    func trash(_ item: Opened) async {
-        if await trashOne(item) { announceTrash([item]) }
-    }
-
-    private func trashOne(_ item: Opened) async -> Bool {
-        let ok = await perform(in: item.node.parentId) { try await vault.trash(item.id) }
-        recents.removeAll { $0.id == item.id }
-        return ok
-    }
+    func trash(_ item: Opened) async { await trash([item]) }
 
     func restore(_ item: Opened, parentTrashed: Bool) async {
         let folder = wasIn(item)
