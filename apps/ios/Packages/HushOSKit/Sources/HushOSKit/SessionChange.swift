@@ -30,4 +30,16 @@ public enum SessionChange: Equatable, Sendable {
         if let last, last != AccountOwner(stored) { return .another }
         return .restart
     }
+
+    /*
+     * What goes from memory before the app follows the change: the last session's family sync,
+     * the family keys its area ledger holds, and its vault. Each session has its own vault and
+     * ledger (`Vault.fromKeychain`), so a new session for the same account (`adopt`) starts
+     * clean too; otherwise the previous account's family keys stayed in memory after another
+     * signed in from the Files sheet.
+     */
+    public func forgetLastSession() {
+        guard self != .none else { return }
+        FamilySync.forget()
+    }
 }

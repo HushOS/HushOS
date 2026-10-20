@@ -14,6 +14,9 @@ public enum StagedSave {
     public static func seal<T>(_ copy: URL, in directory: URL, _ seal: (URL) async throws -> T) async throws -> T {
         let content = directory.appendingPathComponent("content")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // This process's, before the only copy moves in: the queue's sweep leaves it while the process may run,
+        // however long a suspended sheet writes nothing (ShareHandoff.sweepOrphans).
+        ShareHandoff.claim(directory)
         try FileManager.default.moveItem(at: copy, to: content)
         do {
             let result = try await seal(content)

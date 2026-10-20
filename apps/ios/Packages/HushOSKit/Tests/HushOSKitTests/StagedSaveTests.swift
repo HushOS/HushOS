@@ -21,6 +21,8 @@ struct StagedSaveTests {
         do {
             _ = try await StagedSave.seal(copy, in: directory) { content -> Int in
                 #expect(FileManager.default.fileExists(atPath: content.path))
+                // Claimed before the copy moved in, so the queue's sweep leaves it while this process may run.
+                #expect(ShareHandoff.owner(of: directory) == getpid(), "the only copy sat in a folder nobody claimed")
                 throw CancellationError()
             }
             Issue.record("a cancelled seal returned")

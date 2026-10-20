@@ -52,6 +52,8 @@ final class SaveModel {
         // Plaintext of what was shared, until it is sealed: never in a backup.
         Unbacked.folder(ShareHandoff.staging)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        // This sheet's: another sheet's sweep leaves it while this process runs.
+        ShareHandoff.claim(staging)
         phase = .ready
         async let place: Void = findFolder(vault)
         await read(extensionItems)
