@@ -95,3 +95,14 @@ describe('a trashed folder hides what is inside it', () => {
         expect(drive(true).tagCounts().get('tax')).toBe(1);
     });
 });
+
+describe('a folder that is no longer here', () => {
+    test('leaves nothing that was inside it live, at any depth', () => {
+        const catalogue = drive();
+        // The folder's tombstone arrived; what was inside waits for the server's fan-out.
+        catalogue.remove('work');
+        expect(ids(catalogue.recent(10))).toEqual(['notes.md', 'plan.md']);
+        expect(catalogue.search({ query: 'old' })).toEqual([]);
+        expect(ids(catalogue.byTags(['tax']))).toEqual(['notes.md']);
+    });
+});

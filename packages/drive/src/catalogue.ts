@@ -124,6 +124,21 @@ export class Catalogue {
         }
     }
 
+    /*
+     * A purged node and everything below it. The server tombstones what was inside a purged
+     * folder only when its background fan-out reaches it, minutes later, and until then
+     * those rows would hang here without a parent: unreachable, yet live by their own word.
+     */
+    removeTree(id: string) {
+        const ids = [id];
+        for (let index = 0; index < ids.length; index++)
+            for (const child of this.children.get(ids[index]!) ?? []) ids.push(child);
+        for (const each of ids) {
+            this.remove(each);
+            this.children.delete(each);
+        }
+    }
+
     /* Everything, keys and tags alike: what a lock calls for. */
     clear() {
         this.clearNodes();
@@ -180,17 +195,21 @@ export class Catalogue {
     }
 
     /*
-     * A check for "live": not trashed, and no trashed folder above it. Trashing a
-     * folder marks only the folder, so what is inside it must be ruled out by its
-     * ancestors. Answers are remembered for the life of the check.
+     * A check for "live": not trashed, no trashed folder above it, and every folder
+     * above it here. Trashing a folder marks only the folder, so what is inside it
+     * must be ruled out by its ancestors. Answers are remembered for the life of
+     * the check.
      */
     private liveCheck() {
         const live = new Map<string, boolean>();
         const isLive = (node: DriveNode): boolean => {
             const known = live.get(node.id);
             if (known !== undefined) return known;
+            // A parent that is not here was purged (or never arrived): nothing reaches this node.
             const parent = node.parentId ? this.nodes.get(node.parentId) : undefined;
-            const value = !node.trashedAt && (parent === undefined || isLive(parent));
+            const value =
+                !node.trashedAt &&
+                (node.parentId === null || (parent !== undefined && isLive(parent)));
             live.set(node.id, value);
             return value;
         };

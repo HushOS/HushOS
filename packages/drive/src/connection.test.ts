@@ -120,21 +120,21 @@ describe('the tree mirror', () => {
     it('lets another tab delete its database, then opens a new one on the next read', async () => {
         const name = `mirror-${Math.random()}`;
         const mirror = createIndexedDbMirror(name);
-        await mirror.apply('ws-1', [], 7);
+        await mirror.apply('ws-1', 0, [], 7);
 
         expect(await deleteFromAnotherTab(name)).toBe('deleted');
         expect(await mirror.cursor('ws-1')).toBe(0);
-        await mirror.apply('ws-1', [], 9);
+        await mirror.apply('ws-1', 0, [], 9);
         expect(await mirror.cursor('ws-1')).toBe(9);
     });
 
     it('opens a new connection after the browser closed its connection', async () => {
         const mirror = createIndexedDbMirror(`mirror-${Math.random()}`);
-        await mirror.apply('ws-1', [], 7);
+        await mirror.apply('ws-1', 0, [], 7);
         forceCloseDatabase(opened.at(-1)! as never);
 
         expect(await mirror.cursor('ws-1')).toBe(7);
-        await mirror.apply('ws-1', [], 9);
+        await mirror.apply('ws-1', 7, [], 9);
         expect(await mirror.workspaces()).toEqual(['ws-1']);
         expect(opened).toHaveLength(2);
     });
@@ -142,14 +142,14 @@ describe('the tree mirror', () => {
     it('keeps the connection that replaced one the browser then closed while it was letting go', async () => {
         const name = `mirror-${Math.random()}`;
         const mirror = createIndexedDbMirror(name);
-        await mirror.apply('ws-1', [], 1);
+        await mirror.apply('ws-1', 0, [], 1);
         const first = opened[0]!;
         // A long write, still running when another tab deletes the database.
         const changes = Array.from({ length: 300 }, (_, index) => ({
             kind: 'node',
             node: { id: `n-${index}`, workspaceId: 'ws-1' },
         })) as unknown as NodeChange[];
-        const writing = mirror.apply('ws-1', changes, 2);
+        const writing = mirror.apply('ws-1', 1, changes, 2);
         let reading: Promise<number> | undefined;
         // Once the mirror let go of the first connection (whose close waits for the write), the
         // next read takes a new one; then the browser closes the first for good (site data
@@ -164,7 +164,7 @@ describe('the tree mirror', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
 
         // The late "close" from the first connection did not drop the second: no third is opened.
-        await mirror.apply('ws-1', [], 5);
+        await mirror.apply('ws-1', 0, [], 5);
         expect(await mirror.cursor('ws-1')).toBe(5);
         expect(opened).toHaveLength(2);
     });
