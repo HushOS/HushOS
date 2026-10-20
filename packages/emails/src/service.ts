@@ -3,6 +3,7 @@ import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import { familyPlanEnding } from './rendered/family-plan-ending';
 import { groupInvitation } from './rendered/group-invitation';
 import { securityNotice } from './rendered/security-notice';
 import { shareNotice } from './rendered/share-notice';
@@ -262,4 +263,21 @@ export function composeGroupInvitation(to: string, input: InvitationInput) {
 
 export async function sendGroupInvitation(to: string, input: InvitationInput) {
     await deliver(composeGroupInvitation(to, input));
+}
+
+/*
+ * To a dissolved family's payer: its plan was set to end at the period's end, on
+ * `endsOn` (written by the caller, in UTC). Fixed words, so nothing anyone typed
+ * (the family's name included) reaches the message; the date is in the subject so
+ * a second notice, after the plan was resumed and cancelled again, is its own thread.
+ */
+export function composeFamilyPlanEnding(to: string, input: { endsOn: string; appUrl: string }) {
+    return compose(to, `Your family plan ends on ${input.endsOn} · HushOS`, familyPlanEnding, {
+        endsOn: input.endsOn,
+        logoUrl: logoUrl(input.appUrl),
+    });
+}
+
+export async function sendFamilyPlanEnding(to: string, input: { endsOn: string; appUrl: string }) {
+    await deliver(composeFamilyPlanEnding(to, input));
 }

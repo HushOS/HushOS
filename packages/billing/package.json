@@ -17,6 +17,7 @@
     },
     "dependencies": {
         "@hushos/db": "workspace:*",
+        "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
         "@polar-sh/sdk": "1.0.0-alpha.20"

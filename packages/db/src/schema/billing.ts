@@ -203,6 +203,30 @@ export const groupBillingSubscriptions = pgTable(
          */
         changeClaimUntil: timestamp('change_claim_until', { withTimezone: true }),
         /*
+         * How many times HushOS set this plan to end at its period's end because its family
+         * was dissolved (a payer may take that back in Polar's portal, every time), and when
+         * it last asked Polar to (written before the call, so an answer lost to a timeout
+         * still counts). Its payer is emailed once per period: the period end last mailed.
+         */
+        dissolveCancels: integer('dissolve_cancels').notNull().default(0),
+        dissolveCancelledAt: timestamp('dissolve_cancelled_at', { withTimezone: true }),
+        dissolveMailedPeriodEnd: timestamp('dissolve_mailed_period_end', { withTimezone: true }),
+        /*
+         * Polar refused to set it to end (403 `InactiveSubscription`): when, Polar's error name,
+         * and the plan's state then (dissolveStateOf). Listed for operators while the plan is
+         * not set to end; not tried again until the state differs.
+         */
+        dissolveRefusedAt: timestamp('dissolve_refused_at', { withTimezone: true }),
+        /*
+         * When setting it to end first failed in a way pg-boss retries (a token error, a
+         * 409, a 5xx, Polar unreachable), since the last time it was set to end, seen ending
+         * by a reconcile, or refused. A failure Polar keeps repeating would otherwise be retried for ever and
+         * never listed: past a day the plan is listed for operators (`dissolved-failing`).
+         */
+        dissolveFailingSince: timestamp('dissolve_failing_since', { withTimezone: true }),
+        dissolveRefusal: text('dissolve_refusal'),
+        dissolveRefusedState: text('dissolve_refused_state'),
+        /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
          */

@@ -1,4 +1,5 @@
 import {
+    cancelDissolvedPlan,
     endPersonalPlans,
     reconcileCustomer,
     reconcileGroup,
@@ -77,6 +78,25 @@ export async function reissueGroupCut(
     try {
         await reissueCut(job.data.groupId);
         event.set({ outcome: 'reissued' });
+    } catch (error) {
+        event.set({ failure: sanitizeFailure(error) });
+        throw error;
+    } finally {
+        event.emit();
+    }
+}
+
+/*
+ * A dissolved family's plan set to end at its period's end. A failure throws, so
+ * pg-boss retries with backoff.
+ */
+export async function cancelDissolvedFamilyPlan(
+    job: Job<JobPayloads[typeof queues.billingCancelDissolved]>,
+) {
+    const event = createLogger({ job: { id: job.id, queue: job.name } });
+    try {
+        const result = await cancelDissolvedPlan(job.data.groupId);
+        event.set({ outcome: 'done', cancelled: result.cancelled, refused: result.refused });
     } catch (error) {
         event.set({ failure: sanitizeFailure(error) });
         throw error;

@@ -30,6 +30,7 @@ import {
     ensureGroupSeat,
     familyHasPlan,
     paysForGroup,
+    queueDissolvedCancel,
     queuePlanEnding,
     type SeatResult,
 } from '@hushos/billing/server';
@@ -2078,6 +2079,8 @@ export async function leave(userId: string, groupId: string) {
         case 'left':
             return { state: 'left' as const };
         case 'dissolved':
+            // A plan that can still charge is set to end at its period's end, by the worker.
+            await queueDissolvedCancel(groupId);
             return { state: 'left' as const, dissolved: true };
         case 'not-member':
             throw notMember();

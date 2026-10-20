@@ -655,6 +655,14 @@ billing.setEndPersonalPlanQueue((data) =>
     enqueue(queues.billingEndPersonalPlan, data, { singletonKey: data.userId }),
 );
 
+/*
+ * A family dissolved with a plan that can still charge has it set to end by the worker
+ * (docs/groups-design.md 3.3): the leave route and every reconcile queue it, one job per family.
+ */
+billing.setDissolveCancelQueue((groupId) =>
+    enqueue(queues.billingCancelDissolved, { groupId }, { singletonKey: groupId }),
+);
+
 /* The routes' own GROUPS_ENABLED check, behind the edge's. */
 function groupsGate() {
     if (!groups.groupsEnabled())

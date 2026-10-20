@@ -299,7 +299,10 @@ const LIVE = new Set(['active', 'trialing', 'past_due']);
  * HushOS still means to have that Polar lost is asked for again, and queued
  * for a retry if Polar refuses.
  */
-export async function reconcileGroup(groupId: string) {
+export async function reconcileGroup(
+    groupId: string,
+    options: { fromDissolveCancel?: boolean } = {},
+) {
     if (!billingEnabled() || !UUID.test(groupId)) return;
     let state: models.CustomerState | null;
     try {
@@ -361,6 +364,16 @@ export async function reconcileGroup(groupId: string) {
     // lapsed plan bought again, a checkout that raced an admission.
     for (const userId of await billingRepository.listPooledWithPersonalPlan(groupId))
         await queuePlanEnding(userId);
+    // A dissolved family's plan that can still charge and isn't set to end (its payer took the
+    // ending back in the portal, or it was never set): the worker sets it to end. Also one
+    // HushOS set to end whose payer is still owed the mail (it failed, or the answer was lost).
+    if (
+        !options.fromDissolveCancel &&
+        (await billingRepository.listDissolvedChargeable(groupId)).some(
+            (row) => (!row.ending && row.refusedState !== row.state) || row.mailOwed,
+        )
+    )
+        await queueDissolvedCancel(groupId);
     const liveCount =
         subscriptions.filter((s) => !s.endedAt && LIVE.has(s.status)).length + unresolved.length;
     if (liveCount > 1)
@@ -483,6 +496,222 @@ async function revokeWithoutPayer(
     const revoked = await polar().subscriptions.revoke(live.id);
     await applyChanged(groupId, revoked, false);
     return true;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Dissolved families                                                         */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Where a dissolved family's plan is queued to be set to end (pg-boss, keyed by the
+ * family, with retries): set by the processes that can send jobs. Without one the
+ * daily reconcile finds the plan and queues it then.
+ */
+type DissolveCancelQueue = (groupId: string) => Promise<unknown>;
+let dissolveCancelQueue: DissolveCancelQueue | undefined;
+export function setDissolveCancelQueue(queue: DissolveCancelQueue | undefined) {
+    dissolveCancelQueue = queue;
+}
+
+/* Never throws: a family dissolved without a queued job is found by the next reconcile. */
+export async function queueDissolvedCancel(groupId: string) {
+    if (!billingEnabled() || !UUID.test(groupId)) return;
+    if (!dissolveCancelQueue) {
+        log.warn({
+            message: 'No queue for dissolved families’ plans',
+            billing: { group: groupId },
+        });
+        return;
+    }
+    try {
+        await dissolveCancelQueue(groupId);
+    } catch (error) {
+        log.warn({
+            message: 'Dissolved family’s plan not queued to end',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+    }
+}
+
+/* Another run holds the plan (its claim): pg-boss retries this one, which then finds it set. */
+export class DissolveCancelBusyError extends Error {
+    constructor() {
+        super('Another run is setting this plan to end.');
+        this.name = 'DissolveCancelBusyError';
+    }
+}
+
+const ENDED = new Set<string>(billingRepository.ENDED_SUBSCRIPTION_STATUSES);
+const endsOnFormat = new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+});
+
+/* Polar's error name on a refused call (`InactiveSubscription`, `SubscriptionLocked`). */
+function errorName(error: unknown) {
+    return (error as PolarClientError<{ error?: string }>).error?.error ?? null;
+}
+
+const endingOrEnded = (subscription: models.Subscription) =>
+    Boolean(subscription.ended_at) ||
+    subscription.cancel_at_period_end ||
+    ENDED.has(subscription.status);
+
+/*
+ * The job for a dissolved family (docs/groups-design.md 3.3): every plan of it that
+ * can still charge (not ended, `canceled` or `incomplete_expired`; `paused` can, since
+ * a payer may resume it) is set to end at the period's end (`cancel_at_period_end`),
+ * never revoked: the payer keeps what they paid for, and nothing is refunded, as when a
+ * payer cancels (groups-design 3.5); the prorated refund of docs/families-shared-pool.md
+ * 5.1 is for a personal plan ended early.
+ *
+ * Every time it is resumed it is set to end again, without limit: a resume is the payer's
+ * own click in the portal, never something setting it to end causes, so there is no loop
+ * to break, and stopping would leave them charged for a family that is gone.
+ *
+ * Only for a family the mirror holds a plan for that can still charge, so a dissolve
+ * without one asks Polar nothing. Polar is read first (reconcileGroup), since the mirror
+ * may lag a payer's change. Each plan is set under its change claim (claimPlanChange, the
+ * claim raises and tier moves take), read again under it, and changed only when it still
+ * isn't set to end: two runs, a retry and a webhook's job never set it twice.
+ *
+ * Polar's answers to the update (the errors its SDK declares for it): only 403
+ * `InactiveSubscription`, a plan it won't change while it isn't active (past due, paused),
+ * is a refusal no retry changes until the plan does. It is recorded with the plan's state
+ * and listed for operators, and the plan is not tried again, by this job or any reconcile,
+ * until Polar shows it in another state. 403 `AlreadyCanceledSubscription` is a plan set
+ * to end since the read, read again to be sure. Everything else throws, for pg-boss to
+ * retry with backoff: 409 `SubscriptionLocked` (a pending update, as Polar holds one
+ * during a renewal), 402, 422, a token error (401, or a 403 of another name), 429, a 5xx,
+ * a timeout, a held claim. Such a failure is recorded (`dissolve_failing_since`, from the
+ * first), so one Polar keeps repeating lists the plan for operators after a day
+ * (`dissolved-failing`) instead of being retried unseen while the plan renews.
+ *
+ * The payer is emailed once per plan per period (`dissolve_mailed_period_end`), last, from
+ * the mirror: for every plan set to end this period that HushOS asked to end this period
+ * (`dissolve_cancelled_at`, written before the call). So a set whose answer was lost (a
+ * timeout) is mailed by the retry that finds it ending, and a mail that failed by the next
+ * run, which every reconcile queues while one is owed. A plan its payer set to end
+ * themselves gets no mail.
+ */
+export async function cancelDissolvedPlan(groupId: string) {
+    const outcome = { cancelled: 0, refused: 0 };
+    if (!billingEnabled() || !UUID.test(groupId)) return outcome;
+    if ((await billingRepository.listDissolvedChargeable(groupId)).length === 0) return outcome;
+    try {
+        return await setDissolvedToEnd(groupId, outcome);
+    } catch (error) {
+        // Retried by pg-boss, but recorded: a failure Polar keeps repeating (a token without
+        // write access, a revoked one) is listed for operators after a day, not retried unseen.
+        if (!(error instanceof DissolveCancelBusyError))
+            await billingRepository.recordDissolveFailing(groupId).catch((failure) =>
+                log.warn({
+                    message: 'Dissolved family’s failing plan not recorded',
+                    billing: { group: groupId, failure: String((failure as Error)?.name) },
+                }),
+            );
+        throw error;
+    }
+}
+
+async function setDissolvedToEnd(groupId: string, outcome: { cancelled: number; refused: number }) {
+    await reconcileGroup(groupId, { fromDissolveCancel: true });
+    let asked = false;
+    for (const row of await billingRepository.listDissolvedChargeable(groupId)) {
+        if (row.ending || row.refusedState === row.state) continue;
+        const result = await withPlanChange(
+            row.id,
+            () => 'busy' as const,
+            async () => {
+                const read = async () => {
+                    try {
+                        return await polar().subscriptions.get(row.id);
+                    } catch (error) {
+                        if (statusOf(error) === 404) return null;
+                        throw unavailable(error);
+                    }
+                };
+                const current = await read();
+                if (!current) return 'gone' as const;
+                if (endingOrEnded(current)) return 'already' as const;
+                const state = billingRepository.dissolveStateOf({
+                    status: current.status,
+                    currentPeriodEnd: current.current_period_end,
+                    cancelAtPeriodEnd: current.cancel_at_period_end,
+                });
+                // Before the call, so an answer lost to a timeout still counts as HushOS's.
+                await billingRepository.markDissolveAsked(row.id);
+                try {
+                    await polar().subscriptions.update(row.id, { cancel_at_period_end: true });
+                } catch (error) {
+                    const status = statusOf(error);
+                    const name = errorName(error);
+                    if (status === 403 && name === 'AlreadyCanceledSubscription') {
+                        const again = await read();
+                        if (!again || endingOrEnded(again)) return 'already' as const;
+                        throw unavailable(error);
+                    }
+                    if (status !== 403 || name !== 'InactiveSubscription') throw unavailable(error);
+                    await billingRepository.recordDissolveRefusal(row.id, state, name);
+                    log.error({
+                        message:
+                            'Polar refused to end a dissolved family’s plan: cancel it in Polar',
+                        billing: { group: groupId, subscription: row.id, status, refusal: name },
+                    });
+                    return 'refused' as const;
+                }
+                await billingRepository.recordDissolveCancel(row.id);
+                log.info({
+                    message: 'Dissolved family’s plan set to end at its period’s end',
+                    billing: { group: groupId, subscription: row.id, cancels: row.cancels + 1 },
+                });
+                return 'cancelled' as const;
+            },
+        );
+        if (result === 'busy') throw new DissolveCancelBusyError();
+        if (result === 'cancelled') outcome.cancelled++;
+        if (result === 'refused') outcome.refused++;
+        asked = true;
+    }
+    if (asked) await reconcileGroup(groupId, { fromDissolveCancel: true });
+    for (const row of await billingRepository.listDissolvedChargeable(groupId))
+        if (
+            row.mailOwed &&
+            (await billingRepository.claimDissolveMail(row.id, row.currentPeriodEnd))
+        )
+            await tellPayer(groupId, row.id, row.currentPeriodEnd);
+    return outcome;
+}
+
+/*
+ * The payer is told once per plan per period (the caller claimed it). A mail that fails
+ * is logged and the claim given back: the mail is still owed, so the next reconcile (a
+ * delivery, the daily one at the latest) queues the job, which sends it. A family whose
+ * payer's account is gone keeps the claim, and nobody is mailed.
+ * The mail module is loaded here, not with this file: it reads the email settings when it
+ * loads, and a process without them (a worker an operator gave none) must still start.
+ */
+async function tellPayer(groupId: string, subscriptionId: string, endsAt: Date) {
+    try {
+        const customer = await billingRepository.getGroupCustomer(groupId);
+        const payer = customer?.payerUserId
+            ? await authRepository.getUserById(customer.payerUserId)
+            : null;
+        if (!payer) return;
+        const { sendFamilyPlanEnding } = await import('@hushos/emails/server');
+        await sendFamilyPlanEnding(payer.email, {
+            endsOn: endsOnFormat.format(endsAt),
+            appUrl: appEnv.APP_ORIGIN,
+        });
+    } catch (error) {
+        await billingRepository.releaseDissolveMail(subscriptionId, endsAt);
+        log.warn({
+            message: 'Plan ending email not sent',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+    }
 }
 
 /* ------------------------------------------------------------------------- */

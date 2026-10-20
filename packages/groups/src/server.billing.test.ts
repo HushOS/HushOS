@@ -100,7 +100,10 @@ const fakeClient = {
             return structuredClone(subscription);
         },
         // A raise is charged at once; a refused charge (402) changes nothing (spike E8).
-        async update(id: string, body: { units?: number; proration_behavior?: string }) {
+        async update(
+            id: string,
+            body: { units?: number; proration_behavior?: string; cancel_at_period_end?: boolean },
+        ) {
             polar.updates.push({ id, ...body });
             const subscription = polar.subscriptions.get(id);
             if (!subscription) throw notFound();
@@ -114,6 +117,8 @@ const fakeClient = {
                 subscription.units = body.units;
                 subscription.pending_update = null;
             }
+            if (body.cancel_at_period_end !== undefined)
+                subscription.cancel_at_period_end = body.cancel_at_period_end;
             return structuredClone(subscription);
         },
     },
@@ -557,6 +562,39 @@ describe('admission with billing on', () => {
             state: 'left',
             dissolved: true,
         });
+    });
+
+    test('the last member leaving dissolves the family and queues its plan to be set to end; a member leaving before them does not', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const other = await kit.member();
+        await kit.admitted(fam, other, []);
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(fam.groupId);
+        const queued: string[] = [];
+        billing.setDissolveCancelQueue(async (groupId) => {
+            queued.push(groupId);
+        });
+        try {
+            expect(await groups.leave(other.userId, fam.groupId)).toEqual({ state: 'left' });
+            expect(queued).toEqual([]);
+            // The payer took the cancellation back in the portal, and no delivery came yet: only
+            // the leave route can queue the job (the mirror still says the plan ends).
+            subscription.cancel_at_period_end = false;
+            expect(await groups.leave(fam.organizer.userId, fam.groupId)).toEqual({
+                state: 'left',
+                dissolved: true,
+            });
+            expect(queued).toEqual([fam.groupId]);
+            // The worker runs it: the plan is set to end at its period's end, not revoked.
+            expect(await billing.cancelDissolvedPlan(fam.groupId)).toEqual({
+                cancelled: 1,
+                refused: 0,
+            });
+            expect(subscription).toMatchObject({ cancel_at_period_end: true, ended_at: null });
+        } finally {
+            billing.setDissolveCancelQueue(undefined);
+        }
     });
 
     test('a payer who cancelled can leave; the family keeps the plan until it ends', async () => {
