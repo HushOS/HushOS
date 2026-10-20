@@ -1,0 +1,27 @@
+apps/ios/App/BrowseView.swift
+  s_c56e31c87cddde::t_a94f7a64203a8e 194,356-357,387-388,432,435,505-507,585-586
+apps/ios/App/DriveStore.swift
+  s_c56e31c87cddde::t_db40be2e77750f 119-124,1142-1144,1146,1149-1150,1210-1211,1217-1218
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TrashBatch.swift
+  s_c56e31c87cddde::t_09514a477859d1 28-29,35-53,60,72-75,81,97,105,168-191
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c56e31c87cddde::t_7a1d92bed8932b 247
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchTests.swift
+  s_c56e31c87cddde::t_7150956f87980f 153,158,170-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6fa932fce06555cff4cba6a2a08a75c36de91097",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
