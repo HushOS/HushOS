@@ -102,10 +102,18 @@ data class AccountDevice(
  * the pool or without billing, it is null or absent. A pool this build can't
  * read is no pool: the figures still show under today's words.
  */
-data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long, val pool: StoragePool? = null) {
+data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long, val availableBytes: Long, val pool: StoragePool? = null) {
+    /*
+     * What an upload can still take, as the server checks it. Never quota less used: in a pool
+     * the server leaves other members' uploads in flight out of `usedBytes` (they would give
+     * away one member's activity) and takes them off `availableBytes` only.
+     */
+    val free: Long get() = availableBytes.coerceAtLeast(0L)
+
     companion object {
         fun from(json: JSONObject) = StorageAllowance(
-            json.getString("quotaBytes").toLong(), json.getString("usedBytes").toLong(), json.optJSONObject("pool")?.let(StoragePool::from),
+            json.getString("quotaBytes").toLong(), json.getString("usedBytes").toLong(), json.getString("availableBytes").toLong(),
+            json.optJSONObject("pool")?.let(StoragePool::from),
         )
     }
 }
@@ -141,10 +149,11 @@ data class BillingSummary(
     }
 }
 
+/* The family whose plan a pooled person's storage comes from: a name that isn't blank, as for a pool. */
 data class BillingFamily(val name: String, val planName: String?) {
     companion object {
         fun from(json: JSONObject): BillingFamily? {
-            val name = json.opt("name") as? String ?: return null
+            val name = (json.opt("name") as? String)?.takeUnless { it.isBlank() } ?: return null
             return BillingFamily(name, (json.opt("planName") as? String)?.trim()?.ifEmpty { null })
         }
     }
@@ -157,14 +166,14 @@ data class BillingFamily(val name: String, val planName: String?) {
  *
  * While the storage figures are a family's pool, the plan is the family's: its
  * name from `/api/billing`'s `family` ("Family plan" until that answers) and the
- * line "From <family>’s plan". A personal plan is never shown then, since the
+ * line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal plan is never shown then, since the
  * person no longer draws from it (billing ends it, 5.1). Without a readable
  * `pool` it is today's display: the personal plan, or Free.
  */
 data class PlanDisplay(
     /* The plan's name, the card's heading. */
     val name: String,
-    /* "From Lindqvist family’s plan" while pooled, else null. */
+    /* "Shared with Lindqvist family" while pooled, else null. */
     val source: String?,
     /* The family's name while pooled, for labels that would otherwise read as the person's own. */
     val family: String?,
@@ -178,7 +187,7 @@ data class PlanDisplay(
             // so a failed read never puts back a personal plan the person no longer draws from.
             val family = if (allowance != null) allowance.pool?.name else billing?.family?.name
             return if (family != null) {
-                PlanDisplay(billing?.family?.planName ?: "Family plan", "From $family’s plan", family, null, false)
+                PlanDisplay(billing?.family?.planName ?: "Family plan", "Shared with $family", family, null, false)
             } else {
                 PlanDisplay(billing?.planName?.takeIf { it.isNotEmpty() } ?: "Free", null, null, billing?.periodEnd, billing?.cancelAtPeriodEnd ?: false)
             }

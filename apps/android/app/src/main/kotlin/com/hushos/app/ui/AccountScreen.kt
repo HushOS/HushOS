@@ -339,7 +339,7 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
             Text(plan(state).name, style = MaterialTheme.typography.titleLarge)
             // The plan's name and storage only: no way to the web's billing page (Google Play's
             // payments policy; Apple's 3.1.3(f)). The renewal date is account information; while
-            // pooled, whose plan it is ("From <family>’s plan") comes first.
+            // pooled, whose plan it is ("Shared with <family>") comes first.
             val pooled = plan(state).source != null
             Text((if (pooled) listOfNotNull(planLine(state), state.allowance?.let { formatQuota(it.quotaBytes) })
                 else listOfNotNull(state.allowance?.let { formatQuota(it.quotaBytes) }, planLine(state)?.replaceFirstChar { it.lowercase() })).joinToString(" · "),
@@ -352,13 +352,16 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
             val versions = storage?.supersededBytes ?: 0L
             val files = (allowance.usedBytes - trash - versions).coerceAtLeast(0L)
             Text("${formatSpace(allowance.usedBytes)} of ${formatQuota(allowance.quotaBytes)}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = AlpineSpace.S4))
-            SplitMeter(listOf(files to alpine.primary, versions to alpine.folderBack, trash to alpine.inkMuted), allowance.quotaBytes, Modifier.padding(AlpineSpace.S4))
-            // In a pool the rest is everyone's: the family folders and each member's own files.
+            // In a pool the total is counted in whole GB, part by part, and the rest is everyone's
+            // (the family folders and each member's own files): no Files row or segment, which
+            // would take this person's exact bytes off a rounded total.
             val family = plan(state).family
-            StorageRow(if (family == null) "Files" else "Files in the family’s storage", formatSpace(files), alpine.primary, null)
+            SplitMeter(if (family == null) listOf(files to alpine.primary, versions to alpine.folderBack, trash to alpine.inkMuted) else listOf(allowance.usedBytes to alpine.primary),
+                allowance.quotaBytes, Modifier.padding(AlpineSpace.S4))
+            if (family == null) StorageRow("Files", formatSpace(files), alpine.primary, null)
             StorageRow("Earlier versions", formatSpace(versions), alpine.folderBack, if (versions > 0) "Remove" to { removing = true } else null)
             StorageRow("Trash", "${formatSpace(trash)} · empties itself after 30 days", alpine.inkMuted, "Open trash" to { showingTrash = true })
-            if (family != null) Text("$family’s storage, counted in whole GB. Your trash and earlier versions count until they’re removed.",
+            if (family != null) Text("Shared with $family, counted in whole GB. Your trash and earlier versions count until they’re removed.",
                 style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
             if (busy) Row(Modifier.padding(AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Text("Removing…", modifier = Modifier.padding(start = AlpineSpace.S2))
