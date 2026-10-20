@@ -1,0 +1,27 @@
+apps/web/src/lib/families.walk-poll.test.tsx
+  s_c56e31c87cddde::t_d80d013009502a 1-101
+apps/web/src/lib/families.ts
+  s_c56e31c87cddde::t_814a75180e9b09 12,183-186,196-199,231-236
+apps/web/src/lib/groups/walks.test.ts
+  s_c56e31c87cddde::t_761f12170058e7 3-10,154-263
+apps/web/src/lib/groups/walks.ts
+  s_c56e31c87cddde::t_f001ddf9547c47 87-173
+apps/web/src/lib/spaces.ts
+  s_c56e31c87cddde::t_8e819bff4b6592 27,315-318,320,333-350,366-370,373-374
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a9c48bc80ae530bd2ad0014f749a8a39b21b103f",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
