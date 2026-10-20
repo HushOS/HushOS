@@ -13,6 +13,7 @@ import {
     quoteAdd,
     removeRange,
     seatNoteFor,
+    tierTooSmall,
     type FamilyBillingFull,
     type FamilyGlance,
 } from './family-billing';
@@ -531,5 +532,35 @@ describe('tierMoves', () => {
         expect(
             familyActions(onTier('pro-month', { units: 6, paidUnits: 5 }), organizer).changePlan,
         ).toBe(false);
+    });
+});
+
+describe('tierTooSmall', () => {
+    const GIB = 1024n ** 3n;
+    const plus = { name: 'Family Plus (monthly)', quotaBytes: String(800n * GIB) };
+    const own = (bytes: bigint) => ({ usedBytes: String(bytes), pool: null });
+
+    test('a tier exactly as big as their files is offered; one byte more than it holds is not', () => {
+        expect(tierTooSmall(own(800n * GIB), plus)).toBeNull();
+        // The server refuses anything over the pool, checked to the byte, and says it in whole GB.
+        expect(tierTooSmall(own(800n * GIB + 1n), plus)).toBe(
+            'Your files take 801 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 1 GB.',
+        );
+    });
+
+    test('says it in the server’s words, rounded up', () => {
+        expect(tierTooSmall(own(950n * GIB - 5n), plus)).toBe(
+            'Your files take 950 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 150 GB.',
+        );
+    });
+
+    test('pooled figures are the family’s, not theirs: nothing is refused from them', () => {
+        expect(
+            tierTooSmall(
+                { usedBytes: String(900n * GIB), pool: { groupId: 'g', name: 'F' } },
+                plus,
+            ),
+        ).toBeNull();
+        expect(tierTooSmall(undefined, plus)).toBeNull();
     });
 });

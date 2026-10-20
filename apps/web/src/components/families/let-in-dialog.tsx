@@ -27,7 +27,7 @@ import { toast } from '@/components/ui/toast';
 import { lookupContact, pinContact, readSettingsForWrite, type Lookup } from '@/lib/contacts';
 import { formatDay } from '@/lib/drive';
 import {
-    afterMembershipChange,
+    afterFamilyChange,
     familiesQueryOptions,
     familyContext,
     familyKeys,
@@ -236,7 +236,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 if (staged.status !== 'sent')
                     throw new Error(`Couldn’t check ${family}. Try again.`);
                 const outcome = staged.outcome;
-                void afterMembershipChange(queryClient, userId);
+                void afterFamilyChange(queryClient, userId);
                 switch (outcome.status) {
                     case 'landed':
                         cue('success');

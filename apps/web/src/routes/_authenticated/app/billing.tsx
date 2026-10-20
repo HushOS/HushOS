@@ -28,7 +28,7 @@ import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { useUnlocked } from '@/lib/families';
 import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
-import { familyCurrencies } from '@/lib/family-billing';
+import { familyCurrencies, tierTooSmall } from '@/lib/family-billing';
 import {
     currenciesOf,
     familyPairs,
@@ -397,6 +397,8 @@ function BillingPage() {
         .filter((plan) => plan.interval === period)
         .sort((a, b) => (BigInt(a.quotaBytes) < BigInt(b.quotaBytes) ? -1 : 1));
     const [creating, setCreating] = useState<FamilyPlan | null>(null);
+    // Their own files, to say which tiers can't hold them before a family is made.
+    const ownStorage = useQuery({ ...storageQueryOptions, enabled: offerFamilies });
     // A family's keys are made on this device, which needs the account unlocked. Plans is
     // outside the drive (which asks for it), so a locked device goes to Account → Family,
     // which unlocks first, with the tier it chose.
@@ -708,6 +710,7 @@ function BillingPage() {
                                 const price = familyPrice(plan, familyCurrency);
                                 if (!price) return null;
                                 const name = familyTierName(plan);
+                                const tooSmall = tierTooSmall(ownStorage.data, plan);
                                 return (
                                     <PlanCard
                                         key={plan.id}
@@ -715,6 +718,7 @@ function BillingPage() {
                                         size={formatQuota(plan.quotaBytes)}
                                         price={`${formatMoney(price.base, price.currency)} ${per[plan.interval]}${plan.interval === 'year' && familySaving ? ' · 2 months free' : ''}`}
                                         detail={`For up to ${plan.includedMembers} people, then ${formatMoney(price.perMember, price.currency)} ${per[plan.interval]} for each person after that, up to ${plan.maxMembers}.`}
+                                        note={tooSmall}
                                         current={false}
                                         recommended={plan.recommended}
                                         footer={
@@ -722,7 +726,9 @@ function BillingPage() {
                                                 className="w-full"
                                                 variant="outline"
                                                 aria-label={`Create a family with ${name}`}
-                                                disabled={busy !== null || activating}
+                                                disabled={
+                                                    busy !== null || activating || tooSmall !== null
+                                                }
                                                 onClick={() => createFamilyWith(plan)}
                                             >
                                                 Create a family
@@ -853,6 +859,7 @@ function PlanCard({
     size,
     price,
     detail,
+    note,
     current,
     recommended,
     footer,
@@ -861,6 +868,8 @@ function PlanCard({
     size: string;
     price: string;
     detail?: string;
+    /* Why it can't be chosen, said beside its disabled button. */
+    note?: string | null;
     current: boolean;
     recommended?: boolean;
     footer?: ReactNode;
@@ -888,6 +897,11 @@ function PlanCard({
             </span>
             <span className="text-sm text-muted-foreground">{price}</span>
             {detail && <span className="text-sm text-muted-foreground">{detail}</span>}
+            {note && (
+                <span className="text-sm" data-tier-too-small>
+                    {note}
+                </span>
+            )}
             <div className="mt-auto pt-1">
                 {current ? (
                     <span className="flex h-9 items-center text-sm font-semibold text-muted-foreground">

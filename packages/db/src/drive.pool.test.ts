@@ -1,9 +1,24 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { Client } from 'pg';
-import { afterAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { GroupSubscriptionSnapshot } from './billing';
 import type { EntryChange, ParsedRoster } from './groups';
+import type * as PoolModule from './pool';
+
+/*
+ * A family's name read while its row goes (a dissolution between resolving the pool and naming
+ * it): only that one race test sets it; every other test reads the real name.
+ */
+const race = vi.hoisted(() => ({ nameGone: false }));
+vi.mock('./pool', async (importOriginal) => {
+    const actual = await importOriginal<typeof PoolModule>();
+    return {
+        ...actual,
+        poolName: (...args: Parameters<typeof actual.poolName>) =>
+            race.nameGone ? Promise.resolve(null) : actual.poolName(...args),
+    };
+});
 
 /*
  * One pool for a family's folders and every member's own files
@@ -729,6 +744,23 @@ describe('what one member sees', () => {
         expect((await auth.getStorageAllowance(maya.userId))?.usedBytes).toBe(String(GIB));
         await setBytes(sam.workspaceId, GIB + 1n);
         expect((await auth.getStorageAllowance(maya.userId))?.usedBytes).toBe(String(2n * GIB));
+    });
+
+    test('a pool whose name can’t be read answers nothing, never the pool’s exact figures', async () => {
+        const maya = await person();
+        const sam = await person();
+        const { areaIds } = await family({ organizer: maya, members: [sam], quota: 100n * GIB });
+        await setBytes(areaIds[0]!, 3n * GIB + 5n);
+        await setBytes(sam.workspaceId, 5n * GIB + 123n, 7n);
+        race.nameGone = true;
+        try {
+            // The exact figures (Sam's bytes to the byte, in flight included) would give Sam's
+            // usage away to Maya; read without the family's name, there is no answer at all.
+            expect(await auth.getStorageAllowance(maya.userId)).toBeNull();
+        } finally {
+            race.nameGone = false;
+        }
+        expect((await auth.getStorageAllowance(maya.userId))?.usedBytes).toBe(String(10n * GIB));
     });
 
     test('the endpoint reads without the pool’s lock: a held pool doesn’t stall a member’s figures', async () => {

@@ -21,7 +21,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { cue } from '@/lib/sounds';
-import { afterMembershipChange, familyContext, firstName, type FamilyMember } from '@/lib/families';
+import { afterFamilyChange, familyContext, firstName, type FamilyMember } from '@/lib/families';
 import { errorCopy } from '@/lib/groups/copy';
 import { removeMember, type RemovalOutcome, type RemovalStep } from '@/lib/groups/removal';
 // Loads the family folders' clients, which build a removal's rotations and walk them.
@@ -91,7 +91,7 @@ export function RemoveDialog({
             cue('error');
             setPhase({ kind: 'error', message: errorCopy(cause, { family, person: who }) });
         } finally {
-            void afterMembershipChange(queryClient, userId);
+            void afterFamilyChange(queryClient, userId);
         }
     }
 

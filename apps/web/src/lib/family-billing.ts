@@ -10,6 +10,7 @@ import {
     MAX_MEMBERS_PER_RAISE,
     quoteTierChange,
     quoteUnitsChange,
+    spaceOf,
 } from '@hushos/billing/protocol';
 import { queryOptions } from '@tanstack/react-query';
 import { groupBillingApi } from '@/lib/billing-api';
@@ -443,3 +444,26 @@ export function familyCurrencies(plans: readonly FamilyPlan[]) {
 
 /* In lib/plans, shared with the pricing page, which must not load this module's API clients. */
 export { familyPrice } from '@/lib/plans';
+
+const GIB = 1n << 30n;
+const wholeGibUp = (bytes: bigint) => ((bytes + GIB - 1n) / GIB) * GIB;
+
+/*
+ * Whether a family tier can be someone's new family's first plan: once it is live, their own
+ * files draw from it, so the server refuses a tier smaller than what they store (startGroupCheckout,
+ * docs/families-shared-pool.md 3.2), checked exactly against their own stored bytes. Said here
+ * before the family is made, in the server's words (whole GB, rounded up), so nobody is left with
+ * a family and no plan. `storage` is the account's own figures (/api/auth/storage while not pooled);
+ * unknown, or pooled already (someone in a family can't make another), nothing is refused here.
+ */
+export function tierTooSmall(
+    storage: { usedBytes: string; pool: unknown } | null | undefined,
+    plan: Pick<FamilyPlan, 'name' | 'quotaBytes'>,
+) {
+    if (!storage || storage.pool) return null;
+    const used = BigInt(storage.usedBytes);
+    const room = BigInt(plan.quotaBytes);
+    if (used <= room) return null;
+    const tier = plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+    return `Your files take ${spaceOf(wholeGibUp(used))}, more than ${tier}’s ${spaceOf(room)}. Choose a bigger plan or free at least ${spaceOf(wholeGibUp(used - room))}.`;
+}

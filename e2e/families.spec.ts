@@ -953,8 +953,14 @@ test.describe.serial('removal, leaving and key changes', () => {
         browser,
     }) => {
         // About 1.3 minutes on CI's dev server, and up to half a minute more waiting on route 2's
-        // poll below: a wait that never ends fails in three, not ten.
-        test.setTimeout(180_000);
+        // poll below: a wait that never ends fails in three, not ten. WebKit runs every step
+        // here slower (two to three minutes on a local dev server), so the walk stays held
+        // longer, and Maya's page, which checks a running walk from 15 s and twice as long each
+        // time it still finds it, may next look two or four minutes after it is released: route
+        // 2's 30 s poll and the held listing's waits add to that. It gets seven, and the wait for
+        // the walk's end below gets five.
+        const webkit = test.info().project.name === 'webkit';
+        test.setTimeout(webkit ? 420_000 : 180_000);
         // Sam adds a file after Replace keys, so the removal's walk is the first to re-key it.
         await openFamilyFolder(sam, family, 'Family');
         await upload(sam, 'sam-notes.txt', 'Notes by Sam\n');
@@ -1128,7 +1134,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         // "Re-keyed records"): after it his file still reads as a former member's, never as
         // re-locked by Maya, and Info names her only as the one who replaced the keys.
         await walk.release();
-        await waitForRotation(maya.page, before);
+        await waitForRotation(maya.page, before, webkit ? 300_000 : 120_000);
         for (const other of others) await other.release();
         // Ana's upload goes by itself, sealed again under Trips' new key: nobody pressed Retry,
         // it never failed, and it opens byte for byte.
@@ -2342,6 +2348,157 @@ test.describe.serial('one view for a family member, with one pool', () => {
             theo.page.getByRole('heading', { level: 2, name: 'Family folders' }),
         ).toBeVisible();
         await expect(theo.page.locator('[data-family-trash]')).toBeVisible({ timeout: 90_000 });
+    });
+});
+
+/*
+ * Creating a family from Plans, where it can stop: a tier smaller than the person's own files
+ * is refused before any family is made (the server would refuse its checkout and leave a
+ * family with no plan); a locked device goes to Account → Family, which unlocks first, with the
+ * tier it chose (a family's keys are made on the device); and a checkout that doesn't open
+ * leaves the family made, on its page, where Choose a plan offers the tiers again. Polar is never
+ * asked: the person's own figures and the checkout's refusal are answered on the wire. Runs only
+ * against a server that sells family plans (verify-hushos `launch --groups --billing polar`).
+ */
+test.describe.serial('creating a family from Plans: where it stops', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    const GIB = 1024 ** 3;
+    let nora: Person;
+    let plans: CatalogueFamily[] = [];
+    const monthly = (tier: string) =>
+        plans.find((plan) => plan.interval === 'month' && plan.tier === tier)!;
+    const tierOf = (plan: CatalogueFamily) =>
+        plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+
+    test.beforeAll(async ({ browser, request }) => {
+        test.setTimeout(300_000);
+        plans = await familyCatalogue(request);
+        test.skip(
+            !plans.some((plan) => plan.tier === 'plus' && plan.interval === 'month') ||
+                !plans.some((plan) => plan.tier === 'pro' && plan.interval === 'month'),
+            'This server sells no Family Plus and Pro plans.',
+        );
+        nora = await person(browser, 'Nora Berg');
+    });
+    test.afterAll(async () => {
+        await nora?.page.context().close();
+    });
+
+    test('a tier smaller than their own files can’t be chosen, and nothing is made', async () => {
+        const plus = monthly('plus');
+        const pro = monthly('pro');
+        const room = BigInt(plus.quotaBytes);
+        // Her own files, as the server answers them while she's in no family: 1 GB past Plus.
+        const storage = async (route: Route) =>
+            route.fulfill({
+                json: {
+                    storage: {
+                        workspaceId: randomUUID(),
+                        quotaBytes: String(4096n * BigInt(GIB)),
+                        usedBytes: String(room + 1n),
+                        reservedBytes: '0',
+                        availableBytes: String(4096n * BigInt(GIB) - room - 1n),
+                        pool: null,
+                        own: null,
+                    },
+                },
+            });
+        await nora.page.route('**/api/auth/storage', storage);
+        const created: string[] = [];
+        nora.page.on('request', (request) => {
+            if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/groups')
+                created.push(request.url());
+        });
+        await nora.page.goto('/app/billing');
+        const section = nora.page.locator('[data-family-plans]');
+        const card = section.locator(`[data-plan="${tierOf(plus)}"]`);
+        const why = `Your files take ${Number(room) / GIB + 1} GB, more than ${tierOf(plus)}’s ${Number(room) / GIB} GB. Choose a bigger plan or free at least 1 GB.`;
+        await expect(card.locator('[data-tier-too-small]')).toHaveText(why, { timeout: 60_000 });
+        await expect(
+            card.getByRole('button', { name: `Create a family with ${tierOf(plus)}` }),
+        ).toBeDisabled();
+        // A tier that holds them is offered as before.
+        await expect(
+            section.getByRole('button', { name: `Create a family with ${tierOf(pro)}` }),
+        ).toBeEnabled();
+        await expect(
+            section.locator(`[data-plan="${tierOf(pro)}"] [data-tier-too-small]`),
+        ).toHaveCount(0);
+        // Asked for by address too (a locked device's way in): the dialog says why and makes nothing.
+        await nora.page.goto(`/app/family?create=${plus.id}&currency=usd`);
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(why, { timeout: 60_000 });
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeDisabled();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        expect(created).toEqual([]);
+        await nora.page.unroute('**/api/auth/storage', storage);
+    });
+
+    test('on a locked device, Create a family unlocks first and carries the tier', async () => {
+        const plus = monthly('plus');
+        await nora.page.goto('/app/account', { waitUntil: 'networkidle' });
+        await nora.page
+            .getByRole('button', { name: 'Lock on this browser' })
+            .click({ timeout: 60_000 });
+        await nora.page
+            .getByRole('alertdialog')
+            .getByRole('button', { name: 'Lock', exact: true })
+            .click();
+        await expect(nora.page.getByRole('button', { name: 'Unlock on this browser' })).toBeVisible(
+            { timeout: 60_000 },
+        );
+        // Plans is outside the drive and opens locked; a family's keys can't be made there now.
+        await nora.page.goto('/app/billing');
+        await nora.page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tierOf(plus)}` })
+            .click({ timeout: 60_000 });
+        await expect(nora.page).toHaveURL(
+            new RegExp(`/app/family\\?create=${plus.id}&currency=[a-z]{3}$`),
+        );
+        await expect(
+            nora.page.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
+        ).toBeVisible({ timeout: 60_000 });
+        await nora.page.locator('input[autocomplete=current-password]').fill(PASSWORD);
+        await nora.page.locator('input[autocomplete=current-password]').press('Enter');
+        // Unlocked, the dialog opens with the tier chosen on Plans.
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(`Then you pay for ${tierOf(plus)},`, {
+            timeout: 60_000,
+        });
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(nora.page.locator('[data-no-family]')).toBeVisible();
+    });
+
+    test('a checkout that doesn’t open leaves the family made, on its page, with Choose a plan', async () => {
+        const plus = monthly('plus');
+        const family = 'Berg family';
+        const checkout = /\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/;
+        await nora.page.route(checkout, (route: Route) =>
+            route.fulfill({ status: 503, json: { error: 'Payments are unavailable just now.' } }),
+        );
+        await nora.page.goto('/app/billing');
+        await nora.page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tierOf(plus)}` })
+            .click({ timeout: 60_000 });
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(family);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await expect(
+            nora.page.getByText(`${family} created, but the checkout didn’t open`),
+        ).toBeVisible({ timeout: 90_000 });
+        await expect(nora.page).toHaveURL(/\/app\/family$/);
+        await expect(nora.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(nora.page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+        await nora.page.unroute(checkout);
+        // And Plans no longer offers a second family to someone who has one.
+        await nora.page.goto('/app/billing');
+        await expect(nora.page.locator('[data-plan="Free"]')).toBeVisible({ timeout: 60_000 });
+        await expect(nora.page.locator('[data-family-plans]')).toHaveCount(0);
     });
 });
 

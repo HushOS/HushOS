@@ -1,7 +1,7 @@
 import type { FamilyPlan } from '@hushos/billing/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -16,8 +16,14 @@ import { groupBillingApi } from '@/lib/billing-api';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { familyTierName } from '@/lib/plans';
-import { formatQuota, useBillingEnabled } from '@/lib/queries';
-import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families';
+import { tierTooSmall } from '@/lib/family-billing';
+import { formatQuota, storageQueryOptions, useBillingEnabled } from '@/lib/queries';
+import {
+    afterFamilyChange,
+    afterMembershipChange,
+    familiesQueryOptions,
+    familyContext,
+} from '@/lib/families';
 import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { createFamily } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
@@ -61,10 +67,25 @@ export function CreateFamilyDialog({
     const yours = useQuery(familiesQueryOptions(userId)).data?.find(
         (at) => at.kind === 'family' && at.state === 'active',
     );
+    // A tier smaller than their own files can't be the new family's first plan (the server
+    // refuses it at checkout): said, and nothing is made, before the family exists.
+    const storage = useQuery({ ...storageQueryOptions, enabled: Boolean(plan) });
+    const tooSmall = plan ? tierTooSmall(storage.data, plan.plan) : null;
     // Once submitted, the family being made is about to be "yours": it refuses nothing then.
-    const refusal = yours && !pending ? createInFamilyCopy(yours.name) : '';
-    // Back from Polar's checkout (the browser's back button restores this page as it was).
-    usePageRestored(() => setPending(false));
+    const refusal = yours && !pending ? createInFamilyCopy(yours.name) : tooSmall || '';
+    // Back from Polar's checkout (the browser's back button restores this page as it was, from
+    // before the family existed): the family is made and has no plan yet, so its page, where
+    // Choose a plan offers the tiers again, is where this goes on, never a second Create.
+    const leftFor = useRef<string | null>(null);
+    usePageRestored(() => {
+        setPending(false);
+        if (!leftFor.current) return;
+        leftFor.current = null;
+        onOpenChange(false);
+        setName('');
+        void afterMembershipChange(queryClient, userId);
+        void navigate({ to: '/app/family' });
+    });
 
     async function submit(event: FormEvent) {
         event.preventDefault();
@@ -74,9 +95,9 @@ export function CreateFamilyDialog({
         setError('');
         try {
             const { groupId, outcome } = await createFamily(familyContext(userId), trimmed);
-            // On to the checkout, the families aren't read again first: the page offering the
-            // tiers would take them away (one family per account) while the checkout opens.
-            if (!(plan && outcome.status === 'landed')) void afterFamilyChange(queryClient, userId);
+            // Read again before anything else, the checkout included: whatever page comes back
+            // (a reload, Back from Polar) knows the family exists. This dialog stays while it does.
+            await afterFamilyChange(queryClient, userId);
             if (outcome.status === 'landed') {
                 if (plan) {
                     try {
@@ -85,6 +106,7 @@ export function CreateFamilyDialog({
                             plan.plan.id,
                             plan.currency,
                         );
+                        leftFor.current = groupId;
                         window.location.assign(url);
                         // Busy until the browser has left for the checkout.
                         return;
@@ -98,7 +120,6 @@ export function CreateFamilyDialog({
                         onOpenChange(false);
                         setName('');
                         setPending(false);
-                        await afterFamilyChange(queryClient, userId);
                         await navigate({ to: '/app/family' });
                         return;
                     }
