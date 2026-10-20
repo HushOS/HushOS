@@ -74,7 +74,9 @@ private final class PassThroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         if hit !== rootViewController?.view { return hit }
-        return NoticeCenter.shared.frame?.contains(point) == true ? hit : nil
+        // Only while a notice shows: a frame left behind after the notice went never takes a touch.
+        let center = NoticeCenter.shared
+        return center.current != nil && center.frame?.contains(point) == true ? hit : nil
     }
 }
 
@@ -86,8 +88,6 @@ private struct NoticeLayer: View {
             Spacer()
             if let notice = center.current {
                 NoticeBar(notice: notice) { center.dismiss() }
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { center.frame = $0 }
-                    .onDisappear { center.frame = nil }
                     .padding(.bottom, center.bottom + center.lift)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -120,6 +120,9 @@ struct NoticeBar: View {
         .frame(minHeight: 48)
         .frame(maxWidth: 370)
         .background(Alpine.snackbar, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        // The capsule's own frame, not its margins: the window takes touches only there.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { NoticeCenter.shared.frame = $0 }
+        .onDisappear { NoticeCenter.shared.frame = nil }
         .alpineRaised(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .padding(.horizontal)
         .accessibilityElement(children: .contain)
