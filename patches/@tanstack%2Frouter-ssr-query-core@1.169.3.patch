@@ -1,0 +1,49 @@
+diff --git a/dist/cjs/index.cjs b/dist/cjs/index.cjs
+index c5ec4b6df063a1b54d14e67efde7e0d3b96a8d42..6d77c4431b2118ca0faa568a7f05caf8e274b85b 100644
+--- a/dist/cjs/index.cjs
++++ b/dist/cjs/index.cjs
+@@ -125,9 +125,10 @@ function setupCoreRouterSsrQueryIntegration({ router, queryClient, dehydrateOpti
+ 			} catch (error) {
+ 				console.error("Error reading query stream:", error);
+ 				reader.cancel(error).catch(() => {});
+-			} finally {
+-				reader.releaseLock();
+ 			}
++			// HushOS patch: no reader.releaseLock(). WebKit's releaseLock() holds the reader's lock
++			// while it allocates, and a garbage collection starting there deadlocks the main thread.
++			// Nothing reads this stream after it ends, so the reader is simply dropped.
+ 		})();
+ 	};
+ 	if (handleRedirects) {
+diff --git a/dist/esm/index.js b/dist/esm/index.js
+index c386fdab342d31399a034b49557f8c88fad02a86..87d6d18c857242e970dd946edde2f21b086ff203 100644
+--- a/dist/esm/index.js
++++ b/dist/esm/index.js
+@@ -124,9 +124,10 @@ function setupCoreRouterSsrQueryIntegration({ router, queryClient, dehydrateOpti
+ 			} catch (error) {
+ 				console.error("Error reading query stream:", error);
+ 				reader.cancel(error).catch(() => {});
+-			} finally {
+-				reader.releaseLock();
+ 			}
++			// HushOS patch: no reader.releaseLock(). WebKit's releaseLock() holds the reader's lock
++			// while it allocates, and a garbage collection starting there deadlocks the main thread.
++			// Nothing reads this stream after it ends, so the reader is simply dropped.
+ 		})();
+ 	};
+ 	if (handleRedirects) {
+diff --git a/src/index.ts b/src/index.ts
+index a36eeddba18898339e3c17b570137446adb36250..4927a59915241e6d1279bae78483e7c054086f77 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -254,9 +254,8 @@ export function setupCoreRouterSsrQueryIntegration<TRouter extends AnyRouter>({
+       } catch (error) {
+         console.error('Error reading query stream:', error)
+         void reader.cancel(error).catch(() => {})
+-      } finally {
+-        reader.releaseLock()
+       }
++      // HushOS patch: no reader.releaseLock(); see dist/esm/index.js.
+     })()
+   }
+   if (handleRedirects) {
