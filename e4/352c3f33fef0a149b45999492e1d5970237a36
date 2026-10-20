@@ -1,0 +1,37 @@
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_d5a6b8a1970e85 97-98
+docs/groups-design.md
+  s_566b8e0c4467a4::t_90ae9efdecc801 335
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_5a460a4be24142 208,701,718-720
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_b7667608f30412 587-590,603-614
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_d10d3c78a0da5b 266-267,429,645,663,1054,5311-5351
+packages/db/drizzle/20261020211129_dissolve_failing/migration.sql
+  s_566b8e0c4467a4::t_918266d422e9b5 1-6
+packages/db/drizzle/20261020211129_dissolve_failing/snapshot.json
+  s_566b8e0c4467a4::t_6fd839c1357561 1-13553
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_7180aaaf28a946 589-591,595-598,602-605,613,620,711,732,738-759,911-914
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_5941bf4527a398 14
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_1c1988455ec16d 220-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4352c3f33fef0a149b45999492e1d5970237a36",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
