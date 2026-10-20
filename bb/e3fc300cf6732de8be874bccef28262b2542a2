@@ -1,0 +1,31 @@
+apps/web/src/lib/drive.ts
+  s_566b8e0c4467a4::t_bdfca5d9586420 78-79
+apps/web/src/lib/groups/walks.test.ts
+  s_566b8e0c4467a4::t_a955920e17845d 394,402,404,549-668
+apps/web/src/lib/groups/walks.ts
+  s_566b8e0c4467a4::t_ffc581ba594f4f 139-147,179,193,199-200,232-236,238-243,247,336-345,362-364,367-369,371-375,377-385,388-392,395,416,423,428-440,475-477
+apps/web/src/lib/sign-out.test.ts
+  s_566b8e0c4467a4::t_a31226a4cebba0 26-27,38,49,434-447
+apps/web/src/lib/sign-out.ts
+  s_566b8e0c4467a4::t_7c03d588c15e5a 51-56
+apps/web/src/lib/space-registry.ts
+  s_566b8e0c4467a4::t_219f11556103c0 93-99
+apps/web/src/lib/spaces.ts
+  s_566b8e0c4467a4::t_98488a59a3f4bb 251-259,261-268,270-273,288-289,297-312
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bbe3fc300cf6732de8be874bccef28262b2542a2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
