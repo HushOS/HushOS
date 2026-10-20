@@ -1,0 +1,24 @@
+apps/web/src/lib/fonts.ts
+  s_566b8e0c4467a4::t_edaec8017009bc 1-26
+  s_566b8e0c4467a4::t_d16041742c2e71 27-50
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_646f5b63431fe7 26,86-102
+apps/web/src/routes/pricing/route.tsx
+  s_566b8e0c4467a4::t_0e56df00d4e2d3 56,129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8353ab6d9f9c694b15fa6f52ee80040666735efd",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
