@@ -1315,15 +1315,90 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun trashAll(items: List<Opened>) = viewModelScope.launch {
-        for (item in items) trashOne(item)
-        announceTrash(items)
+    fun trashAll(items: List<Opened>) = viewModelScope.launch { trashBatch(items) }
+
+    /*
+     * Move to Trash, one item or many (TrashBatch.kt): the batch goes through Vault.trashMany; then
+     * the moved rows leave every list, the notice says what moved with an Undo for exactly that, and the
+     * feed, the listings, the system's view and kept folders follow once, in the background.
+     */
+    private suspend fun trashBatch(items: List<Opened>) {
+        val vault = vault ?: return
+        if (items.isEmpty()) return
+        _state.update { it.copy(busy = true) }
+        val result = try {
+            trashMany(items, TrashSteps(
+                send = { batch -> withContext(Dispatchers.IO) { vault.trashMany(batch.map { it.id }) } },
+                drop = { moved -> dropRows(moved.map { it.id }.toSet()) },
+                announce = { text, undo -> if (undo.isEmpty()) notify(text) else notify(text) { viewModelScope.launch { undoTrash(undo) } } },
+                settle = { folders -> viewModelScope.launch { settle(folders) } },
+            ))
+        } finally {
+            _state.update { it.copy(busy = false) }
+        }
+        reportFailures(result.failed.map { it.second }, single = items.size == 1)
     }
 
-    /* Says what went to the trash and offers to bring it straight back. */
-    private fun announceTrash(items: List<Opened>) {
-        val text = if (items.size == 1) "Moved “${items[0].name}” to Trash" else "Moved ${items.size} items to Trash"
-        notify(text) { viewModelScope.launch { for (item in items) restoreQuietly(item) } }
+    /* Rows the server agreed are gone: off every folder on screen and off Recent, without a listing. */
+    private fun dropRows(ids: Set<String>) = _state.update { s ->
+        s.copy(folders = s.folders.mapValues { (_, rows) -> rows.filter { it.id !in ids } }, recents = s.recents.filter { it.id !in ids })
+    }
+
+    /*
+     * After a batch of writes, once: the feed (it already holds them), each changed folder read
+     * again, the system's view told, and kept folders of shares looked at. Quiet: a failure here
+     * raises nothing and leaves the lists as the write left them.
+     */
+    private suspend fun settle(folders: Set<String>) {
+        sync(quiet = true)
+        for (folder in folders) quietly { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
+        context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
+        if (Offline.folders(context).any { it.shareRoot != null }) refreshKeptFolders(withShares = true)
+    }
+
+    /*
+     * What a batch's failures mean beyond its notice: an ended session signs out, no network sets
+     * the offline line, and a single item that failed says so as a single write always did.
+     */
+    private fun reportFailures(errors: List<Throwable>, single: Boolean) {
+        if (errors.isEmpty()) return
+        if (errors.any { it is NotAuthenticated }) { sessionLost(); return }
+        if (errors.any { com.hushos.app.data.Problems.offline(it) }) _state.update { it.copy(unreachable = true) }
+        errors.filter { !com.hushos.app.data.Problems.offline(it) }.forEach { android.util.Log.w("HushOS", "request failed", it) }
+        if (!single) return
+        val error = errors[0]
+        if (com.hushos.app.data.Problems.offline(error)) notify("You’re offline, so that didn’t happen. Try again once you’re connected.")
+        else { lastFailure = error; _state.update { it.copy(error = com.hushos.app.data.Problems.of(error)) } }
+    }
+
+    /* The notice's Undo: exactly what moved comes back, then each row goes into its folder at once and the follow-up runs once. */
+    private suspend fun undoTrash(moved: List<Opened>) {
+        val vault = vault ?: return
+        _state.update { it.copy(busy = true) }
+        val outcomes = try {
+            withContext(Dispatchers.IO) { com.hushos.app.data.oneAfterAnother(moved) { item -> vault.restore(TrashItem(item, false)) } }
+        } finally {
+            _state.update { it.copy(busy = false) }
+        }
+        val back = outcomes.mapNotNull { it.getOrNull() }
+        val byName = compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+        val backIds = back.map { it.id }.toSet()
+        _state.update { s ->
+            s.copy(
+                folders = s.folders.mapValues { (id, rows) ->
+                    val returning = back.filter { item -> item.node.parentId == id && rows.none { it.id == item.id } }
+                    if (returning.isEmpty()) rows else (rows + returning).sortedWith(byName)
+                },
+                // The Trash list may be open under the notice: what came back leaves it now too.
+                trash = s.trash.filter { it.item.id !in backIds },
+            )
+        }
+        if (back.isNotEmpty()) viewModelScope.launch { settle(back.mapNotNull { it.node.parentId }.toSet()) }
+        val errors = outcomes.mapNotNull { it.exceptionOrNull() }
+        reportFailures(errors, single = moved.size == 1)
+        if (errors.isNotEmpty() && moved.size > 1 && errors.none { it is NotAuthenticated }) {
+            notify(if (back.isEmpty()) "Couldn’t bring them back. They’re still in Trash." else "${back.size} of ${moved.size} are back. The rest are still in Trash.")
+        }
     }
 
     /*
@@ -1351,9 +1426,6 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissNotice() = _state.update { it.copy(notice = null) }
 
-    private suspend fun restoreQuietly(item: Opened) {
-        if (write(item.node.parentId) { it.restore(TrashItem(item, false)) }) refreshRecents()
-    }
     /*
      * Move to…: within a drive the item's key is wrapped again under its new folder.
      * Into (or out of) a folder someone shared, the server keeps objects per drive,
@@ -1447,13 +1519,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         return ok
     }
 
-    fun trash(item: Opened) = viewModelScope.launch {
-        if (trashOne(item)) announceTrash(listOf(item))
-    }
+    fun trash(item: Opened) = viewModelScope.launch { trashBatch(listOf(item)) }
 
+    /* The original of a move across drives, once its copy landed: part of that move, so no notice of its own. */
     private suspend fun trashOne(item: Opened): Boolean {
         val ok = write(item.node.parentId) { it.trash(item.id) }
-        _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }) }
+        if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }) }
         return ok
     }
     fun restore(entry: TrashItem) = viewModelScope.launch {
