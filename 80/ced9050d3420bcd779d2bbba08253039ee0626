@@ -1,0 +1,28 @@
+apps/web/src/lib/ssr-query-stream.test.ts
+  s_c56e31c87cddde::t_97ad15d6571174 10-12
+  s_c56e31c87cddde::t_6d3d7413ef5c67 1-9,13-37,39,48-90
+  s_c56e31c87cddde::t_86c27e10ea0abc 38,40-47
+  s_c56e31c87cddde::t_351d1024ccfcf0 91-92
+bun.lock
+  s_c56e31c87cddde::t_258e27b144e552 335
+package.json
+  s_c56e31c87cddde::t_361275710572d1 88-89
+patches/@tanstack%2Frouter-ssr-query-core@1.169.3.patch
+  s_c56e31c87cddde::t_10247ab61b45f0 1-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "80ced9050d3420bcd779d2bbba08253039ee0626",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
