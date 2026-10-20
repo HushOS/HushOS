@@ -575,8 +575,12 @@ final class BackgroundTransfers {
         // Plaintext an extension killed mid-seal left with no note, which nothing would ever adopt or remove.
         ShareHandoff.sweepOrphans(keeping: Set(records.map(\.id)))
         var added = false
+        // What goes once the records naming it are on disk (ShareHandoff.adopt): each note and the parts it brought.
+        var taken: [UUID: [Int]] = [:]
         let signedIn = AccountOwner.signedIn
-        for note in notes where !records.contains(where: { $0.id == note.id }) {
+        for note in notes {
+            // Recorded before, and the app stopped before the note went: only the note goes now.
+            if records.contains(where: { $0.id == note.id }) { taken[note.id] = []; continue }
             switch TransferOwnership.of(note.owner, signedIn: signedIn) {
             case .run:
                 break
@@ -592,14 +596,16 @@ final class BackgroundTransfers {
             record.state = .sending
             record.sealed = note.sealed
             record.size = note.size
-            record.etags = ShareHandoff.takeLanded(note.id)
+            record.etags = ShareHandoff.landedParts(note.id)
             if record.etags.count == note.sealed.partCount { record.state = .finishing }
             records.append(record)
-            ShareHandoff.adopted(note.id)
+            taken[note.id] = Array(record.etags.keys)
             added = true
         }
+        guard !taken.isEmpty else { return }
+        // Records first, then the notes: killed between, the upload is adopted again, never left with neither.
+        ShareHandoff.adopt(taken) { save() }
         guard added else { return }
-        save()
         if UIApplication.shared.applicationState == .active { BackgroundAccess.shared.transferStarted() }
         Task { await pump() }
     }
@@ -745,9 +751,12 @@ final class BackgroundTransfers {
      */
     private var queue: URL { Unbacked.folder(root) }
 
-    private func save() {
+    /* Whether the records reached the disk. */
+    @discardableResult
+    private func save() -> Bool {
         TransferLive.shared.refresh()
-        if let data = try? JSONEncoder().encode(records) { try? data.write(to: queue.appendingPathComponent("records.json"), options: .atomic) }
+        guard let data = try? JSONEncoder().encode(records) else { return false }
+        return (try? data.write(to: queue.appendingPathComponent("records.json"), options: .atomic)) != nil
     }
 
     private func folder(_ id: UUID) -> URL { queue.appendingPathComponent(id.uuidString, isDirectory: true) }

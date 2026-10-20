@@ -55,20 +55,23 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
     /* Where the extension copies what it was handed, one folder per sheet, until Save seals it into `transfers`. */
     public static var staging: URL { transfers.deletingLastPathComponent().appendingPathComponent("share-staging", isDirectory: true) }
 
-    /* How long a note may be held before its extension must be gone; a folder nothing claims is left that long too. */
+    /* How long a note may be held before its extension must be gone. */
     static let heldAge: TimeInterval = 120
+    /* A queue folder with no note, no transfer and no owner on record: left a day before it is taken for abandoned. */
+    static let unclaimedAge: TimeInterval = 86400
     /* A staging folder whose sheet left no owner (an older version): kept an hour. */
     static let unownedStagingAge: TimeInterval = 3600
     /* No sheet stays open a day: past that an owner's process id is taken for reused. */
     static let ownedStagingAge: TimeInterval = 86400
 
     /*
-     * A sheet's staging folder belongs to the extension process that made it: the folder names
-     * it (`owner`, the process id), and the sweep leaves it while that process runs, however long
-     * the sheet stays open. A plain marker, never a lock: a process suspended holding a lock in the
+     * A folder the extension is working in (a sheet's staging folder, a file it is sealing into
+     * the queue's folder) belongs to the extension process that made it: the folder names it
+     * (`owner`, the process id), and the sweeps leave it while that process may still run, however
+     * long it is suspended. A plain marker, never a lock: a process suspended holding a lock in the
      * group container is killed (0xdead10cc).
      */
-    public static func claimStaging(_ folder: URL, pid: Int32 = getpid()) {
+    public static func claim(_ folder: URL, pid: Int32 = getpid()) {
         try? Data(String(pid).utf8).write(to: folder.appendingPathComponent("owner"), options: .atomic)
     }
 
@@ -81,32 +84,45 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
         let files = FileManager.default
         for folder in (try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
             let age = now.timeIntervalSince(lastTouched(folder))
-            let owner = (try? String(contentsOf: folder.appendingPathComponent("owner"), encoding: .utf8)).flatMap { Int32($0) }
+            let owner = owner(of: folder)
             let stale: Bool
             if let owner { stale = !running(owner) || age > ownedStagingAge } else { stale = age > unownedStagingAge }
             if stale { try? files.removeItem(at: folder) }
         }
     }
 
-    /* Whether a process is alive: a signal check, which fails with "no such process" only when it is gone. */
+    /*
+     * Whether a process may still be alive: only "no such process" (ESRCH) says it is gone. A
+     * process this one may not signal (EPERM) exists, and anything else can't be ruled out.
+     */
     public static func processRuns(_ pid: Int32) -> Bool {
-        kill(pid, 0) == 0 || errno == EPERM
+        guard pid > 0 else { return false }
+        return kill(pid, 0) == 0 || errno != ESRCH
     }
 
     /*
-     * Folders under `transfers` nothing owns: no note beside them (the extension was killed while
-     * sealing, leaving the plaintext in `content`) and no queued transfer of that id, untouched for
-     * as long as a held note is waited for. Anything else in the folder (the queue's records) stays.
+     * Folders under `transfers` nothing owns: no note beside them and no queued transfer of that
+     * id. One the extension claimed goes only once its process is gone (it was killed while
+     * sealing, leaving the plaintext in `content`), or after a day (a reused process id). One
+     * nobody claimed goes after a day. Age alone said nothing: a sheet suspended mid-seal writes
+     * nothing for minutes, and its folder held the only copy of the file. The queue's records stay.
      */
-    public static func sweepOrphans(keeping queued: Set<UUID>, now: Date = Date(), in root: URL = transfers) {
+    public static func sweepOrphans(keeping queued: Set<UUID>, now: Date = Date(), in root: URL = transfers,
+                                    running: (Int32) -> Bool = processRuns) {
         let files = FileManager.default
         for folder in (try? files.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
             guard let id = UUID(uuidString: folder.lastPathComponent), !queued.contains(id),
-                  !files.fileExists(atPath: folder.appendingPathComponent("handoff.json").path),
-                  now.timeIntervalSince(lastTouched(folder)) > heldAge
+                  !files.fileExists(atPath: folder.appendingPathComponent("handoff.json").path)
             else { continue }
-            try? files.removeItem(at: folder)
+            let age = now.timeIntervalSince(lastTouched(folder))
+            let abandoned = owner(of: folder).map { !running($0) } ?? false
+            if abandoned || age > unclaimedAge { try? files.removeItem(at: folder) }
         }
+    }
+
+    static func owner(of folder: URL) -> Int32? {
+        (try? String(contentsOf: folder.appendingPathComponent("owner"), encoding: .utf8))
+            .flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
     /* The latest change to a folder or anything directly in it: a seal writing parts keeps it fresh. */
@@ -118,7 +134,9 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
         return ([own] + inside).max() ?? own
     }
 
-    private static func note(_ id: UUID) -> URL { directory(id).appendingPathComponent("handoff.json") }
+    private static func note(_ id: UUID, in root: URL = transfers) -> URL {
+        root.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent("handoff.json")
+    }
 
     /* Written once the parts are sealed on disk, before they go to the session; written again to release it. */
     public func write() throws {
@@ -137,8 +155,37 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
         }
     }
 
-    /* Adopted: the note goes, so it is not adopted twice. */
-    public static func adopted(_ id: UUID) { try? FileManager.default.removeItem(at: note(id)) }
+    /*
+     * Notes taken into the queue, each with the parts it was adopted with: the queue's records are
+     * written first (`persist`), and only once they are on disk do the notes and those parts' files
+     * go, so a note is never adopted twice nor lost. Killed in between, the note is still there and
+     * the queue, finding its record, only removes it. The other way round, a killed app left an
+     * upload with neither note nor record, and the next sweep took it.
+     */
+    @discardableResult
+    public static func adopt(_ taken: [UUID: [Int]], in root: URL = transfers, persist: () -> Bool) -> Bool {
+        guard persist() else { return false }
+        for (id, parts) in taken {
+            try? FileManager.default.removeItem(at: note(id, in: root))
+            for part in parts {
+                try? FileManager.default.removeItem(at: root.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent("etag-\(part)"))
+            }
+        }
+        return true
+    }
+
+    /* The parts the extension saw land, read and left in place (`adopt` removes them once recorded). */
+    public static func landedParts(_ id: UUID, in root: URL = transfers) -> [Int: String] {
+        let folder = root.appendingPathComponent(id.uuidString, isDirectory: true)
+        var found: [Int: String] = [:]
+        for file in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        where file.lastPathComponent.hasPrefix("etag-") {
+            guard let part = Int(file.lastPathComponent.dropFirst("etag-".count)),
+                  let etag = try? String(contentsOf: file, encoding: .utf8), !etag.isEmpty else { continue }
+            found[part] = etag
+        }
+        return found
+    }
 
     /* A part the extension saw land. */
     public static func landed(_ id: UUID, part: Int, etag: String) {

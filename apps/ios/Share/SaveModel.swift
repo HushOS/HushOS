@@ -53,7 +53,7 @@ final class SaveModel {
         Unbacked.folder(ShareHandoff.staging)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         // This sheet's: another sheet's sweep leaves it while this process runs.
-        ShareHandoff.claimStaging(staging)
+        ShareHandoff.claim(staging)
         phase = .ready
         async let place: Void = findFolder(vault)
         await read(extensionItems)
