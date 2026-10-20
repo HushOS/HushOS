@@ -1,0 +1,33 @@
+docs/groups-design.md
+  s_566b8e0c4467a4::t_25f764edc32422 335
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_c36d397012ba82 699,701,703,716-720
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_5f91599ff723aa 368-369,373,552-554,557-561,572,578-594,601,608-618,624-625,627,630-637,641,656,658-664,669-672,678-682
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_a385f9c7323d15 259-265,775-779,784-787,919-920,923-926,1048,1050,5233,5272-5405,5422
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_150ae0e66f4fbc 592-594,597-598,606,613,645-647,655,658-659,674-678,687-698,747
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_35779644ed4c7d 208-209,215-217
+packages/emails/src/rendered/family-plan-ending.ts
+  s_566b8e0c4467a4::t_ef7eed9b181c18 3-4
+packages/emails/src/templates/family-plan-ending.tsx
+  s_566b8e0c4467a4::t_403d360e9b5e85 172-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e1fefdc55785ec724d2e0f46ce4a6927decae7d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
