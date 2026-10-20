@@ -17,13 +17,18 @@
 -- the previous release keep writing shared numbers until they stop; the next release runs this
 -- again and then makes the index unique.
 --
--- Locks: no table lock and no schema change. The first statement locks, FOR UPDATE and in id
--- order, the workspaces rows of the workspaces that have a shared number, the lock every Drive
--- write in a workspace takes first (nextChangeSeq), so Drive writes in those workspaces only wait
--- until drizzle's single transaction commits: the time of two scans of drive_nodes' numbered rows
--- and the update of the rows that move. Reads, sign-ups and every other workspace go on. It waits
--- at most five seconds for a row and fails, to be retried, rather than queue requests behind it;
--- a deadlock with a live write (a move between two of those workspaces) fails it the same way.
+-- Locks: no table lock and no schema change. What keeps the new numbers unique is that every
+-- number comes from the workspace's counter (nextChangeSeq and moreChangeSeqs, under the workspace
+-- row), which this moves past the numbers it hands out. The first statement locks, FOR UPDATE and
+-- in id order, the workspaces rows of the workspaces that have a shared number, so that no number
+-- is taken in them meanwhile: writes that number nodes in those workspaces wait until drizzle's
+-- single transaction commits, the time of two scans of drive_nodes' numbered rows and the update of
+-- the rows that move. Not every write takes that row (an upload's first step inserts its node
+-- without a number); none of those number a node. Reads, sign-ups and every other workspace go on.
+-- It waits at most five seconds for a row and fails, to be retried, rather than queue requests
+-- behind it. A deadlock aborts it with nothing applied, to be run again: the tombstone sweep
+-- deletes drive_nodes rows before updating workspaces, and a move between a family folder and a
+-- personal workspace locks the family folder's row first, not in id order.
 SET LOCAL lock_timeout = '5s';--> statement-breakpoint
 SELECT 1 FROM "workspaces"
 WHERE "id" IN (
