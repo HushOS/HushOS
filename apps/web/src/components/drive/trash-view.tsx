@@ -49,6 +49,7 @@ import {
     invalidateFolders,
     nodeSize,
     trashQueryOptions,
+    refreshSharing,
 } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 import { emptyTrashAll } from '@/lib/trash';
@@ -272,6 +273,7 @@ export function TrashView({
         setActive(null);
         setBatch(null);
         await invalidateFolders(queryClient);
+        void refreshSharing(queryClient);
         const restored = ordered.length - failed.length;
         if (failed.length) {
             // Several, and some didn't come back: that stays on the page, not in a toast.
@@ -378,6 +380,7 @@ export function TrashView({
                     : undefined,
             });
             await invalidateFolders(queryClient, restored.parentId, item.node.parentId);
+            void refreshSharing(queryClient);
         } catch (error) {
             cue('error');
             toast.add({

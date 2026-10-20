@@ -55,6 +55,7 @@ import {
     restoreNodes,
     trashNodes,
     useCatalogueState,
+    refreshSharing,
 } from '@/lib/drive';
 import { usePaletteOpen } from '@/lib/palette';
 import { previewKind } from '@/lib/previews';
@@ -250,6 +251,7 @@ export function HomeView() {
                     new Map([...current, ...landed.map((node) => [node.id, node] as const)]),
             );
         });
+        if (returned.length > 0) void refreshSharing(queryClient);
         if (returned.length === nodes.length) {
             cue('success');
             toast.update(toastId, {

@@ -83,6 +83,7 @@ import {
     DEFAULT_SORT,
     type SortKey,
     type SortOrder,
+    refreshSharing,
 } from '@/lib/drive';
 import { previewKind } from '@/lib/previews';
 import { saveCopy } from '@/lib/save-copy';
@@ -412,6 +413,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                     new Map([...current, ...landed.map((node) => [node.id, node] as const)]),
             );
         });
+        if (returned.length > 0) void refreshSharing(queryClient);
         if (returned.length === nodes.length) {
             cue('success');
             toast.update(toastId, {
