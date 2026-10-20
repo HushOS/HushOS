@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-20';
+export const updated = '2026-10-21';
 
 export const sections: RoadmapSection[] = [
     {
@@ -219,6 +219,20 @@ export const sections: RoadmapSection[] = [
                     { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
                 ],
             },
+            {
+                id: 'two-step-sign-in',
+                status: 'next',
+                area: 'Platform',
+                title: 'Two-step sign-in and device approval',
+                body: 'Sign in with your password and a code from an authenticator app, or a security key, and approve a new device from one you already use. The second step is a check the server makes when you sign in; device approval goes further, holding back your keys from a new device until you approve it.',
+                links: [
+                    {
+                        kind: 'docs',
+                        path: 'docs/devices-design.md',
+                        label: 'Read the devices design',
+                    },
+                ],
+            },
         ],
     },
     {
@@ -255,6 +269,13 @@ export const sections: RoadmapSection[] = [
                 title: 'Messages',
                 body: 'Messages with the people already in your contacts, locked on your device the way your files are.',
                 links: [{ kind: 'blog', slug: 'hushos-1-0', label: 'Where it fits' }],
+            },
+            {
+                id: 'passkeys',
+                status: 'later',
+                area: 'Platform',
+                title: 'Sign in with a passkey',
+                body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
             },
         ],
     },
