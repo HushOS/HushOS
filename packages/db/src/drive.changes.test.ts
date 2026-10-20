@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
     closeDatabase,
@@ -9,7 +10,7 @@ import {
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { driveNodes, workspaceKeys } from './schema';
 import { sealShareCursor } from './share-cursor';
 
@@ -300,5 +301,244 @@ describe('change feeds', () => {
                 })
             ).status,
         ).toBe('bad-cursor');
+    });
+});
+
+/*
+ * A batch of folders (POST /drive/folders, up to 64) used to take one change
+ * number for all of them. The feed pages on that number and its cursor is the
+ * last one served, so a page ending inside a batch had the next page skip the
+ * rest of it, on every pull.
+ */
+describe('a batch of folders in the feed', () => {
+    const BATCH = 64;
+
+    /* `count` folders in one request: the first `chain` nested in order, the rest under `parentId`. */
+    async function batch(
+        parentId: string,
+        parentKeyEpoch: number,
+        count: number,
+        chain = 0,
+        who = owner,
+    ) {
+        const from = (await drive.allocateKeyEpochs(who.workspaceId, count))!.from;
+        const specs = Array.from({ length: count }, (_, index) => ({
+            id: randomUUID(),
+            keyEpoch: from + index,
+        }));
+        const created = await signed.createFolders({
+            workspaceId: who.workspaceId,
+            userId: who.userId,
+            folders: specs.map((spec, index) => {
+                const nested = index > 0 && index < chain;
+                return {
+                    id: spec.id,
+                    parentId: nested ? specs[index - 1]!.id : parentId,
+                    envelopes: {
+                        keyEpoch: spec.keyEpoch,
+                        parentKeyEpoch: nested ? specs[index - 1]!.keyEpoch : parentKeyEpoch,
+                        keyEnvelope: env(),
+                        metadataEnvelope: meta(),
+                    },
+                };
+            }),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        return created.nodes.map((node) => node.id);
+    }
+    async function head(who = owner) {
+        return (await drive.getPersonalWorkspace(who.userId))!.changeSeq;
+    }
+    /* Pulls the workspace feed from `since` to its end as a device does; every node change, in order. */
+    async function pull(since: number, limit: number) {
+        const ids: string[] = [];
+        let cursor = since;
+        for (let pages = 0; ; pages++) {
+            if (pages > 100) throw new Error('the feed never ended');
+            const page = await drive.listChanges({
+                workspaceId: owner.workspaceId,
+                since: cursor,
+                limit,
+            });
+            expect(page.changes.length).toBeLessThanOrEqual(limit);
+            if (page.changes.length) expect(page.nextCursor).toBeGreaterThan(cursor);
+            for (const change of page.changes) if (change.kind === 'node') ids.push(change.node.id);
+            cursor = page.nextCursor;
+            if (!page.hasMore) break;
+            // A page that says there is more has something in it.
+            expect(page.changes.length).toBe(limit);
+        }
+        return { ids, cursor };
+    }
+    function once(arrived: string[], expected: string[]) {
+        const counts = new Map<string, number>();
+        for (const id of arrived) counts.set(id, (counts.get(id) ?? 0) + 1);
+        expect(expected.filter((id) => counts.get(id) !== 1)).toEqual([]);
+    }
+
+    test('a page boundary inside a batch loses none of it, in the workspace feed and a share’s', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const shareId = await shareWithGuest(project);
+        const start = await head();
+        // Three folders, then the batch: a page of 7 ends four folders into it.
+        for (let i = 0; i < 3; i++) await folder(rootId, rootEpoch);
+        const before = await head();
+        const ids = await batch(project.id, project.keyEpoch, BATCH, 4);
+        const after = await folder(rootId, rootEpoch);
+
+        const seqs = await db
+            .select({ id: driveNodes.id, changeSeq: driveNodes.changeSeq })
+            .from(driveNodes)
+            .where(inArray(driveNodes.id, ids));
+        const seqOf = new Map(seqs.map((row) => [row.id, row.changeSeq!]));
+        // One number each, in the order sent: a chain's parents come first.
+        expect(ids.map((id) => seqOf.get(id))).toEqual(ids.map((_, index) => before + 1 + index));
+        expect(await head()).toBe(before + BATCH + 1);
+
+        const pulled = await pull(start, 7);
+        once(pulled.ids, [...ids, after.id]);
+        expect(pulled.cursor).toBe(await head());
+
+        // The share's feed, paged as small: every folder of the batch is inside the share.
+        const shared: string[] = [];
+        let cursor: string | undefined;
+        for (let polls = 0; ; polls++) {
+            if (polls > 100) throw new Error('the share feed never ended');
+            const page = await drive.listShareChanges({
+                shareId,
+                granteeUserId: guest.userId,
+                cursor,
+                limit: 7,
+            });
+            if (page.status !== 'ok') throw new Error(page.status);
+            for (const change of page.changes)
+                if (change.kind === 'node') shared.push(change.node.id);
+            cursor = page.cursor;
+            if (!page.hasMore) break;
+        }
+        once(shared, ids);
+    });
+
+    test('a page wholly inside a batch moves the cursor on without skipping the rest', async () => {
+        const start = await head();
+        const ids = await batch(rootId, rootEpoch, BATCH);
+        const first = await drive.listChanges({
+            workspaceId: owner.workspaceId,
+            since: start,
+            limit: 10,
+        });
+        expect(first.changes.map((c) => (c.kind === 'node' ? c.node.id : c.kind))).toEqual(
+            ids.slice(0, 10),
+        );
+        expect(first.hasMore).toBe(true);
+        expect(first.nextCursor).toBe(start + 10);
+        const rest = await pull(first.nextCursor, 10);
+        expect(rest.ids).toEqual(ids.slice(10));
+        expect(rest.cursor).toBe(start + BATCH);
+    });
+
+    test('the upgrade gives batches still sharing a number new ones, per workspace, so a device that skipped them gets them', async () => {
+        const migration = readFileSync(
+            new URL('../drizzle/20261020213416_change_seq_renumber/migration.sql', import.meta.url),
+            'utf8',
+        );
+        const statements = migration
+            .split('--> statement-breakpoint')
+            .map((statement) => statement.replace(/^--.*$/gm, '').trim())
+            .filter(Boolean);
+        const upgrade = () =>
+            db.transaction(async (tx) => {
+                for (const statement of statements) await tx.execute(sql.raw(statement));
+            });
+        const seqsOf = async (ids: string[]) =>
+            new Map(
+                (
+                    await db
+                        .select({ id: driveNodes.id, changeSeq: driveNodes.changeSeq })
+                        .from(driveNodes)
+                        .where(inArray(driveNodes.id, ids))
+                ).map((row) => [row.id, row.changeSeq!]),
+            );
+        /* Gives every row of `ids` the number of the first, as the old code wrote a batch. */
+        async function asOldCodeWrote(ids: string[]) {
+            const seq = (await seqsOf([ids[0]!])).get(ids[0]!)!;
+            await db.update(driveNodes).set({ changeSeq: seq }).where(inArray(driveNodes.id, ids));
+        }
+
+        // The owner: a folder, a batch with a chain of 5, a folder, then a batch of 3 filed under
+        // a folder of the first batch.
+        const start = await head();
+        const solo = await folder(rootId, rootEpoch);
+        const first = await batch(rootId, rootEpoch, BATCH, 5);
+        const between = await folder(rootId, rootEpoch);
+        const [holder] = await db
+            .select({ keyEpoch: driveNodes.keyEpoch })
+            .from(driveNodes)
+            .where(eq(driveNodes.id, first[10]!));
+        const second = await batch(first[10]!, holder!.keyEpoch, 3);
+        await asOldCodeWrote(first);
+        await asOldCodeWrote(second);
+        // The guest's workspace has a batch of its own, and a folder outside it.
+        const guestRoot = await signed.createRoot({
+            workspaceId: guest.workspaceId,
+            userId: guest.userId,
+            id: randomUUID(),
+            envelopes: {
+                keyEpoch: (await drive.allocateKeyEpochs(guest.workspaceId, 1))!.from,
+                parentKeyEpoch: 1,
+                keyEnvelope: env(),
+                metadataEnvelope: meta(),
+            },
+        });
+        if (guestRoot.status !== 'created') throw new Error(guestRoot.status);
+        const guestBatch = await batch(guestRoot.root.id, guestRoot.root.keyEpoch, 4, 2, guest);
+        await asOldCodeWrote(guestBatch);
+        const kept = [solo.id, between.id, guestRoot.root.id];
+        const keptBefore = await seqsOf(kept);
+
+        // A device pulling 10 at a time ends its first page inside the first batch and never
+        // sees the rest of it: the defect, as databases written before the fix hold it.
+        const device = await pull(start, 10);
+        expect(first.filter((id) => !device.ids.includes(id)).length).toBeGreaterThan(0);
+
+        const ownerHead = await head();
+        const guestHead = await head(guest);
+        await upgrade();
+
+        // Each workspace's rows take the numbers just above its own head, one each, and its
+        // counter moves by exactly as many.
+        const owned = [...first, ...second];
+        const ownedSeqs = await seqsOf(owned);
+        expect([...ownedSeqs.values()].sort((a, b) => a - b)).toEqual(
+            owned.map((_, index) => ownerHead + 1 + index),
+        );
+        expect(await head()).toBe(ownerHead + owned.length);
+        const guestSeqs = await seqsOf(guestBatch);
+        expect([...guestSeqs.values()].sort((a, b) => a - b)).toEqual(
+            guestBatch.map((_, index) => guestHead + 1 + index),
+        );
+        expect(await head(guest)).toBe(guestHead + guestBatch.length);
+        // Parents first: down the chain, and the second batch's parent before all of it.
+        for (let i = 1; i < 5; i++)
+            expect(ownedSeqs.get(first[i]!)!).toBeGreaterThan(ownedSeqs.get(first[i - 1]!)!);
+        for (const id of second)
+            expect(ownedSeqs.get(id)!).toBeGreaterThan(ownedSeqs.get(first[10]!)!);
+        expect(guestSeqs.get(guestBatch[1]!)!).toBeGreaterThan(guestSeqs.get(guestBatch[0]!)!);
+        // What never shared a number kept its own.
+        expect(await seqsOf(kept)).toEqual(keptBefore);
+
+        // The device, from where it stopped, now gets both batches whole; a fresh pull gets
+        // every folder exactly once.
+        const caughtUp = await pull(device.cursor, 10);
+        once(caughtUp.ids, owned);
+        once((await pull(start, 10)).ids, [solo.id, ...first, between.id, ...second]);
+
+        // Run again (a retried deploy): nothing shares a number, so nothing moves.
+        await upgrade();
+        expect(await seqsOf([...owned, ...guestBatch, ...kept])).toEqual(
+            new Map([...ownedSeqs, ...guestSeqs, ...keptBefore]),
+        );
+        expect(await head()).toBe(ownerHead + owned.length);
+        expect(await head(guest)).toBe(guestHead + guestBatch.length);
     });
 });
