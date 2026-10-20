@@ -25,6 +25,12 @@ struct SharedView: View {
     @State private var action: NodeAction?
     @State private var viewing: Opened?
     @State private var stopping: SharedByMe?
+    /* The Shared tab is the one on screen. */
+    private let visible: Bool
+
+    init(visible: Bool = true) { self.visible = visible }
+
+    private var loadKey: Int { visible ? (byMe ? store.sharingVersion : -1) : -2 }
 
     var body: some View {
         NavigationStack {
@@ -59,9 +65,6 @@ struct SharedView: View {
             } message: {
                 Text(stopMessage)
             }
-            .onChange(of: byMe) { _, _ in Task { await load() } }
-            // What this account shares was asked again (a restore, a change from another device): By me follows while open.
-            .onChange(of: store.sharingVersion) { _, _ in if byMe { Task { await load() } } }
             .onChange(of: store.route, initial: true) { _, link in
                 switch link {
                 case .shared(let mine):
@@ -82,7 +85,13 @@ struct SharedView: View {
                 }
             }
             .refreshable { await load() }
-            .task { await load() }
+            // One load at a time, the last one asked: switching sides, and By me again whenever what this
+            // account shares changed (a restore, a change from another device, a share stopped), cancel the
+            // load before it so an older answer never lands over a newer one. Nothing while the tab is hidden.
+            .task(id: loadKey) {
+                guard visible else { return }
+                await load()
+            }
         }
     }
 
@@ -355,8 +364,8 @@ struct SharedView: View {
             } catch {
                 store.notify((row.link != nil ? "Couldn’t turn the link off. " : "Couldn’t stop sharing. ") + "Check your connection and try again.")
             }
+            // By me reads its list again when the answer changed (`loadKey`).
             await store.refreshSharing()
-            await load()
         }
     }
 

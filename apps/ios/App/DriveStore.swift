@@ -62,9 +62,9 @@ final class DriveStore {
     var myWorkspace: String?
     /* Who can open each of one's own shared items, from /shares/mine, as the web's access index. */
     var sharing: [String: SharingIndex.Entry] = [:]
-    /* Counts answers to `refreshSharing`: an open By me reads its list again when it moves. */
+    /* Moves when an answer to `refreshSharing` changed `sharing`: an open By me reads its list again then. */
     var sharingVersion = 0
-    /* When `sharing` is asked again: on start, a pull, the share sheet, every restore and any sync with changes. */
+    /* When `sharing` is asked again: on start, a pull, the share sheet, reconnecting, every restore and syncs with changes (at most every 10 s). */
     @ObservationIgnored private lazy var sharingLoads = SharingRefresh { [weak self] in await self?.loadSharing() }
     /* What the session-ended error says; the shell turns it into "You’ve been signed out". */
     static let sessionEnded = "Your session ended. Sign in again."
@@ -304,6 +304,8 @@ final class DriveStore {
                 if reachable, self.offline {
                     self.offline = false
                     await self.sync()
+                    // A start without network never learnt who can open what: asked now, not at the next change.
+                    await self.refreshSharing()
                 } else if !reachable {
                     self.offline = true
                 }
@@ -360,7 +362,7 @@ final class DriveStore {
     func sync(restored: Bool = false) async {
         let touched = await pull()
         guard error != Self.sessionEnded else { return }
-        Task { await sharingLoads.afterSync(touched: touched, restored: restored, inUse: sharingVersion > 0) }
+        Task { await sharingLoads.afterSync(touched: touched, restored: restored) }
     }
 
     /* The feed's part of `sync`: the ids it changed, nil when the server was not asked or didn't answer. */
@@ -406,7 +408,8 @@ final class DriveStore {
     func refreshSharing() async { await sharingLoads.now() }
 
     private func loadSharing() async {
-        guard let index = try? await vault.sharingIndex() else { return }
+        guard let index = try? await vault.sharingIndex(), index.entries != sharing else { return }
+        // Only a different answer is published: the same one would redraw every row for nothing.
         sharing = index.entries
         sharingVersion += 1
     }

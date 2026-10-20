@@ -113,7 +113,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     var sending by remember { mutableStateOf<Opened?>(null) }
     var reload by remember { mutableStateOf(0) }
     suspend fun loadMine() { val rows = model.sharedByMe(); mineFailed = rows == null; if (rows != null) mine = rows }
-    // Read again when what this account shares was asked again (a restore, a change from another device) while it is open.
+    // Read again when what this account shares changed (a restore, a change from another device, a share stopped) while it is open.
     LaunchedEffect(byMe, reload, state.accessLoads) { if (byMe) loadMine() }
     // A link opened from elsewhere (retyped whole on a link that was cut short).
     LaunchedEffect(state.request) {
@@ -297,7 +297,8 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                         row.link != null -> "Link turned off"
                         else -> "$who can’t open “${row.name}” any more"
                     })
-                    reload++; model.refreshAccess()
+                    // By me reads its list again when the answer changed (accessLoads).
+                    model.refreshAccess()
                 }
             }) { Text(if (row.link != null) "Turn off link" else "Stop sharing", color = alpine.danger) } },
             dismissButton = { TextButton(onClick = { stopping = null }) { Text("Cancel") } },
@@ -305,7 +306,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     }
     if (people) PeopleSheet(model, state) { people = false }
     sending?.let { item -> SendCopy(model, state, listOf(item)) { sending = null } }
-    sharing?.let { item -> ShareSheet(model, state, item) { sharing = null; reload++; model.refreshAccess() } }
+    sharing?.let { item -> ShareSheet(model, state, item) { sharing = null; model.refreshAccess() } }
 }
 
 private fun whoNames(row: Outgoing): String = names(row.shares.mapNotNull { it.share }.map { it.granteeName.ifEmpty { it.granteeEmail } })

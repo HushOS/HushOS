@@ -397,7 +397,7 @@ extension Vault {
 
 /* Who can open each of one's own shared items: the people on it and how many links open it. Names are the server's; nothing is opened. */
 public struct SharingIndex: Sendable {
-    public struct Entry: Sendable {
+    public struct Entry: Sendable, Equatable {
         public var people: [ShareView.Grantee] = []
         /* Grantee id to role ("viewer" or "editor"). */
         public var roles: [String: String] = [:]
