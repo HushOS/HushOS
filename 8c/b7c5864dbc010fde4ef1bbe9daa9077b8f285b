@@ -1,0 +1,27 @@
+apps/android/AGENTS.md
+  s_c56e31c87cddde::t_2e1431316b0425 24
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_c56e31c87cddde::t_1560556b44ed29 105-112,115-116,152,156,169,176,190
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_c56e31c87cddde::t_486501de4c5564 342,355-357,359-361,364
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c56e31c87cddde::t_ee686cffda0a97 513-514
+apps/android/app/src/test/kotlin/com/hushos/app/data/StoragePoolTest.kt
+  s_c56e31c87cddde::t_1f07590412bb9a 17-22,27,42,46,51,55-73,114,118-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8cb7c5864dbc010fde4ef1bbe9daa9077b8f285b",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
