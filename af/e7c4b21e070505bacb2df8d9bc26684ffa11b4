@@ -1,0 +1,43 @@
+packages/db/drizzle/20261020213416_change_seq_renumber/migration.sql
+  s_566b8e0c4467a4::t_8f43a981086800 1-19,32-61
+  s_566b8e0c4467a4::t_e22e3df182ece2 20-31
+packages/db/src/drive.changes.test.ts
+  s_566b8e0c4467a4::t_81fc6b565fc9d9 2,13,306-372,434-501,528,550,565,579,581,595,597,612,661-662
+  s_566b8e0c4467a4::t_3f00781b184e69 373-433,502-527,529-549,551-564,566-578,580,582-594,596,598-611,613-660
+packages/db/src/drive.ts
+  s_566b8e0c4467a4::t_9d9bcf1f6dd50a 842-844,852-857,874,918,920-921,2838-2839,4336-4337,4405-4406
+  s_566b8e0c4467a4::t_351236fe36e87f 4338-4340
+packages/db/drizzle/20261020213416_change_seq_renumber/snapshot.json
+  s_566b8e0c4467a4::t_28807e19b6cc24 1,2-3,6-6026,6118-13553
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_2bc152ad02299d 209
+  s_566b8e0c4467a4::t_0481b410c30414 210
+docs/drive-design.md
+  s_566b8e0c4467a4::t_7e4a3119da182a 249,346
+packages/db/src/schema/drive.ts
+  s_566b8e0c4467a4::t_d96ddde4df85bd 116-118
+packages/db/src/drive.copy.test.ts
+  s_566b8e0c4467a4::t_39db4d70741b06 421-463
+packages/db/drizzle/20261020214235_change_seq_unique/migration.sql
+  s_566b8e0c4467a4::t_cf533321a4fcdc 1-59
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_0d42ece2e6e754 14
+packages/db/drizzle/20261020214235_change_seq_unique/snapshot.json
+  s_566b8e0c4467a4::t_e363dad39f36a3 1-13462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "afe7c4b21e070505bacb2df8d9bc26684ffa11b4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
