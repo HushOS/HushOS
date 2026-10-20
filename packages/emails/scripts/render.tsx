@@ -27,8 +27,12 @@ const plain = (html: string) => {
         selectors: headings,
     });
     if (text.includes('{{marker}}')) throw new Error('The marker leaked into the plain text.');
-    if (text.split('{{').length - 1 !== [...text.matchAll(/\{\{\w+\}\}/g)].length)
-        throw new Error('The plain text has a placeholder broken apart.');
+    for (const [part, body] of [
+        ['HTML', html],
+        ['plain text', text],
+    ] as const)
+        if (body.split('{{').length - 1 !== [...body.matchAll(/\{\{\w+\}\}/g)].length)
+            throw new Error(`The ${part} has a placeholder broken apart.`);
     for (const [token] of text.matchAll(/\{\{\w+\}\}/g))
         if (!html.includes(token))
             throw new Error(`The plain text has ${token}, which no one fills.`);
