@@ -11,7 +11,7 @@ import * as schema from './schema';
  */
 
 /* The newest migration this build knows; `readiness.test.ts` keeps it honest. */
-export const LATEST_MIGRATION = '20261019181225_drive_moves';
+export const LATEST_MIGRATION = '20261020151204_group_billing_no_group_fk';
 
 /* Every application table, in name order. */
 export const APP_TABLES = Object.values(schema)

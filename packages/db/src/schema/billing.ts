@@ -12,7 +12,6 @@ import {
     uuid,
 } from 'drizzle-orm/pg-core';
 import { users } from './auth';
-import { groups } from './groups';
 import { workspaces } from './workspaces';
 
 // The provider's customer for a user. Polar finds it by external id (the user id);
@@ -87,13 +86,15 @@ export const accountIntents = pgTable('account_intents', {
  * is the paying person (external id: their user id). `payer_user_id` is who
  * HushOS lets raise, cut and open the portal; it moves only with a completed
  * handover, which is not built yet.
+ *
+ * No foreign key to the group, here or on its subscriptions: billing records are
+ * kept for accounting after a dissolved family's records are purged
+ * (purgeDissolvedFamilies), by the group's id only, as personal_plan_endings is.
  */
 export const groupBillingCustomers = pgTable(
     'group_billing_customers',
     {
-        groupId: uuid('group_id')
-            .primaryKey()
-            .references(() => groups.id, { onDelete: 'cascade' }),
+        groupId: uuid('group_id').primaryKey(),
         provider: text().notNull(),
         providerCustomerId: text('provider_customer_id').notNull().unique(),
         payerUserId: uuid('payer_user_id').references(() => users.id, { onDelete: 'set null' }),
@@ -119,9 +120,7 @@ export const groupBillingSubscriptions = pgTable(
     'group_billing_subscriptions',
     {
         id: text().primaryKey(),
-        groupId: uuid('group_id')
-            .notNull()
-            .references(() => groups.id, { onDelete: 'cascade' }),
+        groupId: uuid('group_id').notNull(),
         provider: text().notNull(),
         productId: text('product_id').notNull(),
         productName: text('product_name').notNull(),

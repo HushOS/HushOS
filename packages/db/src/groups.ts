@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { billingEnv } from '@hushos/env/billing';
-import { and, count, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import {
@@ -41,10 +41,12 @@ import {
     groupKeySeals,
     groupKeySuccessions,
     groupMemberships,
+    groupBillingCustomers,
     groupBillingSubscriptions,
     groupRosters,
     groupStorage,
     groups,
+    personalPlanEndings,
     users,
     workspaceDocuments,
     workspaceKeys,
@@ -1279,6 +1281,17 @@ export async function createGroup(input: {
                     .from(groups)
                     .where(eq(groups.id, input.id));
                 if (landed) return refuse(await replay());
+                // A purged family's id stays taken: the commitments its rosters listed and its
+                // billing records outlive it, and a family made again under it would be read as
+                // the old one's by anything still naming the id.
+                const traced = await tx.execute<{ traced: boolean }>(sql`
+                    select exists (select 1 from ${groupAreaCommitments} where group_id = ${input.id})
+                        or exists (select 1 from ${groupBillingCustomers} where group_id = ${input.id})
+                        or exists (select 1 from ${groupBillingSubscriptions} where group_id = ${input.id})
+                        or exists (select 1 from ${personalPlanEndings} where group_id = ${input.id})
+                        as traced
+                `);
+                if (traced.rows[0]?.traced) return refuse({ status: 'taken' });
                 // Admissions elsewhere don't take that lock: group_memberships_one_family_idx
                 // refuses the loser of such a race, and `answering` reads it as in-family.
                 const family =
@@ -1924,6 +1937,9 @@ async function depart(tx: Tx, groupId: string, userId: string): Promise<LeaveRes
             .update(groups)
             .set({ dissolvedAt: now, updatedAt: now })
             .where(eq(groups.id, groupId));
+        // Its folders go as deleted family folders do: Drive's purge takes them after the trash's
+        // retention (purgeDissolvedFamilies then deletes the family's own records).
+        await retireAllAreas(tx, groupId, now);
         return { status: 'dissolved' };
     }
     const blocked = blocker(membership.roles, others);
@@ -3338,4 +3354,143 @@ export async function purgeDeletedAreas(days: number, limit = 20) {
         if (gone) purged++;
     }
     return purged;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Dissolved families                                                         */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * How long a dissolved family's records outlive it (owner, 20 October 2026):
+ * the same 30 days the trash keeps things and a deleted family folder waits
+ * (TRASH_RETENTION_DAYS, docs/groups-design.md 3.3), long enough to look into a
+ * dissolve made by mistake. Nothing reopens a dissolved family in the meantime.
+ */
+export const DISSOLVED_FAMILY_RETENTION_DAYS = 30;
+
+/* The purge's advisory lock, keyed by the family: a second run skips a family the first is on. */
+const PURGE_LOCK_SPACE = 0x70757267;
+
+/*
+ * Every live folder of a group marked deleted at `at`, as retireArea marks one
+ * (no rotation due, every share and link inside revoked): from then
+ * purgeDeletedAreas, in Drive's purge job, takes each with its files after
+ * Drive's trash retention, skipping one an open or held report names. Called
+ * under the group's lock, its areas locked after it. How many it marked.
+ */
+async function retireAllAreas(tx: Tx, groupId: string, at: Date | SQL) {
+    const retired = (
+        await tx
+            .update(workspaces)
+            .set({ deletedAt: at, rotationDueAt: null })
+            .where(and(eq(workspaces.groupId, groupId), isNull(workspaces.deletedAt)))
+            .returning({ id: workspaces.id })
+    ).map((row) => row.id);
+    if (retired.length === 0) return 0;
+    const now = new Date();
+    await tx
+        .update(driveShares)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(inArray(driveShares.workspaceId, retired), isNull(driveShares.revokedAt)));
+    await tx
+        .update(driveLinks)
+        .set({ revokedAt: now })
+        .where(and(inArray(driveLinks.workspaceId, retired), isNull(driveLinks.revokedAt)));
+    return retired.length;
+}
+
+/*
+ * The purge of what dissolved families leave (docs/groups-design.md 3.3).
+ * Dissolving retires the family's folders (depart), so Drive's purge job
+ * deletes them, files and stored objects through the deletion outbox, after
+ * the trash's retention, as it deletes any deleted family folder. This does
+ * the rest, each family in its own transaction under its advisory lock (a
+ * family another run holds is `busy` and skipped) and its row lock:
+ *
+ * - a family dissolved before folders were retired on dissolving (an earlier
+ *   release, or one still serving during a rolling update) has its folders
+ *   retired now, as of now: whoever dissolved it was never told they would go,
+ *   so they get the whole retention from here, never a purge on the next run;
+ * - a family dissolved more than `days` ago with no folder left (one an open
+ *   or held report names is still there, so the family waits for the report)
+ *   and, with billing on, no subscription that can still become active (any
+ *   not ended, canceled or expired incomplete: a payer may dissolve once the
+ *   plan is set to cancel, may take that back in Polar's portal, and billing
+ *   projects such a plan onto the group's row) loses its row. It is read again
+ *   in a statement of its own once the row is locked: applyGroupState writes a
+ *   subscription holding that row, so whatever it committed while this waited
+ *   is seen, and anything later waits for the delete and finds no group. The
+ *   row takes its memberships,
+ *   rosters, successions, seals, invitations, departures, holds, chain cache
+ *   and pool.
+ *
+ * Kept: the family's billing records (no foreign key to the group, for
+ * accounting), the area commitments its rosters listed (so no key it used is
+ * ever another group's, and a resent creation of the same family is refused),
+ * reports, and the deletion outbox's rows. At most `limit` families of each
+ * kind a call; a run that stops halfway leaves work the next run finishes.
+ */
+export async function purgeDissolvedFamilies(days: number, limit = 50) {
+    const counts = { retired: 0, families: 0, busy: 0 };
+    const locked = async (tx: Tx, groupId: string) => {
+        const lock = await tx.execute<{ locked: boolean }>(
+            sql`select pg_try_advisory_xact_lock(${PURGE_LOCK_SPACE}::int, hashtext(${groupId})) as locked`,
+        );
+        if (lock.rows[0]?.locked) return true;
+        counts.busy++;
+        return false;
+    };
+    const liveArea = sql`exists (select 1 from ${workspaces} w where w.group_id = ${groups.id} and w.deleted_at is null)`;
+    const unretired = await db
+        .select({ id: groups.id })
+        .from(groups)
+        .where(and(isNotNull(groups.dissolvedAt), liveArea))
+        .orderBy(groups.dissolvedAt)
+        .limit(limit);
+    for (const { id } of unretired)
+        await db.transaction(async (tx) => {
+            if (!(await locked(tx, id))) return;
+            const [group] = await tx
+                .select({ dissolvedAt: groups.dissolvedAt })
+                .from(groups)
+                .where(eq(groups.id, id))
+                .for('update');
+            if (!group?.dissolvedAt) return;
+            await lockAreas(tx, id);
+            counts.retired += await retireAllAreas(tx, id, new Date());
+        });
+
+    const purgeable = and(
+        isNotNull(groups.dissolvedAt),
+        sql`${groups.dissolvedAt} < now() - make_interval(days => ${days})`,
+        sql`not exists (select 1 from ${workspaces} w where w.group_id = ${groups.id})`,
+        billingEnv.BILLING_PROVIDER === 'none'
+            ? undefined
+            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in ('canceled', 'incomplete_expired'))`,
+    );
+    const due = await db
+        .select({ id: groups.id })
+        .from(groups)
+        .where(purgeable)
+        .orderBy(groups.dissolvedAt)
+        .limit(limit);
+    for (const { id } of due)
+        await db.transaction(async (tx) => {
+            if (!(await locked(tx, id))) return;
+            const [group] = await tx
+                .select({ id: groups.id })
+                .from(groups)
+                .where(eq(groups.id, id))
+                .for('update');
+            if (!group) return;
+            // A statement of its own, after the lock: it sees what billing committed meanwhile.
+            const [still] = await tx
+                .select({ id: groups.id })
+                .from(groups)
+                .where(and(eq(groups.id, id), purgeable));
+            if (!still) return;
+            await tx.delete(groups).where(eq(groups.id, id));
+            counts.families++;
+        });
+    return counts;
 }

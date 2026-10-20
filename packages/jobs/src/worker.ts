@@ -5,6 +5,7 @@ import type { Job } from 'pg-boss';
 import { createBoss, ensureQueues, queues, type JobPayloads } from './client';
 import { evidenceConfigured, replicaConfigured } from '@hushos/env/storage';
 import { cleanupExpired } from './jobs/cleanup-expired';
+import { groupsPurgeDissolved } from './jobs/groups';
 import {
     driveAuditObjects,
     driveAuditReplica,
@@ -73,6 +74,20 @@ await boss.work<JobPayloads[typeof queues.cleanupExpired]>(
     { batchSize: 1, pollingIntervalSeconds: 5 },
     async ([job]) => {
         if (job) await cleanupExpired(job);
+    },
+);
+
+/*
+ * Hourly, and once now: dissolved families past DISSOLVED_FAMILY_RETENTION_DAYS go,
+ * folders and stored objects (through the deletion outbox) and then their records.
+ */
+await boss.schedule(queues.groupsPurgeDissolved, '25 * * * *', {}, { tz: 'UTC' });
+await boss.send(queues.groupsPurgeDissolved, {});
+await boss.work<JobPayloads[typeof queues.groupsPurgeDissolved]>(
+    queues.groupsPurgeDissolved,
+    { batchSize: 1, pollingIntervalSeconds: 30 },
+    async ([job]) => {
+        if (job) await groupsPurgeDissolved(job);
     },
 );
 

@@ -24,6 +24,7 @@ export const queues = {
     driveTier: 'drive.tier',
     reportsEvidence: 'reports.evidence',
     reportsRequests: 'reports.requests',
+    groupsPurgeDissolved: 'groups.purge-dissolved',
 } as const;
 
 export type QueueName = (typeof queues)[keyof typeof queues];
@@ -50,6 +51,7 @@ export type JobPayloads = {
     [queues.driveTier]: Record<string, never>;
     [queues.reportsEvidence]: Record<string, never>;
     [queues.reportsRequests]: Record<string, never>;
+    [queues.groupsPurgeDissolved]: { batchSize?: number };
 };
 
 export const SCHEMA = 'pgboss';
@@ -134,6 +136,18 @@ export async function ensureQueues(boss: PgBoss) {
         retryDelayMax: 6 * 60 * 60,
         expireInSeconds: 10 * 60,
         retentionSeconds: 30 * 24 * 60 * 60,
+    });
+    /*
+     * Dissolved families past their retention: idempotent and bounded, and each family
+     * is purged under its own advisory lock, so a second run at once skips it.
+     */
+    await boss.createQueue(queues.groupsPurgeDissolved, {
+        policy: 'singleton',
+        retryLimit: 3,
+        retryDelay: 60,
+        retryBackoff: true,
+        expireInSeconds: 30 * 60,
+        retentionSeconds: 7 * 24 * 60 * 60,
     });
     // Drive's sweeps are idempotent and bounded; one of each at a time is enough.
     for (const queue of [
