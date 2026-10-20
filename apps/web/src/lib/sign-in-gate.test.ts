@@ -8,7 +8,10 @@ import { afterEach, expect, test, vi } from 'vitest';
  * two tabs share the browser's.
  */
 
-/* A minimal navigator.locks (jsdom has none): exclusive and shared modes, granted in order. */
+/*
+ * A minimal navigator.locks (jsdom has none): exclusive and shared modes, granted in order, and
+ * ifAvailable, which runs the callback with null at once when the lock is taken.
+ */
 function stubLocks() {
     type Waiting = { mode: LockMode; grant: () => void };
     const held = new Map<string, LockMode[]>();
@@ -30,9 +33,16 @@ function stubLocks() {
     };
     const locks = {
         request(name: string, ...args: unknown[]) {
-            const callback = args.at(-1) as (lock: { name: string; mode: LockMode }) => unknown;
-            const mode =
-                (args.length > 1 ? (args[0] as LockOptions).mode : undefined) ?? 'exclusive';
+            const callback = args.at(-1) as (
+                lock: { name: string; mode: LockMode } | null,
+            ) => unknown;
+            const options = args.length > 1 ? (args[0] as LockOptions) : {};
+            const mode = options.mode ?? 'exclusive';
+            const holding = held.get(name) ?? [];
+            const taken =
+                (queued.get(name) ?? []).length > 0 ||
+                (holding.length > 0 && (mode === 'exclusive' || holding.includes('exclusive')));
+            if (options.ifAvailable && taken) return Promise.resolve().then(() => callback(null));
             return new Promise((resolve, reject) => {
                 const grant = () => {
                     void Promise.resolve()
