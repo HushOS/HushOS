@@ -152,6 +152,18 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     return null;
 }
 
+/* Keys for what sits around the hidden page rather than in it (see DriveShell). */
+function outsidePage(event: KeyboardEvent) {
+    const key = event.key.toLowerCase();
+    if (((event.metaKey || event.ctrlKey) && key === 'k') || key === '/') return true;
+    return (
+        event.target instanceof Element &&
+        event.target.closest(
+            '[role=dialog], [role=alertdialog], [role=menu], [role=listbox], [data-slot=command]',
+        ) !== null
+    );
+}
+
 /* Which account and lock the drive was last shown for in this page load (see DriveShell). */
 let paintedFor: string | null = null;
 
@@ -228,12 +240,15 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     if (!opening && late) setLate(false);
     // The hidden page takes no keys: a shortcut would open a dialog over the line, or act on a
     // list nobody can see. Window capture runs before TanStack Hotkeys' document listeners.
-    // Defaults still happen (typing, Enter on a link); moving focus, Escape and reloading pass.
+    // Defaults still happen (typing, Enter on a link); moving focus, Escape and reloading pass,
+    // and so does what the app around the page owns: the palette (and the keys that open it),
+    // menus, list boxes and dialogs, whose handlers also listen above the page.
     const hidden = ready && !painted;
     useEffect(() => {
         if (!hidden) return;
         const swallow = (event: KeyboardEvent) => {
-            if (!passesThrough(event)) event.stopImmediatePropagation();
+            if (passesThrough(event) || outsidePage(event)) return;
+            event.stopImmediatePropagation();
         };
         for (const type of ['keydown', 'keypress'] as const)
             window.addEventListener(type, swallow, { capture: true });
