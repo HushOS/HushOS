@@ -34,6 +34,7 @@ import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
+import { passesThrough } from '@/lib/own-keys';
 import { leaveApp } from '@/lib/sign-out';
 import { cue } from '@/lib/sounds';
 
@@ -151,6 +152,9 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     return null;
 }
 
+/* Which account and lock the drive was last shown for in this page load (see DriveShell). */
+let paintedFor: string | null = null;
+
 export function DriveShell({ user, children }: { user: SessionUser; children: ReactNode }) {
     const unlockedUser = useAuthView((state) => state.unlockedUserId);
     const restoring = useAuthView((state) => state.restoring);
@@ -187,11 +191,20 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     }
 
     // The page is mounted under "Opening your files" as soon as the drive is open, and shown
-    // once its placeholders are gone (first-paint.ts): one step from the line to the list.
+    // once its placeholders are gone (first-paint.ts): one step from the line to the list. Once
+    // per page load, account and lock: back from Account or Billing, the page shows at once.
     const ready = unlocked && opened.isSuccess;
-    const [painted, setPainted] = useState(false);
+    const paintKey = `${user.id}:${lockRevision}`;
+    const [painted, setPainted] = useState(() => paintedFor === paintKey);
     // Locked again: the next unlock opens in one step too.
     if (!ready && painted) setPainted(false);
+    useEffect(() => {
+        if (painted) paintedFor = paintKey;
+    }, [painted, paintKey]);
+    // Past the line's "Still opening": the page shows as it is, placeholders and all, rather
+    // than stay hidden behind a list that may never come (offline, a stuck worker).
+    const [late, setLate] = useState(false);
+    const [markLate] = useState(() => () => setLate(true));
     const holds = useRef(0);
     const [settle] = useState(() => () => {
         // After the commit that let a placeholder go: one that took its place holds on.
@@ -206,11 +219,29 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
             settle();
         };
     });
+    if (ready && !painted && late) setPainted(true);
     // After every render until the page shows: its placeholders have registered by now.
     useLayoutEffect(() => {
         if (ready && !painted) settle();
     });
     const opening = unlocked ? opened.isPending || (ready && !painted) : restoring || !attempted;
+    if (!opening && late) setLate(false);
+    // The hidden page takes no keys: a shortcut would open a dialog over the line, or act on a
+    // list nobody can see. Window capture runs before TanStack Hotkeys' document listeners.
+    // Defaults still happen (typing, Enter on a link); moving focus, Escape and reloading pass.
+    const hidden = ready && !painted;
+    useEffect(() => {
+        if (!hidden) return;
+        const swallow = (event: KeyboardEvent) => {
+            if (!passesThrough(event)) event.stopImmediatePropagation();
+        };
+        for (const type of ['keydown', 'keypress'] as const)
+            window.addEventListener(type, swallow, { capture: true });
+        return () => {
+            for (const type of ['keydown', 'keypress'] as const)
+                window.removeEventListener(type, swallow, { capture: true });
+        };
+    }, [hidden]);
 
     let body: ReactNode = null;
     if (!unlocked) {
@@ -276,7 +307,7 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     // The line stays in one place in the tree from the restore to the list, so it is drawn once.
     return (
         <>
-            {opening && <Opening />}
+            {opening && <Opening onLate={markLate} />}
             {body}
         </>
     );
@@ -295,12 +326,15 @@ function Centered({ children }: { children: ReactNode }) {
  * second that says it is still going. Which step is slow is not something a
  * person can act on, so it is not named.
  */
-function Opening() {
+function Opening({ onLate }: { onLate: () => void }) {
     const [late, setLate] = useState(false);
     useEffect(() => {
-        const timer = setTimeout(() => setLate(true), 4_000);
+        const timer = setTimeout(() => {
+            setLate(true);
+            onLate();
+        }, 4_000);
         return () => clearTimeout(timer);
-    }, []);
+    }, [onLate]);
     return (
         <div className="flex flex-1 items-center justify-center px-5 py-16 sm:px-8">
             <output className="flex flex-col items-center gap-2 text-center">
