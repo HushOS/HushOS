@@ -1178,9 +1178,9 @@ final class DriveStore {
         let result = await TrashBatch.trash(items, TrashBatch.Steps(
             send: { batch, moved in
                 let byId = Dictionary(batch.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-                return await vault.trashMany(batch.map(\.id)) { id in if let item = byId[id] { await moved(item) } }
+                return await vault.trashMany(batch.map(\.id)) { ids in await moved(ids.compactMap { byId[$0] }) }
             },
-            drop: { [weak self] item in self?.dropRows([item.id]) },
+            drop: { [weak self] items in self?.dropRows(Set(items.map(\.id))) },
             announce: { [weak self] text, undo in self?.announceTrash(text, undo) },
             restore: { [weak self] moved in Task { await self?.undoTrash(moved) } },
             settle: { [weak self] folders in Task { await self?.settle(folders) } }
@@ -1231,7 +1231,8 @@ final class DriveStore {
     private func undoTrash(_ items: [Opened]) async {
         let vault = vault
         busy = true
-        let outcomes = await TrashBatch.oneAfterAnother(items) { item in try await vault.restore(item, parentTrashed: false) }
+        // Folders before their contents, `parent-trashed` tried again once the rest landed (Vault.restoreMany).
+        let outcomes = await vault.restoreMany(items)
         busy = false
         let back = outcomes.compactMap { try? $0.get() }
         (folders, trash) = TrashBatch.afterUndo(back, folders: folders, trash: trash)

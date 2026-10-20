@@ -30,18 +30,22 @@ import Testing
         var settled: [Set<String>] = []
         private var restored: [String]?
 
-        /* `send` answers for one item, as the server would; the batch goes through the kit's sequencing. */
-        func steps(_ send: @escaping @Sendable (Opened) async throws -> Void) -> TrashBatch.Steps {
+        /*
+         * `send` answers for one item, as the server would; the batch goes through the kit's
+         * sequencing. Items in `withFolder` went with a folder (`covered`), the rest on their own.
+         */
+        func steps(withFolder: Set<String> = [], _ send: @escaping @Sendable (Opened) async throws -> Void) -> TrashBatch.Steps {
             TrashBatch.Steps(
                 send: { batch, moved in
                     await MainActor.run { self.batches.append(batch.map(\.id)) }
                     return await TrashBatch.oneAfterAnother(batch) { item in
                         try await send(item)
                         await MainActor.run { self.events.append("sent \(item.id)") }
-                        await moved(item)
+                        await moved([item])
+                        return withFolder.contains(item.id) ? TrashBatch.Move.withFolder : .trashed
                     }
                 },
-                drop: { item in self.events.append("drop \(item.id)"); self.dropped.append(item.id) },
+                drop: { items in for item in items { self.events.append("drop \(item.id)"); self.dropped.append(item.id) } },
                 announce: { text, undo in
                     self.events.append("announce")
                     // Tap Undo at once: what reaches `restore` is what the person gets back.
@@ -217,5 +221,33 @@ import Testing
         #expect(TrashBatch.undoProblem(back: 0, tried: 1) == nil)
         #expect(TrashBatch.undoProblem(back: 11, tried: 13) == "11 of 13 are back. The rest are still in Trash.")
         #expect(TrashBatch.undoProblem(back: 0, tried: 13) == "Couldn’t bring them back. They’re still in Trash.")
+    }
+
+    @Test func anItemThatWentWithItsFolderCountsAsMovedButUndoLeavesItToTheFolder() async {
+        let recorder = Recorder()
+        let result = await TrashBatch.trash(thirteen, recorder.steps(withFolder: ["f2", "f5"]) { _ in })
+        #expect(recorder.notices.map(\.text) == ["Moved 13 items to Trash"])
+        #expect(recorder.dropped == thirteen.map(\.id))
+        // Undo puts back what went on its own; f2 and f5 come back with their folder.
+        #expect(recorder.notices.map(\.undo) == [thirteen.map(\.id).filter { $0 != "f2" && $0 != "f5" }])
+        #expect(result.moved.count == 13)
+    }
+
+    @Test func nothingOfItsOwnToPutBackMeansNoUndo() async {
+        let recorder = Recorder()
+        _ = await TrashBatch.trash(Array(thirteen.prefix(2)), recorder.steps(withFolder: ["f1", "f2"]) { _ in })
+        #expect(recorder.notices.map(\.text) == ["Moved 2 items to Trash"])
+        #expect(recorder.notices.map(\.undo) == [nil])
+    }
+
+    @Test func aBusyOrRateLimitedRequestSaysSoInTheWebsWords() async {
+        let busy = await TrashBatch.trash(thirteen, Recorder().steps { item in
+            if item.id == "f13" { throw TrashBatch.RequestRefusal.busy }
+        })
+        #expect(busy.notice == "12 of 13 moved to Trash. Too many changes are being made here at once. Please try again.")
+        let none = await TrashBatch.trash(Array(thirteen.prefix(3)), Recorder().steps { _ in throw TrashBatch.RequestRefusal.tooMany })
+        #expect(none.notice == "Couldn’t move to Trash. Too many requests. Please try again shortly.")
+        let large = await TrashBatch.trash(Array(thirteen.prefix(3)), Recorder().steps { _ in throw TrashBatch.RequestRefusal.tooLarge })
+        #expect(large.failure == .tooLarge)
     }
 }

@@ -345,6 +345,29 @@ class DriveApi(val session: Shared.Session) : RootApi {
     fun copy(sourceNodeId: String, workspaceId: String, body: JSONObject): NodeView =
         NodeView.from(send("/nodes/$sourceNodeId/copy", body.put("workspaceId", workspaceId)).getJSONObject("node"))
 
+    /* One request of a selection to the trash, or back in place (Undo): up to MAX_TRASH_BATCH ids of one workspace. */
+    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch("/workspaces/$workspaceId/trash-batch", ids)
+    fun restoreBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch("/workspaces/$workspaceId/restore-batch", ids)
+
+    private fun batch(path: String, ids: List<String>): List<BatchAnswer> {
+        val connection = open(path, "POST")
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        val body = JSONObject().put("nodeIds", org.json.JSONArray(ids)).toString().toByteArray()
+        try { connection.outputStream.use { it.write(body) } } catch (error: java.io.IOException) { throw Unreachable() }
+        val status: Int
+        val text: String
+        try {
+            status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        } catch (error: java.io.IOException) {
+            // Sent and no answer: what moved isn't known, as for any lost response.
+            throw Unreachable()
+        }
+        return batchAnswers(status, text)
+    }
+
     fun trash(nodeId: String, workspaceId: String) {
         send("/nodes/$nodeId/trash", JSONObject().put("workspaceId", workspaceId))
     }

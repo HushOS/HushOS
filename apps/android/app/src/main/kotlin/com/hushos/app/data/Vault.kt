@@ -1160,11 +1160,65 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * Move to Trash for many, one outcome per id in order, `moved` told of each id as the server
-     * confirms it: the one place a batch reaches the server. One request each, one after another,
-     * until the server takes a batch in one request.
+     * Move to Trash for many, one outcome per id in order, `moved` told of each id as its request's
+     * answer lands: the one place a selection reaches the server. The batch route, 200 ids a
+     * request and a request per workspace (TrashBatches.kt); one request an item on a server
+     * without it. What moved leaves this device's rows at once.
      */
-    suspend fun trashMany(ids: List<String>, moved: (String) -> Unit = {}): List<Result<Unit>> = trashEach(ids, ::trash, moved)
+    suspend fun trashMany(ids: List<String>, moved: (List<String>) -> Unit = {}): List<Result<TrashMove>> {
+        val items = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
+        val workspaces = items.toMap()
+        return trashInBatches(
+            items,
+            send = { ws, chunk -> api.trashBatch(ws, chunk) },
+            sequential = { chunk -> trashEach(chunk, ::trash) { moved(listOf(it)) }.map { outcome -> outcome.map { TrashMove.TRASHED } } },
+            // The row leaves the lists first, then this device forgets it: a row still on screen whose
+            // node is gone would be looked up again for each one in the batch.
+            moved = { landed ->
+                moved(landed.map { it.first })
+                for ((id, _) in landed) workspaces[id]?.let { forget(it, id) }
+            },
+        )
+    }
+
+    /*
+     * Undo for trashMany: the items back in place through the batch route (folders before what is
+     * in them, `parent-trashed` tried again once the rest landed), or one request an item on a
+     * server without it. One outcome per item in order, the restored row on success; `back` hears
+     * each row as it lands.
+     */
+    suspend fun restoreMany(items: List<Opened>, back: (Opened) -> Unit = {}): List<Result<Opened>> {
+        val given = items.associateBy { it.id }
+        val rows = java.util.concurrent.ConcurrentHashMap<String, Opened>()
+        val outcomes = restoreInBatches(
+            items.map { it.id to it.node.workspaceId },
+            depth = { id -> ancestorIds(given.getValue(id)).count { it in given } },
+            send = { ws, chunk ->
+                api.restoreBatch(ws, chunk).onEach { answer -> if (answer is Restored) rows[answer.id] = restoredRow(given.getValue(answer.id), answer.changeSeq) }
+            },
+            sequential = { chunk -> chunk.map { id -> runCatching { rows[id] = restore(TrashItem(given.getValue(id), false)) } } },
+            back = { id -> rows[id]?.let(back) },
+        )
+        return items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } }
+    }
+
+    /* The folders above an item, nearest first, as far as this device knows them. */
+    private fun ancestorIds(item: Opened): List<String> {
+        val chain = ArrayList<String>()
+        var cursor = item.node.parentId
+        while (cursor != null && chain.size < 256) {
+            chain.add(cursor)
+            cursor = nodes.find(cursor)?.node?.parentId ?: parents[cursor]
+        }
+        return chain
+    }
+
+    /* A row the batch put back: the one this device holds, out of the trash, with the server's change number. */
+    private fun restoredRow(item: Opened, changeSeq: Int): Opened {
+        val row = nodes.row(item.node.workspaceId, item.id) ?: runCatching { open(item.node) }.getOrNull() ?: item
+        val key = nodes.key(row) ?: return row.copy(node = row.node.copy(trashedAt = null, changeSeq = changeSeq))
+        return adopt(row.node.copy(trashedAt = null, changeSeq = changeSeq), key, row.metadata)
+    }
 
     fun restore(entry: TrashItem): Opened {
         val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)

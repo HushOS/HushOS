@@ -1374,9 +1374,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             trashMany(items, TrashSteps(
                 send = { batch, moved ->
                     val byId = batch.associateBy { it.id }
-                    withContext(Dispatchers.IO) { vault.trashMany(batch.map { it.id }) { id -> byId[id]?.let(moved) } }
+                    withContext(Dispatchers.IO) { vault.trashMany(batch.map { it.id }) { ids -> moved(ids.mapNotNull { byId[it] }) } }
                 },
-                drop = { item -> dropRows(setOf(item.id)) },
+                drop = { items -> dropRows(items.map { it.id }.toSet()) },
                 announce = { text, undo -> notify(text, undo = undo) },
                 restore = { moved -> viewModelScope.launch { undoTrash(moved) } },
                 settle = { folders -> viewModelScope.launch { settle(folders) } },
@@ -1425,7 +1425,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val vault = vault ?: return
         _state.update { it.copy(busy = true) }
         val outcomes = try {
-            withContext(Dispatchers.IO) { com.hushos.app.data.oneAfterAnother(moved) { item -> vault.restore(TrashItem(item, false)) } }
+            // Folders before their contents, `parent-trashed` tried again once the rest landed (Vault.restoreMany).
+            withContext(Dispatchers.IO) { vault.restoreMany(moved) }
         } finally {
             _state.update { it.copy(busy = false) }
         }
