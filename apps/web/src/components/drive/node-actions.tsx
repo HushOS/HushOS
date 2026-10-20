@@ -36,7 +36,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { formatBytes, nodeSize } from '@/lib/drive';
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 
 /*
  * What every list of items shares beyond selection itself: what a row's size
@@ -298,23 +298,44 @@ export function NodeSelectionBar({
     onSelectAll: () => void;
     onClear: () => void;
 }) {
-    const single = selection.length === 1 ? selection[0]! : null;
+    // Rows leave the list as each lands in the trash. The bar keeps what it was acting on until
+    // the batch is done: its count and its actions (Share and Rename would appear for the last
+    // one) hold still, so the centred bar never shifts or grows under the pointer.
+    const key = selection.map((node) => node.id).join();
+    const [held, setHeld] = useState({ key, selection });
+    if (!trashing && held.key !== key) setHeld({ key, selection });
+    const items = trashing ? held.selection : selection;
+    const single = items.length === 1 ? items[0]! : null;
     /* What More holds on a wide screen: Versions, Info, Select all. */
-    const moreWide = selection.length === 1 || !allSelected;
+    const moreWide = items.length === 1 || !allSelected;
     return (
-        <SelectionBar label={`${selection.length} selected`} onClear={onClear}>
+        <SelectionBar label={`${items.length} selected`} onClear={onClear}>
             {single && own && (
                 <SelectionAction
+                    disabled={trashing}
                     icon={Share2Icon}
                     label="Share"
                     className="max-sm:hidden"
                     onClick={() => onShare(single)}
                 />
             )}
-            <SelectionAction icon={DownloadIcon} label="Download" onClick={onDownload} />
-            {onMove && <SelectionAction icon={FolderInputIcon} label="Move" onClick={onMove} />}
+            <SelectionAction
+                icon={DownloadIcon}
+                label="Download"
+                disabled={trashing}
+                onClick={onDownload}
+            />
+            {onMove && (
+                <SelectionAction
+                    icon={FolderInputIcon}
+                    label="Move"
+                    disabled={trashing}
+                    onClick={onMove}
+                />
+            )}
             {onCopy && (
                 <SelectionAction
+                    disabled={trashing}
                     icon={CopyIcon}
                     label="Copy"
                     secondary
@@ -324,6 +345,7 @@ export function NodeSelectionBar({
             )}
             {single && onRename && (
                 <SelectionAction
+                    disabled={trashing}
                     icon={PencilIcon}
                     label="Rename"
                     secondary
@@ -333,6 +355,7 @@ export function NodeSelectionBar({
             )}
             {own && (
                 <SelectionAction
+                    disabled={trashing}
                     icon={TagIcon}
                     label="Tags"
                     secondary
@@ -344,7 +367,8 @@ export function NodeSelectionBar({
                 <SelectionAction
                     icon={Trash2Icon}
                     label="Move to Trash"
-                    disabled={trashing}
+                    pending={trashing}
+                    pendingLabel="Moving to Trash"
                     onClick={onTrash}
                 />
             )}

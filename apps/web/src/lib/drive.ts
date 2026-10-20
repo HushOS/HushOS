@@ -156,6 +156,89 @@ export async function invalidateFolders(queryClient: QueryClient, ...folderIds: 
     for (const client of spaces.clients()) void client.catchUp().catch(() => {});
 }
 
+/*
+ * How many items go to the trash at once. The server takes them one at a time
+ * under the workspace's lock (nextChangeSeq), so more at once only hides the
+ * round trips between them. Each waiting request holds one of the server
+ * process's pooled database connections (ten by default) while it queues for
+ * the lock, so this stays small: at a 180 ms round trip, six moved 100 items
+ * in 4.4 s where four took 7.9 s.
+ */
+const TRASH_AT_ONCE = 6;
+
+/*
+ * Moves items to the trash, a few at a time. An item inside a folder that is
+ * also going is left to go with it: trashed on its own as well, it would either
+ * be refused as already in the trash or come back on Undo without its folder.
+ * Every other item is tried, so one refusal leaves no others behind. `moved`
+ * is what reached the trash, in the order given, and is exactly what Undo puts
+ * back; `tried` is how many were sent; `error` is the first refusal, if any.
+ */
+export async function trashNodes(
+    nodes: DriveNode[],
+    /* As items land (at most once a frame): their ids, and those of the selected items inside them. */
+    onMoved?: (ids: string[]) => void,
+) {
+    const going = new Set(nodes.map((node) => node.id));
+    /* The selected folders each item sits in, nearest first. */
+    const within = new Map(
+        nodes.map((node) => {
+            const chain = clientFor(node.workspaceId)
+                .ancestorsOf(node.id)
+                .map((ancestor) => ancestor.id);
+            if (node.parentId && !chain.includes(node.parentId)) chain.push(node.parentId);
+            return [node.id, chain.filter((id) => going.has(id))];
+        }),
+    );
+    const roots = nodes.filter((node) => !within.get(node.id)!.length);
+    /* The selected items that are in the trash once `movedIds` are: those, and what sits inside them. */
+    const wentWith = (movedIds: Set<string>) =>
+        nodes
+            .filter(
+                (node) =>
+                    movedIds.has(node.id) || within.get(node.id)!.some((id) => movedIds.has(id)),
+            )
+            .map((node) => node.id);
+    const moved: (DriveNode | undefined)[] = Array.from({ length: roots.length });
+    let error: unknown = null;
+    let next = 0;
+    // What landed is told once a frame, not once an item: each telling redraws the whole list.
+    let landed: string[] = [];
+    let frame = 0;
+    const tell = () => {
+        frame = 0;
+        const ids = landed;
+        landed = [];
+        if (ids.length) onMoved?.(ids);
+    };
+    const lane = async () => {
+        while (next < roots.length) {
+            const index = next++;
+            const node = roots[index]!;
+            try {
+                moved[index] = await clientFor(node.workspaceId).trash(node);
+            } catch (cause) {
+                error ??= cause;
+                continue;
+            }
+            landed.push(...wentWith(new Set([node.id])));
+            frame ||= requestAnimationFrame(tell);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(TRASH_AT_ONCE, roots.length) }, lane));
+    // A hidden tab runs no frames: whatever is left is told now.
+    if (frame) cancelAnimationFrame(frame);
+    tell();
+    const done = moved.filter((node) => node !== undefined);
+    return {
+        moved: done,
+        tried: roots.length,
+        /* Everything now in the trash: what moved, and what went inside it. */
+        gone: wentWith(new Set(done.map((node) => node.id))),
+        error,
+    };
+}
+
 /* The name a copy takes among `taken`: the original, else "name (copy)", "name (copy 2)", and so on. */
 export function copyName(name: string, taken: Set<string>) {
     const lower = new Set(Array.from(taken, (entry) => entry.toLowerCase()));

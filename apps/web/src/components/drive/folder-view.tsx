@@ -74,6 +74,7 @@ import {
     folderQueryOptions,
     formatWhen,
     invalidateFolders,
+    trashNodes,
     refuseWrite,
     sharedQueryOptions,
     sortNodesBy,
@@ -219,10 +220,27 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [table, setTable] = useState<HTMLTableElement | null>(null);
     const sortColumn = order.key === 'name' ? null : order.key;
     const sortHidden = useHiddenColumn(table, sortColumn);
+    // Trashed from here: gone from the list as each lands, before the listing is fetched again.
+    const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
     const rows = useMemo(
-        () => (listing.data ? sortNodesBy(listing.data.children, order) : []),
-        [listing.data, order],
+        () =>
+            listing.data
+                ? sortNodesBy(
+                      listing.data.children.filter((node) => !gone.has(node.id)),
+                      order,
+                  )
+                : [],
+        [listing.data, order, gone],
     );
+    // Once a listing no longer holds them, they need no hiding: one restored elsewhere shows again.
+    useEffect(() => {
+        if (!listing.data) return;
+        const present = new Set(listing.data.children.map((node) => node.id));
+        setGone((current) => {
+            const kept = [...current].filter((id) => present.has(id));
+            return kept.length === current.size ? current : new Set(kept);
+        });
+    }, [listing.data]);
     const ids = useMemo(() => rows.map((row) => row.id), [rows]);
     const dropRef = useRef<HTMLDivElement>(null);
     const mobile = useIsMobile();
@@ -401,42 +419,57 @@ export function FolderView({ folderId }: { folderId: string }) {
                 description: `${driveError(error)} The rest are still in Trash.`,
             });
         } finally {
+            const restored = new Set(nodes.slice(0, back).map((node) => node.id));
+            setGone((current) => new Set([...current].filter((id) => !restored.has(id))));
             await invalidateFolders(queryClient, folderId);
         }
     }
     async function trash(nodes: DriveNode[]) {
         if (!nodes.length || trashing) return;
         setTrashing(true);
-        const done: DriveNode[] = [];
         try {
-            for (const node of nodes) done.push(await clientFor(node.workspaceId).trash(node));
-            cue('droplet');
-            toast.add({
-                type: 'success',
-                title:
-                    done.length === 1
-                        ? `“${nodes[0]!.name}” moved to Trash`
-                        : `${done.length} items moved to Trash`,
-                description:
-                    done.length === 1
-                        ? 'It stays in Trash for 30 days.'
-                        : 'They stay in Trash for 30 days.',
-                timeout: 8_000,
-                actionProps: { children: 'Undo', onClick: () => void undoTrash(done) },
-            });
-        } catch (error) {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title:
-                    done.length === 0
-                        ? 'Couldn’t move to Trash'
-                        : `${done.length} of ${nodes.length} moved to Trash`,
-                description: driveError(error),
-            });
+            const {
+                moved,
+                tried,
+                gone: went,
+                error,
+            } = await trashNodes(nodes, (ids) =>
+                setGone((current) => new Set([...current, ...ids])),
+            );
+            if (moved.length === tried) {
+                cue('droplet');
+                toast.add({
+                    type: 'success',
+                    title:
+                        nodes.length === 1
+                            ? `“${nodes[0]!.name}” moved to Trash`
+                            : `${nodes.length} items moved to Trash`,
+                    description:
+                        nodes.length === 1
+                            ? 'It stays in Trash for 30 days.'
+                            : 'They stay in Trash for 30 days.',
+                    timeout: 8_000,
+                    actionProps: { children: 'Undo', onClick: () => void undoTrash(moved) },
+                });
+            } else {
+                cue('error');
+                toast.add({
+                    type: 'error',
+                    title:
+                        moved.length === 0
+                            ? 'Couldn’t move to Trash'
+                            : `${went.length} of ${nodes.length} moved to Trash`,
+                    description: driveError(error),
+                    ...(moved.length > 0 && {
+                        timeout: 8_000,
+                        actionProps: { children: 'Undo', onClick: () => void undoTrash(moved) },
+                    }),
+                });
+            }
         } finally {
             setTrashing(false);
-            await invalidateFolders(queryClient, folderId);
+            // One refresh for the whole batch, in the background: the rows have already gone.
+            void invalidateFolders(queryClient, folderId);
         }
     }
 

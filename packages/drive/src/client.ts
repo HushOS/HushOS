@@ -1859,26 +1859,43 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return mounts;
     }
 
-    async function trash(node: DriveNode) {
-        const result = await api.trash(node.workspaceId, node.id);
-        return (await decorate([result.node]))[0]!;
+    /*
+     * Trashing and restoring in place change only `trashedAt` and `changeSeq`
+     * (packages/db drive.ts): no key, envelope or signature moves. So the node
+     * the caller already opened is the answer, with those two fields from the
+     * server; nothing goes back through the worker. Any other field the
+     * response carries is ignored, so a server cannot slip an envelope in
+     * beside metadata this client decrypted from another.
+     */
+    function withPlace(node: DriveNode, served: NodeView): DriveNode {
+        return { ...node, trashedAt: served.trashedAt, changeSeq: served.changeSeq };
     }
 
-    /* Restores in place, or to the root when the original parent is itself in the trash. */
+    async function trash(node: DriveNode) {
+        const result = await api.trash(node.workspaceId, node.id);
+        return withPlace(node, result.node);
+    }
+
+    /*
+     * Restores in place, or to the root when the original parent is itself in
+     * the trash. Only the second re-wraps the node key under a new parent, and
+     * only it is opened again, so the worker holds the node under its new
+     * parent.
+     */
     async function restore(node: DriveNode, toRoot?: DriveNode) {
         const ws = node.workspaceId;
-        let envelope: { parentKeyEpoch: number; keyEnvelope: string } | undefined;
-        if (toRoot) {
-            const { keyEnvelope } = await rpc('driveRewrapNode', {
-                workspaceId: ws,
-                nodeId: node.id,
-                parentId: toRoot.id,
-                parentKeyEpoch: toRoot.keyEpoch,
-                keyEpoch: node.keyEpoch,
-            });
-            envelope = { parentKeyEpoch: toRoot.keyEpoch, keyEnvelope };
-        }
-        const result = await api.restore(ws, node.id, envelope);
+        if (!toRoot) return withPlace(node, (await api.restore(ws, node.id)).node);
+        const { keyEnvelope } = await rpc('driveRewrapNode', {
+            workspaceId: ws,
+            nodeId: node.id,
+            parentId: toRoot.id,
+            parentKeyEpoch: toRoot.keyEpoch,
+            keyEpoch: node.keyEpoch,
+        });
+        const result = await api.restore(ws, node.id, {
+            parentKeyEpoch: toRoot.keyEpoch,
+            keyEnvelope,
+        });
         return (await decorate([result.node]))[0]!;
     }
 
