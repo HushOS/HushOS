@@ -94,8 +94,106 @@ data class AccountDevice(
     }
 }
 
-data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long)
-data class BillingSummary(val enabled: Boolean, val planName: String?, val periodEnd: String?, val cancelAtPeriodEnd: Boolean)
+/*
+ * `/api/auth/storage`. While the account's own files draw from a family's pool
+ * (docs/families-shared-pool.md 3.1) the figures are the pool's, counted part by
+ * part in whole GiB so they give away no one member's usage (3.9), and `pool`
+ * names the family; on the account's own allowance, or on a server older than
+ * the pool or without billing, it is null or absent. A pool this build can't
+ * read is no pool: the figures still show under today's words.
+ */
+data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long, val availableBytes: Long, val pool: StoragePool? = null) {
+    /*
+     * What an upload can still take, as the server checks it. Never quota less used: in a pool
+     * the server leaves other members' uploads in flight out of `usedBytes` (they would give
+     * away one member's activity) and takes them off `availableBytes` only.
+     */
+    val free: Long get() = availableBytes.coerceAtLeast(0L)
+
+    companion object {
+        fun from(json: JSONObject) = StorageAllowance(
+            json.getString("quotaBytes").toLong(), json.getString("usedBytes").toLong(), json.getString("availableBytes").toLong(),
+            json.optJSONObject("pool")?.let(StoragePool::from),
+        )
+    }
+}
+
+/* The family whose pool the storage figures are: both fields strings, neither empty. */
+data class StoragePool(val groupId: String, val name: String) {
+    companion object {
+        fun from(json: JSONObject): StoragePool? {
+            // `opt` and a type check, never `optString`, which turns a number into its digits.
+            val groupId = json.opt("groupId") as? String
+            val name = json.opt("name") as? String
+            return if (groupId.isNullOrEmpty() || name.isNullOrBlank()) null else StoragePool(groupId, name)
+        }
+    }
+}
+
+data class BillingSummary(
+    val enabled: Boolean,
+    val planName: String?,
+    val periodEnd: String?,
+    val cancelAtPeriodEnd: Boolean,
+    /* The family whose plan the storage comes from while pooled; absent on older servers. */
+    val family: BillingFamily? = null,
+) {
+    companion object {
+        fun from(json: JSONObject): BillingSummary {
+            val subscription = json.optJSONObject("subscription")
+            return BillingSummary(
+                json.optBoolean("enabled"), subscription?.optString("productName"), subscription?.optString("currentPeriodEnd"),
+                subscription?.optBoolean("cancelAtPeriodEnd") ?: false, json.optJSONObject("family")?.let(BillingFamily::from),
+            )
+        }
+    }
+}
+
+/* The family whose plan a pooled person's storage comes from: a name that isn't blank, as for a pool. */
+data class BillingFamily(val name: String, val planName: String?) {
+    companion object {
+        fun from(json: JSONObject): BillingFamily? {
+            val name = (json.opt("name") as? String)?.takeUnless { it.isBlank() } ?: return null
+            return BillingFamily(name, (json.opt("planName") as? String)?.trim()?.ifEmpty { null })
+        }
+    }
+}
+
+/*
+ * What Account says about the plan (docs/families-shared-pool.md 9). Read only,
+ * as all billing on the phone is: no way to buy or change a plan here (Google
+ * Play's payments policy, as Apple's 3.1.3(f) on iOS).
+ *
+ * While the storage figures are a family's pool, the plan is the family's: its
+ * name from `/api/billing`'s `family` ("Family plan" until that answers) and the
+ * line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal plan is never shown then, since the
+ * person no longer draws from it (billing ends it, 5.1). Without a readable
+ * `pool` it is today's display: the personal plan, or Free.
+ */
+data class PlanDisplay(
+    /* The plan's name, the card's heading. */
+    val name: String,
+    /* "Shared with Lindqvist family" while pooled, else null. */
+    val source: String?,
+    /* The family's name while pooled, for labels that would otherwise read as the person's own. */
+    val family: String?,
+    /* The personal plan's renewal or end date, shown only when not pooled. */
+    val periodEnd: String?,
+    val cancelAtPeriodEnd: Boolean,
+) {
+    companion object {
+        fun of(allowance: StorageAllowance?, billing: BillingSummary?): PlanDisplay {
+            // The storage answer decides; the billing one only when storage didn't answer at all,
+            // so a failed read never puts back a personal plan the person no longer draws from.
+            val family = if (allowance != null) allowance.pool?.name else billing?.family?.name
+            return if (family != null) {
+                PlanDisplay(billing?.family?.planName ?: "Family plan", "Shared with $family", family, null, false)
+            } else {
+                PlanDisplay(billing?.planName?.takeIf { it.isNotEmpty() } ?: "Free", null, null, billing?.periodEnd, billing?.cancelAtPeriodEnd ?: false)
+            }
+        }
+    }
+}
 
 /*
  * OPAQUE sign-in against the HushOS API, entirely native: the Rust core runs
@@ -571,14 +669,9 @@ object Auth {
         call(context, "/api/auth/recovery-key/confirm", JSONObject().put("recoveryVersion", recoveryVersion))
     }
 
-    fun storage(context: Context): StorageAllowance = call(context, "/api/auth/storage").getJSONObject("storage").let {
-        StorageAllowance(it.getString("quotaBytes").toLong(), it.getString("usedBytes").toLong())
-    }
+    fun storage(context: Context): StorageAllowance = StorageAllowance.from(call(context, "/api/auth/storage").getJSONObject("storage"))
 
-    fun billing(context: Context): BillingSummary = call(context, "/api/billing").let {
-        val subscription = it.optJSONObject("subscription")
-        BillingSummary(it.optBoolean("enabled"), subscription?.optString("productName"), subscription?.optString("currentPeriodEnd"), subscription?.optBoolean("cancelAtPeriodEnd") ?: false)
-    }
+    fun billing(context: Context): BillingSummary = BillingSummary.from(call(context, "/api/billing"))
 
     private fun envelope(json: JSONObject) = AccountKeyEnvelope(
         json.getInt("envelopeVersion").toUInt(), json.getLong("keyVersion").toULong(), json.getLong("credentialVersion").toULong(),
