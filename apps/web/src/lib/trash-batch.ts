@@ -1,4 +1,12 @@
 import type { DriveNode } from '@hushos/drive/client';
+import {
+    DriveApiError,
+    type RestoreBatchItem,
+    type RestoreRefusal,
+    type TrashBatchItem,
+    type TrashRefusal,
+} from '@hushos/drive/api';
+import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 
 /*
  * Moving a selection to the trash and Undo putting it back. The Drive client
@@ -7,97 +15,98 @@ import type { DriveNode } from '@hushos/drive/client';
  */
 
 export type TrashParts = {
-    /* One item to the trash, or back; throws when the server refuses it. */
-    trash: (node: DriveNode) => Promise<DriveNode>;
-    restore: (node: DriveNode) => Promise<DriveNode>;
+    /*
+     * One request: these items, all in one workspace and at most MAX_TRASH_BATCH,
+     * to the trash or back (api.ts trashBatch, restoreBatch). The server answers
+     * for each; it throws only when the request as a whole fails.
+     */
+    trash: (workspaceId: string, nodeIds: string[]) => Promise<{ results: TrashBatchItem[] }>;
+    restore: (workspaceId: string, nodeIds: string[]) => Promise<{ results: RestoreBatchItem[] }>;
     /* The folders an item sits in, as far as this device knows; any order. */
     ancestorsOf: (node: DriveNode) => { id: string }[];
 };
 
-/*
- * How many items go to or come back from the trash at once. The server takes
- * them one at a time under the workspace's lock (nextChangeSeq), so more at
- * once only hides the round trips between them. Each waiting request holds one
- * of the server process's pooled database connections (ten by default) while
- * it queues for the lock, so this stays small: at a 180 ms round trip, six
- * moved 100 items in 4.4 s where four took 7.9 s.
- */
-export const AT_ONCE = 6;
+type Item = TrashBatchItem | RestoreBatchItem;
+/* What the server said about one item: its answer, or why there is none (`error`). */
+type Answer<T extends Item> = { node: DriveNode; item: T | null; error: unknown };
 
-type Landed = { node: DriveNode; result: DriveNode }[];
-
-/* At most once a frame: each telling redraws a whole list. Without frames (a hidden tab, tests), at the end. */
-function frames(tell: () => void) {
-    let frame = 0;
-    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
-    return {
-        soon() {
-            if (raf && !frame)
-                frame = raf(() => {
-                    frame = 0;
-                    tell();
-                });
-        },
-        now() {
-            if (frame) cancelAnimationFrame(frame);
-            frame = 0;
-            tell();
-        },
-    };
-}
+const REFUSAL_CODES: Record<TrashRefusal | RestoreRefusal, DriveApiError['code']> = {
+    'not-found': 'not-found',
+    forbidden: 'forbidden',
+    root: 'invalid',
+    trashed: 'trashed',
+    'not-trashed': 'conflict',
+    removed: 'forbidden',
+    'parent-trashed': 'parent-trashed',
+};
 
 /*
- * Sends each item through `send`, a few at a time. Every item is tried, so one
- * refusal leaves no others behind. `results` keeps the order given, undefined
- * where the server refused; `error` is the first refusal. This is the one place
- * that decides how a batch reaches the server: a batch endpoint replaces this
- * function and nothing else.
+ * Sends the items through `send`: one request per workspace for up to
+ * MAX_TRASH_BATCH of them, a larger selection in several, one after another
+ * (the server takes each under the workspace's lock, so more at once would
+ * only queue there). `onLanded` hears each request's answers as it lands.
+ * Every item is tried: a request that fails as a whole fails only its own
+ * items, with its error, and an item the server refused, or left out of its
+ * answer, carries the error that says why. This is the one place that decides
+ * how a batch reaches the server. Answers keep the order given.
  */
-async function sendEach(
+async function sendEach<T extends Item>(
     nodes: DriveNode[],
-    send: (node: DriveNode) => Promise<DriveNode>,
-    onLanded: (landed: Landed) => void,
+    send: (workspaceId: string, nodeIds: string[]) => Promise<{ results: T[] }>,
+    onLanded: (landed: Answer<T>[]) => void,
 ) {
-    const results: (DriveNode | undefined)[] = Array.from({ length: nodes.length });
-    let error: unknown = null;
-    let next = 0;
-    let landed: Landed = [];
-    const telling = frames(() => {
-        const batch = landed;
-        landed = [];
-        if (batch.length) onLanded(batch);
-    });
-    const lane = async () => {
-        while (next < nodes.length) {
-            const index = next++;
-            const node = nodes[index]!;
-            let result: DriveNode;
+    const answers: Answer<T>[] = nodes.map((node) => ({ node, item: null, error: null }));
+    const byWorkspace = new Map<string, number[]>();
+    for (const [index, node] of nodes.entries())
+        byWorkspace.set(node.workspaceId, [...(byWorkspace.get(node.workspaceId) ?? []), index]);
+    for (const [workspaceId, indexes] of byWorkspace)
+        for (let start = 0; start < indexes.length; start += MAX_TRASH_BATCH) {
+            const chunk = indexes.slice(start, start + MAX_TRASH_BATCH).map((i) => answers[i]!);
             try {
-                result = await send(node);
+                const { results } = await send(
+                    workspaceId,
+                    chunk.map(({ node }) => node.id),
+                );
+                const byId = new Map(results.map((item) => [item.id, item]));
+                for (const answer of chunk) {
+                    const item = byId.get(answer.node.id) ?? null;
+                    answer.item = item;
+                    if (!item)
+                        answer.error = new DriveApiError(
+                            'The server didn’t say what happened to this item.',
+                            'unavailable',
+                            502,
+                        );
+                    else if (item.status === 'refused')
+                        answer.error = new DriveApiError(
+                            item.message,
+                            REFUSAL_CODES[item.reason],
+                            409,
+                        );
+                }
             } catch (cause) {
-                error ??= cause;
-                continue;
+                for (const answer of chunk) answer.error = cause;
             }
-            results[index] = result;
-            landed.push({ node, result });
-            telling.soon();
+            onLanded(chunk);
         }
-    };
-    await Promise.all(Array.from({ length: Math.min(AT_ONCE, nodes.length) }, lane));
-    telling.now();
-    return { results, error };
+    return answers;
 }
 
+const firstError = (answers: Answer<Item>[]) =>
+    answers.find((answer) => answer.error !== null)?.error ?? null;
+
 /*
- * Moves items to the trash. An item inside a folder that is also going is never
- * sent on its own: trashed as well, it would either be refused as already in the
- * trash or come back on Undo without its folder. It goes with its folder, or
- * stays where it is if the folder is refused.
+ * Moves items to the trash. An item inside a folder that is also going, as far
+ * as this device knows, is never sent: trashed as well, it would either be
+ * refused as already in the trash or come back on Undo without its folder. It
+ * goes with its folder, or stays where it is if the folder is refused. The
+ * server does the same for what this device does not know (`covered`).
  *
- * `moved` is what reached the trash, in the order given, and is exactly what
- * Undo puts back. `tried` is how many were sent. `gone` is every selected item
- * now in the trash, those inside moved folders included: what "N of M" counts.
- * `error` is the first refusal. `onMoved` hears the same ids as they land.
+ * `moved` is what reached the trash itself, in the order given, and is exactly
+ * what Undo puts back. `gone` is every selected item now in the trash, those
+ * inside a folder that went included: what "N of M" counts, and the whole
+ * selection went when it holds every item. `error` is the first refusal.
+ * `onMoved` hears the same ids as they land.
  */
 export async function trashBatch(
     nodes: DriveNode[],
@@ -121,31 +130,48 @@ export async function trashBatch(
                     movedIds.has(node.id) || within.get(node.id)!.some((id) => movedIds.has(id)),
             )
             .map((node) => node.id);
-    const { results, error } = await sendEach(roots, parts.trash, (landed) =>
-        onMoved?.(wentWith(new Set(landed.map(({ node }) => node.id)))),
+    const went = (answers: Answer<TrashBatchItem>[]) =>
+        new Set(
+            answers
+                .filter(({ item }) => item?.status === 'trashed' || item?.status === 'covered')
+                .map(({ node }) => node.id),
+        );
+    const answers = await sendEach(roots, parts.trash, (landed) => {
+        const ids = wentWith(went(landed));
+        if (ids.length) onMoved?.(ids);
+    });
+    const moved = answers.flatMap(({ node, item }) =>
+        item?.status === 'trashed'
+            ? [{ ...node, trashedAt: item.trashedAt, changeSeq: item.changeSeq }]
+            : [],
     );
-    const moved = results.filter((node) => node !== undefined);
     return {
         moved,
-        tried: roots.length,
-        gone: wentWith(new Set(moved.map((node) => node.id))),
-        error,
+        gone: wentWith(went(answers)),
+        error: firstError(answers),
     };
 }
 
 /*
  * Undo for trashBatch: puts back what it moved. None of those sits inside
- * another (only the outermost are sent), so the order they land in does not
- * matter. `back` is what came back, in the order given; `error` the first
- * refusal. `onBack` hears them as they land.
+ * another (only the outermost are sent), and the server would wait for a
+ * folder in the same request anyway. `back` is what came back, in the order
+ * given; `error` the first refusal. `onBack` hears them as they land.
  */
 export async function restoreBatch(
     nodes: DriveNode[],
     parts: TrashParts,
     onBack?: (back: DriveNode[]) => void,
 ) {
-    const { results, error } = await sendEach(nodes, parts.restore, (landed) =>
-        onBack?.(landed.map(({ result }) => result)),
-    );
-    return { back: results.filter((node) => node !== undefined), error };
+    const back = (answers: Answer<RestoreBatchItem>[]) =>
+        answers.flatMap(({ node, item }) =>
+            item?.status === 'restored'
+                ? [{ ...node, trashedAt: null, changeSeq: item.changeSeq }]
+                : [],
+        );
+    const answers = await sendEach(nodes, parts.restore, (landed) => {
+        const returned = back(landed);
+        if (returned.length) onBack?.(returned);
+    });
+    return { back: back(answers), error: firstError(answers) };
 }

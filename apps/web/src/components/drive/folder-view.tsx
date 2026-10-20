@@ -446,9 +446,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                 setGone((current) => new Set([...current, ...ids]));
                 setBack((current) => new Map([...current].filter(([id]) => !ids.includes(id))));
             });
-            const { moved, tried, error } = result;
+            const { moved, error } = result;
             went = result.gone;
-            if (moved.length === tried) {
+            // Everything picked is in the trash, itself or inside a folder that went.
+            if (went.length === nodes.length) {
                 cue('droplet');
                 const id = toast.add({
                     type: 'success',
@@ -596,10 +597,15 @@ export function FolderView({ folderId }: { folderId: string }) {
                 move: () => !trashing && writable && selection.length > 0 && setMoving(selection),
                 copy: () => !trashing && writable && selection.length > 0 && setCopying(selection),
                 versions: () =>
+                    !trashing &&
                     selection.length === 1 &&
                     selection[0]!.kind === 'file' &&
                     setVersionsOf(selection[0]!),
-                share: () => ownSelection && selection.length === 1 && setSharing(selection[0]!),
+                share: () =>
+                    !trashing &&
+                    ownSelection &&
+                    selection.length === 1 &&
+                    setSharing(selection[0]!),
                 tags: () => !trashing && ownSelection && setTagging(selection),
                 download: () => !trashing && paletteHandlers.current.download(selection),
                 trash: () => writable && void paletteHandlers.current.trash(selection),

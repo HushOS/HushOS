@@ -112,6 +112,10 @@ export const driveApi: DriveApi = {
                 .nodes({ id: nodeId })
                 .restore.post(toRoot ? { workspaceId, toRoot } : { workspaceId }),
         ),
+    trashBatch: (workspaceId, nodeIds) =>
+        unwrapDrive(api().workspaces({ id: workspaceId })['trash-batch'].post({ nodeIds })),
+    restoreBatch: (workspaceId, nodeIds) =>
+        unwrapDrive(api().workspaces({ id: workspaceId })['restore-batch'].post({ nodeIds })),
     beginUpload: (workspaceId, input) => unwrapDrive(api().uploads.post({ workspaceId, ...input })),
     uploadState: (workspaceId, uploadId) =>
         unwrapDrive(api().uploads({ id: uploadId }).get({ query: { workspaceId } })),

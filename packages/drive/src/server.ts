@@ -32,6 +32,7 @@ import {
     KEY_ENVELOPE_BYTES,
     MAX_DEPTH,
     MAX_FOLDER_BATCH,
+    MAX_TRASH_BATCH,
     MAX_PART_URLS_PER_REQUEST,
     RETIRED_SHARE_ENVELOPE_BYTES,
     SHARE_ENVELOPE_BYTES,
@@ -45,6 +46,7 @@ import {
     SHARE_URL_TTL_SECONDS,
     TOMBSTONE_DAYS,
     TRASH_RETENTION_DAYS,
+    TRASH_BATCHES_PER_MINUTE,
     UPLOAD_TTL_HOURS,
     DOCUMENT_KINDS,
     WORKSPACE_DOCUMENT_BYTES,
@@ -468,6 +470,21 @@ const familySharing = () =>
     new DriveError('family-sharing', 'Sharing isn’t available in family folders.', 409);
 const trashed = () =>
     new DriveError('trashed', 'This item is in the trash. Restore it first.', 409);
+const topFolderToTrash = () =>
+    new DriveError('invalid', 'The top folder cannot be moved to the trash.', 409);
+const notTrashed = () => new DriveError('conflict', 'This item is not in the trash.', 409);
+const parentTrashedOnRestore = () =>
+    new DriveError(
+        'parent-trashed',
+        'The folder this was in is still in the trash. Restore it to the top folder instead.',
+        409,
+    );
+const removedByOperator = () =>
+    new DriveError(
+        'forbidden',
+        'This item was removed by the operator of this instance and cannot be restored.',
+        403,
+    );
 const parentTrashed = () =>
     new DriveError('parent-trashed', 'The destination folder is in the trash.', 409);
 const tooDeep = () =>
@@ -716,10 +733,99 @@ export async function trashNode(userId: string, workspaceId: string, nodeId: str
     await requireAccess(userId, workspaceId, nodeId, 'editor');
     const result = await driveRepository.trashNode({ workspaceId, nodeId, writer: userId });
     if (result.status === 'not-found') throw notFound();
-    if (result.status === 'root')
-        throw new DriveError('invalid', 'The top folder cannot be moved to the trash.', 409);
+    if (result.status === 'root') throw topFolderToTrash();
     if (result.status === 'trashed') throw trashed();
     return { node: nodeView(result.node) };
+}
+
+/*
+ * The words a refusal in a batch carries: the single route's for the same
+ * refusal, so a client shows what it would have shown for one item.
+ */
+const trashRefusals = {
+    'not-found': () => notFound(),
+    forbidden: () => forbidden(),
+    root: () => topFolderToTrash(),
+    trashed: () => trashed(),
+} satisfies Record<driveRepository.TrashRefusal, () => DriveError>;
+const restoreRefusals = {
+    'not-found': () => notFound(),
+    'not-trashed': () => notTrashed(),
+    removed: () => removedByOperator(),
+    'parent-trashed': () => parentTrashedOnRestore(),
+} satisfies Record<driveRepository.RestoreRefusal, () => DriveError>;
+
+/*
+ * A batch request's ids: between one and MAX_TRASH_BATCH, none twice. One
+ * account makes at most TRASH_BATCHES_PER_MINUTE of them; each holds the
+ * workspace's lock while it walks its items.
+ */
+async function requireBatch(userId: string, nodeIds: string[]) {
+    if (nodeIds.length < 1 || nodeIds.length > MAX_TRASH_BATCH)
+        throw new DriveError('invalid', `Send between 1 and ${MAX_TRASH_BATCH} items at a time.`);
+    if (new Set(nodeIds).size !== nodeIds.length)
+        throw new DriveError('invalid', 'An item is named twice.');
+    if (
+        !(await authRepository.consumeRateLimit(
+            hashToken(`drive:trash-batch:user:${userId}`),
+            TRASH_BATCHES_PER_MINUTE,
+            60_000,
+        ))
+    )
+        throw new DriveError('conflict', 'Too many requests. Please try again shortly.', 429);
+}
+
+/*
+ * A selection to the trash in one request: each item as trashNode would have
+ * it, refused one by one (driveRepository.trashNodes). Someone with nothing to
+ * write in the workspace is refused before its lock is taken, as trashNode's
+ * access check refuses them first: a member, or an editor of something in it.
+ */
+export async function trashNodes(userId: string, workspaceId: string, nodeIds: string[]) {
+    await requireBatch(userId, nodeIds);
+    await requireEpochs(userId, workspaceId);
+    const outcomes = await driveRepository.trashNodes({ workspaceId, nodeIds, writer: userId });
+    return {
+        results: outcomes.map((outcome) => {
+            switch (outcome.status) {
+                case 'trashed':
+                    return {
+                        id: outcome.id,
+                        status: outcome.status,
+                        trashedAt: outcome.trashedAt.toISOString(),
+                        changeSeq: outcome.changeSeq,
+                    };
+                case 'covered':
+                    return { id: outcome.id, status: outcome.status, by: outcome.by };
+                case 'refused':
+                    return {
+                        id: outcome.id,
+                        status: outcome.status,
+                        reason: outcome.reason,
+                        message: trashRefusals[outcome.reason]().message,
+                    };
+            }
+        }),
+    };
+}
+
+/* Undo for trashNodes: in place only, each as restoreNode would have it, for a member. */
+export async function restoreNodes(userId: string, workspaceId: string, nodeIds: string[]) {
+    await requireBatch(userId, nodeIds);
+    await requireMember(userId, workspaceId);
+    const outcomes = await driveRepository.restoreNodes({ workspaceId, nodeIds, writer: userId });
+    return {
+        results: outcomes.map((outcome) =>
+            outcome.status === 'restored'
+                ? { id: outcome.id, status: outcome.status, changeSeq: outcome.changeSeq }
+                : {
+                      id: outcome.id,
+                      status: outcome.status,
+                      reason: outcome.reason,
+                      message: restoreRefusals[outcome.reason]().message,
+                  },
+        ),
+    };
 }
 
 export async function restoreNode(
@@ -746,13 +852,9 @@ export async function restoreNode(
         case 'not-found':
             throw notFound();
         case 'not-trashed':
-            throw new DriveError('conflict', 'This item is not in the trash.', 409);
+            throw notTrashed();
         case 'parent-trashed':
-            throw new DriveError(
-                'parent-trashed',
-                'The folder this was in is still in the trash. Restore it to the top folder instead.',
-                409,
-            );
+            throw parentTrashedOnRestore();
         case 'rotating':
             // Back to a family folder's top folder that a key change has not re-keyed yet.
             throw rotating();
@@ -761,11 +863,7 @@ export async function restoreNode(
         case 'stale':
             throw stale();
         case 'removed':
-            throw new DriveError(
-                'forbidden',
-                'This item was removed by the operator of this instance and cannot be restored.',
-                403,
-            );
+            throw removedByOperator();
     }
 }
 

@@ -91,6 +91,7 @@ type ChainRow = {
     key_epoch: number;
     trashed_at: Date | null;
     purged_at: Date | null;
+    removed_at: Date | null;
     height_bound: number;
     depth: number;
 };
@@ -103,6 +104,7 @@ export type Walk = {
     ancestors: Ancestor[];
     depth: number; // the root is 0
     trashed: boolean; // the node or any ancestor
+    ancestorTrashed: boolean; // any ancestor, not counting the node
     purged: boolean;
     rootId: string;
 };
@@ -116,11 +118,11 @@ export async function walk(tx: Tx, nodeId: string): Promise<Walk | null> {
     const result = await tx.execute<ChainRow>(sql`
         with recursive chain as (
             select id, parent_id, workspace_id, kind, key_epoch, trashed_at, purged_at,
-                   height_bound, 1 as depth
+                   removed_at, height_bound, 1 as depth
             from drive_nodes where id = ${nodeId}
             union all
             select n.id, n.parent_id, n.workspace_id, n.kind, n.key_epoch, n.trashed_at,
-                   n.purged_at, n.height_bound, c.depth + 1
+                   n.purged_at, n.removed_at, n.height_bound, c.depth + 1
             from drive_nodes n join chain c on n.id = c.parent_id
             where c.depth < ${WALK_CAP}
         )
@@ -139,6 +141,7 @@ export async function walk(tx: Tx, nodeId: string): Promise<Walk | null> {
         ancestors,
         depth: rows.length - 1,
         trashed: rows.some((row) => row.trashed_at !== null),
+        ancestorTrashed: rows.slice(1).some((row) => row.trashed_at !== null),
         purged: rows.some((row) => row.purged_at !== null),
         rootId: top.id,
     };
@@ -1075,21 +1078,143 @@ export async function moveNode(input: {
     });
 }
 
+/* The most nodes one trashNodes or restoreNodes call takes: protocol.ts MAX_TRASH_BATCH says the same. */
+export const MAX_NODE_BATCH = 500;
+
+/* Why a node may not go to the trash, by its walk; null when it may. */
+function trashRefusal(chain: Walk | null, workspaceId: string) {
+    if (!chain || chain.node.workspace_id !== workspaceId || chain.purged)
+        return 'not-found' as const;
+    if (chain.node.parent_id === null) return 'root' as const;
+    if (chain.trashed) return 'trashed' as const;
+    return null;
+}
+
+/*
+ * Moves nodes to the trash (`at`), or back in place (null), the first taking
+ * change number `firstSeq` and each after it the next, in the order given: the
+ * caller holds the workspace's lock and has taken those numbers. Neither is a
+ * change to an item: its date stays what it was, and trashedAt says when.
+ */
+async function markTrashed(tx: Tx, ids: string[], firstSeq: number, at: Date | null) {
+    const order = sql`array_position(string_to_array(${ids.join(',')}, ',')::uuid[], ${driveNodes.id})`;
+    const rows = await tx
+        .update(driveNodes)
+        .set({ trashedAt: at, changeSeq: sql`${firstSeq}::bigint - 1 + ${order}` })
+        .where(inArray(driveNodes.id, ids))
+        .returning(nodeColumns);
+    const byId = new Map(signNodes(rows as RawNodeRow[]).map((node) => [node.id, node]));
+    return ids.map((id) => byId.get(id)!);
+}
+
+/*
+ * `count` change numbers after the one nextChangeSeq took, under the lock it
+ * holds: one write for a batch, never one per node. Returns the last.
+ */
+async function moreChangeSeqs(tx: Tx, workspaceId: string, count: number) {
+    const [row] = await tx
+        .update(workspaces)
+        .set({ changeSeq: sql`${workspaces.changeSeq} + ${count}` })
+        .where(eq(workspaces.id, workspaceId))
+        .returning({ changeSeq: workspaces.changeSeq });
+    return row!.changeSeq;
+}
+
 export async function trashNode(input: { workspaceId: string; nodeId: string; writer?: string }) {
     return db.transaction(async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
-        const chain = await walk(tx, input.nodeId);
-        if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
-            return { status: 'not-found' as const };
-        if (chain.node.parent_id === null) return { status: 'root' as const };
-        if (chain.trashed) return { status: 'trashed' as const };
-        const [node] = await tx
-            .update(driveNodes)
-            // Trashing is not a change to the item: its date stays what it was, trashedAt says when.
-            .set({ trashedAt: new Date(), changeSeq })
-            .where(eq(driveNodes.id, input.nodeId))
-            .returning(nodeColumns);
-        return { status: 'ok' as const, node: signNodes([node as RawNodeRow])[0]! };
+        switch (trashRefusal(await walk(tx, input.nodeId), input.workspaceId)) {
+            case 'not-found':
+                return { status: 'not-found' as const };
+            case 'root':
+                return { status: 'root' as const };
+            case 'trashed':
+                return { status: 'trashed' as const };
+        }
+        const [node] = await markTrashed(tx, [input.nodeId], changeSeq, new Date());
+        return { status: 'ok' as const, node: node! };
+    });
+}
+
+export type TrashRefusal = 'not-found' | 'forbidden' | 'root' | 'trashed';
+export type TrashOutcome =
+    | { id: string; status: 'trashed'; trashedAt: Date; changeSeq: number }
+    /* Inside `by`, a folder of the same request that went: it is in the trash with it. */
+    | { id: string; status: 'covered'; by: string }
+    | { id: string; status: 'refused'; reason: TrashRefusal };
+
+/*
+ * A selection to the trash in one transaction: every node trashNode would
+ * move, moved as it would, and the rest refused one by one, so one refusal
+ * keeps none of the others back. (Nothing about trashing one node depends on
+ * another, so all-or-nothing would only make a person redo the rest.) A writer
+ * who may no longer write here (requireStillWriter) moves nothing: that is
+ * about the person, not the node, and throws like it does for one.
+ *
+ * In trashNode's order: the workspace's lock first, then each node's walk.
+ * Access is the authorization walk's (accessFor), under the lock, so a share
+ * revoked mid-batch counts. A node whose walk passes but which sits inside
+ * another that goes is `covered`, not trashed on its own: trashed separately,
+ * Undo of its folder would leave it behind. One inside a refused node of the
+ * request (the top folder, say) is judged on its own. Each that moves takes
+ * its own change number, in the order given, so a feed read a page at a time
+ * never splits a batch on a shared number; refusals take none, beyond the one
+ * the lock takes.
+ */
+export async function trashNodes(input: {
+    workspaceId: string;
+    nodeIds: string[];
+    writer: string;
+}) {
+    const { workspaceId, nodeIds, writer } = input;
+    if (nodeIds.length < 1 || nodeIds.length > MAX_NODE_BATCH)
+        throw new RangeError(`Trash between 1 and ${MAX_NODE_BATCH} items at a time.`);
+    if (new Set(nodeIds).size !== nodeIds.length) throw new RangeError('An item is named twice.');
+    return db.transaction(async (tx) => {
+        const firstSeq = await nextChangeSeq(tx, workspaceId, writer);
+        // Everything here is theirs, or each node is theirs to trash by the share above it.
+        const member = await holdsWorkspace(tx, writer, workspaceId);
+        const checked: { id: string; chain: Walk | null; refusal: TrashRefusal | null }[] = [];
+        for (const id of nodeIds) {
+            const chain = await walk(tx, id);
+            let refusal: TrashRefusal | null = trashRefusal(chain, workspaceId);
+            if (refusal !== 'not-found' && !member) {
+                const access = await accessFor(tx, writer, chain!);
+                if (!access) refusal = 'not-found';
+                else if (!atLeast(access.role, 'editor')) refusal = 'forbidden';
+            }
+            checked.push({ id, chain, refusal });
+        }
+        const passed = new Set(checked.filter((entry) => !entry.refusal).map((entry) => entry.id));
+        const outcomes: (TrashOutcome | { id: string; status: 'going' })[] = checked.map(
+            ({ id, chain, refusal }) => {
+                if (refusal) return { id, status: 'refused', reason: refusal };
+                // Root first: the outermost of the request's nodes above it, which always goes.
+                const by = chain!.ancestors.find((ancestor) => passed.has(ancestor.id));
+                if (by) return { id, status: 'covered', by: by.id };
+                return { id, status: 'going' };
+            },
+        );
+        const going = outcomes.filter((entry) => entry.status === 'going').map(({ id }) => id);
+        if (going.length > 1) await moreChangeSeqs(tx, workspaceId, going.length - 1);
+        const moved = going.length
+            ? new Map(
+                  (await markTrashed(tx, going, firstSeq, new Date())).map((node) => [
+                      node.id,
+                      node,
+                  ]),
+              )
+            : new Map<string, NodeRow>();
+        return outcomes.map((entry): TrashOutcome => {
+            if (entry.status !== 'going') return entry;
+            const node = moved.get(entry.id)!;
+            return {
+                id: entry.id,
+                status: 'trashed',
+                trashedAt: node.trashedAt!,
+                changeSeq: node.changeSeq!,
+            };
+        });
     });
 }
 
@@ -1136,6 +1261,20 @@ export async function removeNodeIn(tx: Tx, input: { workspaceId: string; nodeId:
     return { status: 'ok' as const, shares: shares.length, links: links.length };
 }
 
+/*
+ * Whether a node may come back from the trash, read under the caller's lock:
+ * why not, or its walk and whether its folder is itself in the trash (then it
+ * needs a new home).
+ */
+async function restoreCheck(tx: Tx, workspaceId: string, nodeId: string) {
+    const chain = await walk(tx, nodeId);
+    if (!chain || chain.node.workspace_id !== workspaceId || chain.purged)
+        return { refusal: 'not-found' as const };
+    if (chain.node.trashed_at === null) return { refusal: 'not-trashed' as const };
+    if (chain.node.removed_at) return { refusal: 'removed' as const };
+    return { refusal: null, chain, parentTrashed: chain.ancestorTrashed };
+}
+
 export async function restoreNode(input: {
     workspaceId: string;
     /* The account writing: in a group area, checked again under the lock. */
@@ -1145,17 +1284,9 @@ export async function restoreNode(input: {
 }) {
     return db.transaction(async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
-        const chain = await walk(tx, input.nodeId);
-        if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
-            return { status: 'not-found' as const };
-        if (chain.node.trashed_at === null) return { status: 'not-trashed' as const };
-        const [removal] = await tx
-            .select({ removedAt: driveNodes.removedAt })
-            .from(driveNodes)
-            .where(eq(driveNodes.id, input.nodeId));
-        if (removal?.removedAt) return { status: 'removed' as const };
-        const parent = chain.node.parent_id ? await walk(tx, chain.node.parent_id) : null;
-        const parentTrashed = parent?.trashed ?? false;
+        const check = await restoreCheck(tx, input.workspaceId, input.nodeId);
+        if (check.refusal) return { status: check.refusal };
+        const { chain, parentTrashed } = check;
         // Restoring is not a change either: a folder comes back with the date it had, not today's.
         const set: Partial<typeof driveNodes.$inferInsert> = {
             trashedAt: null,
@@ -1189,6 +1320,75 @@ export async function restoreNode(input: {
                 );
         }
         return { status: 'ok' as const, node: signNodes([node as RawNodeRow])[0]! };
+    });
+}
+
+export type RestoreRefusal = 'not-found' | 'not-trashed' | 'removed' | 'parent-trashed';
+export type RestoreOutcome =
+    | { id: string; status: 'restored'; changeSeq: number }
+    | { id: string; status: 'refused'; reason: RestoreRefusal };
+
+/*
+ * Undo for trashNodes: puts nodes back where they were, in one transaction,
+ * as restoreNode does without a new home, each refused one by one. Restoring
+ * to the top folder re-wraps a node's key, which only its client can do, so
+ * it stays restoreNode's. A node whose folder is in the trash is refused as
+ * `parent-trashed`, unless that folder is in the same request: then it waits
+ * for it, and comes back after it, whatever the order given. Change numbers
+ * go in the order the nodes come back.
+ */
+export async function restoreNodes(input: {
+    workspaceId: string;
+    nodeIds: string[];
+    writer: string;
+}) {
+    const { workspaceId, nodeIds, writer } = input;
+    if (nodeIds.length < 1 || nodeIds.length > MAX_NODE_BATCH)
+        throw new RangeError(`Restore between 1 and ${MAX_NODE_BATCH} items at a time.`);
+    if (new Set(nodeIds).size !== nodeIds.length) throw new RangeError('An item is named twice.');
+    return db.transaction(async (tx) => {
+        // The lock, and the change number for the first to come back.
+        let firstSeq: number | null = await nextChangeSeq(tx, workspaceId, writer);
+        const outcomes = new Map<string, RestoreOutcome>();
+        // Not yet settled, in the order given. Each pass settles at least the outermost of them
+        // (nothing unsettled is above it), so this ends.
+        const unsettled = new Set(nodeIds);
+        while (unsettled.size) {
+            const back: string[] = [];
+            for (const id of unsettled) {
+                const check = await restoreCheck(tx, workspaceId, id);
+                if (!check.refusal && !check.parentTrashed) {
+                    // Settled once this pass's writes land: until then, anything inside it waits.
+                    back.push(id);
+                    continue;
+                }
+                // Its folder may be one of these, still to come back: it waits for it.
+                if (
+                    !check.refusal &&
+                    check.chain.ancestors.some((ancestor) => unsettled.has(ancestor.id))
+                )
+                    continue;
+                outcomes.set(id, {
+                    id,
+                    status: 'refused',
+                    reason: check.refusal ?? 'parent-trashed',
+                });
+                unsettled.delete(id);
+            }
+            if (!back.length) continue;
+            const first: number = firstSeq ?? (await moreChangeSeqs(tx, workspaceId, 1));
+            if (back.length > 1) await moreChangeSeqs(tx, workspaceId, back.length - 1);
+            firstSeq = null;
+            for (const node of await markTrashed(tx, back, first, null)) {
+                outcomes.set(node.id, {
+                    id: node.id,
+                    status: 'restored',
+                    changeSeq: node.changeSeq!,
+                });
+                unsettled.delete(node.id);
+            }
+        }
+        return nodeIds.map((id) => outcomes.get(id)!);
     });
 }
 

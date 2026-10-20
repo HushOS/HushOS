@@ -27,6 +27,7 @@ import { authRepository, driveRepository, growthRepository } from '@hushos/db';
 import {
     CLIENT_HEADER,
     LINK_TOKEN_HEADER,
+    MAX_TRASH_BATCH,
     checkClient,
     legacyMinimums,
     parseMinimums,
@@ -40,6 +41,7 @@ import {
     MAX_SEALS_PER_CALL,
 } from '@hushos/groups/protocol';
 import { createGroupRequestHandler } from '@/lib/group-requests';
+import { readCapped } from '@/lib/read-capped';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
 import { appEnv } from '@hushos/env/app';
@@ -298,6 +300,12 @@ const uuidSchema = t.String({
     pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
 });
 const epochSchema = t.Integer({ minimum: 1, maximum: 2147483646 });
+/* The items of a batch trash or restore: drive.trashNodes checks the same again. */
+const nodeBatchSchema = t.Array(uuidSchema, {
+    minItems: 1,
+    maxItems: MAX_TRASH_BATCH,
+    uniqueItems: true,
+});
 /*
  * The seed a client-made id was derived from. Optional and loose here on
  * purpose: the domain derives the id again and answers a missing, malformed
@@ -1408,6 +1416,27 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 body.workspaceId,
                 params.id,
                 body.toRoot,
+            ),
+    )
+    // A selection to the trash, or back in place, in one request: per-item results, in order.
+    .post(
+        '/drive/workspaces/:id/trash-batch',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({ nodeIds: nodeBatchSchema }) },
+        async ({ request, sessionToken, params, body }) =>
+            drive.trashNodes(
+                (await driveMutation(request, sessionToken)).id,
+                params.id,
+                body.nodeIds,
+            ),
+    )
+    .post(
+        '/drive/workspaces/:id/restore-batch',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({ nodeIds: nodeBatchSchema }) },
+        async ({ request, sessionToken, params, body }) =>
+            drive.restoreNodes(
+                (await driveMutation(request, sessionToken)).id,
+                params.id,
+                body.nodeIds,
             ),
     )
     .post(
@@ -2731,6 +2760,14 @@ export const apiApp = new Elysia({ prefix: '/api' })
 
 export type Api = typeof apiApp;
 
+/*
+ * A batch trash or restore is read whole under a cap before anything parses it:
+ * MAX_TRASH_BATCH ids are about 19.5 KB of JSON (`{"nodeIds":[...]}`, 39 bytes
+ * an id), and nothing larger is one.
+ */
+const TRASH_BATCH_PATH = /^\/api\/drive\/workspaces\/[^/]+\/(trash|restore)-batch\/?$/;
+const TRASH_BATCH_BODY_BYTES = 24 * 1024;
+
 // Bound auth bodies before JSON parsing; never log protocol messages or tokens.
 export async function handleApiRequest(request: Request): Promise<Response> {
     if (request.method === 'HEAD') {
@@ -2742,6 +2779,19 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
     if (/^\/api\/(groups|invitations)(\/|$)/.test(pathname)) return handleGroupRequest(request);
+    if (request.method === 'POST' && TRASH_BATCH_PATH.test(pathname)) {
+        const body = await readCapped(request, TRASH_BATCH_BODY_BYTES);
+        if (!body)
+            return Response.json(
+                { message: 'Request is too large.', code: 'too-large' },
+                { status: 413 },
+            );
+        request = new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body,
+        });
+    }
     // Settings carry every pin and the sharing ledger: up to 64 KiB sealed, Base64url, in JSON.
     /*
      * Auth bodies are small, so they are read whole under a cap. A few carry
