@@ -1164,7 +1164,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * confirms it: the one place a batch reaches the server. One request each, one after another,
      * until the server takes a batch in one request.
      */
-    fun trashMany(ids: List<String>, moved: (String) -> Unit = {}): List<Result<Unit>> = oneAfterAnother(ids) { trash(it); moved(it) }
+    suspend fun trashMany(ids: List<String>, moved: (String) -> Unit = {}): List<Result<Unit>> = trashEach(ids, ::trash, moved)
 
     fun restore(entry: TrashItem): Opened {
         val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)

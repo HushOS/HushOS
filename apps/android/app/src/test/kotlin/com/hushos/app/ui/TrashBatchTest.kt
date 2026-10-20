@@ -4,6 +4,7 @@ import com.hushos.app.data.ApiError
 import com.hushos.app.data.NodeView
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
+import com.hushos.app.data.TrashItem
 import com.hushos.app.data.Unreachable
 import com.hushos.app.data.oneAfterAnother
 import com.hushos.core.NodeMetadata
@@ -120,13 +121,55 @@ class TrashBatchTest {
 
     @Test
     fun theReasonIsOfflineOnlyWhenEveryFailureWas() = runBlocking {
-        // A refusal, then no network: the reason can't honestly be "offline" alone.
+        // A refusal, then no network: the second may have landed, so nothing is said to have stayed.
         val mixed = trashMany(thirteen, Recorder().steps { if (it.id == "f2") throw ApiError(409, "x") else if (it.id == "f4") throw Unreachable() })
-        assertEquals(TrashFailure.OTHER, mixed.failure)
+        assertEquals(TrashFailure.UNCONFIRMED, mixed.failure)
         // No network at the twelfth: nothing after it was sent, and none of it counts as moved.
         val offline = trashMany(thirteen, Recorder().steps { if (it.id == "f12") throw Unreachable() })
         assertEquals("11 of 13 moved to Trash. You’re offline, so the rest weren’t confirmed.", offline.notice())
         val signedOut = trashMany(thirteen, Recorder().steps { if (it.id == "f2") throw ApiError(409, "x") else if (it.id == "f4") throw NotAuthenticated() })
         assertEquals(TrashFailure.SIGNED_OUT, signedOut.failure)
+        // Only refusals: those did stay where they were.
+        val refused = trashMany(thirteen, Recorder().steps { if (it.id == "f2" || it.id == "f4") throw ApiError(409, "x") })
+        assertEquals("11 of 13 moved to Trash. The rest stayed where they were. Try again.", refused.notice())
+    }
+
+    @Test
+    fun aGatewayErrorIsUnconfirmedNeverStayed() = runBlocking {
+        // A 502 or 504 can come after the trash committed behind the gateway.
+        val partial = trashMany(thirteen, Recorder().steps { if (it.id == "f12") throw ApiError(502, "Bad gateway") })
+        assertEquals("12 of 13 moved to Trash. The rest weren’t confirmed. Try again.", partial.notice())
+        val none = trashMany(thirteen.take(2), Recorder().steps { throw ApiError(504, "Gateway timeout") })
+        assertEquals("Couldn’t move to Trash. HushOS didn’t confirm it. Try again.", none.notice())
+        assertEquals(TrashFailure.OTHER, trashFailure(ApiError(500, "x")))
+    }
+
+    private fun trashRow(item: Opened) = TrashItem(item, false)
+
+    @Test
+    fun undoPutsBackOnlyWhatCameBackOnceInListOrderAndOnlyInFoldersOnScreen() {
+        val work = listOf(item("Budget", "work"), item("Zebra", "work"))
+        val folders = mapOf("work" to work, "photos" to emptyList<Opened>())
+        val back = listOf(item("apple", "work"), item("Zebra", "work"), item("elsewhere", "music"))
+        val (rows, _) = afterUndo(folders, emptyList(), back)
+        // "apple" joins Work in name order, "Zebra" isn't doubled, and a folder not on screen gets no list.
+        assertEquals(listOf("apple", "Budget", "Zebra"), rows.getValue("work").map { it.id })
+        assertEquals(emptyList<String>(), rows.getValue("photos").map { it.id })
+        assertEquals(setOf("work", "photos"), rows.keys)
+    }
+
+    @Test
+    fun undoTakesWhatCameBackOffTheTrashListAndLeavesTheRest() {
+        val trashed = listOf(item("a"), item("b"), item("c"))
+        val (_, trash) = afterUndo(emptyMap(), trashed.map(::trashRow), listOf(trashed[0], trashed[2]))
+        assertEquals(listOf("b"), trash.map { it.item.id })
+    }
+
+    @Test
+    fun anUndoOfManySaysWhatDidntComeBack() {
+        assertNull(undoProblem(13, 13))
+        assertNull(undoProblem(0, 1))
+        assertEquals("11 of 13 are back. The rest are still in Trash.", undoProblem(11, 13))
+        assertEquals("Couldn’t bring them back. They’re still in Trash.", undoProblem(0, 13))
     }
 }

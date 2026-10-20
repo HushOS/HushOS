@@ -1,15 +1,22 @@
 package com.hushos.app.ui
 
+import com.hushos.app.data.ApiError
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Problems
+import com.hushos.app.data.TrashItem
 
-/* Why the rest stayed where they were, in words of our own: the server's sentence is never shown here. */
-enum class TrashFailure { OFFLINE, SIGNED_OUT, OTHER }
+/*
+ * Why the rest didn't move, in words of our own: the server's sentence is never shown here.
+ * UNCONFIRMED is a gateway's 502 or 504: the request may have landed behind it, as it may have
+ * when there was no answer at all, so neither is ever said to have "stayed".
+ */
+enum class TrashFailure { OFFLINE, UNCONFIRMED, SIGNED_OUT, OTHER }
 
 fun trashFailure(error: Throwable): TrashFailure = when {
     error is NotAuthenticated -> TrashFailure.SIGNED_OUT
     Problems.offline(error) -> TrashFailure.OFFLINE
+    error is ApiError && (error.status == 502 || error.status == 504) -> TrashFailure.UNCONFIRMED
     else -> TrashFailure.OTHER
 }
 
@@ -17,7 +24,10 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
     /* The folders whose listings changed: each read once after the batch, never once per item. */
     val folders: Set<String> get() = moved.mapNotNull { it.node.parentId }.toSet()
 
-    /* The reason the notice gives: offline only when every failure was, signed out when any was. */
+    /*
+     * The reason the notice gives: signed out when any was; offline only when every failure was;
+     * unconfirmed when any may have landed (offline or a gateway error); otherwise a refusal.
+     */
     val failure: TrashFailure?
         get() {
             if (failed.isEmpty()) return null
@@ -25,6 +35,7 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
             return when {
                 TrashFailure.SIGNED_OUT in kinds -> TrashFailure.SIGNED_OUT
                 kinds.all { it == TrashFailure.OFFLINE } -> TrashFailure.OFFLINE
+                kinds.any { it == TrashFailure.OFFLINE || it == TrashFailure.UNCONFIRMED } -> TrashFailure.UNCONFIRMED
                 else -> TrashFailure.OTHER
             }
         }
@@ -41,11 +52,13 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
         if (tried.size == 1) return null
         if (moved.isEmpty()) return "Couldn’t move to Trash. " + when (failure) {
             TrashFailure.OFFLINE -> "You’re offline. Try again once you’re connected."
+            TrashFailure.UNCONFIRMED -> "HushOS didn’t confirm it. Try again."
             TrashFailure.SIGNED_OUT -> "Sign in again, then try again."
             TrashFailure.OTHER -> "Try again."
         }
         return "${moved.size} of ${tried.size} moved to Trash. " + when (failure) {
             TrashFailure.OFFLINE -> "You’re offline, so the rest weren’t confirmed."
+            TrashFailure.UNCONFIRMED -> "The rest weren’t confirmed. Try again."
             TrashFailure.SIGNED_OUT -> "Sign in again to move the rest."
             TrashFailure.OTHER -> "The rest stayed where they were. Try again."
         }
@@ -82,4 +95,26 @@ suspend fun trashMany(items: List<Opened>, steps: TrashSteps): TrashResult {
     result.notice()?.let { text -> steps.announce(text, if (moved.isEmpty()) null else ({ steps.restore(moved) })) }
     if (moved.isNotEmpty()) steps.settle(result.folders)
     return result
+}
+
+/*
+ * After the notice's Undo: each row that came back goes into its folder's list, if that folder is
+ * on screen, once, in list order (folders first, then by name); rows that didn't come back stay
+ * out. Every row that came back leaves the Trash list, which may be open under the notice.
+ */
+fun afterUndo(folders: Map<String, List<Opened>>, trash: List<TrashItem>, back: List<Opened>): Pair<Map<String, List<Opened>>, List<TrashItem>> {
+    val byName = compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+    val backIds = back.map { it.id }.toSet()
+    val rows = folders.mapValues { (id, rows) ->
+        val returning = back.filter { item -> item.node.parentId == id && rows.none { it.id == item.id } }
+        if (returning.isEmpty()) rows else (rows + returning).sortedWith(byName)
+    }
+    return rows to trash.filter { it.item.id !in backIds }
+}
+
+/* What an Undo of many says when not everything came back; null when it all did, or for one item (its error says it). */
+fun undoProblem(back: Int, tried: Int): String? = when {
+    tried <= 1 || back == tried -> null
+    back == 0 -> "Couldn’t bring them back. They’re still in Trash."
+    else -> "$back of $tried are back. The rest are still in Trash."
 }

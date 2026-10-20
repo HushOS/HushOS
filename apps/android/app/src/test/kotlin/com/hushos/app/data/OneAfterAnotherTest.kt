@@ -1,5 +1,8 @@
 package com.hushos.app.data
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,7 +16,7 @@ class OneAfterAnotherTest {
     private val ids = (1..6).map { "n$it" }
 
     @Test
-    fun anOrdinaryRefusalDoesNotStopTheRest() {
+    fun anOrdinaryRefusalDoesNotStopTheRest() = runBlocking {
         val sent = ArrayList<String>()
         val outcomes = oneAfterAnother(ids) { id -> sent.add(id); if (id == "n2") throw ApiError(409, "trashed") }
         assertEquals(ids, sent)
@@ -21,7 +24,7 @@ class OneAfterAnotherTest {
     }
 
     @Test
-    fun noNetworkStopsSendingAndTheRestAreNotMoved() {
+    fun noNetworkStopsSendingAndTheRestAreNotMoved() = runBlocking {
         val sent = ArrayList<String>()
         val outcomes = oneAfterAnother(ids) { id -> sent.add(id); if (id == "n3") throw Unreachable() }
         assertEquals(listOf("n1", "n2", "n3"), sent)
@@ -30,10 +33,28 @@ class OneAfterAnotherTest {
     }
 
     @Test
-    fun anEndedSessionStopsSendingToo() {
+    fun anEndedSessionStopsSendingToo() = runBlocking {
         val sent = ArrayList<String>()
         val outcomes = oneAfterAnother(ids) { id -> sent.add(id); if (id == "n1") throw NotAuthenticated() }
         assertEquals(listOf("n1"), sent)
         assertTrue(outcomes.all { it.exceptionOrNull() is NotAuthenticated })
+    }
+
+    @Test
+    fun aCancelledBatchSendsNothingAfterTheItemUnderWay() = runBlocking {
+        val sent = ArrayList<String>()
+        lateinit var batch: Job
+        batch = launch { oneAfterAnother(ids) { id -> sent.add(id); if (id == "n2") batch.cancel() } }
+        batch.join()
+        assertEquals(listOf("n1", "n2"), sent)
+    }
+
+    @Test
+    fun anItemIsReportedMovedOnlyAfterItsTrashCameBack() = runBlocking {
+        val events = ArrayList<String>()
+        val outcomes = trashEach(ids, trash = { id -> events.add("trash $id"); if (id == "n3") throw ApiError(409, "trashed") }, moved = { events.add("moved $it") })
+        assertEquals(listOf("trash n1", "moved n1", "trash n2", "moved n2", "trash n3", "trash n4", "moved n4"), events.take(7))
+        assertTrue("moved n3" !in events)
+        assertEquals(listOf(true, true, false, true, true, true), outcomes.map { it.isSuccess })
     }
 }

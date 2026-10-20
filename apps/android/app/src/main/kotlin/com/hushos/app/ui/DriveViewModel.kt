@@ -110,6 +110,12 @@ data class DriveState(
     /* An alert's words: a title, what to do, and the raw detail for Details only. */
     val error: com.hushos.app.data.Problem? = null,
     val busy: Boolean = false,
+    /*
+     * Ids in a Move to Trash batch under way, every batch's together: a selection whose ids are here
+     * shows its bar pending (rotation keeps it, as the view model outlives the screen), and an id
+     * already here is never sent again by a second batch.
+     */
+    val trashing: Set<String> = emptySet(),
     /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
     val trashWorking: Set<String> = emptySet(),
     /* A batch restore where some came back and some didn't: on screen until dismissed, retried, or Trash is left. */
@@ -1323,10 +1329,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * an Undo for exactly that, and the feed, the listings, the system's view and kept folders
      * follow once, in the background.
      */
-    private suspend fun trashBatch(items: List<Opened>) {
+    private suspend fun trashBatch(requested: List<Opened>) {
         val vault = vault ?: return
+        // Items already on their way to the Trash in another batch aren't sent twice.
+        val items = requested.filter { it.id !in state.value.trashing }
         if (items.isEmpty()) return
-        _state.update { it.copy(busy = true) }
+        val ids = items.map { it.id }.toSet()
+        _state.update { it.copy(busy = true, trashing = it.trashing + ids) }
         val result = try {
             trashMany(items, TrashSteps(
                 send = { batch, moved ->
@@ -1339,7 +1348,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 settle = { folders -> viewModelScope.launch { settle(folders) } },
             ))
         } finally {
-            _state.update { it.copy(busy = false) }
+            // Only this batch's ids: another batch still under way keeps its own pending.
+            _state.update { it.copy(busy = false, trashing = it.trashing - ids) }
         }
         reportFailures(result.failed.map { it.second }, single = items.size == 1)
     }
@@ -1386,24 +1396,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(busy = false) }
         }
         val back = outcomes.mapNotNull { it.getOrNull() }
-        val byName = compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-        val backIds = back.map { it.id }.toSet()
-        _state.update { s ->
-            s.copy(
-                folders = s.folders.mapValues { (id, rows) ->
-                    val returning = back.filter { item -> item.node.parentId == id && rows.none { it.id == item.id } }
-                    if (returning.isEmpty()) rows else (rows + returning).sortedWith(byName)
-                },
-                // The Trash list may be open under the notice: what came back leaves it now too.
-                trash = s.trash.filter { it.item.id !in backIds },
-            )
-        }
+        _state.update { s -> afterUndo(s.folders, s.trash, back).let { (folders, trash) -> s.copy(folders = folders, trash = trash) } }
         if (back.isNotEmpty()) viewModelScope.launch { settle(back.mapNotNull { it.node.parentId }.toSet()) }
         val errors = outcomes.mapNotNull { it.exceptionOrNull() }
         reportFailures(errors, single = moved.size == 1)
-        if (errors.isNotEmpty() && moved.size > 1 && errors.none { it is NotAuthenticated }) {
-            notify(if (back.isEmpty()) "Couldn’t bring them back. They’re still in Trash." else "${back.size} of ${moved.size} are back. The rest are still in Trash.")
-        }
+        if (errors.none { it is NotAuthenticated }) undoProblem(back.size, moved.size)?.let { notify(it) }
     }
 
     /*
