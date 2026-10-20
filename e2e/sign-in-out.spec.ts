@@ -9,31 +9,63 @@ import { hydrated, landedOnHome, newFolder, newPage, PASSWORD, registerAccount }
  * since the bad state lasted only as long as a request.
  */
 
-type Frame = { app: boolean; email: string | null; rows: number; locked: boolean };
+type Frame = {
+    app: boolean;
+    email: string | null;
+    rows: number;
+    locked: boolean;
+    /* "Opening your files" on screen. */
+    opening: boolean;
+    /* Skeleton rows on screen. */
+    skeleton: boolean;
+    /* The page's own title on screen ("Home"), with or without its list. */
+    page: boolean;
+};
 
 /*
  * Records, every frame, whether the app is on screen (its account menu), the email field's
- * value and the Drive rows. The app's own DOM, not the address: the router changes the address
- * before the next page is drawn, and a redraw after that would otherwise go unseen.
+ * value, the Drive rows, and what Drive draws while it opens. The app's own DOM, not the
+ * address: the router changes the address before the next page is drawn, and a redraw after
+ * that would otherwise go unseen. Self-contained, so it also runs as an init script.
  */
-function watch(page: Page) {
-    return page.evaluate(() => {
-        const frames: Frame[] = [];
-        (window as unknown as { __frames: typeof frames }).__frames = frames;
-        const tick = () => {
-            frames.push({
-                app: document.querySelector('button[aria-label="Account menu"]') !== null,
-                email: document.querySelector<HTMLInputElement>('#email')?.value ?? null,
-                rows: document.querySelectorAll('[data-node-id]').length,
-                locked: document.body.innerText.includes('HushOS is locked here'),
-            });
-            requestAnimationFrame(tick);
-        };
+function record() {
+    const frames: Frame[] = [];
+    (window as unknown as { __frames: typeof frames }).__frames = frames;
+    const shown = (element: Element) => element.getClientRects().length > 0;
+    const tick = () => {
+        frames.push({
+            app: document.querySelector('button[aria-label="Account menu"]') !== null,
+            email: document.querySelector<HTMLInputElement>('#email')?.value ?? null,
+            rows: [...document.querySelectorAll('[data-node-id]')].filter(shown).length,
+            locked: document.body.innerText.includes('HushOS is locked here'),
+            opening: [...document.querySelectorAll('output')].some(
+                (output) => shown(output) && output.textContent?.includes('Opening your files'),
+            ),
+            skeleton: [...document.querySelectorAll('output[aria-label="Loading"]')].some(shown),
+            page: [...document.querySelectorAll('h1')].some(
+                (heading) => shown(heading) && heading.textContent?.trim() === 'Home',
+            ),
+        });
         requestAnimationFrame(tick);
-    });
+    };
+    requestAnimationFrame(tick);
 }
+const watch = (page: Page) => page.evaluate(record);
 const frames = (page: Page) =>
     page.evaluate(() => (window as unknown as { __frames: Frame[] }).__frames);
+
+/*
+ * From the moment the app is on screen until its list is: one line ("Opening your files"),
+ * never skeleton rows after it, and never the page without its list.
+ */
+function openedInOneStep(recorded: Frame[]) {
+    const app = recorded.filter((frame) => frame.app && !frame.locked);
+    const listed = app.findIndex((frame) => frame.rows > 0);
+    expect(listed).toBeGreaterThan(-1);
+    const before = app.slice(0, listed);
+    expect(before.filter((frame) => frame.skeleton)).toEqual([]);
+    expect(before.filter((frame) => frame.page)).toEqual([]);
+}
 
 test('signing out and back in never redraws the page being left', async ({ browser }) => {
     const page = await newPage(browser);
@@ -63,8 +95,20 @@ test('signing out and back in never redraws the page being left', async ({ brows
     await watch(page);
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await landedOnHome(page);
-    const signingIn = (await frames(page)).filter((frame) => frame.email !== null);
+    await expect(page.locator('[data-node-id]')).toHaveCount(1);
+    const recorded = await frames(page);
+    const signingIn = recorded.filter((frame) => frame.email !== null);
     expect(signingIn.length).toBeGreaterThan(0);
     // The form kept what was typed until the app replaced it.
     expect(signingIn.filter((frame) => frame.email !== email)).toEqual([]);
+    // Then the drive appeared in one step: the line, then the list.
+    openedInOneStep(recorded);
+
+    // A reload opens it again from the saved unlock, in one step too.
+    await page.addInitScript(record);
+    await page.reload();
+    await expect(page.locator('[data-node-id]')).toHaveCount(1, { timeout: 60_000 });
+    const reloaded = await frames(page);
+    expect(reloaded.some((frame) => frame.opening)).toBe(true);
+    openedInOneStep(reloaded);
 });
