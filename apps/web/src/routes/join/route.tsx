@@ -5,6 +5,13 @@ import { AuthActions, AuthLayout, AuthNote, authLink } from '@/components/auth-l
 import { Spinner } from '@/components/motion';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { familyKeys } from '@/lib/families-shell';
+import {
+    billingQueryOptions,
+    formatSpace,
+    storageQueryOptions,
+    useBillingEnabled,
+} from '@/lib/queries';
+import { familyTierName } from '@/lib/plans';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy, familyField, joinInFamilyCopy } from '@/lib/groups/copy';
 import { rememberReturn } from '@/lib/return-to';
@@ -149,6 +156,13 @@ function OpenInvitation({
     const queryClient = useQueryClient();
     const [accepting, setAccepting] = useState(false);
     const [error, setError] = useState<unknown>(null);
+    // Where plans are sold, a newcomer's own files draw from the family's storage once they're
+    // let in, and a personal plan they pay for ends then (docs/families-shared-pool.md 3.2,
+    // 3.3): said before they accept, with their own figure. Their own figures only: they are in
+    // no family yet, so the server's are theirs.
+    const billing = useBillingEnabled();
+    const storage = useQuery({ ...storageQueryOptions, enabled: billing });
+    const personal = useQuery({ ...billingQueryOptions, enabled: billing });
     const opened = useQuery({
         queryKey: ['invitations', 'open', token],
         queryFn: () =>
@@ -248,6 +262,16 @@ function OpenInvitation({
     const yours =
         invitation.inFamily ??
         (code === 'in-family' && error instanceof GroupApiError ? familyField(error.data) : null);
+    const ownFiles =
+        storage.data && !storage.data.pool ? formatSpace(storage.data.usedBytes) : null;
+    const plan = personal.data?.subscription;
+    const ownPlan = plan && !plan.endedAt ? familyTierName({ name: plan.productName }) : null;
+    const storageLine =
+        !ownFiles || code === 'email-mismatch' || code === 'already-member'
+            ? null
+            : ownPlan
+              ? `Your ${ownPlan} plan ends when you’re let in, and the unused days are refunded. From then on your files use ${invitation.name}’s storage. They take ${ownFiles} now.`
+              : `Once you’re let in, your files use ${invitation.name}’s storage. They take ${ownFiles} now.`;
     return (
         <AuthLayout
             title={
@@ -263,6 +287,11 @@ function OpenInvitation({
                 <p className="text-[15px] leading-relaxed">
                     After you accept, you and {inviter ? inviter.name.split(/\s+/)[0] : 'they'}{' '}
                     check it’s really each other, on a call or in person. Then you’re let in.
+                </p>
+            )}
+            {!yours && storageLine && (
+                <p className="text-[15px] leading-relaxed" data-join-storage>
+                    {storageLine}
                 </p>
             )}
             {yours ? (

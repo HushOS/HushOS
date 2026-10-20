@@ -41,7 +41,6 @@ import {
     FoldersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
-import { familyBillingQueryOptions } from '@/lib/family-billing';
 import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
 
 export type NavItem = {
@@ -135,55 +134,48 @@ function CatalogueStatus() {
 }
 
 /*
- * The storage at the foot of the sidebar. Inside a family's folders it is the family's pool where
- * the family's plan says it (a server that sells plans), and otherwise the person's own space,
- * labelled My files, so it never reads as the family folder's usage. Nothing shows there until
- * the family's plan has answered, so the meter doesn't change under the reader.
+ * The storage at the foot of the sidebar (docs/families-shared-pool.md 7.1). While the person's
+ * files draw from their family's pool, it is the pool, named after the family, on every page:
+ * My files and the family folders spend the same storage. Otherwise it is their own space,
+ * labelled My files when they are in a family (a family without a live plan, or a server that
+ * sells none), so it never reads as the family's.
  */
 function StorageMeter({ userId }: { userId: string }) {
-    const familyId = useLocation({
-        select: (location) => /^\/app\/s\/([0-9a-f-]{36})(?:\/|$)/.exec(location.pathname)?.[1],
-    });
-    const groups = useGroupsEnabled();
-    const inFamily = groups && familyId !== undefined;
-    const families = useQuery({ ...familiesQueryOptions(userId), enabled: inFamily });
-    const familyPlan = useQuery({
-        ...familyBillingQueryOptions(userId, familyId ?? ''),
-        enabled: inFamily,
-    });
-    if (!inFamily) return <OwnMeter label={null} />;
-    if (families.isPending || familyPlan.isPending) return null;
-    const family = families.data?.find((at) => at.id === familyId);
-    const pool = familyPlan.data?.enabled ? familyPlan.data.storage : null;
-    if (family && pool) return <PoolMeter family={family.name} pool={pool} />;
-    return <OwnMeter label="My files" />;
+    const { data: storage } = useQuery(storageQueryOptions);
+    const family = useYourFamily(userId);
+    if (storage?.pool) return <PoolMeter family={storage.pool.name} storage={storage} />;
+    return <OwnMeter label={family ? 'My files' : null} />;
 }
 
-/* A family's pool, in its folders: an empty one (no plan, or it ended) has no room. */
+/*
+ * The family's pool, as the server counts it for a member (each part in whole GB): what is
+ * stored, what is free, and when nothing is, that the family's storage is full. Uploads stop
+ * for everyone then, in My files and the family folders alike; nothing is deleted.
+ */
 function PoolMeter({
     family,
-    pool,
+    storage,
 }: {
     family: string;
-    pool: { usedBytes: string; quotaBytes: string };
+    storage: { usedBytes: string; quotaBytes: string; availableBytes: string };
 }) {
-    const quota = BigInt(pool.quotaBytes);
-    const usedBytes = BigInt(pool.usedBytes);
-    const empty = quota === 0n;
-    const used = empty ? 1 : Math.min(1, Math.max(0, Number(usedBytes) / Number(quota)));
-    const nearlyFull = used >= 0.95;
-    const free = quota > usedBytes ? quota - usedBytes : 0n;
-    const usedLine = empty
-        ? 'No room'
-        : `${formatSpace(pool.usedBytes)} of ${formatQuota(pool.quotaBytes)} used`;
+    const billing = useBillingEnabled();
+    const quota = Number(storage.quotaBytes);
+    const used = quota > 0 ? Math.min(1, Math.max(0, Number(storage.usedBytes) / quota)) : 1;
+    const full = BigInt(storage.availableBytes) <= 0n;
+    const nearlyFull = full || used >= 0.95;
+    const usedLine = `${formatSpace(storage.usedBytes)} of ${formatQuota(storage.quotaBytes)} used`;
+    const line = full
+        ? 'The family’s storage is full'
+        : `${formatSpace(storage.availableBytes)} free`;
     return (
         <>
             <CollapsedMeter
                 used={used}
                 nearlyFull={nearlyFull}
-                line={`${family}: ${usedLine}${empty ? '' : `, ${formatSpace(free.toString())} free`}`}
+                line={`${family}: ${usedLine}, ${line}`}
             />
-            <div className="flex flex-col gap-2 px-2 rail:hidden">
+            <div className="flex flex-col gap-2 px-2 rail:hidden" data-storage-meter="pool">
                 <span className="eyebrow truncate text-muted-foreground">{family}</span>
                 <Progress
                     value={Math.round(used * 100)}
@@ -203,24 +195,24 @@ function PoolMeter({
                         nearlyFull ? 'text-destructive' : 'text-muted-foreground',
                     )}
                 >
-                    {empty
-                        ? 'The family has no plan right now'
-                        : `${formatSpace(free.toString())} free`}
+                    {line}
                 </span>
+                {billing && (
+                    <Link
+                        to="/app/billing"
+                        className="self-start text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                    >
+                        Plan and storage
+                    </Link>
+                )}
             </div>
         </>
     );
 }
 
-/*
- * The person's own space; `label` names it where it could be read as something else's. While
- * their files draw from a family's pool (docs/families-shared-pool.md 3.1) the server's figures
- * are the pool's, named after the family, and no personal plan offers more room.
- */
-function OwnMeter({ label: given }: { label: string | null }) {
+/* The person's own space; `label` names it where it could be read as something else's. */
+function OwnMeter({ label }: { label: string | null }) {
     const { data: storage } = useQuery(storageQueryOptions);
-    const pooled = storage?.pool ?? null;
-    const label = pooled ? pooled.name : given;
     const billing = useBillingEnabled();
     const { data: catalogue } = useQuery({ ...catalogueQueryOptions, enabled: billing });
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: billing });
@@ -229,8 +221,9 @@ function OwnMeter({ label: given }: { label: string | null }) {
     const current =
         summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
     const currentQuota = current ? BigInt(current.quotaBytes) : 0n;
-    const canUpgrade =
-        !pooled && Boolean(catalogue?.plans.some((plan) => BigInt(plan.quotaBytes) > currentQuota));
+    const canUpgrade = Boolean(
+        catalogue?.plans.some((plan) => BigInt(plan.quotaBytes) > currentQuota),
+    );
     // Nearly full: the bar and the line turn red, and the link offers more room.
     const nearlyFull = used >= 0.95;
     const ending = current?.cancelAtPeriodEnd ? current : null;
@@ -249,7 +242,7 @@ function OwnMeter({ label: given }: { label: string | null }) {
                 nearlyFull={nearlyFull && !ending}
                 line={`${label ? `${label}: ` : ''}${usedLine}${line ? `, ${line}` : ''}`}
             />
-            <div className="flex flex-col gap-2 px-2 rail:hidden">
+            <div className="flex flex-col gap-2 px-2 rail:hidden" data-storage-meter="own">
                 {label && <span className="eyebrow text-muted-foreground">{label}</span>}
                 <Progress
                     value={Math.round(used * 100)}

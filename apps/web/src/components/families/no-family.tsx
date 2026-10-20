@@ -8,6 +8,8 @@ import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
+import { familyTierName } from '@/lib/plans';
+import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
 import type { GroupSummary } from '@/lib/groups/api';
 import type { GroupNotice } from '@/lib/groups/context';
 import { errorCopy } from '@/lib/groups/copy';
@@ -28,20 +30,39 @@ export function NoFamily({
     families,
     notices,
     nameOf,
+    create,
 }: {
     userId: string;
     families: readonly GroupSummary[];
     notices: readonly GroupNotice[];
     nameOf: (groupId: string) => string | undefined;
+    /* A family tier chosen on Plans: Create a family opens with it, and goes on to its checkout. */
+    create?: { planId: string; currency?: string };
 }) {
     const waiting = families.filter((at) => at.kind === 'family' && at.state === 'accepted');
     const invitations = useQuery(myInvitationsQueryOptions(userId));
     const [creating, setCreating] = useState(false);
+    // Where plans are sold, a family's plan holds everyone's own files and the family folders.
+    const billing = useBillingEnabled();
+    const catalogue = useQuery({ ...catalogueQueryOptions, enabled: billing && Boolean(create) });
+    const personal = useQuery({ ...billingQueryOptions, enabled: billing && Boolean(create) });
+    const chosen = create ? catalogue.data?.families.find((at) => at.id === create.planId) : null;
+    const plan = chosen
+        ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
+        : undefined;
+    const live = personal.data?.subscription;
+    // Arrived from Plans with a tier: the dialog opens with it, until it is closed.
+    const [dismissed, setDismissed] = useState(false);
+    const open = creating || (Boolean(chosen) && !dismissed);
     return (
         <div className="flex flex-1 flex-col" data-no-family>
             <PageHeader
                 title="Family"
-                description="A family shares folders, and everyone in it is checked before they join. You can be in one family."
+                description={
+                    billing
+                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders, and everyone in it is checked before they join. You can be in one family.'
+                        : 'A family shares folders, and everyone in it is checked before they join. You can be in one family.'
+                }
             >
                 <Button onClick={() => setCreating(true)}>Create a family</Button>
             </PageHeader>
@@ -105,7 +126,18 @@ export function NoFamily({
                 </SettingsGroup>
             </div>
             <ServerKnowsLine className="mt-auto" />
-            <CreateFamilyDialog userId={userId} open={creating} onOpenChange={setCreating} />
+            <CreateFamilyDialog
+                userId={userId}
+                open={open}
+                onOpenChange={(next) => {
+                    setCreating(next);
+                    if (!next) setDismissed(true);
+                }}
+                plan={plan}
+                personalPlan={
+                    live && !live.endedAt ? familyTierName({ name: live.productName }) : null
+                }
+            />
         </div>
     );
 }

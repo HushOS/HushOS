@@ -28,7 +28,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from '@/components/ui/toast';
-import { localeHintQueryOptions } from '@/lib/billing';
+import { billingQueryOptions, localeHintQueryOptions } from '@/lib/billing';
+import { storageQueryOptions } from '@/lib/queries';
 import { groupBillingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
 import { formatDay } from '@/lib/drive';
@@ -126,6 +127,104 @@ function PoolLine({ storage }: { storage: FamilyBilling['storage'] }) {
             </span>
             <StorageMeter used={used} quota={quota} parts={null} className="h-1.5 max-w-64" />
         </span>
+    );
+}
+
+/* A member's own files as a manager sees them: whole GB, rounded up on the server. */
+const roundedLabel = (bytes: string) => (bytes === '0' ? 'Under 1 GB' : formatQuota(bytes));
+
+/*
+ * Who stores what in the family's pool (docs/families-shared-pool.md 3.9, 7.3), under the
+ * plan. Everyone sees their own files exactly, the family folders' total and what is free;
+ * the organizer and anyone who manages the family also see each member's own files, which
+ * the server rounds up to the whole GB before they leave it, largest first. Nobody sees
+ * names, counts or types of anyone's files. Shown only while the family has a pool to share
+ * (billing on, a live plan).
+ */
+export function FamilyStorage({
+    userId,
+    groupId,
+    family,
+}: {
+    userId: string;
+    groupId: string;
+    family: string;
+}) {
+    const summary = useQuery(familyBillingQueryOptions(userId, groupId));
+    const detail = useQuery(familyQueryOptions(userId, groupId));
+    // What is free, as the sidebar says it: the server's figure for this pool, which counts
+    // uploads in flight; the summary's own arithmetic only for a payer who isn't pooled.
+    const account = useQuery(storageQueryOptions);
+    const data = summary.data;
+    if (!data?.enabled || !data.usage || !data.storage || data.storage.quotaBytes === '0')
+        return null;
+    const { usage, storage } = data;
+    const quota = BigInt(storage.quotaBytes);
+    const used = BigInt(storage.usedBytes);
+    const free =
+        account.data?.pool?.groupId === groupId
+            ? BigInt(account.data.availableBytes)
+            : quota > used
+              ? quota - used
+              : 0n;
+    const nameOf = (id: string) => {
+        if (id === userId) return 'You';
+        const member = detail.data?.members.find((at) => at.userId === id);
+        return member ? member.name : 'Someone in the family';
+    };
+    return (
+        <Section title="Storage">
+            <div
+                data-family-usage={usage.members ? 'manager' : 'member'}
+                className="flex flex-col gap-3"
+            >
+                <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2.5 text-sm sm:max-w-md">
+                    {usage.members
+                        ? usage.members.map((member) => (
+                              <div key={member.userId} className="contents" data-usage-member>
+                                  <dt className="truncate">{nameOf(member.userId)}</dt>
+                                  <dd className="text-right tabular-nums">
+                                      {roundedLabel(member.ownBytesRounded)}
+                                  </dd>
+                              </div>
+                          ))
+                        : usage.ownBytes !== null && (
+                              <div className="contents" data-usage-own>
+                                  <dt>Your files</dt>
+                                  <dd className="text-right tabular-nums">
+                                      {formatSpace(usage.ownBytes)}
+                                  </dd>
+                              </div>
+                          )}
+                    <div className="contents" data-usage-folders>
+                        <dt>Family folders</dt>
+                        <dd className="text-right tabular-nums">
+                            {usage.foldersBytes === '0' ? 'None' : formatQuota(usage.foldersBytes)}
+                        </dd>
+                    </div>
+                    <div className="contents" data-usage-free>
+                        <dt className="text-muted-foreground">Free</dt>
+                        <dd
+                            className={cn(
+                                'text-right tabular-nums',
+                                free === 0n
+                                    ? 'font-semibold text-destructive'
+                                    : 'text-muted-foreground',
+                            )}
+                        >
+                            {free === 0n
+                                ? 'The family’s storage is full'
+                                : formatSpace(free.toString())}
+                        </dd>
+                    </div>
+                </dl>
+                <p className="max-w-[43em] text-[13px] text-muted-foreground">
+                    {usage.members
+                        ? 'How much each person’s own files take, rounded up to the whole GB. You can’t see what the files are.'
+                        : `Your files include your Trash and earlier versions. The people who manage ${family} see how much your files take, rounded up to the whole GB, never what they are.`}
+                </p>
+            </div>
+        </Section>
     );
 }
 
@@ -336,7 +435,8 @@ function PlanTop(props: Inner) {
                             {family}’s plan ends on {ends}
                         </AlertTitle>
                         <AlertDescription>
-                            After that, nobody can upload to the family folders. Nothing is deleted.{' '}
+                            After that, nobody can upload to the family folders, and everyone’s own
+                            files count against their own storage again. Nothing is deleted.{' '}
                             {payerYou
                                 ? 'To keep the plan, resume it in Manage payment and invoices, under Billing.'
                                 : `${payerName ?? 'The person who pays for it'} can resume it before then.`}
@@ -382,7 +482,7 @@ function PlanTop(props: Inner) {
                     </AlertTitle>
                     <AlertDescription>
                         {emptyPool
-                            ? 'Nobody can upload to the family folders, and nobody new can join, until it’s renewed.'
+                            ? 'Nobody can upload to the family folders, and nobody new can join, until it’s renewed. Until then, everyone’s own files count against their own storage.'
                             : 'Nobody new can join until it’s renewed.'}{' '}
                         Nothing has been deleted.{' '}
                         {actions.choosePlan
@@ -429,6 +529,10 @@ function ChoosePlan({
     // Only you in it so far (a new family): said. Others already in it (a plan that never
     // started, members kept from before): the sentence would be false, so it goes.
     const alone = !members?.some((member) => member.state === 'active' && member.userId !== userId);
+    // A personal plan the person pays for ends when the family's plan starts, with the unused
+    // days refunded (docs/families-shared-pool.md 3.3): said before they pay.
+    const personal = useQuery(billingQueryOptions).data?.subscription;
+    const ownPlan = personal && !personal.endedAt ? tierName({ name: personal.productName }) : null;
     const hint = useQuery(localeHintQueryOptions);
     const plans = summary.plans;
     const currencies = familyCurrencies(plans);
@@ -479,6 +583,12 @@ function ChoosePlan({
                     <p className="max-w-[43em] text-sm text-muted-foreground">
                         {family} needs a plan before you can invite anyone or make family folders.
                         {alone && ' Until then, only you are in it.'}
+                    </p>
+                )}
+                {ownPlan && (
+                    <p className="max-w-[43em] text-sm" data-personal-plan-ends>
+                        Your {ownPlan} plan ends when the family’s plan starts, and the unused days
+                        are refunded. From then on your files use {family}’s storage.
                     </p>
                 )}
             </div>
@@ -812,7 +922,8 @@ function PlanSection(props: Inner) {
                         <AlertDialogDescription>
                             You cancel it in the billing portal. The family keeps its plan and{' '}
                             {formatQuota(live.quotaBytes)} until {ends}. After that, nobody can
-                            upload to the family folders. Nothing is deleted.
+                            upload to the family folders, and everyone’s own files count against
+                            their own storage again. Nothing is deleted.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

@@ -11,9 +11,15 @@ import { errorCopy } from '@/lib/groups/copy';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/family/')({
     head: () => ({ meta: [{ title: 'Family · HushOS' }] }),
-    // Back from Polar's checkout: `checkout_id` says a plan is on its way.
-    validateSearch: (search: Record<string, unknown>): { checkout_id?: string } =>
-        typeof search.checkout_id === 'string' ? { checkout_id: search.checkout_id } : {},
+    // Back from Polar's checkout: `checkout_id` says a plan is on its way. From Plans on a locked
+    // device: `create` is the family tier chosen there, priced in `currency`.
+    validateSearch: (
+        search: Record<string, unknown>,
+    ): { checkout_id?: string; create?: string; currency?: string } => ({
+        ...(typeof search.checkout_id === 'string' ? { checkout_id: search.checkout_id } : {}),
+        ...(typeof search.create === 'string' ? { create: search.create } : {}),
+        ...(typeof search.currency === 'string' ? { currency: search.currency } : {}),
+    }),
     component: FamilyRoute,
 });
 
@@ -26,7 +32,7 @@ export const Route = createFileRoute('/_authenticated/app/_drive/family/')({
  */
 function FamilyRoute() {
     const { userId } = useDrive();
-    const { checkout_id: checkoutId } = Route.useSearch();
+    const { checkout_id: checkoutId, create, currency } = Route.useSearch();
     const families = useQuery(familiesQueryOptions(userId));
     // Read here, never started: the Drive runtime runs it.
     const pass = useQuery({ ...familiesSyncQueryOptions(userId), enabled: false });
@@ -57,6 +63,7 @@ function FamilyRoute() {
             families={families.data}
             notices={notices}
             nameOf={(id) => families.data.find((at) => at.id === id)?.name}
+            create={create ? { planId: create, currency } : undefined}
         />
     );
 }

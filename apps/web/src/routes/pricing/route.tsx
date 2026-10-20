@@ -670,8 +670,10 @@ function Business() {
 
 /*
  * The family section's button. Create a family is offered only to someone in no family (one
- * per account), and leads to Account → Family (/app/family), where the family is made; signed
- * out, it signs up first and lands there. Someone already in a family opens theirs instead.
+ * per account), and leads to Plans (/app/billing), where the family tiers sit beside the
+ * personal plans, each creating a family and going to its checkout
+ * (docs/families-shared-pool.md 7.4); signed out, it signs up first and lands there. Someone
+ * already in a family opens theirs instead.
  * Nothing shows until that is known, so the button never offers what the server would refuse;
  * if the families can't be read, it opens /app/family, which shows whichever is true. A
  * session cookie that turns out to have expired (no account behind it) is treated as signed out.
@@ -686,7 +688,7 @@ function FamilyAction({ hasSession }: { hasSession: boolean }) {
         return (
             <Link
                 to="/register"
-                onClick={() => rememberReturn('/app/family')}
+                onClick={() => rememberReturn('/app/billing')}
                 className={className}
             >
                 Create a family
@@ -700,9 +702,13 @@ function FamilyAction({ hasSession }: { hasSession: boolean }) {
         );
     if (!userId || families.isPending) return null;
     const yours = activeFamily(families.data);
-    return (
+    return yours ? (
         <Link to="/app/family" className={className}>
-            {yours ? `Open ${yours.name}` : 'Create a family'}
+            Open {yours.name}
+        </Link>
+    ) : (
+        <Link to="/app/billing" className={className}>
+            Create a family
         </Link>
     );
 }

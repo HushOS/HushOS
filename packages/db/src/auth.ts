@@ -17,7 +17,7 @@ import {
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { departAllForDeletion } from './groups';
-import { poolName, storageFigures } from './pool';
+import { ownStorage, poolName, storageFigures } from './pool';
 import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
 import { personalWorkspaces, workspaceKeys, workspaceStorage, workspaces } from './schema';
@@ -1048,9 +1048,15 @@ export async function getStorageAllowance(userId: string) {
     const figures = await storageFigures(db, personal.workspaceId, { lock: false });
     if (!figures) return null;
     const name = figures.pool ? await poolName(db, figures.pool.groupId) : null;
-    if (figures.pool && figures.shown && name !== null)
+    const own = figures.pool ? await ownStorage(db, personal.workspaceId) : null;
+    // A pool's exact figures never leave here (they would give away another member's usage):
+    // if its name or the person's own row went in the meantime, nothing is answered this time.
+    if (figures.pool) {
+        if (!figures.shown || name === null || !own) return null;
         // The pool's figures as a member may see them (pool.ts PoolPart): each part in whole
         // GiB, and no reserved bytes, which shipped clients still decode, so the field stays "0".
+        // Beside them, the person's own: what their files take, exactly (theirs to know), and
+        // the allowance they'd have on their own, for the breakdown and the leave dialog.
         return {
             workspaceId: personal.workspaceId,
             quotaBytes: figures.allowance.toString(),
@@ -1058,7 +1064,9 @@ export async function getStorageAllowance(userId: string) {
             reservedBytes: '0',
             availableBytes: (figures.shown.free > 0n ? figures.shown.free : 0n).toString(),
             pool: { groupId: figures.pool.groupId, name },
+            own: { usedBytes: own.used.toString(), allowanceBytes: own.allowance.toString() },
         };
+    }
     return {
         workspaceId: personal.workspaceId,
         quotaBytes: figures.allowance.toString(),
@@ -1066,6 +1074,7 @@ export async function getStorageAllowance(userId: string) {
         reservedBytes: figures.reserved.toString(),
         availableBytes: (figures.free > 0n ? figures.free : 0n).toString(),
         pool: null,
+        own: null,
     };
 }
 

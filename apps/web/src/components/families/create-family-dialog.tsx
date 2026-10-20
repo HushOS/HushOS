@@ -1,3 +1,4 @@
+import type { FamilyPlan } from '@hushos/billing/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useId, useState, type FormEvent } from 'react';
@@ -11,7 +12,11 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { useBillingEnabled } from '@/lib/queries';
+import { groupBillingApi } from '@/lib/billing-api';
+import { authError } from '@/lib/form';
+import { usePageRestored } from '@/lib/page-restore';
+import { familyTierName } from '@/lib/plans';
+import { formatQuota, useBillingEnabled } from '@/lib/queries';
 import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families';
 import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { createFamily } from '@/lib/groups/outbox';
@@ -24,15 +29,26 @@ import { cue } from '@/lib/sounds';
  * on this device and is sent again on the next visit: said, not hidden.
  * Someone already in a family is told to leave it first, before any keys are
  * made (one family per account); the server refuses it too.
+ *
+ * From Plans, with a tier chosen (`plan`), the family is made the same way and
+ * then goes straight to Polar's checkout for that tier
+ * (docs/families-shared-pool.md 7.4). A checkout that can't start leaves the
+ * family made, on its page, where Choose a plan offers the tiers again.
+ * `personalPlan` is the name of a personal plan the person pays for: it ends
+ * when the family's plan starts, and that is said before they go on (3.3).
  */
 export function CreateFamilyDialog({
     userId,
     open,
     onOpenChange,
+    plan,
+    personalPlan,
 }: {
     userId: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    plan?: { plan: FamilyPlan; currency: string };
+    personalPlan?: string | null;
 }) {
     const id = useId();
     const queryClient = useQueryClient();
@@ -45,22 +61,53 @@ export function CreateFamilyDialog({
     const yours = useQuery(familiesQueryOptions(userId)).data?.find(
         (at) => at.kind === 'family' && at.state === 'active',
     );
-    const refusal = yours ? createInFamilyCopy(yours.name) : '';
+    // Once submitted, the family being made is about to be "yours": it refuses nothing then.
+    const refusal = yours && !pending ? createInFamilyCopy(yours.name) : '';
+    // Back from Polar's checkout (the browser's back button restores this page as it was).
+    usePageRestored(() => setPending(false));
 
     async function submit(event: FormEvent) {
         event.preventDefault();
         const trimmed = name.trim();
-        if (!trimmed || yours) return;
+        if (!trimmed || refusal) return;
         setPending(true);
         setError('');
         try {
-            const { outcome } = await createFamily(familyContext(userId), trimmed);
-            void afterFamilyChange(queryClient, userId);
+            const { groupId, outcome } = await createFamily(familyContext(userId), trimmed);
+            // On to the checkout, the families aren't read again first: the page offering the
+            // tiers would take them away (one family per account) while the checkout opens.
+            if (!(plan && outcome.status === 'landed')) void afterFamilyChange(queryClient, userId);
             if (outcome.status === 'landed') {
+                if (plan) {
+                    try {
+                        const { url } = await groupBillingApi.checkout(
+                            groupId,
+                            plan.plan.id,
+                            plan.currency,
+                        );
+                        window.location.assign(url);
+                        // Busy until the browser has left for the checkout.
+                        return;
+                    } catch (cause) {
+                        cue('error');
+                        toast.add({
+                            type: 'error',
+                            title: `${trimmed} created, but the checkout didn’t open`,
+                            description: `${authError(cause)} Choose a plan on its page.`,
+                        });
+                        onOpenChange(false);
+                        setName('');
+                        setPending(false);
+                        await afterFamilyChange(queryClient, userId);
+                        await navigate({ to: '/app/family' });
+                        return;
+                    }
+                }
                 cue('success');
                 toast.add({ type: 'success', title: `${trimmed} created` });
                 onOpenChange(false);
                 setName('');
+                setPending(false);
                 await navigate({ to: '/app/family' });
                 return;
             }
@@ -72,6 +119,7 @@ export function CreateFamilyDialog({
                         'HushOS couldn’t reach the server. It finishes creating the family when it can.',
                 });
                 onOpenChange(false);
+                setPending(false);
                 return;
             }
             cue('error');
@@ -79,9 +127,8 @@ export function CreateFamilyDialog({
         } catch (cause) {
             cue('error');
             setError(errorCopy(cause, { family: trimmed }));
-        } finally {
-            setPending(false);
         }
+        setPending(false);
     }
 
     return (
@@ -91,10 +138,19 @@ export function CreateFamilyDialog({
                     <DialogTitle>Create a family</DialogTitle>
                     <DialogDescription>
                         {refusal ||
-                            (billing
-                                ? 'You’ll be its organizer. Then choose a plan and invite people by email.'
-                                : 'You’ll be its organizer. Then invite people by email.')}
+                            (plan
+                                ? `You’ll be its organizer. Then you pay for ${familyTierName(plan.plan)}, ${formatQuota(plan.plan.quotaBytes)} for everyone’s own files and the family folders, and invite people by email.`
+                                : billing
+                                  ? 'You’ll be its organizer. Then choose a plan and invite people by email.'
+                                  : 'You’ll be its organizer. Then invite people by email.')}
                     </DialogDescription>
+                    {!refusal && plan && personalPlan && (
+                        <p className="text-sm" data-personal-plan-ends>
+                            Your {personalPlan} plan ends when the family’s plan starts, and the
+                            unused days are refunded. From then on your files use the family’s
+                            storage.
+                        </p>
+                    )}
                 </DialogHeader>
                 <form
                     noValidate
@@ -112,7 +168,7 @@ export function CreateFamilyDialog({
                             value={name}
                             onChange={(event) => setName(event.target.value)}
                             placeholder="Lindqvist family"
-                            disabled={Boolean(yours)}
+                            disabled={Boolean(refusal) || pending}
                             aria-invalid={Boolean(error) || undefined}
                             aria-describedby={`${id}-hint`}
                         />
@@ -133,8 +189,11 @@ export function CreateFamilyDialog({
                         >
                             Cancel
                         </Button>
-                        <Button type="submit" disabled={pending || !name.trim() || Boolean(yours)}>
-                            {pending ? 'Creating…' : 'Create family'}
+                        <Button
+                            type="submit"
+                            disabled={pending || !name.trim() || Boolean(refusal)}
+                        >
+                            {pending ? 'Creating…' : plan ? 'Create and pay' : 'Create family'}
                         </Button>
                     </div>
                 </form>

@@ -1,0 +1,220 @@
+import type { TrashItem } from '@hushos/drive/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { RotateCcwIcon, Trash2Icon } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
+import { FileMark } from '@/components/drive/file-mark';
+import {
+    AlertDialog,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/toast';
+import { driveError, driveKeys, formatWhen, invalidateFolders } from '@/lib/drive';
+import { openArea, useFamilySpace } from '@/lib/spaces';
+import { cue } from '@/lib/sounds';
+
+type Row = TrashItem & { workspaceId: string; folder: string };
+
+/*
+ * What was moved to Trash in the family's folders, every folder's together,
+ * as the second section of Trash (docs/families-shared-pool.md 7.1), inside the
+ * family's space (FamilySpaceScope): Restore puts an item back (in its family
+ * folder's top folder when its own folder is in the Trash too), Delete forever
+ * asks once. Anyone in the family may do either, as in the folders
+ * themselves, and only where this device may write in that folder. Items stay
+ * 30 days, as in My files.
+ */
+export function FamilyTrashList() {
+    const space = useFamilySpace();
+    const queryClient = useQueryClient();
+    const [busy, setBusy] = useState<string | null>(null);
+    const [deleting, setDeleting] = useState<Row | null>(null);
+    const trash = useQuery({
+        queryKey: [...driveKeys.trash, 'family', space.groupId],
+        queryFn: async () => {
+            const rows: Row[] = [];
+            for (const state of space.areas) {
+                if (!state.opened || !state.view.root) continue;
+                const { client } = await openArea(space.userId, space.groupId, state);
+                for (const item of await client.listTrash())
+                    rows.push({
+                        ...item,
+                        workspaceId: state.workspaceId,
+                        folder: state.name ?? 'Family folder',
+                    });
+            }
+            return rows.sort((a, b) =>
+                (b.node.trashedAt ?? '').localeCompare(a.node.trashedAt ?? ''),
+            );
+        },
+        staleTime: 15_000,
+        retry: 1,
+    });
+    // Come for the family folders' Trash (/app/trash#family): it is below My files', which
+    // may load first and push it down, so it is scrolled to once its own list is there.
+    const listed = trash.data !== undefined;
+    useEffect(() => {
+        if (listed && window.location.hash === '#family')
+            document.getElementById('family')?.scrollIntoView({ block: 'start' });
+    }, [listed]);
+    const writable = (row: Row) =>
+        space.areas.find((area) => area.workspaceId === row.workspaceId)?.write === 'writable';
+
+    async function restore(row: Row) {
+        setBusy(row.node.id);
+        try {
+            const state = space.areas.find((area) => area.workspaceId === row.workspaceId)!;
+            const { client, root } = await openArea(space.userId, space.groupId, state);
+            const top = row.parentTrashed ? (await client.listFolder(root.id)).folder : undefined;
+            await client.restore(row.node, top);
+            cue('success');
+            toast.add({
+                type: 'success',
+                title: `Restored “${row.node.name}”`,
+                description: row.parentTrashed
+                    ? `Its folder is in the Trash too, so it went to “${row.folder}”.`
+                    : undefined,
+            });
+        } catch (error) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: `Couldn’t restore “${row.node.name}”`,
+                description: driveError(error),
+            });
+        } finally {
+            setBusy(null);
+            await invalidateFolders(queryClient, row.node.parentId);
+        }
+    }
+
+    async function purge(row: Row) {
+        setBusy(row.node.id);
+        setDeleting(null);
+        try {
+            const state = space.areas.find((area) => area.workspaceId === row.workspaceId)!;
+            const { client } = await openArea(space.userId, space.groupId, state);
+            await client.purge(row.node);
+            cue('droplet');
+            toast.add({ type: 'success', title: `Deleted “${row.node.name}” forever` });
+        } catch (error) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: `Couldn’t delete “${row.node.name}”`,
+                description: driveError(error),
+            });
+        } finally {
+            setBusy(null);
+            await invalidateFolders(queryClient);
+        }
+    }
+
+    return (
+        <div className="flex flex-col" data-family-trash>
+            {trash.isPending && <SkeletonRows rows={3} />}
+            {trash.isError && (
+                <EmptyState title="The Trash couldn’t be opened" body={driveError(trash.error)}>
+                    <Button variant="outline" onClick={() => void trash.refetch()}>
+                        <RotateCcwIcon />
+                        Try again
+                    </Button>
+                </EmptyState>
+            )}
+            {trash.data?.length === 0 && (
+                <p className="border-t border-rule px-5 py-4 text-sm text-muted-foreground sm:px-8">
+                    Nothing here. What anyone in the family moves to Trash from the family folders
+                    shows up here.
+                </p>
+            )}
+            {trash.data && trash.data.length > 0 && (
+                <ul
+                    aria-label="Family folders’ Trash"
+                    className="flex flex-col border-t border-rule"
+                >
+                    {trash.data.map((row) => (
+                        <li
+                            key={row.node.id}
+                            data-node-id={row.node.id}
+                            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-5 pl-5 sm:pr-8 sm:pl-8"
+                        >
+                            <FileMark node={row.node} size="list" />
+                            <span className="flex min-w-0 flex-1 flex-col">
+                                <span className="truncate text-[15px] font-medium">
+                                    {row.node.name}
+                                </span>
+                                <span className="truncate text-[13px] text-muted-foreground">
+                                    {[
+                                        row.folder,
+                                        ...row.ancestors.slice(1).map((at) => at.name),
+                                    ].join(' / ')}
+                                    {row.node.trashedAt
+                                        ? ` · ${formatWhen(row.node.trashedAt, { lower: true })}`
+                                        : ''}
+                                </span>
+                            </span>
+                            {writable(row) && (
+                                <span className="flex shrink-0 gap-2">
+                                    {/*
+                                     * Icons with their words for screen readers on a phone, as Drive's
+                                     * Trash does, so the name keeps its room; 36px, 44px on touch.
+                                     */}
+                                    <Button
+                                        variant="outline"
+                                        disabled={busy !== null}
+                                        title="Restore"
+                                        className="max-sm:w-9 max-sm:px-0 max-sm:pointer-coarse:w-11"
+                                        onClick={() => void restore(row)}
+                                    >
+                                        <RotateCcwIcon className="sm:hidden" aria-hidden="true" />
+                                        <span className="max-sm:sr-only">Restore</span>
+                                    </Button>
+                                    <Button
+                                        variant="destructive-outline"
+                                        disabled={busy !== null}
+                                        title="Delete forever"
+                                        className="max-sm:w-9 max-sm:px-0 max-sm:pointer-coarse:w-11"
+                                        onClick={() => setDeleting(row)}
+                                    >
+                                        <Trash2Icon className="sm:hidden" aria-hidden="true" />
+                                        <span className="max-sm:sr-only">Delete forever</span>
+                                    </Button>
+                                </span>
+                            )}
+                        </li>
+                    ))}
+                </ul>
+            )}
+            <AlertDialog
+                open={deleting !== null}
+                onOpenChange={(open) => !open && setDeleting(null)}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete “{deleting?.node.name}” forever?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {deleting?.node.kind === 'folder'
+                                ? 'Everything inside goes too, for everyone in the family. It can’t be restored after this.'
+                                : 'It goes for everyone in the family, and it can’t be restored after this.'}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <Button
+                            variant="destructive"
+                            onClick={() => deleting && void purge(deleting)}
+                        >
+                            Delete forever
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </div>
+    );
+}
