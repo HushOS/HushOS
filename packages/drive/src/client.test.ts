@@ -953,11 +953,14 @@ describe('a pull of the feed on its way when the client closes', () => {
         let cursor = 0;
         const mirror: TreeMirror = {
             cursor: async () => cursor,
-            apply: async (_ws, _changes, next) => {
+            apply: async (_ws, _from, _changes, next) => {
                 applied.push(next);
                 cursor = next;
+                return [];
             },
             rows: async () => [],
+            snapshot: async () => ({ cursor, rows: [] }),
+            dropBelow: async () => {},
             clear: async () => {
                 cursor = 0;
             },
@@ -979,7 +982,7 @@ describe('a pull of the feed on its way when the client closes', () => {
         await expect.poll(() => answer).toBeDefined();
         client.close();
         answer({
-            changes: [{ kind: 'node', seq: 1, node: node(A, ROOT) }],
+            changes: [{ kind: 'node', changeSeq: 1, node: node(A, ROOT) }],
             nextCursor: 1,
             hasMore: false,
         } as unknown as Awaited<ReturnType<DriveApi['changes']>>);
@@ -993,7 +996,7 @@ describe('a pull of the feed on its way when the client closes', () => {
         const api = {
             ...h.api,
             changes: async () => ({
-                changes: [{ kind: 'node', seq: 1, node: node(A, ROOT) }],
+                changes: [{ kind: 'node', changeSeq: 1, node: node(A, ROOT) }],
                 nextCursor: 1,
                 hasMore: false,
             }),

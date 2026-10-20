@@ -14,7 +14,7 @@ import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
-import { Catalogue, parentsFirst } from './catalogue';
+import { Catalogue, parentsBefore, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
 import {
     TAGS_DOCUMENT,
@@ -583,6 +583,13 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     const catalogueListeners = new Set<(state: CatalogueState) => void>();
     let building: Promise<void> | undefined;
     let feedChain: Promise<unknown> = Promise.resolve();
+    let ingesting: Promise<unknown> = Promise.resolve();
+    /*
+     * The last change this tab's catalogue holds. The mirror's cursor is the device's, shared
+     * by every tab, so it says only what reached the disk: a change another tab pulled is
+     * past it, and this catalogue would never hear of it from the mirror's cursor alone.
+     */
+    let catalogueCursor = 0;
     let rebuiltOnce = false;
     /* Bumped by close(): work started before a lock must not touch the catalogue after it. */
     let generation = 0;
@@ -599,30 +606,98 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     }
 
     /*
-     * Pulls the feed from the mirror's cursor until the head (or `until`), committing each page;
-     * returns what arrived. A close() in between stops it before the next write: signing out
-     * clears the mirror, and a pull still on its way must not write the tree back.
+     * Pulls the feed until the head, committing each page to the mirror; returns what arrived
+     * and the cursor it reached. It starts at the mirror's cursor, or earlier at `from` (where
+     * a catalogue stands that another tab's pull left behind); the mirror keeps only what is
+     * past its own cursor, and refuses a page from past it (another tab cleared it meanwhile),
+     * after which the pull goes on from the mirror's cursor or its own, whichever is earlier:
+     * the clearing tab may have pulled past this one's start by then, and this catalogue still
+     * needs what lies in between.
+     *
+     * A start so old the server dropped tombstones since (`resync`, said of the first page)
+     * means deletions went by unnamed: when the start was this tab's own, the mirror may still
+     * be current and is asked from its own cursor; when the mirror is stale too, it starts over
+     * from nothing. Either way, and whenever the pull for a catalogue starts from nothing (the
+     * mirror was cleared), `refile` tells the catalogue to refile from the mirror's rows.
+     *
+     * A close() in between stops it before the next write: signing out clears the mirror, and
+     * a pull still on its way must not write the tree back.
      */
-    function pullFeed(workspaceId: string, until?: number) {
+    function pullFeed(workspaceId: string, from?: number) {
         const mirror = options.mirror!;
         const startedIn = generation;
         const work = feedChain.then(async () => {
             const arrived: NodeChange[] = [];
-            if (generation !== startedIn) return arrived;
-            let cursor = await mirror.cursor(workspaceId);
-            for (;;) {
-                if (until !== undefined && cursor >= until) break;
-                const page = await api.changes(workspaceId, cursor, FEED_PAGE);
-                if (generation !== startedIn) break;
-                for (const change of page.changes)
-                    if (change.kind === 'node') remember([change.node]);
-                await mirror.apply(workspaceId, page.changes, page.nextCursor);
-                arrived.push(...page.changes);
-                cursor = page.nextCursor;
-                setCatalogueState({ pulled: catalogueState.pulled + page.changes.length });
-                if (!page.hasMore) break;
+            let refile = false;
+            if (generation !== startedIn) return { arrived, cursor: 0, refile };
+            let mirrored = await mirror.cursor(workspaceId);
+            let cursor = from === undefined ? mirrored : Math.min(from, mirrored);
+            // From nothing, a pull names no deletion: a catalogue that stood anywhere refiles.
+            if (cursor === 0 && from) refile = true;
+            let first = true;
+            // What was inside a folder deleted forever leaves with it (TreeMirror.dropBelow), for
+            // every page applied, even when a later one fails: no later pull names that deletion
+            // again. A tab closed or locked mid-pull leaves the rows until the server's fan-out
+            // tombstones them, or the next build finds them without a parent and starts over:
+            // only the tab whose page took the folder off sweeps, and the others skip a
+            // tombstone the mirror already holds.
+            // Only where something can be below: a folder the mirror took off, or a tombstoned
+            // node that rows of this pull name as their parent (a pull from nothing gets a
+            // purged folder's contents, and the folder only as its tombstone).
+            const foldersDropped: string[] = [];
+            const tombstoned = new Set<string>();
+            const parents = new Set<string>();
+            let failed = true;
+            try {
+                for (;;) {
+                    const page = await api.changes(workspaceId, cursor, FEED_PAGE);
+                    if (generation !== startedIn) break;
+                    if (first && page.resync && cursor > 0) {
+                        refile = true;
+                        arrived.length = 0;
+                        if (cursor < mirrored) cursor = mirrored;
+                        else {
+                            await mirror.clear(workspaceId);
+                            cursor = mirrored = 0;
+                        }
+                        continue;
+                    }
+                    first = false;
+                    for (const change of page.changes)
+                        if (change.kind === 'node') remember([change.node]);
+                    const dropped = await mirror.apply(
+                        workspaceId,
+                        cursor,
+                        page.changes,
+                        page.nextCursor,
+                    );
+                    if (dropped === null) {
+                        cursor = Math.min(cursor, await mirror.cursor(workspaceId));
+                        if (cursor === 0 && from) refile = true;
+                        continue;
+                    }
+                    arrived.push(...page.changes);
+                    foldersDropped.push(...dropped);
+                    for (const change of page.changes)
+                        if (change.kind === 'tombstone') tombstoned.add(change.nodeId);
+                        else if (change.kind === 'node' && change.node.parentId)
+                            parents.add(change.node.parentId);
+                    cursor = page.nextCursor;
+                    // A poll that brought nothing redraws nothing.
+                    if (page.changes.length)
+                        setCatalogueState({ pulled: catalogueState.pulled + page.changes.length });
+                    if (!page.hasMore) break;
+                }
+                failed = false;
+            } finally {
+                const below = new Set(foldersDropped);
+                for (const id of tombstoned) if (parents.has(id)) below.add(id);
+                if (generation === startedIn && below.size) {
+                    const sweep = mirror.dropBelow(workspaceId, [...below]);
+                    await (failed ? sweep.catch(() => {}) : sweep);
+                }
             }
-            return arrived;
+            return { arrived, cursor, refile };
         });
         feedChain = work.catch(() => {});
         return work;
@@ -657,7 +732,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 await pullFeed(workspaceId);
                 if (generation !== startedIn) return;
                 setCatalogueState({ phase: 'opening' });
-                const { ordered, orphans } = parentsFirst(await mirror.rows(workspaceId));
+                const snapshot = await mirror.snapshot(workspaceId);
+                catalogueCursor = snapshot.cursor;
+                const { ordered, orphans } = parentsFirst(snapshot.rows);
                 if (orphans.length && !rebuiltOnce) {
                     // A row without its parent is a page this device missed: start over once.
                     rebuiltOnce = true;
@@ -682,8 +759,17 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return building;
     }
 
-    /* After a page of changes reached the app, bring the mirror and catalogue up to the head. */
-    async function ingest(workspaceId: string) {
+    /*
+     * After a page of changes reached the app, bring the mirror and this tab's catalogue up to
+     * the head: from wherever the catalogue stands, whichever tab moved the mirror on. One at a
+     * time, so a slower pull never files an older state over a newer one.
+     */
+    function ingest(workspaceId: string) {
+        const work = ingesting.then(() => ingestNow(workspaceId));
+        ingesting = work.catch(() => {});
+        return work;
+    }
+    async function ingestNow(workspaceId: string) {
         if (
             !options.mirror ||
             catalogueState.phase !== 'ready' ||
@@ -691,15 +777,61 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         )
             return;
         const startedIn = generation;
-        const arrived = await pullFeed(workspaceId);
-        if (generation !== startedIn) return;
-        const changed: NodeView[] = [];
-        for (const change of arrived) {
-            if (change.kind === 'node') changed.push(change.node);
-            else if (change.kind === 'tombstone') catalogue.remove(change.nodeId);
+        // A refile that met a mirror another tab cleared meanwhile pulls again at once, a few
+        // times at most: the app pulls next only when the feed has news, which may be long.
+        for (let attempt = 0; ; attempt++) {
+            const { arrived, cursor, refile } = await pullFeed(workspaceId, catalogueCursor);
+            if (generation !== startedIn) return;
+            if (!refile) return fileArrived(arrived, cursor, startedIn);
+            // Deletions went by that no change names: the mirror's rows say what is left. Only
+            // rows that stand at least where the pull ended: a mirror another tab cleared since
+            // holds a part, and what is missing from a part is not gone.
+            const snapshot = await options.mirror.snapshot(workspaceId);
+            if (generation !== startedIn) return;
+            if (snapshot.cursor < cursor) {
+                if (attempt < 2) continue;
+                return;
+            }
+            const { ordered } = parentsFirst(snapshot.rows);
+            // What changed is filed over what was held, so answers stay whole meanwhile; so is
+            // what would not open before, which may have been for want of its folder's key.
+            const left = new Set(ordered.map((row) => row.id));
+            let removed = false;
+            for (const node of catalogue.values())
+                if (!left.has(node.id)) removed = catalogue.remove(node.id) || removed;
+            await fileRows(
+                ordered.filter((row) => {
+                    const held = catalogue.get(row.id);
+                    return !held || held.changeSeq !== row.changeSeq || held.openError !== null;
+                }),
+                startedIn,
+            );
+            if (generation !== startedIn) return;
+            // The rows filed stand where the snapshot does, which may be past the pull.
+            catalogueCursor = snapshot.cursor;
+            // What was filed was heard as it opened; a removal alone is heard here.
+            if (removed) setCatalogueState({});
+            return;
         }
-        // The feed is in change order, which puts a new folder before what was made inside it.
-        await fileRows(changed, startedIn);
+    }
+    async function fileArrived(arrived: NodeChange[], cursor: number, startedIn: number) {
+        const changed: NodeView[] = [];
+        const purged: string[] = [];
+        for (const change of arrived)
+            if (change.kind === 'node') changed.push(change.node);
+            else if (change.kind === 'tombstone') purged.push(change.nodeId);
+        // The feed holds each node once, at its latest change: a folder made, filled and then
+        // renamed comes after what is inside it, and the worker opens a child only under a
+        // parent it has opened. Folders made together share one change, in no set order.
+        await fileRows(parentsBefore(changed), startedIn);
+        if (generation !== startedIn) return;
+        // What was inside a purged folder goes with it: its own tombstones come minutes later.
+        // After the changes are filed, so a child changed before its folder went goes too.
+        let removed = 0;
+        for (const id of purged) removed += catalogue.removeTree(id);
+        catalogueCursor = Math.max(catalogueCursor, cursor);
+        // What was filed was heard as it opened; a removal alone is heard here.
+        if (removed) setCatalogueState({});
     }
 
     /*
@@ -749,21 +881,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             const batch = nodes.slice(index, index + OPEN_BATCH);
             const checked = await verify(batch);
             if (generation !== startedIn) return;
+            // Only onto the row as it was checked: one purged meanwhile stays gone, and one the
+            // feed changed meanwhile (trashed, renamed) was checked when it was filed.
             for (const node of batch)
-                if (catalogue.has(node.id))
-                    catalogue.upsert({ ...node, integrity: checked.get(node.id) ?? null });
+                if (catalogue.get(node.id)?.changeSeq === node.changeSeq)
+                    catalogue.upsert({
+                        ...catalogue.get(node.id)!,
+                        integrity: checked.get(node.id) ?? null,
+                    });
         }
         setCatalogueState({});
-    }
-    /* Starts the build over from nothing, for a person who suspects the catalogue is wrong. */
-    async function rebuildCatalogue() {
-        const ws = workspace?.workspaceId;
-        if (!ws || !options.mirror) return;
-        await building?.catch(() => {});
-        await options.mirror.clear(ws);
-        catalogue.clear();
-        rebuiltOnce = false;
-        await buildCatalogue(ws);
     }
 
     /*
@@ -2012,6 +2139,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         building = undefined;
         catalogue.clear();
         catalogueWorkspace = null;
+        catalogueCursor = 0;
         registry = null;
         setCatalogueState({ phase: 'idle', pulled: 0, opened: 0, error: null });
     }
@@ -2059,7 +2187,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         changesSince,
         shareChangesSince,
         buildCatalogue,
-        rebuildCatalogue,
         recheckIntegrity,
         catchUp,
         subscribeCatalogue,
