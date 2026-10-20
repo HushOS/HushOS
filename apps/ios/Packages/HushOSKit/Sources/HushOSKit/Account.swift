@@ -16,6 +16,12 @@ public struct StorageAllowance: Codable, Sendable {
     public let pool: StoragePool?
     public var quota: Int64 { Int64(quotaBytes) ?? 0 }
     public var used: Int64 { Int64(usedBytes) ?? 0 }
+    /*
+     * What an upload can still take, as the server checks it. Never quota less used: in a pool
+     * the server leaves other members' uploads in flight out of `usedBytes` (they would give
+     * away one member's activity) and takes them off `availableBytes` only.
+     */
+    public var free: Int64 { max(0, Int64(availableBytes) ?? 0) }
 
     private enum CodingKeys: String, CodingKey { case workspaceId, quotaBytes, usedBytes, reservedBytes, availableBytes, pool }
 
@@ -74,9 +80,21 @@ public struct BillingSummary: Codable, Sendable {
     }
 }
 
+/* The family whose plan a pooled person's storage comes from: a name that isn't blank, as for a pool. */
 public struct BillingFamily: Codable, Sendable, Equatable {
     public let name: String
     public let planName: String?
+
+    private enum CodingKeys: String, CodingKey { case name, planName }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        planName = try container.decodeIfPresent(String.self, forKey: .planName)
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DecodingError.dataCorrupted(.init(codingPath: container.codingPath, debugDescription: "A family has a name."))
+        }
+    }
 }
 
 /*
@@ -86,14 +104,14 @@ public struct BillingFamily: Codable, Sendable, Equatable {
  *
  * While the storage figures are a family's pool, the plan is the family's: its
  * name from `/api/billing`'s `family` ("Family plan" until that answers) and
- * the line "From <family>’s plan". A personal subscription is never shown then,
+ * the line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal subscription is never shown then,
  * since the person no longer draws from it (billing ends it, 5.1). Without a
  * readable `pool` it is today's display: the personal plan, or Free.
  */
 public struct PlanDisplay: Sendable {
     /* The plan's name, the card's heading. */
     public let name: String
-    /* "From Lindqvist family’s plan" while pooled, else nil. */
+    /* "Shared with Lindqvist family" while pooled, else nil. */
     public let source: String?
     /* The family's name while pooled, for labels that would otherwise read as the person's own. */
     public let family: String?
@@ -107,7 +125,7 @@ public struct PlanDisplay: Sendable {
         if let family {
             let planName = billing?.family?.planName?.trimmingCharacters(in: .whitespacesAndNewlines)
             name = planName.flatMap { $0.isEmpty ? nil : $0 } ?? "Family plan"
-            source = "From \(family)’s plan"
+            source = "Shared with \(family)"
             self.family = family
             subscription = nil
         } else {

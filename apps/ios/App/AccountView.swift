@@ -294,14 +294,18 @@ struct PlansView: View {
                         Text("of \(formatQuota(allowance?.quota ?? 0)) used").font(.body).foregroundStyle(Alpine.inkMuted)
                     }
                     .padding(.horizontal, Alpine.Space.s1)
-                    StorageMeter(used: used, quota: allowance?.quota ?? 1, versions: versions, trash: trash).padding(.horizontal, Alpine.Space.s1)
+                    // In a pool the total is counted in whole GB, part by part, and is everyone's: one plain bar.
+                    StorageMeter(used: used, quota: allowance?.quota ?? 1, versions: versions, trash: trash, simple: plan.family != nil).padding(.horizontal, Alpine.Space.s1)
                 }
                 .textCase(nil)
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: Alpine.Space.s2, trailing: 0))
             }
             Section {
-                // In a pool the rest is everyone's: the family folders and each member's own files.
-                line(Alpine.primary, plan.family == nil ? "Files" : "Files in the family’s storage", nil, trailing: Text(formatSpace(max(0, used - versions - trash))))
+                // No Files row in a pool: the rest is everyone's (the family folders and each member's
+                // own files), and this person's exact bytes taken off a rounded total mean nothing.
+                if plan.family == nil {
+                    line(Alpine.primary, "Files", nil, trailing: Text(formatSpace(max(0, used - versions - trash))))
+                }
                 HStack {
                     swatch(Alpine.primary.opacity(0.45))
                     VStack(alignment: .leading, spacing: 2) {
@@ -324,7 +328,7 @@ struct PlansView: View {
                 .alpineRow()
             } footer: {
                 if let family = plan.family {
-                    Text("\(family)’s storage, counted in whole GB. Your trash and earlier versions count until they’re removed. Trash empties itself after 30 days.")
+                    Text("Shared with \(family), counted in whole GB. Your trash and earlier versions count until they’re removed. Trash empties itself after 30 days.")
                 } else {
                     Text("Trash and earlier versions count until they’re removed. Trash empties itself after 30 days.")
                 }
@@ -445,7 +449,8 @@ struct StorageFullSheet: View {
     }
 
     private var explanation: String {
-        let free = allowance.map { formatSpace(max(0, $0.quota - $0.used)) + ($0.pool.map { " in \($0.name)’s storage" } ?? "") } ?? "little room"
+        // What the server checks uploads against (StorageAllowance.free), never quota less used.
+        let free = allowance.map { formatSpace($0.free) + ($0.pool == nil ? "" : " in the family’s storage") } ?? "little room"
         let needed = waiting.compactMap(\.size).reduce(0, +)
         let what = waiting.count == 1 ? "“\(waiting[0].name)”" : waiting.isEmpty ? "This upload" : "These \(waiting.count) files"
         let needs = needed > 0 ? " need\(waiting.count == 1 ? "s" : "") \(formatSpace(needed))," : " doesn’t fit, "

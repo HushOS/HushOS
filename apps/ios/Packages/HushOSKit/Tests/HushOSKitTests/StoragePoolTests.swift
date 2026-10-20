@@ -13,9 +13,15 @@ import Testing
 @Suite struct StoragePoolTests {
     let pro = #"{"productName":"Pro","status":"active","recurringInterval":"month","quotaBytes":"214748364800","currentPeriodEnd":"2026-11-03T00:00:00.000Z","cancelAtPeriodEnd":false}"#
 
+    /*
+     * Quota less used is 523986010112, but 2 GiB of uploads other members have in flight are taken
+     * off what is available and left out of what is used (pool.ts), as the server serves a pool.
+     */
+    let available: Int64 = 523_986_010_112 - 2_147_483_648
+
     func storage(pool: String?) throws -> StorageAllowance {
         let field = pool.map { #","pool":\#($0)"# } ?? ""
-        let body = #"{"workspaceId":"w-1","quotaBytes":"858993459200","usedBytes":"335007449088","reservedBytes":"0","availableBytes":"523986010112"\#(field)}"#
+        let body = #"{"workspaceId":"w-1","quotaBytes":"858993459200","usedBytes":"335007449088","reservedBytes":"0","availableBytes":"\#(available)"\#(field)}"#
         return try JSONDecoder().decode(StorageAllowance.self, from: Data(body.utf8))
     }
 
@@ -34,7 +40,7 @@ import Testing
         // A personal plan billing hasn't ended yet still comes back beside the family: it must not show.
         let plan = PlanDisplay(allowance: allowance, billing: try billing(family: #"{"name":"Lindqvist family","planName":"Family Plus"}"#))
         #expect(plan.name == "Family Plus")
-        #expect(plan.source == "From Lindqvist family’s plan")
+        #expect(plan.source == "Shared with Lindqvist family")
         #expect(plan.family == "Lindqvist family")
         #expect(plan.subscription == nil)
 
@@ -42,14 +48,33 @@ import Testing
         for summary in [nil, try billing(family: #"{"name":"Lindqvist family","planName":null}"#)] {
             let plan = PlanDisplay(allowance: allowance, billing: summary)
             #expect(plan.name == "Family plan")
-            #expect(plan.source == "From Lindqvist family’s plan")
+            #expect(plan.source == "Shared with Lindqvist family")
             #expect(plan.subscription == nil)
         }
 
         // Storage unanswered: billing's family keeps the personal plan off the card.
         let unread = PlanDisplay(allowance: nil, billing: try billing(family: #"{"name":"Lindqvist family","planName":"Family Plus"}"#))
-        #expect(unread.source == "From Lindqvist family’s plan")
+        #expect(unread.source == "Shared with Lindqvist family")
         #expect(unread.subscription == nil)
+    }
+
+    @Test func theFreeSpaceIsWhatTheServerChecksUploadsAgainst() throws {
+        // "Not enough room" says this figure: quota less used would claim 2 GiB the upload can't have.
+        for pool in [#"{"groupId":"g-1","name":"Lindqvist family"}"#, nil] {
+            #expect(try storage(pool: pool).free == available, "pool \(pool ?? "absent")")
+        }
+        let full = try JSONDecoder().decode(StorageAllowance.self, from: Data(#"{"workspaceId":"w","quotaBytes":"10","usedBytes":"4","reservedBytes":"0","availableBytes":"0"}"#.utf8))
+        #expect(full.free == 0)
+    }
+
+    @Test func storageWithNoPoolKeepsThePersonalPlanWhateverBillingSays() throws {
+        // Storage answered and names no pool: the person draws from their own plan, so a family in
+        // the billing reply (a race, a stale cache) must not take the personal plan off the card.
+        let plan = PlanDisplay(allowance: try storage(pool: "null"), billing: try billing(family: #"{"name":"Lindqvist family","planName":"Family Plus"}"#))
+        #expect(plan.name == "Pro")
+        #expect(plan.source == nil)
+        #expect(plan.family == nil)
+        #expect(plan.subscription?.productName == "Pro")
     }
 
     @Test func withoutAPoolTheCardIsTodays() throws {
@@ -96,10 +121,14 @@ import Testing
             #expect(plan.source == nil, "pool \(pool)")
         }
         // A family field this build can't read costs the billing answer nothing either.
-        for family in [#""Lindqvist family""#, #"{"planName":"Family Plus"}"#, "[]"] {
+        for family in [#""Lindqvist family""#, #"{"planName":"Family Plus"}"#, "[]", #"{"name":"  ","planName":"Family Plus"}"#, #"{"name":"","planName":null}"#] {
             let summary = try billing(family: family)
             #expect(summary.family == nil, "family \(family)")
             #expect(summary.subscription?.productName == "Pro", "family \(family)")
+            // Storage unanswered: a blank family name never becomes "Shared with " on the card.
+            let plan = PlanDisplay(allowance: nil, billing: summary)
+            #expect(plan.source == nil, "family \(family)")
+            #expect(plan.name == "Pro", "family \(family)")
         }
     }
 }
