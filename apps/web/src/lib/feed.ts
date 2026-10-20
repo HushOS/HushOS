@@ -72,22 +72,32 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
         }
         async function pollOwn() {
             const cursor = own.current;
+            let changed = false;
             try {
                 let page = await driveClient.changesSince(workspaceId!, cursor.since);
                 // A sign-out began while it was on its way: the page being left stays as drawn.
                 if (isLeaving()) return;
                 apply(queryClient, page.changes);
                 cursor.since = page.nextCursor;
+                changed = page.changes.length > 0;
                 // A backlog after a long sleep: drain it in a few more pages, then rest.
                 for (let more = 0; page.hasMore && more < 5; more++) {
                     page = await driveClient.changesSince(workspaceId!, cursor.since);
                     if (isLeaving()) return;
                     apply(queryClient, page.changes);
                     cursor.since = page.nextCursor;
+                    changed ||= page.changes.length > 0;
                 }
                 cursor.failures = 0;
             } catch {
                 cursor.failures++;
+            } finally {
+                // What this person shares: the server leaves out what is in the trash, and a
+                // change can't say it put an item back, so any of one's own changes refreshes
+                // By me and the rows' who-can-open marks, once per tick, even when a later page
+                // of the tick failed after earlier ones moved the cursor past their changes.
+                if (changed && !isLeaving())
+                    void queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             }
         }
         async function pollShares() {

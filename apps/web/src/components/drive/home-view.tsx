@@ -52,6 +52,7 @@ import {
     folderQueryOptions,
     formatWhen,
     refreshFolders,
+    refreshSharing,
     restoreNodes,
     trashNodes,
     useCatalogueState,
@@ -250,6 +251,7 @@ export function HomeView() {
                     new Map([...current, ...landed.map((node) => [node.id, node] as const)]),
             );
         });
+        if (returned.length > 0) void refreshSharing(queryClient);
         if (returned.length === nodes.length) {
             cue('success');
             toast.update(toastId, {

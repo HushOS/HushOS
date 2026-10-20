@@ -176,6 +176,15 @@ export async function refreshFolders(queryClient: QueryClient, ...folderIds: (st
     await catchUpCatalogues();
 }
 
+/*
+ * After a restore: what this person shares, fetched now even with no page
+ * showing it, so a row put back reads who can open it at once instead of
+ * "Only you" until the feed's next poll, and By me opens on fresh data.
+ */
+export function refreshSharing(queryClient: QueryClient) {
+    return queryClient.invalidateQueries({ queryKey: driveKeys.mine, refetchType: 'all' });
+}
+
 /* Trash and Undo for a selection, sent through the Drive client of each item's workspace (lib/trash-batch.ts). */
 const trashParts: TrashParts = {
     trash: (workspaceId, nodeIds) => clientFor(workspaceId).trashMany(workspaceId, nodeIds),
