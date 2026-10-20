@@ -1,0 +1,19 @@
+e2e/sign-in-out.spec.ts
+  s_c56e31c87cddde::t_2f9e8f17f29c68 13-14,39,60-64,66-70,72,77-87,125,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "41062d6a9dd6899c811fbef9627313ed7334fcc8",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
