@@ -1,4 +1,9 @@
-import { billingEnabled, setCutRetryQueue, setEndPersonalPlanQueue } from '@hushos/billing/server';
+import {
+    billingEnabled,
+    setCutRetryQueue,
+    setDissolveCancelQueue,
+    setEndPersonalPlanQueue,
+} from '@hushos/billing/server';
 import { LATEST_MIGRATION, missingTablePrivileges, schemaState } from '@hushos/db';
 import { initProcessLogger, log } from '@hushos/logging';
 import type { Job } from 'pg-boss';
@@ -19,7 +24,12 @@ import {
     reportsEvidence,
     reportsRequests,
 } from './jobs/drive';
-import { endPersonalPlan, reconcileBilling, reissueGroupCut } from './jobs/reconcile-billing';
+import {
+    cancelDissolvedFamilyPlan,
+    endPersonalPlan,
+    reconcileBilling,
+    reissueGroupCut,
+} from './jobs/reconcile-billing';
 
 /*
  * The background worker: one process, started with `bun run --cwd packages/jobs start`
@@ -123,6 +133,17 @@ if (billingEnabled()) {
         { batchSize: 1, pollingIntervalSeconds: 30 },
         async ([job]) => {
             if (job) await endPersonalPlan(job);
+        },
+    );
+    // A dissolved family's plan set to end at its period's end: one job per family.
+    setDissolveCancelQueue((groupId) =>
+        boss.send(queues.billingCancelDissolved, { groupId }, { singletonKey: groupId }),
+    );
+    await boss.work<JobPayloads[typeof queues.billingCancelDissolved]>(
+        queues.billingCancelDissolved,
+        { batchSize: 1, pollingIntervalSeconds: 30 },
+        async ([job]) => {
+            if (job) await cancelDissolvedFamilyPlan(job);
         },
     );
     for (const queue of [queues.billingReissuePending, queues.billingReissueCut] as const)

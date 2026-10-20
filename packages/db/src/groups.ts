@@ -11,6 +11,7 @@ import {
     type NodeEnvelopes,
     type Tx,
 } from './drive';
+import { ENDED_SUBSCRIPTION_STATUSES } from './billing';
 import { madeFor } from './ids';
 import { admissionFits, lockPool } from './pool';
 import { pgCode } from './readiness';
@@ -3466,7 +3467,10 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
         sql`not exists (select 1 from ${workspaces} w where w.group_id = ${groups.id})`,
         billingEnv.BILLING_PROVIDER === 'none'
             ? undefined
-            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in ('canceled', 'incomplete_expired'))`,
+            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in (${sql.join(
+                  ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
+                  sql`, `,
+              )}))`,
     );
     const due = await db
         .select({ id: groups.id })

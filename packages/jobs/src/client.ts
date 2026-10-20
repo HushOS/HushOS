@@ -13,6 +13,7 @@ export const queues = {
     billingReissueCut: 'billing.reissue-cut',
     billingReissuePending: 'billing.reissue-pending',
     billingEndPersonalPlan: 'billing.end-personal-plan',
+    billingCancelDissolved: 'billing.cancel-dissolved',
     driveExpireUploads: 'drive.expire-uploads',
     driveDeleteObjects: 'drive.delete-objects',
     driveReplicate: 'drive.replicate',
@@ -40,6 +41,7 @@ export type JobPayloads = {
         admittedAt: string;
         seenAt: string;
     };
+    [queues.billingCancelDissolved]: { groupId: string };
     [queues.driveExpireUploads]: Record<string, never>;
     [queues.driveDeleteObjects]: Record<string, never>;
     [queues.driveReplicate]: Record<string, never>;
@@ -148,6 +150,23 @@ export async function ensureQueues(boss: PgBoss) {
         retryBackoff: true,
         expireInSeconds: 30 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
+    });
+    /*
+     * A dissolved family's plan set to end at its period's end (docs/groups-design.md 3.3),
+     * sent with the group id as `singletonKey`: one queued and one active per family. Each
+     * plan is set under its change claim and read again first, so a retry, a webhook's job
+     * and the leave route's never set it twice. A failure (Polar down, the claim held) is
+     * retried ten times, backing off from a minute to six hours; the daily reconcile queues
+     * it again while the plan can still charge.
+     */
+    await boss.createQueue(queues.billingCancelDissolved, {
+        policy: 'stately',
+        retryLimit: 10,
+        retryDelay: 60,
+        retryBackoff: true,
+        retryDelayMax: 6 * 60 * 60,
+        expireInSeconds: 5 * 60,
+        retentionSeconds: 30 * 24 * 60 * 60,
     });
     // Drive's sweeps are idempotent and bounded; one of each at a time is enough.
     for (const queue of [

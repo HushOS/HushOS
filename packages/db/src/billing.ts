@@ -586,24 +586,93 @@ export async function releaseReissueRetry(subscriptionId: string) {
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* Live family plans whose scheduled change HushOS gave up on: the operators' list. */
+/*
+ * Live family plans HushOS gave up on, the operators' list: a scheduled change Polar
+ * won't keep or can't be moved back (`reissueStuckReason`), or a dissolved family's plan
+ * its payer kept taking back from ending (`dissolved-resumed`), which an operator cancels.
+ */
 export async function listGivenUpReissues() {
+    const since = sql<Date>`coalesce(${groupBillingSubscriptions.dissolveGaveUpAt}, ${groupBillingSubscriptions.reissueGaveUpAt})`;
     return db
         .select({
             groupId: groupBillingSubscriptions.groupId,
             subscriptionId: groupBillingSubscriptions.id,
             wanted: groupBillingSubscriptions.reissuedState,
-            reason: groupBillingSubscriptions.reissueStuckReason,
-            since: groupBillingSubscriptions.reissueGaveUpAt,
+            reason: sql<
+                string | null
+            >`case when ${groupBillingSubscriptions.dissolveGaveUpAt} is not null then 'dissolved-resumed' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            since: sql<Date>`${since}`.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                isNotNull(groupBillingSubscriptions.reissueGaveUpAt),
+                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${groupBillingSubscriptions.dissolveGaveUpAt} is not null)`,
             ),
         )
-        .orderBy(desc(groupBillingSubscriptions.reissueGaveUpAt));
+        .orderBy(desc(since));
+}
+
+/*
+ * The statuses after which a subscription can never charge again. Anything else not
+ * ended (`active`, `trialing`, `past_due`, `unpaid`, `incomplete`) still can.
+ */
+export const ENDED_SUBSCRIPTION_STATUSES = ['canceled', 'incomplete_expired'] as const;
+const canStillCharge = and(
+    isNull(groupBillingSubscriptions.endedAt),
+    notInArray(groupBillingSubscriptions.status, [...ENDED_SUBSCRIPTION_STATUSES]),
+);
+
+/*
+ * A dissolved family's subscriptions that can still charge (docs/groups-design.md 3.3), as
+ * the mirror holds them: `ending` when set to end at the period's end, with how many times
+ * HushOS set it so and whether it gave up. Empty for a family that isn't dissolved.
+ */
+export async function listDissolvedChargeable(groupId: string) {
+    return db
+        .select({
+            id: groupBillingSubscriptions.id,
+            ending: groupBillingSubscriptions.cancelAtPeriodEnd,
+            cancels: groupBillingSubscriptions.dissolveCancels,
+            gaveUpAt: groupBillingSubscriptions.dissolveGaveUpAt,
+        })
+        .from(groupBillingSubscriptions)
+        .innerJoin(groups, eq(groups.id, groupBillingSubscriptions.groupId))
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNotNull(groups.dissolvedAt),
+                canStillCharge,
+            ),
+        )
+        .orderBy(groupBillingSubscriptions.id);
+}
+
+/* HushOS set a dissolved family's plan to end: one more, now. */
+export async function recordDissolveCancel(subscriptionId: string) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            dissolveCancels: sql`${groupBillingSubscriptions.dissolveCancels} + 1`,
+            dissolveCancelledAt: new Date(),
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* HushOS stops setting it to end; the operators' list shows it. Once. */
+export async function setDissolveGaveUp(subscriptionId: string) {
+    const rows = await db
+        .update(groupBillingSubscriptions)
+        .set({ dissolveGaveUpAt: new Date(), updatedAt: new Date() })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.id, subscriptionId),
+                isNull(groupBillingSubscriptions.dissolveGaveUpAt),
+            ),
+        )
+        .returning({ id: groupBillingSubscriptions.id });
+    return rows.length > 0;
 }
 
 /* One group subscription's row, live or not: what it had paid for before a change. */
