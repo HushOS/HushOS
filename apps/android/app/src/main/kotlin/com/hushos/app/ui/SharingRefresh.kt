@@ -1,6 +1,7 @@
 package com.hushos.app.ui
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -44,19 +45,30 @@ class SharingRefresh(
     suspend fun afterSync(touched: Set<String>?, restored: Boolean) {
         if (restored) return now()
         if (touched.isNullOrEmpty()) return
+        var start: Job? = null
         val loadNow = synchronized(books) {
             val since = lastBegan?.let { clock() - it } ?: Long.MAX_VALUE
             if (since < interval) {
-                // Inside the interval: one load at its end, for this change and any that follow it.
-                if (waiting == null) waiting = scope.launch {
-                    // Measured when the wait starts, so a late start never pushes the load past the interval's end.
-                    wait(maxOf(0L, synchronized(books) { (lastBegan ?: 0L) + interval } - clock()))
-                    synchronized(books) { waiting = null }
-                    now()
+                // Inside the interval: one load at its end, for this change and any that follow it. Made lazy and
+                // recorded before it starts: on an immediate dispatcher its body runs inside `start()`, and a body
+                // that ran before the record would leave a finished job blocking every later one, or be taken
+                // for the waiting load and cancelled by its own `now()`.
+                if (waiting == null) {
+                    lateinit var job: Job
+                    job = scope.launch(start = CoroutineStart.LAZY) {
+                        // Measured when the wait starts, so a late start never pushes the load past the interval's end.
+                        wait(maxOf(0L, synchronized(books) { (lastBegan ?: 0L) + interval } - clock()))
+                        synchronized(books) { if (waiting === job) waiting = null }
+                        now()
+                    }
+                    waiting = job
+                    start = job
                 }
                 false
             } else true
         }
+        // Outside the lock: an immediate dispatcher runs the body here.
+        start?.start()
         if (loadNow) now()
     }
 
@@ -74,5 +86,15 @@ class SharingRefresh(
             }
             load()
         }
+    }
+
+    companion object {
+        /*
+         * What By me lists, as the server answered: each share with its role, each link, by id. By me
+         * reads its list again whenever this changes, even when the rows' marks stay the same (a link
+         * replaced by another, an expired link turned off, a second Sam).
+         */
+        fun listing(shares: List<Pair<String, String>>, links: List<String>): Set<String> =
+            shares.map { (id, role) -> "share $id $role" }.toSet() + links.map { "link $it" }
     }
 }

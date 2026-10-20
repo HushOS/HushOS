@@ -2,10 +2,12 @@ package com.hushos.app.ui
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -57,6 +59,8 @@ class SharingRefreshTest {
             events.add("load $n began at ${time.now}")
             reading.complete(Unit)
             release.await()
+            // The request: a load whose coroutine was cancelled stops here, as a real one does at its I/O.
+            yield()
             events.add("load $n answered")
         }
     }
@@ -152,5 +156,64 @@ class SharingRefreshTest {
         assertEquals(2, server.loads)
         assertEquals(listOf("load 1 began at 0", "load 1 answered", "load 2 began at 0", "load 2 answered"), server.events)
         assertEquals("load 2 answered", restoreAnsweredAfter)
+    }
+
+    /*
+     * The view model's scope runs a launched body at once (Main.immediate). A load at the end of the
+     * interval that is due at once must neither cancel itself when it gets its turn (a refresh lost)
+     * nor stay recorded once it ran (every later change inside an interval left without a load).
+     */
+    private fun CoroutineScope.immediate(server: Server, time: Time) =
+        SharingRefresh(CoroutineScope(Dispatchers.Unconfined), interval = 10_000, clock = { time.now }, wait = { }) { server.load() }
+
+    @Test
+    fun aLoadDueAtOnceWhileAnotherRunsIsNotLost() = runBlocking {
+        val time = Time()
+        val server = Server(time, held = true)
+        val refresh = immediate(server, time)
+        val first = launch { refresh.afterSync(setOf("p1"), restored = false) }
+        server.reading.await()
+        // Inside the interval while the first load still reads, and the wait for its end is already over.
+        time.now = 5_000
+        refresh.afterSync(setOf("p2"), restored = false)
+        server.release.complete(Unit)
+        first.join()
+        repeat(50) { yield() }
+        assertEquals(listOf("load 1 began at 0", "load 1 answered", "load 2 began at 5000", "load 2 answered"), server.events)
+    }
+
+    @Test
+    fun aLoadDueAtOnceDoesNotBlockTheNextOne() = runBlocking {
+        val time = Time()
+        val server = Server(time)
+        val refresh = immediate(server, time)
+        refresh.afterSync(setOf("p1"), restored = false)
+        time.now = 5_000
+        refresh.afterSync(setOf("p2"), restored = false)
+        repeat(50) { yield() }
+        assertEquals(2, server.loads)
+        assertNull(refresh.trailing)
+        time.now = 6_000
+        refresh.afterSync(setOf("p3"), restored = false)
+        repeat(50) { yield() }
+        assertEquals(3, server.loads)
+    }
+
+    /*
+     * By me reads its list again when what the server lists changes, not only when the rows' marks
+     * do: the marks leave expired links out and count links, so turning off an expired link or
+     * replacing one link with another left a row on By me that was gone.
+     */
+    @Test
+    fun byMeFollowsWhatIsListedNotTheMarks() {
+        val before = SharingRefresh.listing(listOf("s1" to "viewer", "s2" to "viewer"), listOf("expired", "a"))
+        // The same answer in another order is the same list: no reload.
+        assertEquals(before, SharingRefresh.listing(listOf("s2" to "viewer", "s1" to "viewer"), listOf("a", "expired")))
+        // An expired link turned off: the marks never counted it.
+        assertNotEquals(before, SharingRefresh.listing(listOf("s1" to "viewer", "s2" to "viewer"), listOf("a")))
+        // Link A turned off and link B made: still one link.
+        assertNotEquals(before, SharingRefresh.listing(listOf("s1" to "viewer", "s2" to "viewer"), listOf("expired", "b")))
+        // A role changed.
+        assertNotEquals(before, SharingRefresh.listing(listOf("s1" to "editor", "s2" to "viewer"), listOf("expired", "a")))
     }
 }

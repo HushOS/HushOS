@@ -156,4 +156,21 @@ import Testing
         #expect(server.loads == 2)
         #expect(server.events == ["load 1 began at 0", "load 1 answered", "load 2 began at 0", "load 2 answered"])
     }
+
+    /*
+     * By me reads its list again when what the server lists changes, not only when the rows' marks
+     * do: the marks count links per item, so turning off link A and making link B in the share sheet
+     * left By me showing the link that was gone.
+     */
+    @Test func byMeFollowsWhatIsListedNotTheMarks() {
+        let before = SharingRefresh.listing(shares: [("s1", "viewer"), ("s2", "viewer")], links: ["old", "a"])
+        // The same answer in another order is the same list: no reload.
+        #expect(before == SharingRefresh.listing(shares: [("s2", "viewer"), ("s1", "viewer")], links: ["a", "old"]))
+        // A link turned off.
+        #expect(before != SharingRefresh.listing(shares: [("s1", "viewer"), ("s2", "viewer")], links: ["a"]))
+        // Link A turned off and link B made: still two links.
+        #expect(before != SharingRefresh.listing(shares: [("s1", "viewer"), ("s2", "viewer")], links: ["old", "b"]))
+        // A role changed.
+        #expect(before != SharingRefresh.listing(shares: [("s1", "editor"), ("s2", "viewer")], links: ["old", "a"]))
+    }
 }

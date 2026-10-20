@@ -78,4 +78,13 @@ import Foundation
         running = task
         await task.value
     }
+
+    /*
+     * What By me lists, as the server answered: each share with its role, each link, by id. By me
+     * reads its list again whenever this changes, even when the rows' marks stay the same (a link
+     * replaced by another: the marks count links).
+     */
+    public nonisolated static func listing(shares: [(id: String, role: String)], links: [String]) -> Set<String> {
+        Set(shares.map { "share \($0.id) \($0.role)" }).union(links.map { "link \($0)" })
+    }
 }

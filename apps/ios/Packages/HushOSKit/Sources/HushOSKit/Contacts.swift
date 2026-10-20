@@ -404,6 +404,8 @@ public struct SharingIndex: Sendable {
         public var links = 0
     }
     public var entries: [String: Entry] = [:]
+    /* What By me lists (`SharingRefresh.listing`). */
+    public var listed: Set<String> = []
 }
 
 extension Vault {
@@ -416,6 +418,7 @@ extension Vault {
             index.entries[share.node.id, default: .init()].roles[share.grantee.id] = share.role
         }
         for link in reply.links { index.entries[link.node.id, default: .init()].links += 1 }
+        index.listed = SharingRefresh.listing(shares: reply.shares.map { ($0.id, $0.role) }, links: reply.links.map(\.id))
         return index
     }
 }

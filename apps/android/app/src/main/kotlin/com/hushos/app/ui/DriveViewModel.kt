@@ -132,7 +132,7 @@ data class DriveState(
     val failedFolders: Set<String> = emptySet(),
     /* What this account shared, by node id; null until the server has said, so rows never guess. */
     val access: Map<String, Access>? = null,
-    /* Moves when an answer to `refreshAccess` changed `access`: an open By me reads its list again then. */
+    /* Moves when what `/shares/mine` lists changed (SharingRefresh.listing): an open By me reads its list again then. */
     val accessLoads: Int = 0,
     /* A place a notice's action asked to open ("phone": On this phone); the shell goes there and clears it. */
     val request: String? = null,
@@ -182,6 +182,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
+    /* What the last answer listed; main thread only. */
+    private var listed: Set<String>? = null
 
     private val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
     private val network = object : android.net.ConnectivityManager.NetworkCallback() {
@@ -765,8 +767,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val open = links.filter { (link, _) -> link.expiresAt?.let { runCatching { java.time.Instant.parse(it).isAfter(now) }.getOrDefault(true) } ?: true }
             .groupingBy { it.second.id }.eachCount()
         val access = (people.keys + open.keys).associateWith { id -> Access(people[id].orEmpty(), open[id] ?: 0, ids[id].orEmpty()) }
-        // Only a different answer is published: the same one would redraw every row and reload By me for nothing.
-        _state.update { if (it.access == access) it else it.copy(access = access, accessLoads = it.accessLoads + 1) }
+        // The marks only when they differ (the same ones would redraw every row); By me whenever what is listed
+        // differs, which the marks can miss (an expired link turned off, a link replaced, two people named Sam).
+        val listing = SharingRefresh.listing(shares.map { (share, _) -> share.id to share.role }, links.map { (link, _) -> link.id })
+        val relist = listing != listed
+        listed = listing
+        _state.update { s ->
+            val marked = if (s.access == access) s else s.copy(access = access)
+            if (relist) marked.copy(accessLoads = s.accessLoads + 1) else marked
+        }
     }
 
     private fun firstName(name: String, email: String) = name.trim().split(' ').firstOrNull { it.isNotEmpty() } ?: email.substringBefore('@')

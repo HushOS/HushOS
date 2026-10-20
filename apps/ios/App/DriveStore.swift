@@ -62,8 +62,9 @@ final class DriveStore {
     var myWorkspace: String?
     /* Who can open each of one's own shared items, from /shares/mine, as the web's access index. */
     var sharing: [String: SharingIndex.Entry] = [:]
-    /* Moves when an answer to `refreshSharing` changed `sharing`: an open By me reads its list again then. */
+    /* Moves when what `/shares/mine` lists changed (`SharingRefresh.listing`): an open By me reads its list again then. */
     var sharingVersion = 0
+    @ObservationIgnored private var listed: Set<String>?
     /* When `sharing` is asked again: on start, a pull, the share sheet, reconnecting, every restore and syncs with changes (at most every 10 s). */
     @ObservationIgnored private lazy var sharingLoads = SharingRefresh { [weak self] in await self?.loadSharing() }
     /* What the session-ended error says; the shell turns it into "You’ve been signed out". */
@@ -408,10 +409,14 @@ final class DriveStore {
     func refreshSharing() async { await sharingLoads.now() }
 
     private func loadSharing() async {
-        guard let index = try? await vault.sharingIndex(), index.entries != sharing else { return }
-        // Only a different answer is published: the same one would redraw every row for nothing.
-        sharing = index.entries
-        sharingVersion += 1
+        guard let index = try? await vault.sharingIndex() else { return }
+        // The marks only when they differ (the same ones would redraw every row); By me whenever what is
+        // listed differs, which the marks can miss (a link replaced by another leaves the count alone).
+        if index.entries != sharing { sharing = index.entries }
+        if index.listed != listed {
+            listed = index.listed
+            sharingVersion += 1
+        }
     }
 
     /* One item by id, from the catalogue or anything listed this session. */
