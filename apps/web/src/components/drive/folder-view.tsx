@@ -75,6 +75,7 @@ import {
     formatWhen,
     invalidateFolders,
     refreshFolders,
+    refreshSharing,
     restoreNodes,
     trashNodes,
     refuseWrite,
@@ -83,7 +84,6 @@ import {
     DEFAULT_SORT,
     type SortKey,
     type SortOrder,
-    refreshSharing,
 } from '@/lib/drive';
 import { previewKind } from '@/lib/previews';
 import { saveCopy } from '@/lib/save-copy';

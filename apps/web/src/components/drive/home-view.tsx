@@ -52,10 +52,10 @@ import {
     folderQueryOptions,
     formatWhen,
     refreshFolders,
+    refreshSharing,
     restoreNodes,
     trashNodes,
     useCatalogueState,
-    refreshSharing,
 } from '@/lib/drive';
 import { usePaletteOpen } from '@/lib/palette';
 import { previewKind } from '@/lib/previews';

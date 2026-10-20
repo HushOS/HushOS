@@ -48,8 +48,8 @@ import {
     formatWhen,
     invalidateFolders,
     nodeSize,
-    trashQueryOptions,
     refreshSharing,
+    trashQueryOptions,
 } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 import { emptyTrashAll } from '@/lib/trash';
@@ -273,8 +273,8 @@ export function TrashView({
         setActive(null);
         setBatch(null);
         await invalidateFolders(queryClient);
-        void refreshSharing(queryClient);
         const restored = ordered.length - failed.length;
+        if (restored > 0) void refreshSharing(queryClient);
         if (failed.length) {
             // Several, and some didn't come back: that stays on the page, not in a toast.
             cue('error');
