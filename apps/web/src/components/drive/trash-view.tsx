@@ -3,7 +3,7 @@ import { useHotkey } from '@tanstack/react-hotkeys';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { cn } from 'cn';
-import { ListChecksIcon, RotateCcwIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import { ListChecksIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { useDrive } from '@/components/drive/drive-shell';
 import {
@@ -489,8 +489,6 @@ export function TrashView() {
             {trash.isPending && <SkeletonRows />}
             {trash.isError && (
                 <EmptyState
-                    icon={TriangleAlertIcon}
-                    tone="danger"
                     title="The Trash couldn’t be opened"
                     body="Check your connection and try again. Nothing in it has been deleted."
                 >
@@ -502,7 +500,6 @@ export function TrashView() {
             )}
             {trash.data && rows.length === 0 && (
                 <EmptyState
-                    icon={Trash2Icon}
                     title="Trash is empty"
                     body="Items you move to the Trash stay here for 30 days."
                 />

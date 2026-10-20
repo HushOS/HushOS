@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useNavigate } from '@tanstack/react-router';
-import { ChevronDownIcon, RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
+import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
 import { useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -126,12 +126,7 @@ export function FamilyPage({
     if (families.isPending) return <SkeletonRows rows={3} />;
     if (families.isError)
         return (
-            <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
-                title="This family couldn’t be opened"
-                body={errorCopy(families.error)}
-            >
+            <EmptyState title="This family couldn’t be opened" body={errorCopy(families.error)}>
                 <Button variant="outline" onClick={() => void families.refetch()}>
                     <RotateCcwIcon />
                     Try again
@@ -291,8 +286,6 @@ export function FamilyPage({
             {detail.isPending && <SkeletonRows rows={2} />}
             {detail.isError && (
                 <EmptyState
-                    icon={TriangleAlertIcon}
-                    tone="danger"
                     title="This family couldn’t be opened"
                     body={errorCopy(detail.error, { family })}
                 >

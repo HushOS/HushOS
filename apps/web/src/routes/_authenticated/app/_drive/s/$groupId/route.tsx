@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, Navigate, Outlet } from '@tanstack/react-router';
-import { RotateCcwIcon, TriangleAlertIcon, UsersIcon } from 'lucide-react';
+import { RotateCcwIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -78,19 +78,13 @@ function FamilySpaceLayout() {
     if (capabilities.data?.groups !== true)
         return (
             <EmptyState
-                icon={UsersIcon}
                 title="Families aren’t available here"
                 body="This HushOS server doesn’t offer families."
             />
         );
     if (families.isError)
         return (
-            <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
-                title="This family couldn’t be opened"
-                body={errorCopy(families.error)}
-            >
+            <EmptyState title="This family couldn’t be opened" body={errorCopy(families.error)}>
                 <Button variant="outline" onClick={() => void families.refetch()}>
                     <RotateCcwIcon />
                     Try again

@@ -2,7 +2,6 @@ import type { SignupIntent } from '@hushos/auth/protocol';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
-import { MailIcon } from 'lucide-react';
 import { useState, useSyncExternalStore } from 'react';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
@@ -254,7 +253,6 @@ export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' })
     }
     return (
         <AuthLayout
-            icon={<MailIcon strokeWidth={1.9} aria-hidden="true" />}
             title="Check your inbox"
             art="MAIL"
             description={

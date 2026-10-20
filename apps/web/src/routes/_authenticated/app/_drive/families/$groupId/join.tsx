@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
+import { RotateCcwIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -238,8 +238,6 @@ function JoinFamily() {
     if (families.isError || !summary)
         return (
             <EmptyState
-                icon={TriangleAlertIcon}
-                tone="danger"
                 title="This family couldn’t be opened"
                 body={
                     families.isError

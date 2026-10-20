@@ -12,6 +12,7 @@ import {
     type RefObject,
 } from 'react';
 import type { DriveNode } from '@hushos/drive/client';
+import { useHoldFirstPaint } from '@/components/drive/first-paint';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Button } from '@/components/ui/button';
 
@@ -593,19 +594,18 @@ export function SortButton({
     );
 }
 
-/* A centred empty, error or waiting state: a quiet mark, a short title, one line, actions. */
+/*
+ * A centred empty, error or waiting state: a short title, one line, actions. No mark above
+ * it (DESIGN.md: no icon tiles), as on iOS and Android.
+ */
 export function EmptyState({
-    icon: Icon,
     title,
     body,
-    tone,
     children,
     className,
 }: {
-    icon?: LucideIcon;
     title: string;
     body?: ReactNode;
-    tone?: 'danger';
     children?: ReactNode;
     className?: string;
 }) {
@@ -616,18 +616,6 @@ export function EmptyState({
                 className,
             )}
         >
-            {Icon && (
-                <span
-                    className={cn(
-                        'mb-2 flex size-14 items-center justify-center rounded-full',
-                        tone === 'danger'
-                            ? 'bg-destructive-soft text-destructive'
-                            : 'bg-accent text-accent-foreground',
-                    )}
-                >
-                    <Icon className="size-6" strokeWidth={1.9} aria-hidden="true" />
-                </span>
-            )}
             <h2 className="text-xl font-bold tracking-[-0.01em] text-balance">{title}</h2>
             {body && (
                 <p className="max-w-[25.2em] text-[15px] leading-snug text-muted-foreground">
@@ -639,8 +627,12 @@ export function EmptyState({
     );
 }
 
-/* Placeholder rows while a list loads, shaped like the rows that will replace them. */
+/*
+ * Placeholder rows while a list loads, shaped like the rows that will replace them. While the
+ * drive is still opening, they hold its one line up instead of showing (first-paint.ts).
+ */
 export function SkeletonRows({ rows = 6 }: { rows?: number }) {
+    useHoldFirstPaint();
     return (
         <output aria-label="Loading" className="flex flex-col">
             {Array.from({ length: rows }, (_, index) => (

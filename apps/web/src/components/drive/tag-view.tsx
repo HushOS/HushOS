@@ -9,7 +9,7 @@ import {
 } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { PaletteIcon, PencilIcon, TagIcon, Trash2Icon } from 'lucide-react';
+import { PaletteIcon, PencilIcon, Trash2Icon } from 'lucide-react';
 import { useId, useState } from 'react';
 import { EmptyState, LIST_COLUMN, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
@@ -188,7 +188,6 @@ export function TagView({ tagId }: { tagId: string }) {
             </PageHeader>
             {tag && items.length === 0 && (
                 <EmptyState
-                    icon={TagIcon}
                     title={building ? 'Nothing yet' : 'Nothing has this tag'}
                     body={
                         building

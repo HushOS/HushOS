@@ -45,10 +45,7 @@ import {
     EyeIcon,
     FlagIcon,
     Link2Icon,
-    Link2OffIcon,
-    LockIcon,
     RotateCcwIcon,
-    TriangleAlertIcon,
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
@@ -127,10 +124,7 @@ function LinkPage() {
                     ) : secret === null ? (
                         <MissingKey />
                     ) : meta.isError ? (
-                        <Card
-                            icon={<Link2OffIcon className="size-6" aria-hidden="true" />}
-                            tone="quiet"
-                        >
+                        <Card>
                             <h1 className="text-[22px] font-extrabold tracking-[-0.02em]">
                                 This link no longer works
                             </h1>
@@ -281,7 +275,7 @@ function MissingKey() {
     const [value, setValue] = useState('');
     const key = value.trim().replace(/^.*#/, '');
     return (
-        <Card icon={<TriangleAlertIcon className="size-6" aria-hidden="true" />} tone="danger">
+        <Card>
             <h1 className="text-[22px] font-extrabold tracking-[-0.02em]">
                 This link is incomplete
             </h1>
@@ -316,31 +310,11 @@ function MissingKey() {
     );
 }
 
-/* A link's state on its own: a quiet mark, what happened, what to do. */
-function Card({
-    icon,
-    tone = 'tint',
-    children,
-}: {
-    icon?: React.ReactNode;
-    tone?: 'tint' | 'quiet' | 'danger';
-    children: React.ReactNode;
-}) {
+/* A link's state on its own: what happened, what to do. No mark above it (DESIGN.md). */
+function Card({ children }: { children: React.ReactNode }) {
     return (
         <div className="flex flex-1 items-center justify-center px-4 py-16 sm:px-8">
             <div className="flex w-full max-w-[440px] flex-col items-center gap-3 rounded-2xl border border-rule bg-card p-8 text-center shadow-sm">
-                {icon && (
-                    <span
-                        className={cn(
-                            'mb-1 flex size-14 items-center justify-center rounded-full',
-                            tone === 'tint' && 'bg-accent text-accent-foreground',
-                            tone === 'quiet' && 'bg-muted text-muted-foreground',
-                            tone === 'danger' && 'bg-destructive-soft text-destructive',
-                        )}
-                    >
-                        {icon}
-                    </span>
-                )}
                 {children}
             </div>
         </div>
@@ -401,7 +375,7 @@ function Unlock({
     }, [hasPassword]);
     if (!hasPassword)
         return error ? (
-            <Card icon={<TriangleAlertIcon className="size-6" aria-hidden="true" />} tone="danger">
+            <Card>
                 <h1 className="text-[22px] font-extrabold tracking-[-0.02em]">
                     This link couldn’t be opened
                 </h1>
@@ -423,7 +397,7 @@ function Unlock({
             <Opening />
         );
     return (
-        <Card icon={<LockIcon className="size-6" aria-hidden="true" />}>
+        <Card>
             <h1 className="text-[22px] font-extrabold tracking-[-0.02em]">
                 This link has a password
             </h1>
@@ -599,8 +573,6 @@ function LinkContents({ opened }: { opened: Opened }) {
                         {listing.isPending && <SkeletonRows />}
                         {listing.isError && (
                             <EmptyState
-                                icon={TriangleAlertIcon}
-                                tone="danger"
                                 title="This folder couldn’t be opened"
                                 body="Check your connection and try again."
                             >

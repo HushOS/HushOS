@@ -374,7 +374,6 @@ export function HomeView() {
             </PageHeader>
             {firstRun ? (
                 <EmptyState
-                    icon={FileUpIcon}
                     title="Nothing here yet"
                     body="Files you add or change show up here. Drop some anywhere on this page to start."
                     className="sm:pt-16"

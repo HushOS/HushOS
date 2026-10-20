@@ -110,7 +110,6 @@ import {
     ListChecksIcon,
     ListIcon,
     RotateCcwIcon,
-    TriangleAlertIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
 
@@ -981,8 +980,6 @@ export function FolderView({ folderId }: { folderId: string }) {
                         {listing.isPending && <SkeletonRows />}
                         {listing.isError && (
                             <EmptyState
-                                icon={TriangleAlertIcon}
-                                tone="danger"
                                 title="This folder couldn’t be opened"
                                 body={driveError(listing.error)}
                             >
@@ -994,7 +991,6 @@ export function FolderView({ folderId }: { folderId: string }) {
                         )}
                         {listing.data && rows.length === 0 && (
                             <EmptyState
-                                icon={FolderPlusIcon}
                                 title="Nothing here yet"
                                 body={
                                     !canAdd

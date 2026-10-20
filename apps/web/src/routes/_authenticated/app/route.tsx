@@ -24,6 +24,7 @@ import { setPaletteOpen } from '@/lib/palette';
 import { billingQueryOptions, storageQueryOptions } from '@/lib/queries';
 import { sessionQueryOptions } from '@/lib/session';
 import { useIsTablet } from '@/hooks/use-mobile';
+import { passesThrough } from '@/lib/own-keys';
 import { getSidebarStateServerFn } from '@/lib/theme';
 import { bindContactsToQueries } from '@/lib/contacts';
 import { bindTransfersToQueries, guardUnloadWhileUploading } from '@/lib/transfers';
@@ -262,12 +263,6 @@ function AppLayout() {
         </SidebarProvider>
     );
 }
-
-const passesThrough = (event: KeyboardEvent) =>
-    event.key === 'Tab' ||
-    event.key === 'Escape' ||
-    event.key === 'F5' ||
-    ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'r');
 
 /*
  * While signing out the page takes no keys: a shortcut would act on what is leaving. Signing out

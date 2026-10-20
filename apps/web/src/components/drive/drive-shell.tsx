@@ -1,10 +1,18 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { LockKeyholeIcon } from 'lucide-react';
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
 import { useRouter } from '@tanstack/react-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { FirstPaintContext } from '@/components/drive/first-paint';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
@@ -26,6 +34,7 @@ import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
+import { passesThrough } from '@/lib/own-keys';
 import { leaveApp } from '@/lib/sign-out';
 import { cue } from '@/lib/sounds';
 
@@ -143,6 +152,21 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     return null;
 }
 
+/* Keys for what sits around the hidden page rather than in it (see DriveShell). */
+function outsidePage(event: KeyboardEvent) {
+    const key = event.key.toLowerCase();
+    if (((event.metaKey || event.ctrlKey) && key === 'k') || key === '/') return true;
+    return (
+        event.target instanceof Element &&
+        event.target.closest(
+            '[role=dialog], [role=alertdialog], [role=menu], [role=listbox], [data-slot=command]',
+        ) !== null
+    );
+}
+
+/* Which account and lock the drive was last shown for in this page load (see DriveShell). */
+let paintedFor: string | null = null;
+
 export function DriveShell({ user, children }: { user: SessionUser; children: ReactNode }) {
     const unlockedUser = useAuthView((state) => state.unlockedUserId);
     const restoring = useAuthView((state) => state.restoring);
@@ -178,34 +202,86 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
         }
     }
 
+    // The page is mounted under "Opening your files" as soon as the drive is open, and shown
+    // once its placeholders are gone (first-paint.ts): one step from the line to the list. Once
+    // per page load, account and lock: back from Account or Billing, the page shows at once.
+    const ready = unlocked && opened.isSuccess;
+    const paintKey = `${user.id}:${lockRevision}`;
+    const [painted, setPainted] = useState(() => paintedFor === paintKey);
+    // Locked again: the next unlock opens in one step too.
+    if (!ready && painted) setPainted(false);
+    useEffect(() => {
+        if (painted) paintedFor = paintKey;
+    }, [painted, paintKey]);
+    // Past the line's "Still opening": the page shows as it is, placeholders and all, rather
+    // than stay hidden behind a list that may never come (offline, a stuck worker).
+    const [late, setLate] = useState(false);
+    const [markLate] = useState(() => () => setLate(true));
+    const holds = useRef(0);
+    const [settle] = useState(() => () => {
+        // After the commit that let a placeholder go: one that took its place holds on.
+        queueMicrotask(() => {
+            if (holds.current === 0) setPainted(true);
+        });
+    });
+    const [hold] = useState(() => () => {
+        holds.current++;
+        return () => {
+            holds.current--;
+            settle();
+        };
+    });
+    if (ready && !painted && late) setPainted(true);
+    // After every render until the page shows: its placeholders have registered by now.
+    useLayoutEffect(() => {
+        if (ready && !painted) settle();
+    });
+    const opening = unlocked ? opened.isPending || (ready && !painted) : restoring || !attempted;
+    if (!opening && late) setLate(false);
+    // The hidden page takes no keys: a shortcut would open a dialog over the line, or act on a
+    // list nobody can see. Window capture runs before TanStack Hotkeys' document listeners.
+    // Defaults still happen (typing, Enter on a link); moving focus, Escape and reloading pass,
+    // and so does what the app around the page owns: the palette (and the keys that open it),
+    // menus, list boxes and dialogs, whose handlers also listen above the page.
+    const hidden = ready && !painted;
+    useEffect(() => {
+        if (!hidden) return;
+        const swallow = (event: KeyboardEvent) => {
+            if (passesThrough(event) || outsidePage(event)) return;
+            event.stopImmediatePropagation();
+        };
+        for (const type of ['keydown', 'keypress'] as const)
+            window.addEventListener(type, swallow, { capture: true });
+        return () => {
+            for (const type of ['keydown', 'keypress'] as const)
+                window.removeEventListener(type, swallow, { capture: true });
+        };
+    }, [hidden]);
+
+    let body: ReactNode = null;
     if (!unlocked) {
-        if (restoring || !attempted) return <Opening />;
-        return (
-            <Centered>
-                <span className="flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground">
-                    <LockKeyholeIcon className="size-5" aria-hidden="true" />
-                </span>
-                <h1 className="mt-5 text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
-                    HushOS is locked here
-                </h1>
-                <p className="mt-1.5 text-[15px] text-muted-foreground">
-                    Enter your password to open your files on this browser.
-                </p>
-                {signOutFailed && (
-                    <Alert variant="destructive" className="mt-5 text-left">
-                        <AlertDescription>
-                            Signing out didn’t finish. Check your connection and try again from your
-                            account menu.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                <UnlockDevice user={user} className="mt-5 w-full" />
-            </Centered>
-        );
-    }
-    if (opened.isPending) return <Opening />;
-    if (opened.isError)
-        return (
+        if (!opening)
+            body = (
+                <Centered>
+                    <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
+                        HushOS is locked here
+                    </h1>
+                    <p className="mt-1.5 text-[15px] text-muted-foreground">
+                        Enter your password to open your files on this browser.
+                    </p>
+                    {signOutFailed && (
+                        <Alert variant="destructive" className="mt-5 text-left">
+                            <AlertDescription>
+                                Signing out didn’t finish. Check your connection and try again from
+                                your account menu.
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                    <UnlockDevice user={user} className="mt-5 w-full" />
+                </Centered>
+            );
+    } else if (opened.isError)
+        body = (
             <Centered>
                 <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
                     Your files didn’t open
@@ -228,16 +304,27 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                 </div>
             </Centered>
         );
+    else if (opened.isSuccess)
+        body = (
+            <DriveContext.Provider
+                value={{
+                    userId: user.id,
+                    workspaceId: opened.data.workspaceId,
+                    rootId: opened.data.root.id,
+                }}
+            >
+                <FirstPaintContext.Provider value={painted ? null : hold}>
+                    {/* The same element hidden and shown, so the page is not mounted twice. */}
+                    <div className={painted ? 'contents' : 'hidden'}>{children}</div>
+                </FirstPaintContext.Provider>
+            </DriveContext.Provider>
+        );
+    // The line stays in one place in the tree from the restore to the list, so it is drawn once.
     return (
-        <DriveContext.Provider
-            value={{
-                userId: user.id,
-                workspaceId: opened.data.workspaceId,
-                rootId: opened.data.root.id,
-            }}
-        >
-            {children}
-        </DriveContext.Provider>
+        <>
+            {opening && <Opening onLate={markLate} />}
+            {body}
+        </>
     );
 }
 
@@ -254,12 +341,15 @@ function Centered({ children }: { children: ReactNode }) {
  * second that says it is still going. Which step is slow is not something a
  * person can act on, so it is not named.
  */
-function Opening() {
+function Opening({ onLate }: { onLate: () => void }) {
     const [late, setLate] = useState(false);
     useEffect(() => {
-        const timer = setTimeout(() => setLate(true), 4_000);
+        const timer = setTimeout(() => {
+            setLate(true);
+            onLate();
+        }, 4_000);
         return () => clearTimeout(timer);
-    }, []);
+    }, [onLate]);
     return (
         <div className="flex flex-1 items-center justify-center px-5 py-16 sm:px-8">
             <output className="flex flex-col items-center gap-2 text-center">
