@@ -116,8 +116,12 @@ final class DriveStore {
     var mountsError: String?
     var mountsLoaded = false
     var busy = false
-    /* A Move to Trash batch is under way: the selection bar shows it pending and keeps the selection. */
-    var trashing = false
+    /*
+     * Ids in a Move to Trash batch under way, every batch's together: a selection whose ids are here
+     * shows its bar pending, and an id already here is never sent again. Each batch takes out only
+     * its own ids, so a single trash from another tab can't end a selection's pending early.
+     */
+    private(set) var trashingIds: Set<String> = []
     /* Transfers in flight and just finished, each with its own bar, as the web's panel shows them. */
     struct TransferItem: Identifiable, Equatable {
         enum Kind { case upload, download, copy, keep }
@@ -1135,11 +1139,15 @@ final class DriveStore {
      * says what moved, with an Undo for exactly that, and the feed, the listings and Files follow
      * once, in the background.
      */
-    func trash(_ items: [Opened]) async {
+    func trash(_ requested: [Opened]) async {
+        // Items already on their way to the Trash in another batch aren't sent twice.
+        let items = requested.filter { !trashingIds.contains($0.id) }
         guard !items.isEmpty else { return }
+        let ids = Set(items.map(\.id))
         let vault = vault
         busy = true
-        trashing = true
+        trashingIds.formUnion(ids)
+        defer { trashingIds.subtract(ids) }
         let result = await TrashBatch.trash(items, TrashBatch.Steps(
             send: { batch, moved in
                 let byId = Dictionary(batch.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -1151,7 +1159,6 @@ final class DriveStore {
             settle: { [weak self] folders in Task { await self?.settle(folders) } }
         ))
         busy = false
-        trashing = false
         reportFailures(result.failed.map(\.error), single: items.count == 1)
     }
 
@@ -1200,21 +1207,15 @@ final class DriveStore {
         let outcomes = await TrashBatch.oneAfterAnother(items) { item in try await vault.restore(item, parentTrashed: false) }
         busy = false
         let back = outcomes.compactMap { try? $0.get() }
-        // The Trash list may be open under the notice: what came back leaves it now too.
-        let backIds = Set(back.map(\.id))
-        trash.removeAll { backIds.contains($0.item.id) }
-        for item in back {
-            catalogue[item.id] = item
-            guard let parent = item.node.parentId, let rows = folders[parent], !rows.contains(where: { $0.id == item.id }) else { continue }
-            folders[parent] = (rows + [item]).sorted(by: Opened.byName)
-        }
+        (folders, trash) = TrashBatch.afterUndo(back, folders: folders, trash: trash)
+        for item in back { catalogue[item.id] = item }
         if !back.isEmpty { catalogueVersion += 1; Task { await settle(Set(back.compactMap(\.node.parentId))) } }
         let errors = outcomes.compactMap { outcome -> Error? in if case .failure(let error) = outcome { return error } else { return nil } }
         reportFailures(errors, single: items.count == 1)
         if errors.isEmpty {
             notify(back.count == 1 ? "Restored “\(back[0].name)”" + (wasIn(back[0]).map { " to \($0)" } ?? "") : "Restored \(back.count) items")
-        } else if items.count > 1, !errors.contains(where: endsSession) {
-            notify(back.isEmpty ? "Couldn’t bring them back. They’re still in Trash." : "\(back.count) of \(items.count) are back. The rest are still in Trash.")
+        } else if !errors.contains(where: endsSession), let problem = TrashBatch.undoProblem(back: back.count, tried: items.count) {
+            notify(problem)
         }
     }
 

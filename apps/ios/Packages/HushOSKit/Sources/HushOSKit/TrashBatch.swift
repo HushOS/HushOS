@@ -25,20 +25,39 @@ public enum TrashBatch {
                 outcomes.append(.success(try await send(item)))
             } catch {
                 outcomes.append(.failure(error))
-                if ErrorWords.isCancellation(error) || failure(of: error) != .other { stopped = error }
+                let kind = failure(of: error)
+                if ErrorWords.isCancellation(error) || kind == .offline || kind == .signedOut { stopped = error }
             }
         }
         return outcomes
     }
 
-    /* Why the rest stayed where they were, in words of our own: the server's sentence is never shown here. */
-    public enum Failure: Sendable, Equatable { case offline, signedOut, other }
+    /*
+     * Each item trashed, and `moved` told of it only once its trash came back (`Vault.trashMany`'s
+     * body). Telling first would take a row off the lists that the server then refused to move.
+     */
+    public static func trashEach(
+        _ ids: [String], trash: @escaping @Sendable (String) async throws -> Void, moved: @escaping @Sendable (String) async -> Void
+    ) async -> [Result<Void, Error>] {
+        await oneAfterAnother(ids) { id in
+            try await trash(id)
+            await moved(id)
+        }
+    }
+
+    /*
+     * Why the rest didn't move, in words of our own: the server's sentence is never shown here.
+     * `unconfirmed` is a gateway's 502 or 504: the request may have landed behind it, as it may
+     * have when there was no answer at all, so neither is ever said to have "stayed".
+     */
+    public enum Failure: Sendable, Equatable { case offline, unconfirmed, signedOut, other }
 
     public static func failure(of error: Error) -> Failure {
         if endsSession(error) { return .signedOut }
         if case DriveAPIError.transport = error { return .offline }
         if error is URLError { return .offline }
         if case AuthError.message(let text) = error, text == AuthError.unreachable { return .offline }
+        if case DriveAPIError.server(let status, _) = error, status == 502 || status == 504 { return .unconfirmed }
         return .other
     }
 
@@ -50,12 +69,16 @@ public enum TrashBatch {
         /* The folders whose listings changed: each read once after the batch, never once per item. */
         public var folders: Set<String> { Set(moved.compactMap(\.node.parentId)) }
 
-        /* The reason the notice gives: offline only when every failure was, signed out when any was. */
+        /*
+         * The reason the notice gives: signed out when any was; offline only when every failure
+         * was; unconfirmed when any may have landed (offline or a gateway error); else a refusal.
+         */
         public var failure: Failure? {
             guard !failed.isEmpty else { return nil }
             let kinds = failed.map { TrashBatch.failure(of: $0.error) }
             if kinds.contains(.signedOut) { return .signedOut }
             if kinds.allSatisfy({ $0 == .offline }) { return .offline }
+            if kinds.contains(where: { $0 == .offline || $0 == .unconfirmed }) { return .unconfirmed }
             return .other
         }
 
@@ -71,6 +94,7 @@ public enum TrashBatch {
             if moved.isEmpty {
                 switch failure {
                 case .offline: return "Couldn’t move to Trash. You’re offline. Try again once you’re connected."
+                case .unconfirmed: return "Couldn’t move to Trash. HushOS didn’t confirm it. Try again."
                 case .signedOut: return "Couldn’t move to Trash. Sign in again, then try again."
                 case .other: return "Couldn’t move to Trash. Try again."
                 }
@@ -78,6 +102,7 @@ public enum TrashBatch {
             let count = "\(moved.count) of \(tried.count) moved to Trash. "
             switch failure {
             case .offline: return count + "You’re offline, so the rest weren’t confirmed."
+            case .unconfirmed: return count + "The rest weren’t confirmed. Try again."
             case .signedOut: return count + "Sign in again to move the rest."
             case .other: return count + "The rest stayed where they were. Try again."
             }
@@ -139,5 +164,29 @@ public enum TrashBatch {
         if let notice = result.notice { steps.announce(notice, undo) }
         if !moved.isEmpty { steps.settle(result.folders) }
         return result
+    }
+
+    /*
+     * After the notice's Undo: each row that came back goes into its folder's list, if that folder
+     * is on screen, once, in list order; rows that didn't come back stay out. Every row that came
+     * back leaves the Trash list, which may be open under the notice.
+     */
+    public static func afterUndo(
+        _ back: [Opened], folders: [String: [Opened]], trash: [(item: Opened, parentTrashed: Bool)]
+    ) -> (folders: [String: [Opened]], trash: [(item: Opened, parentTrashed: Bool)]) {
+        var rows = folders
+        for item in back {
+            guard let parent = item.node.parentId, let list = rows[parent], !list.contains(where: { $0.id == item.id }) else { continue }
+            rows[parent] = (list + [item]).sorted(by: Opened.byName)
+        }
+        let backIds = Set(back.map(\.id))
+        return (rows, trash.filter { !backIds.contains($0.item.id) })
+    }
+
+    /* What an Undo of many says when not everything came back; nil when it all did, or for one item (its error says it). */
+    public static func undoProblem(back: Int, tried: Int) -> String? {
+        if tried <= 1 || back == tried { return nil }
+        if back == 0 { return "Couldn’t bring them back. They’re still in Trash." }
+        return "\(back) of \(tried) are back. The rest are still in Trash."
     }
 }

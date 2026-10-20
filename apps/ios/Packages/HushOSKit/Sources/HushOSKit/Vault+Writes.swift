@@ -244,10 +244,7 @@ extension Vault {
      * until the server takes a batch in one request.
      */
     public func trashMany(_ ids: [String], moved: @escaping @Sendable (String) async -> Void = { _ in }) async -> [Result<Void, Error>] {
-        await TrashBatch.oneAfterAnother(ids) { id in
-            try await self.trash(id)
-            await moved(id)
-        }
+        await TrashBatch.trashEach(ids, trash: { id in try await self.trash(id) }, moved: moved)
     }
 
     /* Back where it was, or under the root when its old folder is in the trash too. */

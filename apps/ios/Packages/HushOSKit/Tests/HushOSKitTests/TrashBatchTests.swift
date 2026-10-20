@@ -150,12 +150,12 @@ import Testing
     }
 
     @Test func theReasonIsOfflineOnlyWhenEveryFailureWas() async {
-        // A refusal, then no network: the reason can't honestly be "offline" alone.
+        // A refusal, then no network: the second may have landed, so nothing is said to have stayed.
         let mixed = await TrashBatch.trash(thirteen, Recorder().steps { item in
             if item.id == "f2" { throw DriveAPIError.server(409, "x") }
             if item.id == "f4" { throw DriveAPIError.transport("offline") }
         })
-        #expect(mixed.failure == .other)
+        #expect(mixed.failure == .unconfirmed)
         // No network at the twelfth: nothing after it was sent, and none of it counts as moved.
         let offline = await TrashBatch.trash(thirteen, Recorder().steps { item in
             if item.id == "f12" { throw URLError(.notConnectedToInternet) }
@@ -166,5 +166,56 @@ import Testing
             if item.id == "f4" { throw DriveAPIError.notAuthenticated }
         })
         #expect(signedOut.failure == .signedOut)
+    }
+
+    @Test func aGatewayErrorIsUnconfirmedNeverStayed() async {
+        // A 502 or 504 can come after the trash committed behind the gateway.
+        let partial = await TrashBatch.trash(thirteen, Recorder().steps { item in
+            if item.id == "f12" { throw DriveAPIError.server(502, "Bad gateway") }
+        })
+        #expect(partial.notice == "12 of 13 moved to Trash. The rest weren’t confirmed. Try again.")
+        let none = await TrashBatch.trash(Array(thirteen.prefix(2)), Recorder().steps { _ in throw DriveAPIError.server(504, "Gateway timeout") })
+        #expect(none.notice == "Couldn’t move to Trash. HushOS didn’t confirm it. Try again.")
+        let refused = await TrashBatch.trash(thirteen, Recorder().steps { item in
+            if item.id == "f2" || item.id == "f4" { throw DriveAPIError.server(409, "x") }
+        })
+        #expect(refused.notice == "11 of 13 moved to Trash. The rest stayed where they were. Try again.")
+        #expect(TrashBatch.failure(of: DriveAPIError.server(500, "x")) == .other)
+    }
+
+    @Test func anItemIsReportedMovedOnlyAfterItsTrashCameBack() async {
+        let ids = (1...6).map { "n\($0)" }
+        let log = Sent()
+        let outcomes = await TrashBatch.trashEach(ids, trash: { id in
+            await log.add("trash \(id)")
+            if id == "n3" { throw DriveAPIError.server(409, "trashed") }
+        }, moved: { id in await log.add("moved \(id)") })
+        let events = await log.ids
+        #expect(Array(events.prefix(7)) == ["trash n1", "moved n1", "trash n2", "moved n2", "trash n3", "trash n4", "moved n4"])
+        #expect(!events.contains("moved n3"))
+        #expect(outcomes.map { if case .success = $0 { true } else { false } } == [true, true, false, true, true, true])
+    }
+
+    @Test func undoPutsBackOnlyWhatCameBackOnceInListOrderAndOnlyInFoldersOnScreen() {
+        let folders = ["work": [item("Budget"), item("Zebra")], "photos": []]
+        let back = [item("apple"), item("Zebra"), item("elsewhere", parent: "music")]
+        let result = TrashBatch.afterUndo(back, folders: folders, trash: [])
+        // "apple" joins Work in name order, "Zebra" isn't doubled, and a folder not on screen gets no list.
+        #expect(result.folders["work"]?.map(\.id) == ["apple", "Budget", "Zebra"])
+        #expect(result.folders["photos"]?.isEmpty == true)
+        #expect(Set(result.folders.keys) == ["work", "photos"])
+    }
+
+    @Test func undoTakesWhatCameBackOffTheTrashListAndLeavesTheRest() {
+        let trashed = [item("a"), item("b"), item("c")]
+        let result = TrashBatch.afterUndo([trashed[0], trashed[2]], folders: [:], trash: trashed.map { ($0, false) })
+        #expect(result.trash.map(\.item.id) == ["b"])
+    }
+
+    @Test func anUndoOfManySaysWhatDidntComeBack() {
+        #expect(TrashBatch.undoProblem(back: 13, tried: 13) == nil)
+        #expect(TrashBatch.undoProblem(back: 0, tried: 1) == nil)
+        #expect(TrashBatch.undoProblem(back: 11, tried: 13) == "11 of 13 are back. The rest are still in Trash.")
+        #expect(TrashBatch.undoProblem(back: 0, tried: 13) == "Couldn’t bring them back. They’re still in Trash.")
     }
 }

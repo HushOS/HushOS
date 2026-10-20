@@ -191,7 +191,7 @@ struct FolderView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if selecting {
-                SelectBar(items: selectedItems, action: $action, moving: $movingMany) { endSelecting() }
+                SelectBar(items: selectedItems, trashing: trashingSelection, action: $action, moving: $movingMany) { endSelecting() }
             } else if !readOnly, let clip = store.clipboard, let first = clip.items.first {
                 PasteBar(
                     text: clip.items.count > 1 ? "Paste \(clip.items.count) items here" : "Paste “\(first.name)” here",
@@ -353,6 +353,8 @@ struct FolderView: View {
         if selecting {
             let picked = selection.contains(item.id)
             Button {
+                // While this selection's Move to Trash runs, taps that would change it are ignored.
+                guard !trashingSelection else { return }
                 if picked { selection.remove(item.id) } else { selection.insert(item.id) }
             } label: {
                 NodeTile(item: item, selected: picked)
@@ -382,6 +384,8 @@ struct FolderView: View {
             // Our own selection rows: List's edit-mode selection never took taps here.
             let picked = selection.contains(item.id)
             Button {
+                // While this selection's Move to Trash runs, taps that would change it are ignored.
+                guard !trashingSelection else { return }
                 if picked { selection.remove(item.id) } else { selection.insert(item.id) }
             } label: {
                 NodeRow(item: item, selected: picked, location: searching ? store.location(of: item) : nil)
@@ -425,10 +429,10 @@ struct FolderView: View {
         if selecting {
             let all = !children.isEmpty && selection.count == children.count
             Button { selection = all ? [] : Set(children.map(\.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
-                .disabled(store.trashing)
+                .disabled(trashingSelection)
                 .buttonStyle(.plain)
             Button { endSelecting() } label: { HeaderWord(text: "Done") }
-                .disabled(store.trashing)
+                .disabled(trashingSelection)
                 .buttonStyle(.plain)
         } else {
             // A folder you can only view takes nothing new.
@@ -497,6 +501,9 @@ struct FolderView: View {
         selecting = false
         selection = []
     }
+
+    /* This selection's Move to Trash is under way (only its own ids count, not another tab's single trash). */
+    private var trashingSelection: Bool { !selection.isDisjoint(with: store.trashingIds) }
 
     private func startSelecting(_ item: Opened) {
         selecting = true
@@ -575,11 +582,11 @@ struct AccessBanner: View {
 private struct SelectBar: View {
     @Environment(DriveStore.self) private var store
     let items: [Opened]
+    /* This selection's Move to Trash is under way: the bar stays, pending, with the selection, until the last request answers. */
+    let trashing: Bool
     @Binding var action: NodeAction?
     @Binding var moving: Bool
     let done: () -> Void
-    /* A Move to Trash under way: the bar stays, pending, with the selection, until the last request answers. */
-    private var trashing: Bool { store.trashing }
 
     /* A family folder's items are never shared or tagged (the web hides both there). */
     private var family: Bool { items.contains { store.isFamily($0) } }
