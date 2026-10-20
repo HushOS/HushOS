@@ -370,6 +370,67 @@ describe('a batch of folders in the feed', () => {
         }
         return { ids, cursor };
     }
+    /*
+     * The index as it was before it became unique, for rows written the old way; afterwards it is
+     * unique again, whatever the body did (a body that left rows sharing a number leaves an empty
+     * database behind it).
+     */
+    async function beforeUniqueIndex(body: () => Promise<void>) {
+        await db.execute(sql`drop index drive_nodes_change_idx`);
+        await db.execute(
+            sql`create index drive_nodes_change_idx on drive_nodes (workspace_id, change_seq) where change_seq is not null`,
+        );
+        try {
+            await body();
+        } finally {
+            if (!(await changeIndexIsUnique())) {
+                await resetDatabase();
+                await db.execute(sql`drop index if exists drive_nodes_change_uidx`);
+                await db.execute(sql`drop index drive_nodes_change_idx`);
+                await db.execute(
+                    sql`create unique index drive_nodes_change_idx on drive_nodes (workspace_id, change_seq) where change_seq is not null`,
+                );
+            }
+        }
+    }
+    async function changeIndexIsUnique() {
+        const rows = await db.execute<{ name: string; def: string }>(
+            sql`select indexname as name, indexdef as def from pg_indexes where tablename = 'drive_nodes' and indexname like 'drive_nodes_change_%'`,
+        );
+        return (
+            rows.rows.length === 1 &&
+            rows.rows[0]!.name === 'drive_nodes_change_idx' &&
+            rows.rows[0]!.def.includes('UNIQUE')
+        );
+    }
+    function migrationOf(name: string) {
+        const statements = readFileSync(
+            new URL(`../drizzle/${name}/migration.sql`, import.meta.url),
+            'utf8',
+        )
+            .split('--> statement-breakpoint')
+            .map((statement) => statement.replace(/^--.*$/gm, '').trim())
+            .filter(Boolean);
+        return () =>
+            db.transaction(async (tx) => {
+                for (const statement of statements) await tx.execute(sql.raw(statement));
+            });
+    }
+    async function seqsOf(ids: string[]) {
+        return new Map(
+            (
+                await db
+                    .select({ id: driveNodes.id, changeSeq: driveNodes.changeSeq })
+                    .from(driveNodes)
+                    .where(inArray(driveNodes.id, ids))
+            ).map((row) => [row.id, row.changeSeq!]),
+        );
+    }
+    /* Gives every row of `ids` the number of the first, as the old code wrote a batch. */
+    async function asOldCodeWrote(ids: string[]) {
+        const seq = (await seqsOf([ids[0]!])).get(ids[0]!)!;
+        await db.update(driveNodes).set({ changeSeq: seq }).where(inArray(driveNodes.id, ids));
+    }
     function once(arrived: string[], expected: string[]) {
         const counts = new Map<string, number>();
         for (const id of arrived) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -438,107 +499,164 @@ describe('a batch of folders in the feed', () => {
     });
 
     test('the upgrade gives batches still sharing a number new ones, per workspace, so a device that skipped them gets them', async () => {
-        const migration = readFileSync(
-            new URL('../drizzle/20261020213416_change_seq_renumber/migration.sql', import.meta.url),
-            'utf8',
-        );
-        const statements = migration
-            .split('--> statement-breakpoint')
-            .map((statement) => statement.replace(/^--.*$/gm, '').trim())
-            .filter(Boolean);
-        const upgrade = () =>
-            db.transaction(async (tx) => {
-                for (const statement of statements) await tx.execute(sql.raw(statement));
+        const upgrade = migrationOf('20261020213416_change_seq_renumber');
+        await beforeUniqueIndex(async () => {
+            // The owner: a folder, a batch with a chain of 5, a folder, then a batch of 3 filed under
+            // a folder of the first batch.
+            const start = await head();
+            const solo = await folder(rootId, rootEpoch);
+            const first = await batch(rootId, rootEpoch, BATCH, 5);
+            const between = await folder(rootId, rootEpoch);
+            const [holder] = await db
+                .select({ keyEpoch: driveNodes.keyEpoch })
+                .from(driveNodes)
+                .where(eq(driveNodes.id, first[10]!));
+            const second = await batch(first[10]!, holder!.keyEpoch, 3);
+            await asOldCodeWrote(first);
+            await asOldCodeWrote(second);
+            // The guest's workspace has a batch of its own, and a folder outside it.
+            const guestRoot = await signed.createRoot({
+                workspaceId: guest.workspaceId,
+                userId: guest.userId,
+                id: randomUUID(),
+                envelopes: {
+                    keyEpoch: (await drive.allocateKeyEpochs(guest.workspaceId, 1))!.from,
+                    parentKeyEpoch: 1,
+                    keyEnvelope: env(),
+                    metadataEnvelope: meta(),
+                },
             });
-        const seqsOf = async (ids: string[]) =>
-            new Map(
-                (
-                    await db
-                        .select({ id: driveNodes.id, changeSeq: driveNodes.changeSeq })
-                        .from(driveNodes)
-                        .where(inArray(driveNodes.id, ids))
-                ).map((row) => [row.id, row.changeSeq!]),
+            if (guestRoot.status !== 'created') throw new Error(guestRoot.status);
+            const guestBatch = await batch(guestRoot.root.id, guestRoot.root.keyEpoch, 4, 2, guest);
+            await asOldCodeWrote(guestBatch);
+            const kept = [solo.id, between.id, guestRoot.root.id];
+            const keptBefore = await seqsOf(kept);
+
+            // A device pulling 10 at a time ends its first page inside the first batch and never
+            // sees the rest of it: the defect, as databases written before the fix hold it.
+            const device = await pull(start, 10);
+            expect(first.filter((id) => !device.ids.includes(id)).length).toBeGreaterThan(0);
+
+            const ownerHead = await head();
+            const guestHead = await head(guest);
+            await upgrade();
+
+            // Each workspace's rows take the numbers just above its own head, one each, and its
+            // counter moves by exactly as many.
+            const owned = [...first, ...second];
+            const ownedSeqs = await seqsOf(owned);
+            expect([...ownedSeqs.values()].sort((a, b) => a - b)).toEqual(
+                owned.map((_, index) => ownerHead + 1 + index),
             );
-        /* Gives every row of `ids` the number of the first, as the old code wrote a batch. */
-        async function asOldCodeWrote(ids: string[]) {
-            const seq = (await seqsOf([ids[0]!])).get(ids[0]!)!;
-            await db.update(driveNodes).set({ changeSeq: seq }).where(inArray(driveNodes.id, ids));
-        }
+            expect(await head()).toBe(ownerHead + owned.length);
+            const guestSeqs = await seqsOf(guestBatch);
+            expect([...guestSeqs.values()].sort((a, b) => a - b)).toEqual(
+                guestBatch.map((_, index) => guestHead + 1 + index),
+            );
+            expect(await head(guest)).toBe(guestHead + guestBatch.length);
+            // Parents first: down the chain, and the second batch's parent before all of it.
+            for (let i = 1; i < 5; i++)
+                expect(ownedSeqs.get(first[i]!)!).toBeGreaterThan(ownedSeqs.get(first[i - 1]!)!);
+            for (const id of second)
+                expect(ownedSeqs.get(id)!).toBeGreaterThan(ownedSeqs.get(first[10]!)!);
+            expect(guestSeqs.get(guestBatch[1]!)!).toBeGreaterThan(guestSeqs.get(guestBatch[0]!)!);
+            // What never shared a number kept its own.
+            expect(await seqsOf(kept)).toEqual(keptBefore);
 
-        // The owner: a folder, a batch with a chain of 5, a folder, then a batch of 3 filed under
-        // a folder of the first batch.
-        const start = await head();
-        const solo = await folder(rootId, rootEpoch);
-        const first = await batch(rootId, rootEpoch, BATCH, 5);
-        const between = await folder(rootId, rootEpoch);
-        const [holder] = await db
-            .select({ keyEpoch: driveNodes.keyEpoch })
-            .from(driveNodes)
-            .where(eq(driveNodes.id, first[10]!));
-        const second = await batch(first[10]!, holder!.keyEpoch, 3);
-        await asOldCodeWrote(first);
-        await asOldCodeWrote(second);
-        // The guest's workspace has a batch of its own, and a folder outside it.
-        const guestRoot = await signed.createRoot({
-            workspaceId: guest.workspaceId,
-            userId: guest.userId,
-            id: randomUUID(),
-            envelopes: {
-                keyEpoch: (await drive.allocateKeyEpochs(guest.workspaceId, 1))!.from,
-                parentKeyEpoch: 1,
-                keyEnvelope: env(),
-                metadataEnvelope: meta(),
-            },
+            // The device, from where it stopped, now gets both batches whole; a fresh pull gets
+            // every folder exactly once.
+            const caughtUp = await pull(device.cursor, 10);
+            once(caughtUp.ids, owned);
+            once((await pull(start, 10)).ids, [solo.id, ...first, between.id, ...second]);
+
+            // Run again (a retried deploy): nothing shares a number, so nothing moves.
+            await upgrade();
+            expect(await seqsOf([...owned, ...guestBatch, ...kept])).toEqual(
+                new Map([...ownedSeqs, ...guestSeqs, ...keptBefore]),
+            );
+            expect(await head()).toBe(ownerHead + owned.length);
+            expect(await head(guest)).toBe(guestHead + guestBatch.length);
         });
-        if (guestRoot.status !== 'created') throw new Error(guestRoot.status);
-        const guestBatch = await batch(guestRoot.root.id, guestRoot.root.keyEpoch, 4, 2, guest);
-        await asOldCodeWrote(guestBatch);
-        const kept = [solo.id, between.id, guestRoot.root.id];
-        const keptBefore = await seqsOf(kept);
+    });
 
-        // A device pulling 10 at a time ends its first page inside the first batch and never
-        // sees the rest of it: the defect, as databases written before the fix hold it.
-        const device = await pull(start, 10);
-        expect(first.filter((id) => !device.ids.includes(id)).length).toBeGreaterThan(0);
+    test('the unique index release renumbers what older containers wrote meanwhile, then refuses a shared number', async () => {
+        await beforeUniqueIndex(async () => {
+            // The previous release ran; an older container still beside it then wrote a batch the
+            // old way.
+            await migrationOf('20261020213416_change_seq_renumber')();
+            const start = await head();
+            const late = await batch(rootId, rootEpoch, BATCH, 3);
+            const after = await folder(rootId, rootEpoch);
+            await asOldCodeWrote(late);
+            const device = await pull(start, 10);
+            expect(late.filter((id) => !device.ids.includes(id)).length).toBeGreaterThan(0);
+            const keptBefore = await seqsOf([after.id]);
+            const headBefore = await head();
 
-        const ownerHead = await head();
-        const guestHead = await head(guest);
-        await upgrade();
+            await migrationOf('20261020214235_change_seq_unique')();
 
-        // Each workspace's rows take the numbers just above its own head, one each, and its
-        // counter moves by exactly as many.
-        const owned = [...first, ...second];
-        const ownedSeqs = await seqsOf(owned);
-        expect([...ownedSeqs.values()].sort((a, b) => a - b)).toEqual(
-            owned.map((_, index) => ownerHead + 1 + index),
-        );
-        expect(await head()).toBe(ownerHead + owned.length);
-        const guestSeqs = await seqsOf(guestBatch);
-        expect([...guestSeqs.values()].sort((a, b) => a - b)).toEqual(
-            guestBatch.map((_, index) => guestHead + 1 + index),
-        );
-        expect(await head(guest)).toBe(guestHead + guestBatch.length);
-        // Parents first: down the chain, and the second batch's parent before all of it.
-        for (let i = 1; i < 5; i++)
-            expect(ownedSeqs.get(first[i]!)!).toBeGreaterThan(ownedSeqs.get(first[i - 1]!)!);
-        for (const id of second)
-            expect(ownedSeqs.get(id)!).toBeGreaterThan(ownedSeqs.get(first[10]!)!);
-        expect(guestSeqs.get(guestBatch[1]!)!).toBeGreaterThan(guestSeqs.get(guestBatch[0]!)!);
-        // What never shared a number kept its own.
-        expect(await seqsOf(kept)).toEqual(keptBefore);
+            expect([...(await seqsOf(late)).values()].sort((a, b) => a - b)).toEqual(
+                late.map((_, index) => headBefore + 1 + index),
+            );
+            expect(await head()).toBe(headBefore + BATCH);
+            expect(await seqsOf([after.id])).toEqual(keptBefore);
+            once((await pull(device.cursor, 10)).ids, late);
+            // One index, unique, under the old name.
+            expect(await changeIndexIsUnique()).toBe(true);
+            const taken = (await seqsOf([late[0]!])).get(late[0]!)!;
+            await expect(
+                db.update(driveNodes).set({ changeSeq: taken }).where(eq(driveNodes.id, late[1]!)),
+            ).rejects.toThrow();
+        });
+    });
 
-        // The device, from where it stopped, now gets both batches whole; a fresh pull gets
-        // every folder exactly once.
-        const caughtUp = await pull(device.cursor, 10);
-        once(caughtUp.ids, owned);
-        once((await pull(start, 10)).ids, [solo.id, ...first, between.id, ...second]);
-
-        // Run again (a retried deploy): nothing shares a number, so nothing moves.
-        await upgrade();
-        expect(await seqsOf([...owned, ...guestBatch, ...kept])).toEqual(
-            new Map([...ownedSeqs, ...guestSeqs, ...keptBefore]),
-        );
-        expect(await head()).toBe(ownerHead + owned.length);
-        expect(await head(guest)).toBe(guestHead + guestBatch.length);
+    test('a clash on the change number fails loudly; only a clash on the id is "already exists"', async () => {
+        // The next number is taken already (a bug the index catches): the write must not pass
+        // for an id that exists.
+        const rootSeq = (await seqsOf([rootId])).get(rootId)!;
+        const before = await head();
+        await db
+            .update(driveNodes)
+            .set({ changeSeq: before + 1 })
+            .where(eq(driveNodes.id, rootId));
+        const clash = signed.createFolders({
+            workspaceId: owner.workspaceId,
+            userId: owner.userId,
+            folders: [
+                {
+                    id: randomUUID(),
+                    parentId: rootId,
+                    envelopes: {
+                        keyEpoch: await epoch(),
+                        parentKeyEpoch: rootEpoch,
+                        keyEnvelope: env(),
+                        metadataEnvelope: meta(),
+                    },
+                },
+            ],
+        });
+        await expect(clash).rejects.toMatchObject({
+            cause: { code: '23505', constraint: 'drive_nodes_change_idx' },
+        });
+        expect(await head()).toBe(before);
+        await db.update(driveNodes).set({ changeSeq: rootSeq }).where(eq(driveNodes.id, rootId));
+        const existing = await folder(rootId, rootEpoch);
+        const again = await signed.createFolders({
+            workspaceId: owner.workspaceId,
+            userId: owner.userId,
+            folders: [
+                {
+                    id: existing.id,
+                    parentId: rootId,
+                    envelopes: {
+                        keyEpoch: await epoch(),
+                        parentKeyEpoch: rootEpoch,
+                        keyEnvelope: env(),
+                        metadataEnvelope: meta(),
+                    },
+                },
+            ],
+        });
+        expect(again).toMatchObject({ status: 'conflict', id: existing.id });
     });
 });
