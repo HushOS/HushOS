@@ -5349,6 +5349,51 @@ describe('a dissolved family’s plan', () => {
         expect(setToEnd()).toEqual([]);
     });
 
+    test('a failing plan close to its renewal is listed at its first failure; one renewing later waits a day', async () => {
+        const soon = await dissolvedResumed();
+        const later = await dissolvedResumed();
+        // The mirror knows when each renews: in 30 hours, and in 10 days.
+        soon.subscription.current_period_end = new Date(Date.now() + 30 * HOUR).toISOString();
+        later.subscription.current_period_end = new Date(Date.now() + 10 * DAY).toISOString();
+        for (const family of [soon, later])
+            await billing.handleWebhook(await resumedWebhook(family.groupId));
+        const listed = async () =>
+            (await billingRepository.listGivenUpReissues()).map((row) => [
+                row.subscriptionId,
+                row.reason,
+            ]);
+        // Renewing soon is not failing: nothing is listed before a run fails.
+        expect(await listed()).toEqual([]);
+        polar.unauthorized = true;
+        for (const family of [soon, later])
+            await expect(billing.cancelDissolvedPlan(family.groupId)).rejects.toBeInstanceOf(
+                billing.BillingError,
+            );
+        expect(await listed()).toEqual([[soon.subscription.id, 'dissolved-failing']]);
+        await rawSql(
+            `update group_billing_subscriptions set dissolve_failing_since = dissolve_failing_since - interval '25 hours' where id = '${later.subscription.id}'`,
+        );
+        expect(new Set((await listed()).map(([id, reason]) => `${id} ${reason}`))).toEqual(
+            new Set([
+                `${soon.subscription.id} dissolved-failing`,
+                `${later.subscription.id} dissolved-failing`,
+            ]),
+        );
+    });
+
+    test('setting a failing plan to end clears the failure itself, before any reconcile', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        polar.cancelFailures = 1;
+        await expect(billing.cancelDissolvedPlan(groupId)).rejects.toMatchObject({ status: 503 });
+        expect((await row(subscription.id)).dissolveFailingSince).not.toBeNull();
+        // What a run records once Polar keeps it, before its closing reconcile reads Polar.
+        await billingRepository.recordDissolveCancel(subscription.id);
+        expect(await row(subscription.id)).toMatchObject({
+            dissolveFailingSince: null,
+            dissolveCancels: 1,
+        });
+    });
+
     test('a refused plan leaves the operators’ list once it is set to end in Polar', async () => {
         const { payer, groupId, subscription } = await dissolvedResumed();
         polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };

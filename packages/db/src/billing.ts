@@ -586,14 +586,19 @@ export async function releaseReissueRetry(subscriptionId: string) {
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 
-/* How long setting a dissolved family's plan to end may keep failing before operators see it. */
+/*
+ * How long setting a dissolved family's plan to end may keep failing before operators see it,
+ * and how close to its renewal a failing one is listed at once, so they see it before the charge.
+ */
 export const DISSOLVE_FAILING_LISTED_HOURS = 24;
+export const DISSOLVE_FAILING_RENEWAL_HOURS = 48;
 
 /*
  * Live family plans HushOS gave up on, the operators' list: a scheduled change Polar
  * won't keep or can't be moved back (`reissueStuckReason`), or a dissolved family's plan
  * Polar refused to set to end (`dissolved-refused`), or that HushOS has failed to set to
- * end for over a day (`dissolved-failing`: a token error, Polar down), which an operator
+ * end for over a day, or at all within two days of its renewal (`dissolved-failing`: a
+ * token error, Polar down), which an operator
  * cancels. Those go from the list once the plan is set to end, whoever set it (the
  * operator in Polar, or its payer), as soon as the mirror shows it.
  */
@@ -601,7 +606,7 @@ export async function listGivenUpReissues() {
     const refused = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is not null and not ${groupBillingSubscriptions.cancelAtPeriodEnd})`;
     // Not filtered on `cancel_at_period_end`: a run fails before it can read Polar (a revoked
     // token), so the mirror's may be stale. It clears once a reconcile sees the plan ending.
-    const failing = sql`(${groupBillingSubscriptions.dissolveFailingSince} < now() - make_interval(hours => ${DISSOLVE_FAILING_LISTED_HOURS}) and ${groupBillingSubscriptions.dissolveRefusedAt} is null)`;
+    const failing = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is null and (${groupBillingSubscriptions.dissolveFailingSince} < now() - make_interval(hours => ${DISSOLVE_FAILING_LISTED_HOURS}) or (${groupBillingSubscriptions.dissolveFailingSince} is not null and ${groupBillingSubscriptions.currentPeriodEnd} < now() + make_interval(hours => ${DISSOLVE_FAILING_RENEWAL_HOURS}))))`;
     const since = sql`coalesce(case when ${refused} then ${groupBillingSubscriptions.dissolveRefusedAt} when ${failing} then ${groupBillingSubscriptions.dissolveFailingSince} end, ${groupBillingSubscriptions.reissueGaveUpAt})`;
     return db
         .select({

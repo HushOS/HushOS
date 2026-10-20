@@ -606,7 +606,12 @@ export async function cancelDissolvedPlan(groupId: string) {
         // Retried by pg-boss, but recorded: a failure Polar keeps repeating (a token without
         // write access, a revoked one) is listed for operators after a day, not retried unseen.
         if (!(error instanceof DissolveCancelBusyError))
-            await billingRepository.recordDissolveFailing(groupId).catch(() => {});
+            await billingRepository.recordDissolveFailing(groupId).catch((failure) =>
+                log.warn({
+                    message: 'Dissolved family’s failing plan not recorded',
+                    billing: { group: groupId, failure: String((failure as Error)?.name) },
+                }),
+            );
         throw error;
     }
 }
