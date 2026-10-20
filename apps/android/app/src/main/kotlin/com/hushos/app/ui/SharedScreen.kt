@@ -113,7 +113,8 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     var sending by remember { mutableStateOf<Opened?>(null) }
     var reload by remember { mutableStateOf(0) }
     suspend fun loadMine() { val rows = model.sharedByMe(); mineFailed = rows == null; if (rows != null) mine = rows }
-    LaunchedEffect(byMe, reload) { if (byMe) loadMine() }
+    // Read again when what this account shares was asked again (a restore, a change from another device) while it is open.
+    LaunchedEffect(byMe, reload, state.accessLoads) { if (byMe) loadMine() }
     // A link opened from elsewhere (retyped whole on a link that was cut short).
     LaunchedEffect(state.request) {
         val request = state.request ?: return@LaunchedEffect

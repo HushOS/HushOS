@@ -62,6 +62,10 @@ final class DriveStore {
     var myWorkspace: String?
     /* Who can open each of one's own shared items, from /shares/mine, as the web's access index. */
     var sharing: [String: SharingIndex.Entry] = [:]
+    /* Counts answers to `refreshSharing`: an open By me reads its list again when it moves. */
+    var sharingVersion = 0
+    /* When `sharing` is asked again: on start, a pull, the share sheet, every restore and any sync with changes. */
+    @ObservationIgnored private lazy var sharingLoads = SharingRefresh { [weak self] in await self?.loadSharing() }
     /* What the session-ended error says; the shell turns it into "You’ve been signed out". */
     static let sessionEnded = "Your session ended. Sign in again."
     /* A link the shell handed over, for the tab it opened to act on and clear. */
@@ -348,8 +352,19 @@ final class DriveStore {
         refreshKeptFolders()
     }
 
-    /* Pulls what changed since the cursor and redraws the lists it touched. */
-    func sync() async {
+    /*
+     * Pulls what changed since the cursor and redraws the lists it touched; then what this account
+     * shares follows any change in its drive (the server leaves trashed items out of it, and a change
+     * can't say it was a restore), and always after a restore (`restored`).
+     */
+    func sync(restored: Bool = false) async {
+        let touched = await pull()
+        guard error != Self.sessionEnded else { return }
+        Task { await sharingLoads.afterSync(touched: touched, restored: restored, inUse: sharingVersion > 0) }
+    }
+
+    /* The feed's part of `sync`: the ids it changed, nil when the server was not asked or didn't answer. */
+    private func pull() async -> Set<String>? {
         if let rotation { await rotation.value }
         // Nil: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
         let touched: Set<String>?
@@ -359,14 +374,14 @@ final class DriveStore {
             // A session that ended is the one failure the feed reports: the app checks why at once
             // (this phone may have been removed) and the polling stops.
             if endsSession(error) { self.error = Self.sessionEnded }
-            return
+            return nil
         }
-        guard let touched else { return }
+        guard let touched else { return nil }
         // The feed answered: whatever the last request said, the server is reachable now.
         offline = false
         // Reachable again after whom to trust failed to load: try once more, so "Couldn't check" clears by itself.
         if case .failed = trust { Task { await refreshSigners() } }
-        if touched.isEmpty { return }
+        if touched.isEmpty { return touched }
         // Changes from other devices reach the Files location too, not only this device's own writes.
         FilesDomain.signal()
         for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
@@ -377,6 +392,7 @@ final class DriveStore {
         catalogueVersion += 1
         refreshKept(touched)
         refreshKeptFolders()
+        return touched
     }
 
     private func reloadCatalogue() async {
@@ -386,10 +402,13 @@ final class DriveStore {
         catalogueReady = true
     }
 
-    /* Who can open what: asked on start, on a pull and after the share sheet closes; not on every live sync. */
-    func refreshSharing() async {
+    /* Who can open what: asked on start, on a pull, after the share sheet closes, and by `sync` (above). */
+    func refreshSharing() async { await sharingLoads.now() }
+
+    private func loadSharing() async {
         guard let index = try? await vault.sharingIndex() else { return }
         sharing = index.entries
+        sharingVersion += 1
     }
 
     /* One item by id, from the catalogue or anything listed this session. */
@@ -1175,8 +1194,8 @@ final class DriveStore {
      * again and Files told. Quiet: a failure here raises nothing and leaves the lists as the write
      * left them.
      */
-    private func settle(_ changed: Set<String>) async {
-        await sync()
+    private func settle(_ changed: Set<String>, restored: Bool = false) async {
+        await sync(restored: restored)
         for id in changed {
             if let children = try? await vault.children(of: id) {
                 folders[id] = children
@@ -1209,7 +1228,7 @@ final class DriveStore {
         let back = outcomes.compactMap { try? $0.get() }
         (folders, trash) = TrashBatch.afterUndo(back, folders: folders, trash: trash)
         for item in back { catalogue[item.id] = item }
-        if !back.isEmpty { catalogueVersion += 1; Task { await settle(Set(back.compactMap(\.node.parentId))) } }
+        if !back.isEmpty { catalogueVersion += 1; Task { await settle(Set(back.compactMap(\.node.parentId)), restored: true) } }
         let errors = outcomes.compactMap { outcome -> Error? in if case .failure(let error) = outcome { return error } else { return nil } }
         reportFailures(errors, single: items.count == 1)
         if errors.isEmpty {
@@ -1355,7 +1374,7 @@ final class DriveStore {
 
     func restore(_ item: Opened, parentTrashed: Bool) async {
         let folder = wasIn(item)
-        let ok = await onTrashRow(item) { _ = try await vault.restore(item, parentTrashed: parentTrashed) }
+        let ok = await onTrashRow(item, restores: true) { _ = try await vault.restore(item, parentTrashed: parentTrashed) }
         if ok, let parent = item.node.parentId, folders[parent] != nil { await refresh(folder: parent) }
         if ok { notify(parentTrashed ? "Restored “\(item.name)” to Files" : "Restored “\(item.name)”" + (folder.map { " to \($0)" } ?? "")) }
     }
@@ -1369,14 +1388,14 @@ final class DriveStore {
      * the server agrees, then the feed pulled so the catalogue the trash reads from
      * knows it too; without the pull the list came back as it was.
      */
-    private func onTrashRow(_ item: Opened, _ action: () async throws -> Void) async -> Bool {
+    private func onTrashRow(_ item: Opened, restores: Bool = false, _ action: () async throws -> Void) async -> Bool {
         guard !trashWorking.contains(item.id) else { return false }
         trashWorking.insert(item.id)
         let ok = await perform(in: nil, action)
         trashWorking.remove(item.id)
         if ok {
             trash.removeAll { $0.item.id == item.id }
-            await sync()
+            await sync(restored: restores)
             await refreshTrash()
         }
         return ok
@@ -1421,7 +1440,7 @@ final class DriveStore {
                 failed.append((entry, why))
             }
         }
-        await sync()
+        await sync(restored: !back.isEmpty)
         await refreshTrash()
         folders.removeAll()
         let restored = entries.count - failed.count

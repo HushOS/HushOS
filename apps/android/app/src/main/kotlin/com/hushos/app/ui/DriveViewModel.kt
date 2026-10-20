@@ -132,6 +132,8 @@ data class DriveState(
     val failedFolders: Set<String> = emptySet(),
     /* What this account shared, by node id; null until the server has said, so rows never guess. */
     val access: Map<String, Access>? = null,
+    /* Counts answers to `refreshAccess`: an open By me reads its list again when it moves. */
+    val accessLoads: Int = 0,
     /* A place a notice's action asked to open ("phone": On this phone); the shell goes there and clears it. */
     val request: String? = null,
     /* The list of what others shared could not be loaded (and nothing was loaded before). */
@@ -178,6 +180,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<DriveState> = _state
     private var vault: Vault? = null
     private val thumbnailTasks = HashSet<String>()
+    /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
+    private val sharingLoads = SharingRefresh { loadAccess() }
 
     private val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
     private val network = object : android.net.ConnectivityManager.NetworkCallback() {
@@ -611,14 +615,24 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         sync(quiet = true)
     }
 
-    private suspend fun sync(quiet: Boolean = false) {
+    /*
+     * `restored`: the sync follows a restore. What this account shares follows any change in its
+     * drive (the server leaves trashed items out of it, and a change can't say it was a restore),
+     * and always a restore; while no screen has asked for it yet, a change asks nothing.
+     */
+    private suspend fun sync(quiet: Boolean = false, restored: Boolean = false) {
         // Null: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
-        val touched = (if (quiet) quietly { it.sync() } else io { it.sync() }) ?: return
-        // The feed answered: whatever the last request said, the server is reachable now.
-        if (state.value.unreachable) _state.update { it.copy(unreachable = false) }
-        if (touched.isEmpty()) return
-        redraw(state.value.folders.filter { (id, children) -> id in touched || children.any { it.id in touched } }.keys)
-        refreshKept(touched)
+        val touched = if (quiet) quietly { it.sync() } else io { it.sync() }
+        if (touched != null) {
+            // The feed answered: whatever the last request said, the server is reachable now.
+            if (state.value.unreachable) _state.update { it.copy(unreachable = false) }
+            if (touched.isNotEmpty()) {
+                redraw(state.value.folders.filter { (id, children) -> id in touched || children.any { it.id in touched } }.keys)
+                refreshKept(touched)
+            }
+        }
+        if (state.value.gate != Gate.SIGNED_IN) return
+        viewModelScope.launch { sharingLoads.afterSync(touched, restored, inUse = state.value.access != null) }
     }
 
     private val refreshingKept = HashSet<String>()
@@ -733,9 +747,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * Who this account gave each item to, from its shares and live links, so rows
      * can say who can open them. Quiet: without it the rows only leave that out.
      */
-    fun refreshAccess() = viewModelScope.launch {
+    fun refreshAccess() = viewModelScope.launch { sharingLoads.now() }
+
+    private suspend fun loadAccess() {
         val now = java.time.Instant.now()
-        val mine = quietly { it.api.sharedByMe() } ?: return@launch
+        val mine = quietly { it.api.sharedByMe() } ?: return
         val (shares, links) = mine
         val people = shares.groupBy { it.second.id }.mapValues { (_, rows) ->
             rows.map { (share, _) -> firstName(share.granteeName, share.granteeEmail) to (share.role == "editor") }.distinctBy { it.first }
@@ -745,7 +761,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
         val open = links.filter { (link, _) -> link.expiresAt?.let { runCatching { java.time.Instant.parse(it).isAfter(now) }.getOrDefault(true) } ?: true }
             .groupingBy { it.second.id }.eachCount()
-        _state.update { it.copy(access = (people.keys + open.keys).associateWith { id -> Access(people[id].orEmpty(), open[id] ?: 0, ids[id].orEmpty()) }) }
+        _state.update { it.copy(access = (people.keys + open.keys).associateWith { id -> Access(people[id].orEmpty(), open[id] ?: 0, ids[id].orEmpty()) }, accessLoads = it.accessLoads + 1) }
     }
 
     private fun firstName(name: String, email: String) = name.trim().split(' ').firstOrNull { it.isNotEmpty() } ?: email.substringBefore('@')
@@ -1364,8 +1380,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * again, the system's view told, and kept folders of shares looked at. Quiet: a failure here
      * raises nothing and leaves the lists as the write left them.
      */
-    private suspend fun settle(folders: Set<String>) {
-        sync(quiet = true)
+    private suspend fun settle(folders: Set<String>, restored: Boolean = false) {
+        sync(quiet = true, restored = restored)
         for (folder in folders) quietly { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
         context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
         if (Offline.folders(context).any { it.shareRoot != null }) refreshKeptFolders(withShares = true)
@@ -1397,7 +1413,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
         val back = outcomes.mapNotNull { it.getOrNull() }
         _state.update { s -> afterUndo(s.folders, s.trash, back).let { (folders, trash) -> s.copy(folders = folders, trash = trash) } }
-        if (back.isNotEmpty()) viewModelScope.launch { settle(back.mapNotNull { it.node.parentId }.toSet()) }
+        if (back.isNotEmpty()) viewModelScope.launch { settle(back.mapNotNull { it.node.parentId }.toSet(), restored = true) }
         val errors = outcomes.mapNotNull { it.exceptionOrNull() }
         reportFailures(errors, single = moved.size == 1)
         if (errors.none { it is NotAuthenticated }) undoProblem(back.size, moved.size)?.let { notify(it) }
@@ -1531,6 +1547,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun restore(entry: TrashItem) = viewModelScope.launch {
         if (!onTrashRow(entry) { it.restore(entry) }) return@launch
+        // The feed now, so what this account shares (the server left the item out while it was in the trash) is asked again.
+        sync(quiet = true, restored = true)
         // Its folder still in the trash, it went to the top.
         notify("Restored “${entry.item.name}” to ${if (entry.parentTrashed) "Files" else entry.wasIn ?: "its folder"}")
         (if (entry.parentTrashed) state.value.rootId else entry.item.node.parentId)?.let { if (state.value.folders.containsKey(it)) refresh(it) }
@@ -1573,7 +1591,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { s -> s.copy(trashWorking = s.trashWorking - entry.item.id, trash = if (ok) s.trash.filter { it.item.id != entry.item.id } else s.trash) }
             if (ok) { back.add(entry.item.id); if (!home) moved.add(entry.item to entry.wasIn) } else failed.add(entry to why)
         }
-        sync()
+        sync(restored = back.isNotEmpty())
         refreshTrash().join()
         redraw(state.value.folders.keys)
         val restored = entries.size - failed.size

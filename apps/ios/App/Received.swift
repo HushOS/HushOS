@@ -60,6 +60,8 @@ struct SharedView: View {
                 Text(stopMessage)
             }
             .onChange(of: byMe) { _, _ in Task { await load() } }
+            // What this account shares was asked again (a restore, a change from another device): By me follows while open.
+            .onChange(of: store.sharingVersion) { _, _ in if byMe { Task { await load() } } }
             .onChange(of: store.route, initial: true) { _, link in
                 switch link {
                 case .shared(let mine):
