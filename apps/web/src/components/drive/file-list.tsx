@@ -14,7 +14,9 @@ import {
 import type { DriveNode } from '@hushos/drive/client';
 import { useHoldFirstPaint } from '@/components/drive/first-paint';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
+import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 /*
  * What Files and Trash share: how a list is selected, the thumbnail that carries
@@ -520,13 +522,27 @@ export function SelectionBar({
     );
 }
 
-/* One action in the selection bar: a label beside its icon where the bar has room, the icon alone where it has not. */
+/*
+ * One action in the selection bar: a label beside its icon where the bar has room, the icon
+ * alone where it has not, with a tooltip then (and only then) that names it.
+ *
+ * The tooltip is drawn in the page and placed against the button. The bar once used `title`,
+ * which the browser draws outside the page wherever it judges the pointer to be; on Move to
+ * Trash, turned `disabled` under a still pointer while it worked, it came up detached at the
+ * window's corner. So a button that can't act now is `aria-disabled`, never `disabled`: it keeps
+ * its pointer events, its focus and its tooltip, and its click does nothing. The tooltip lives
+ * inside the action, so it goes when the button does (the bar leaves once the items have gone).
+ */
 export function SelectionAction({
     icon: Icon,
     label,
     iconOnly = false,
     secondary = false,
+    disabled = false,
+    pending = false,
+    pendingLabel,
     className,
+    onClick,
     ...props
 }: {
     icon: LucideIcon;
@@ -535,30 +551,79 @@ export function SelectionAction({
     iconOnly?: boolean;
     /* Its label goes before the main actions' when the bar is short of room. */
     secondary?: boolean;
+    /* Working: a spinner in place of the icon, `pendingLabel` in place of the label, clicks ignored. */
+    pending?: boolean;
+    /* The label while it works, "Moving to Trash". Its width is kept from the start, so the bar never shifts. */
+    pendingLabel?: string;
 } & Omit<ComponentProps<'button'>, 'children'>) {
+    const [tip, setTip] = useState(false);
+    const labelRef = useRef<HTMLSpanElement>(null);
+    const inert = disabled || pending;
+    const shown = pending && pendingLabel ? pendingLabel : label;
     return (
-        <button
-            type="button"
-            aria-label={label}
-            title={label}
-            className={cn(
-                'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground disabled:cursor-default disabled:opacity-40 aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
-                className,
-            )}
-            {...props}
+        <Tooltip
+            open={tip}
+            // Only where the words are hidden (iconOnly, or sr-only for want of room): a tooltip
+            // repeating the label beside it is noise.
+            // Nor over the menu this button opened (More): both open above it.
+            onOpenChange={(open, details) =>
+                setTip(
+                    open &&
+                        (iconOnly || (labelRef.current?.offsetWidth ?? 0) <= 1) &&
+                        !(details.event?.target as Element | null)?.closest('[aria-expanded=true]'),
+                )
+            }
         >
-            <Icon className="size-[18px] shrink-0" strokeWidth={2} aria-hidden="true" />
-            {!iconOnly && (
-                <span
-                    className={cn(
-                        'group-data-[labels=none]/selection:sr-only',
-                        secondary && 'group-data-[labels=main]/selection:sr-only',
+            <TooltipTrigger
+                type="button"
+                aria-label={shown}
+                aria-disabled={inert || undefined}
+                aria-busy={pending || undefined}
+                data-pending={pending ? '' : undefined}
+                className={cn(
+                    'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
+                    // Working is not unavailable: it stays at full strength, the spinner says why it waits.
+                    disabled && !pending && 'opacity-40',
+                    className,
+                )}
+                onClick={(event) => {
+                    if (inert) {
+                        event.preventDefault();
+                        return;
+                    }
+                    onClick?.(event);
+                }}
+                {...props}
+            >
+                <span className="grid size-[18px] shrink-0 place-items-center" aria-hidden="true">
+                    {pending ? (
+                        <Spinner className="size-4" />
+                    ) : (
+                        <Icon className="size-[18px]" strokeWidth={2} />
                     )}
-                >
-                    {label}
                 </span>
-            )}
-        </button>
+                {!iconOnly && (
+                    <span
+                        ref={labelRef}
+                        className={cn(
+                            'grid whitespace-nowrap group-data-[labels=none]/selection:sr-only',
+                            secondary && 'group-data-[labels=main]/selection:sr-only',
+                        )}
+                    >
+                        {/* Both words hold the cell; only the current one shows. */}
+                        {pendingLabel && (
+                            <span aria-hidden="true" className="invisible col-start-1 row-start-1">
+                                {pendingLabel}
+                            </span>
+                        )}
+                        <span aria-hidden="true" className="col-start-1 row-start-1">
+                            {shown}
+                        </span>
+                    </span>
+                )}
+            </TooltipTrigger>
+            <TooltipContent sideOffset={8}>{shown}</TooltipContent>
+        </Tooltip>
     );
 }
 

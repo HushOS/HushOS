@@ -163,3 +163,90 @@ describe('the trash across pages', () => {
         expect(drive.parseTrashCursor(`1790320010367123.${randomUUID()}`)).not.toBeNull();
     });
 });
+
+/*
+ * The web app trashes a selection several items at a time. Every trash takes
+ * the workspace row's lock first (nextChangeSeq), so they run one after another
+ * whatever their order: none deadlocks, and each that moves takes its own change
+ * sequence number, so a device reading the feed sees every one. A trash that
+ * takes any other lock before that one (the node's, its parent's) can deadlock
+ * against the trash of a folder inside it, which the second test would catch.
+ */
+describe('trashing at once', () => {
+    async function folders(parentId: string, parentKeyEpoch: number, count: number) {
+        const made = [];
+        for (let i = 0; i < count; i++)
+            made.push({
+                id: randomUUID(),
+                parentId,
+                envelopes: {
+                    keyEpoch: await epoch(),
+                    parentKeyEpoch,
+                    keyEnvelope: randomBytes(72),
+                    metadataEnvelope: randomBytes(100),
+                },
+            });
+        const created = await signed.createFolders({
+            workspaceId: account.workspaceId,
+            userId: account.userId,
+            folders: made,
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        return made.map((folder) => ({ id: folder.id, keyEpoch: folder.envelopes.keyEpoch }));
+    }
+    async function workspaceSeq() {
+        const result = await db.execute<{ change_seq: string }>(
+            sql`select change_seq from workspaces where id = ${account.workspaceId}::uuid`,
+        );
+        return Number(result.rows[0]!.change_seq);
+    }
+    const trash = (nodeId: string) =>
+        drive.trashNode({ workspaceId: account.workspaceId, nodeId, writer: account.userId });
+
+    test('siblings trashed together each move, with change numbers one apart and none shared', async () => {
+        const siblings = await folders(rootId, rootEpoch, 16);
+        const before = await workspaceSeq();
+        const results = await Promise.all(siblings.map((folder) => trash(folder.id)));
+        expect(results.map((result) => result.status)).toEqual(siblings.map(() => 'ok'));
+        const seqs = results
+            .map((result) => (result.status === 'ok' ? result.node.changeSeq : null))
+            .sort((a, b) => a! - b!);
+        expect(seqs).toEqual(siblings.map((_, index) => before + index + 1));
+        expect(await workspaceSeq()).toBe(before + siblings.length);
+        const trashed = await drive.listTrash({ workspaceId: account.workspaceId, limit: 100 });
+        expect(trashed.items.map((item) => item.node.id).sort()).toEqual(
+            siblings.map((folder) => folder.id).sort(),
+        );
+    });
+
+    test('a folder and the folder inside it, trashed together, never deadlock and both end in the trash', async () => {
+        for (let round = 0; round < 12; round++) {
+            const [outer] = await folders(rootId, rootEpoch, 1);
+            const [inner] = await folders(outer!.id, outer!.keyEpoch, 1);
+            // Alternate which goes first, so both lock orders are tried.
+            const [first, second] = round % 2 ? [inner!, outer!] : [outer!, inner!];
+            const before = await workspaceSeq();
+            const [a, b] = await Promise.all([trash(first.id), trash(second.id)]);
+            const byId = new Map([
+                [first.id, a],
+                [second.id, b],
+            ]);
+            // The folder always moves. The one inside moves too unless the folder got there first,
+            // when it is already in the trash with it and is refused as such, changing nothing.
+            expect(byId.get(outer!.id)!.status).toBe('ok');
+            expect(['ok', 'trashed']).toContain(byId.get(inner!.id)!.status);
+            const oks = [a, b].filter((result) => result.status === 'ok');
+            const moved = oks.length;
+            // Each that moved has a change number of its own, after everything before the pair.
+            const seqs = oks.map((result) => (result.status === 'ok' ? result.node.changeSeq! : 0));
+            expect(new Set(seqs).size).toBe(seqs.length);
+            for (const seq of seqs) expect(seq).toBeGreaterThan(before);
+            const listed = await drive.listTrash({ workspaceId: account.workspaceId, limit: 100 });
+            const ids = listed.items.map((item) => item.node.id);
+            expect(ids).toContain(outer!.id);
+            expect(ids.includes(inner!.id)).toBe(moved === 2);
+            const chain = await db.transaction((tx) => drive.walk(tx, inner!.id));
+            expect(chain!.trashed).toBe(true);
+        }
+    });
+});

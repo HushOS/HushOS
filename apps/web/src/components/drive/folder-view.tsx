@@ -74,6 +74,9 @@ import {
     folderQueryOptions,
     formatWhen,
     invalidateFolders,
+    refreshFolders,
+    restoreNodes,
+    trashNodes,
     refuseWrite,
     sharedQueryOptions,
     sortNodesBy,
@@ -219,10 +222,19 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [table, setTable] = useState<HTMLTableElement | null>(null);
     const sortColumn = order.key === 'name' ? null : order.key;
     const sortHidden = useHiddenColumn(table, sortColumn);
-    const rows = useMemo(
-        () => (listing.data ? sortNodesBy(listing.data.children, order) : []),
-        [listing.data, order],
-    );
+    // Trashed from here, or put back by Undo: the list changes as each lands, ahead of the
+    // listing, until the one refresh after the batch has the listing say so itself.
+    const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+    const [back, setBack] = useState<ReadonlyMap<string, DriveNode>>(new Map());
+    const rows = useMemo(() => {
+        if (!listing.data) return [];
+        const listed = new Map(listing.data.children.map((node) => [node.id, node]));
+        for (const [id, node] of back) if (!listed.has(id)) listed.set(id, node);
+        return sortNodesBy(
+            [...listed.values()].filter((node) => !gone.has(node.id)),
+            order,
+        );
+    }, [listing.data, order, gone, back]);
     const ids = useMemo(() => rows.map((row) => row.id), [rows]);
     const dropRef = useRef<HTMLDivElement>(null);
     const mobile = useIsMobile();
@@ -379,76 +391,122 @@ export function FolderView({ folderId }: { folderId: string }) {
         const here = listing.data?.folder;
         downloadNodes(nodes, here?.parentId === null ? undefined : here?.name);
     }
-    /* Puts trashed items back where they were: the toast's Undo. */
-    async function undoTrash(nodes: DriveNode[]) {
-        let back = 0;
-        try {
-            for (const node of nodes) {
-                await clientFor(node.workspaceId).restore(node);
-                back++;
-            }
+    /*
+     * The toast's Undo: puts back what moved, a few at a time, each row returning as it
+     * lands. The toast itself says it is working, and then how it went.
+     */
+    async function undoTrash(nodes: DriveNode[], toastId: string) {
+        const one = nodes.length === 1;
+        toast.update(toastId, {
+            type: 'loading',
+            title: one ? `Putting “${nodes[0]!.name}” back` : `Putting ${nodes.length} items back`,
+            description: undefined,
+            actionProps: undefined,
+            timeout: 0,
+        });
+        const { back: returned, error } = await restoreNodes(nodes, (landed) => {
+            const ids = new Set(landed.map((node) => node.id));
+            setGone((current) => new Set([...current].filter((id) => !ids.has(id))));
+            setBack(
+                (current) =>
+                    new Map([...current, ...landed.map((node) => [node.id, node] as const)]),
+            );
+        });
+        if (returned.length === nodes.length) {
             cue('success');
-            toast.add({
+            toast.update(toastId, {
                 type: 'success',
-                title: back === 1 ? `“${nodes[0]!.name}” is back` : `${back} items are back`,
+                title: one ? `“${nodes[0]!.name}” is back` : `${returned.length} items are back`,
+                timeout: 3_500,
             });
-        } catch (error) {
+        } else {
             cue('error');
-            toast.add({
+            toast.update(toastId, {
                 type: 'error',
                 title:
-                    back === 0 ? 'Couldn’t bring it back' : `${back} of ${nodes.length} are back`,
+                    returned.length === 0
+                        ? 'Couldn’t bring it back'
+                        : `${returned.length} of ${nodes.length} are back`,
                 description: `${driveError(error)} The rest are still in Trash.`,
+                timeout: 8_000,
             });
-        } finally {
-            await invalidateFolders(queryClient, folderId);
         }
+        // One refresh for the whole batch, in the background; then the listing holds them itself.
+        const ids = new Set(returned.map((node) => node.id));
+        void refreshFolders(queryClient, folderId).then(() =>
+            setBack((current) => new Map([...current].filter(([id]) => !ids.has(id)))),
+        );
     }
     async function trash(nodes: DriveNode[]) {
         if (!nodes.length || trashing) return;
         setTrashing(true);
-        const done: DriveNode[] = [];
+        let went: string[] = [];
         try {
-            for (const node of nodes) done.push(await clientFor(node.workspaceId).trash(node));
-            cue('droplet');
-            toast.add({
-                type: 'success',
-                title:
-                    done.length === 1
-                        ? `“${nodes[0]!.name}” moved to Trash`
-                        : `${done.length} items moved to Trash`,
-                description:
-                    done.length === 1
-                        ? 'It stays in Trash for 30 days.'
-                        : 'They stay in Trash for 30 days.',
-                timeout: 8_000,
-                actionProps: { children: 'Undo', onClick: () => void undoTrash(done) },
+            const result = await trashNodes(nodes, (ids) => {
+                setGone((current) => new Set([...current, ...ids]));
+                setBack((current) => new Map([...current].filter(([id]) => !ids.includes(id))));
             });
-        } catch (error) {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title:
-                    done.length === 0
-                        ? 'Couldn’t move to Trash'
-                        : `${done.length} of ${nodes.length} moved to Trash`,
-                description: driveError(error),
-            });
+            const { moved, tried, error } = result;
+            went = result.gone;
+            if (moved.length === tried) {
+                cue('droplet');
+                const id = toast.add({
+                    type: 'success',
+                    title:
+                        nodes.length === 1
+                            ? `“${nodes[0]!.name}” moved to Trash`
+                            : `${nodes.length} items moved to Trash`,
+                    description:
+                        nodes.length === 1
+                            ? 'It stays in Trash for 30 days.'
+                            : 'They stay in Trash for 30 days.',
+                    timeout: 8_000,
+                    actionProps: { children: 'Undo', onClick: () => void undoTrash(moved, id) },
+                });
+            } else {
+                cue('error');
+                const id = toast.add({
+                    type: 'error',
+                    title:
+                        moved.length === 0
+                            ? 'Couldn’t move to Trash'
+                            : `${went.length} of ${nodes.length} moved to Trash`,
+                    description: driveError(error),
+                    ...(moved.length > 0 && {
+                        timeout: 8_000,
+                        actionProps: {
+                            children: 'Undo',
+                            onClick: () => void undoTrash(moved, id),
+                        },
+                    }),
+                });
+            }
         } finally {
             setTrashing(false);
-            await invalidateFolders(queryClient, folderId);
+            // One refresh for the whole batch, in the background: the rows have already gone,
+            // and once it lands the listing leaves them out itself.
+            const ids = new Set(went);
+            void refreshFolders(queryClient, folderId).then(() =>
+                setGone((current) => new Set([...current].filter((id) => !ids.has(id)))),
+            );
         }
     }
 
+    // Nothing else acts on a selection while part of it is on its way to the trash.
+    const idle = enabled && !trashing;
     useHotkey('Shift+N', () => canMakeFolder && setCreating(true), { enabled });
     useHotkey('F2', () => writable && selection.length === 1 && setRenaming(selection[0]!), {
-        enabled,
+        enabled: idle,
     });
-    useHotkey('M', () => writable && selection.length > 0 && setMoving(selection), { enabled });
-    useHotkey('C', () => writable && selection.length > 0 && setCopying(selection), { enabled });
-    useHotkey('D', () => download(selection), { enabled });
+    useHotkey('M', () => writable && selection.length > 0 && setMoving(selection), {
+        enabled: idle,
+    });
+    useHotkey('C', () => writable && selection.length > 0 && setCopying(selection), {
+        enabled: idle,
+    });
+    useHotkey('D', () => download(selection), { enabled: idle });
     useHotkey('I', toggleInfo, { enabled });
-    useHotkey('T', () => ownSelection && setTagging(selection), { enabled });
+    useHotkey('T', () => ownSelection && setTagging(selection), { enabled: idle });
     useHotkey('Backspace', () => writable && void trash(selection), { enabled });
     useHotkey('Delete', () => writable && void trash(selection), { enabled });
     // Enter on a focused link or button in the view is that control's, not the selection's.
@@ -532,22 +590,25 @@ export function FolderView({ folderId }: { folderId: string }) {
             actions: {
                 newFolder: () => canMakeFolder && setCreating(true),
                 upload: () => canAdd && picker.current?.pickFiles(),
-                rename: () => writable && selection.length === 1 && setRenaming(selection[0]!),
-                move: () => writable && selection.length > 0 && setMoving(selection),
-                copy: () => writable && selection.length > 0 && setCopying(selection),
+                // Like the hotkeys: nothing acts on a selection while part of it is being trashed.
+                rename: () =>
+                    !trashing && writable && selection.length === 1 && setRenaming(selection[0]!),
+                move: () => !trashing && writable && selection.length > 0 && setMoving(selection),
+                copy: () => !trashing && writable && selection.length > 0 && setCopying(selection),
                 versions: () =>
                     selection.length === 1 &&
                     selection[0]!.kind === 'file' &&
                     setVersionsOf(selection[0]!),
                 share: () => ownSelection && selection.length === 1 && setSharing(selection[0]!),
-                tags: () => ownSelection && setTagging(selection),
-                download: () => paletteHandlers.current.download(selection),
+                tags: () => !trashing && ownSelection && setTagging(selection),
+                download: () => !trashing && paletteHandlers.current.download(selection),
                 trash: () => writable && void paletteHandlers.current.trash(selection),
             },
         });
         // `setSelected` is a state setter and never changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [
+        trashing,
         rows,
         folder,
         selection,

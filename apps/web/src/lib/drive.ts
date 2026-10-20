@@ -22,6 +22,7 @@ import {
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 import { keyChangeWords } from '@/lib/key-change-words';
+import { restoreBatch, trashBatch } from '@/lib/trash-batch';
 import { createSpaceRegistry } from '@/lib/space-registry';
 
 /*
@@ -140,8 +141,14 @@ export const trashQueryOptions = queryOptions({
     retry: 1,
 });
 
-/* After a change: the folders that show the node, and the trash, are stale. */
-export async function invalidateFolders(queryClient: QueryClient, ...folderIds: (string | null)[]) {
+/* Recent, search and tags read the catalogue, which otherwise waits for the next feed poll. */
+function catchUpCatalogues() {
+    return Promise.all(
+        [driveClient, ...spaces.clients()].map((client) => client.catchUp().catch(() => {})),
+    ).then(() => {});
+}
+
+async function invalidateListings(queryClient: QueryClient, folderIds: (string | null)[]) {
     const ids = new Set(folderIds.filter((id): id is string => id !== null));
     await Promise.all([
         ...Array.from(ids, (id) =>
@@ -151,9 +158,35 @@ export async function invalidateFolders(queryClient: QueryClient, ...folderIds: 
         // Whatever changed a folder may have changed how much room is used: the sidebar meter.
         queryClient.invalidateQueries({ queryKey: ['auth', 'storage'] }),
     ]);
-    // Recent, search and tags read the catalogue, which otherwise waits for the next feed poll.
-    void driveClient.catchUp().catch(() => {});
-    for (const client of spaces.clients()) void client.catchUp().catch(() => {});
+}
+
+/* After a change: the folders that show the node, and the trash, are stale. */
+export async function invalidateFolders(queryClient: QueryClient, ...folderIds: (string | null)[]) {
+    await invalidateListings(queryClient, folderIds);
+    void catchUpCatalogues();
+}
+
+/*
+ * The same, settling only once the listings were fetched again and the catalogue
+ * has caught up: from then on they say themselves what a view was showing ahead
+ * of them (rows trashed or put back from it).
+ */
+export async function refreshFolders(queryClient: QueryClient, ...folderIds: (string | null)[]) {
+    await invalidateListings(queryClient, folderIds);
+    await catchUpCatalogues();
+}
+
+/* Trash and Undo for a selection, sent through the Drive client that holds each item (lib/trash-batch.ts). */
+const trashParts = {
+    trash: (node: DriveNode) => clientFor(node.workspaceId).trash(node),
+    restore: (node: DriveNode) => clientFor(node.workspaceId).restore(node),
+    ancestorsOf: (node: DriveNode) => clientFor(node.workspaceId).ancestorsOf(node.id),
+};
+export function trashNodes(nodes: DriveNode[], onMoved?: (ids: string[]) => void) {
+    return trashBatch(nodes, trashParts, onMoved);
+}
+export function restoreNodes(nodes: DriveNode[], onBack?: (back: DriveNode[]) => void) {
+    return restoreBatch(nodes, trashParts, onBack);
 }
 
 /* The name a copy takes among `taken`: the original, else "name (copy)", "name (copy 2)", and so on. */

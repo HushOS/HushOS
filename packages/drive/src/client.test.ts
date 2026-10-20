@@ -1003,3 +1003,113 @@ describe('a pull of the feed on its way when the client closes', () => {
         expect(applied).toEqual([1]);
     });
 });
+
+describe('trash and restore', () => {
+    /*
+     * Trashing and restoring in place change only where an item stands, so the
+     * client answers with the node it already opened and never asks the worker
+     * to open it again. A server's answer carrying other envelopes must not
+     * reach that node either: its metadata was decrypted from the old ones.
+     */
+    const held = {
+        ...node(A, ROOT),
+        metadata: { name: 'Report.pdf', mime: 'application/pdf', size: 10, modified: null },
+        name: 'Report.pdf',
+        content: null,
+        openError: null,
+        integrity: { metadata: 'verified', version: null },
+    } as Parameters<ReturnType<typeof createDriveClient>['trash']>[0];
+    const served = (trashedAt: string | null): NodeView => ({
+        ...node(A, ROOT),
+        keyEnvelope: 'swapped-key',
+        metadataEnvelope: 'swapped-metadata',
+        metadataVersion: 7,
+        trashedAt,
+        changeSeq: 42,
+    });
+
+    function setup() {
+        const calls: { operation: string; input: Record<string, unknown> }[] = [];
+        const rpc = (async (operation: string, input: Record<string, unknown>) => {
+            calls.push({ operation, input });
+            switch (operation) {
+                case 'driveRewrapNode':
+                    return { keyEnvelope: 'rewrapped' };
+                case 'driveOpenNodes':
+                    return {
+                        nodes: (input.nodes as unknown[]).map(() => ({
+                            metadata: {
+                                name: 'Report.pdf',
+                                mime: null,
+                                size: null,
+                                modified: null,
+                            },
+                        })),
+                    };
+                default:
+                    throw new Error(`unexpected ${operation}`);
+            }
+        }) as unknown as Rpc;
+        const api = {
+            trash: async () => ({ node: served('2026-10-20T10:00:00.000Z') }),
+            restore: async (
+                _ws: string,
+                _id: string,
+                toRoot?: { parentKeyEpoch: number; keyEnvelope: string },
+            ) => ({
+                node: toRoot
+                    ? {
+                          ...served(null),
+                          parentKeyEpoch: toRoot.parentKeyEpoch,
+                          keyEnvelope: toRoot.keyEnvelope,
+                      }
+                    : served(null),
+            }),
+        } as unknown as DriveApi;
+        const client = createDriveClient(rpc, api, {
+            verify: async (_ws, nodes) =>
+                nodes.map((n) => ({
+                    id: n.id,
+                    metadata: 'verified' as const,
+                    via: null,
+                    metadataRekey: null,
+                    versions: [],
+                })),
+        });
+        return { client, calls };
+    }
+
+    test('trashing asks nothing of the worker and keeps the opened node, taking only where it stands', async () => {
+        const { client, calls } = setup();
+        const trashed = await client.trash(held);
+        expect(calls.map((call) => call.operation)).toEqual([]);
+        expect(trashed).toEqual({
+            ...held,
+            trashedAt: '2026-10-20T10:00:00.000Z',
+            changeSeq: 42,
+        });
+    });
+
+    test('restoring in place asks nothing of the worker and keeps the opened node', async () => {
+        const { client, calls } = setup();
+        const restored = await client.restore({ ...held, trashedAt: '2026-10-20T10:00:00.000Z' });
+        expect(calls.map((call) => call.operation)).toEqual([]);
+        expect(restored).toEqual({ ...held, trashedAt: null, changeSeq: 42 });
+    });
+
+    test('restoring to the top folder opens the re-wrapped key under its new parent', async () => {
+        const { client, calls } = setup();
+        const top = { ...held, id: ROOT, parentId: null, keyEpoch: 5 };
+        const restored = await client.restore(
+            { ...held, parentId: 'trashed-folder', trashedAt: '2026-10-20T10:00:00.000Z' },
+            top,
+        );
+        expect(calls.map((call) => call.operation)).toEqual(['driveRewrapNode', 'driveOpenNodes']);
+        const [opened] = calls[1]!.input.nodes as {
+            parentKeyEpoch: number;
+            keyEnvelope: string;
+        }[];
+        expect(opened).toMatchObject({ parentKeyEpoch: 5, keyEnvelope: 'rewrapped' });
+        expect(restored).toMatchObject({ keyEnvelope: 'rewrapped', parentKeyEpoch: 5 });
+    });
+});
