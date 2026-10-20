@@ -53,7 +53,7 @@ A personal plan doesn't change this (owner decision 2): someone who pays for one
 `expires_at` is the plan's period end plus `BILLING_GRACE_DAYS` (3 by default), and it is null for a family that never had a plan (`createGroup` writes `quota_bytes = 0`, `expires_at = null`). So:
 
 - **An organizer who created a family but hasn't paid yet** keeps their own allowance, a paid personal plan included. Their files join the pool when the family's plan goes live, and then their personal plan ends with the unused days refunded (5.1).
-- **When a family plan ends** (cancelled, or a renewal never paid, past the grace days), every member's own files go back to their own allowance at the same moment, with no job to run: the rule is computed on every check. The family folders read an empty pool, as today.
+- **When a family plan ends** (cancelled at its period's end, or revoked; the grace days only cover a renewal that is late, not a plan that has ended), every member's own files go back to their own allowance at the same moment, with no job to run: the rule is computed on every check. The family folders read an empty pool, as today.
 - **Family folders always read the pool**, as today: a family without a live plan stores nothing in them.
 
 Nothing else adds to the pool while a person is pooled: not Free's 2 GB ("no stacking of free allowances", groups-design 3.5), not referral bonuses, not an operator's grant, not a personal plan in the moment before billing ends it. Those rows stay in `storage_entitlements` and count again the moment the person is no longer pooled.
