@@ -71,8 +71,10 @@ export const refuseWrite = spaces.refuseWrite;
 export const waitsForKeyChange = spaces.waitsForKeyChange;
 /* A family folder's family synced again while an upload waits out its key change. */
 export const refreshKeyChange = spaces.refreshKeyChange;
-/* After a lock: every family folder's client forgets what it opened, as the personal one does. */
+/* After a lock or a sign-out: every family folder's client forgets what it opened, as the personal one does. */
 export const closeSpaces = spaces.closeAll;
+/* What the families layer stops with them: its walks' retries (lib/spaces.ts). */
+export const onSpacesClosed = spaces.onClose;
 /* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
 export const forgetSpace = spaces.forget;
 export const pruneSpaces = spaces.prune;

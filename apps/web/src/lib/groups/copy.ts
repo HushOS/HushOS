@@ -222,6 +222,16 @@ export function errorCopy(error: unknown, ctx: CopyContext = {}) {
         if (error.status === 501) return 'Families aren’t available on this server.';
         return 'HushOS couldn’t do that just now. Try again in a moment.';
     }
+    // A request the client gave up on (lib/api-client.ts, 30 s), in each browser's words:
+    // "signal timed out" (Chromium), "The operation timed out." (Safari, Firefox). A DOMException,
+    // which some runtimes don't count as an Error.
+    const { name, message } = (error ?? {}) as { name?: unknown; message?: unknown };
+    if (
+        name === 'TimeoutError' ||
+        (typeof message === 'string' &&
+            /^(signal timed out|the operation timed out)/i.test(message))
+    )
+        return 'HushOS’s server took too long to answer.';
     if (!(error instanceof Error) || !error.message) return 'Something went wrong. Try again.';
     // A request outside the groups client (the worker's, a sync's) that never reached the server
     // fails with the browser's own words, as isNetworkFailure in lib/drive.ts reads them.

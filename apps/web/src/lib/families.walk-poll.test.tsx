@@ -84,6 +84,27 @@ test('refetching any number of times doesn’t double the wait: it follows the c
     hook.unmount();
 });
 
+test('a render just past a doubling point doesn’t push out the check the last sync set', async () => {
+    const hook = await mounted();
+    // Checks at 15 s and 45 s (the schedule), then one more at 50 s (a refocus, a change):
+    // the walk has run 50 s, so the next check is 60 s after it, at 110 s.
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(syncs.count).toBe(3);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await client.refetchQueries();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncs.count).toBe(4);
+    // At 106 s the walk has run past 105 s, where the wait doubles; the page renders then.
+    await vi.advanceTimersByTimeAsync(56_000);
+    hook.rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(syncs.count).toBe(4);
+    // The check still comes at 110 s, not 120 s after the render.
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(syncs.count).toBe(5);
+    hook.unmount();
+});
+
 test('the wait does grow with how long the walk has run, and stops at ten minutes', async () => {
     const hook = await mounted();
     // Checks at 15 s, then 30 s apart once 15 s have passed, 60 s once 45 s have, and so on.
