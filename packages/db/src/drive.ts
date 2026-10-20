@@ -4335,9 +4335,9 @@ export type Change =
  * Nodes changed since a cursor, in order, tombstones included; the cursor is
  * the last sequence examined. A node without a sequence is invisible here. The
  * page ends after any row, which is sound only because no two rows of a
- * workspace share a sequence (every write takes one per node it changes): a
- * page ending between two that did would have the next one, asking for what
- * follows, skip the other.
+ * workspace share a sequence (every write takes one per node it changes, and
+ * drive_nodes_change_idx is unique): a page ending between two that did would
+ * have the next one, asking for what follows, skip the other.
  */
 export async function listChanges(input: { workspaceId: string; since: number; limit?: number }) {
     const limit = Math.min(input.limit ?? 200, 500);

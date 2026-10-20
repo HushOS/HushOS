@@ -418,4 +418,47 @@ describe('versions', () => {
         expect(purged?.status).toBe('purged');
         expect(await drive.auditUsage(50)).toEqual([]);
     });
+
+    test('a clash on the change number fails loudly; only a clash on the id is "already exists"', async () => {
+        const { node } = await upload(1n * MiB);
+        const head = async () => (await drive.getPersonalWorkspace(account.userId))!.changeSeq;
+        const [root] = await db
+            .select({ changeSeq: driveNodes.changeSeq })
+            .from(driveNodes)
+            .where(eq(driveNodes.id, rootId));
+        // The next number is taken already (a bug the index catches).
+        const before = await head();
+        await db
+            .update(driveNodes)
+            .set({ changeSeq: before + 1 })
+            .where(eq(driveNodes.id, rootId));
+        await expect(copy(node, { id: rootId, keyEpoch: rootEpoch })).rejects.toMatchObject({
+            cause: { code: '23505', constraint: 'drive_nodes_change_idx' },
+        });
+        expect(await head()).toBe(before);
+        await db
+            .update(driveNodes)
+            .set({ changeSeq: root!.changeSeq })
+            .where(eq(driveNodes.id, rootId));
+        // A copy whose id exists is the conflict it always was.
+        const first = await copy(node, { id: rootId, keyEpoch: rootEpoch });
+        if (first.status !== 'ok') throw new Error(first.status);
+        const again = await copy(
+            node,
+            { id: rootId, keyEpoch: rootEpoch },
+            {
+                node: {
+                    id: first.node.id,
+                    parentId: rootId,
+                    envelopes: {
+                        keyEpoch: await epoch(),
+                        parentKeyEpoch: rootEpoch,
+                        keyEnvelope: keyEnvelope(),
+                        metadataEnvelope: metadataEnvelope(),
+                    },
+                },
+            },
+        );
+        expect(again.status).toBe('conflict');
+    });
 });

@@ -113,7 +113,9 @@ export const driveNodes = pgTable(
         index('drive_nodes_parent_idx')
             .on(table.parentId)
             .where(sql`trashed_at is null`),
-        index('drive_nodes_change_idx')
+        // Unique: a change feed pages on change_seq alone, so two rows sharing one would let a
+        // page end between them and the next page, asking for what follows, skip the other.
+        uniqueIndex('drive_nodes_change_idx')
             .on(table.workspaceId, table.changeSeq)
             .where(sql`change_seq is not null`),
         index('drive_nodes_trash_idx')
