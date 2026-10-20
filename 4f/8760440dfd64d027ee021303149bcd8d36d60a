@@ -1,0 +1,41 @@
+packages/drive/src/server.trash-batch.test.ts
+  s_c56e31c87cddde::t_a8cdec21546f00 1-119
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_11e13a9d58fa84 44,2774-2776
+apps/web/src/lib/trash-batch-request.test.ts
+  s_c56e31c87cddde::t_35a9283bbc38a8 1-54
+apps/web/src/lib/trash-batch-request.ts
+  s_c56e31c87cddde::t_4dfa99cf3c2cba 1-26
+apps/web/src/lib/trash-batch.test.ts
+  s_c56e31c87cddde::t_f4299bfaedc324 27,93-100,189,200,205,253-298
+apps/web/src/lib/trash-batch.ts
+  s_c56e31c87cddde::t_fd038bd8a36c62 156-163,176,179-206
+docs/drive-design.md
+  s_c56e31c87cddde::t_8885fb5a1ec2fa 430,942
+packages/db/src/drive.trash-batch.test.ts
+  s_c56e31c87cddde::t_3e576c7d11695e 14,345-347,358-359,361,365-366,368-553,601-610,622-661
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_3e535392325e10 107-108,145-149,1087-1137,1209-1215,1232-1254,1256,1261-1263,1265-1267,1269,1291,1348-1349,1351-1354,1366-1371,1417-1424,1435-1437,1439-1454,1456-1458,1460-1465,1471
+packages/drive/src/api.ts
+  s_c56e31c87cddde::t_0ea290afed0700 275-279
+packages/drive/src/protocol.ts
+  s_c56e31c87cddde::t_f5c7350f616c36 65-67,69
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_8625f76b03f2fa 778-792,802-804,833-835
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f8760440dfd64d027ee021303149bcd8d36d60a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
