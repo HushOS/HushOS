@@ -8,7 +8,8 @@ import type { JobPayloads, queues } from '../client';
  * (docs/groups-design.md 3.3). Their folders are not deleted here: dissolving
  * marks them deleted, and drive.purge (purgeDeletedAreas) deletes them with their
  * files, through the deletion outbox, as it does any deleted family folder. This
- * job retires the folders of a family dissolved before that (an earlier release),
+ * job retires the folders of a family dissolved without that (by a container of the
+ * previous release during a rollout) as of now, so they too get the whole retention,
  * and deletes a family's own records (member lists, key changes, memberships,
  * invitations) once none of its folders is left and no plan of it is live. Each
  * call is bounded; the run repeats until nothing more is done or the job's time is

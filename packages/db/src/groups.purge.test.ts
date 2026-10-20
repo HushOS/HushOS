@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, count, eq, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgTable } from 'drizzle-orm/pg-core';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import type { Head as ChainHead, ParsedRoster, ParsedSuccession } from './groups';
 import type { GroupRole } from './schema';
@@ -81,7 +82,7 @@ async function account() {
 }
 
 /* A family made by `creator` through createGroup, its first roster listing one area commitment. */
-async function createFamily(creator: Account) {
+async function createFamily(creator: Account, options: { commitments?: boolean } = {}) {
     const idSeed = seed();
     const groupId = scopedId('group', creator.userId, idSeed)!;
     const areaSeed = seed();
@@ -96,7 +97,7 @@ async function createFamily(creator: Account) {
         signerMlDsaPublicKey: randomBytes(1952),
         changes: [{ userId: creator.userId, status: 'active', roles: ORGANIZER }],
         dropsHolder: false,
-        commitments: [randomBytes(32)],
+        commitments: options.commitments === false ? [] : [randomBytes(32)],
     } as unknown as ParsedRoster;
     const firstHead = {
         rosterVersion: 1,
@@ -272,10 +273,10 @@ async function fileIn(workspaceId: string, userId: string) {
  * organizer leaves last, which dissolves it. The member keeps a file of their
  * own, as one moved out of the family folder would be.
  */
-async function dissolvedFamily() {
+async function dissolvedFamily(options: { commitments?: boolean } = {}) {
     const creator = await account();
     const member = await account();
-    const family = await createFamily(creator);
+    const family = await createFamily(creator, options);
     await admit(family, creator, member);
     await succeed(family.groupId, creator);
     const shared = await fileIn(family.areaId, creator.userId);
@@ -446,32 +447,77 @@ describe('purging a dissolved family', () => {
         expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(0);
     });
 
-    test('a family dissolved before folders were retired on dissolving has them retired as of then', async () => {
+    test('a family dissolved long ago, before folders were retired on dissolving, gets the whole retention from now', async () => {
         const family = await dissolvedFamily();
-        // As an earlier release (or one still serving in a rolling update) dissolved it.
+        // As an earlier release (or one still serving in a rolling update) dissolved it, 60 days ago.
         await db
             .update(s.workspaces)
             .set({ deletedAt: null })
             .where(eq(s.workspaces.groupId, family.groupId));
         await db
             .update(s.groups)
-            .set({ dissolvedAt: sql`now() - make_interval(days => ${DAYS + 1})` })
+            .set({ dissolvedAt: sql`now() - make_interval(days => 60)` })
             .where(eq(s.groups.id, family.groupId));
+        const before = await familyRows(family.groupId, [family.areaId]);
 
-        // One run retires the folder as of the dissolve, so it is already past the trash's retention.
-        expect(await groups.purgeDissolvedFamilies(DAYS)).toEqual({
-            retired: 1,
-            families: 0,
-            busy: 0,
-        });
+        // The run that retires its folder, and every run after it, keep everything for now.
+        expect(await purge()).toEqual({ ...NOTHING, retired: 1 });
+        expect(await purge()).toEqual(NOTHING);
+        expect(await familyRows(family.groupId, [family.areaId])).toEqual(before);
+        expect(await outbox(family.shared.objectId)).toBeNull();
         const [area] = await db
             .select()
             .from(s.workspaces)
             .where(eq(s.workspaces.id, family.areaId));
-        const [group] = await db.select().from(s.groups).where(eq(s.groups.id, family.groupId));
-        expect(area!.deletedAt).toEqual(group!.dissolvedAt);
+        expect(Date.now() - area!.deletedAt!.getTime()).toBeLessThan(60_000);
+
+        // 30 days after that, it goes.
+        await db
+            .update(s.workspaces)
+            .set({ deletedAt: sql`now() - make_interval(days => ${DAYS + 1})` })
+            .where(eq(s.workspaces.groupId, family.groupId));
         expect(await purge()).toEqual({ ...NOTHING, areas: 1, families: 1 });
         expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(0);
+    });
+
+    test('the release’s migration gives families dissolved before it 30 days from the upgrade', async () => {
+        // One with its folder still live, one whose only folder was deleted and purged long ago.
+        const withFolder = await dissolvedFamily();
+        const withoutFolder = await dissolvedFamily();
+        await db
+            .update(s.workspaces)
+            .set({ deletedAt: null })
+            .where(eq(s.workspaces.groupId, withFolder.groupId));
+        await db
+            .update(s.workspaces)
+            .set({ deletedAt: sql`now() - make_interval(days => 90)` })
+            .where(eq(s.workspaces.groupId, withoutFolder.groupId));
+        expect(await groups.purgeDeletedAreas(DAYS)).toBe(1);
+        await db
+            .update(s.groups)
+            .set({ dissolvedAt: sql`now() - make_interval(days => 60)` })
+            .where(inArray(s.groups.id, [withFolder.groupId, withoutFolder.groupId]));
+
+        // The migration's data statements, as the file holds them.
+        const migration = readFileSync(
+            new URL(
+                '../drizzle/20261020151204_group_billing_no_group_fk/migration.sql',
+                import.meta.url,
+            ),
+            'utf8',
+        );
+        const updates = migration
+            .split('--> statement-breakpoint')
+            .map((statement) => statement.replace(/^--.*$/gm, '').trim())
+            .filter((statement) => statement.startsWith('UPDATE'));
+        expect(updates).toHaveLength(2);
+        for (const statement of updates) await db.execute(sql.raw(statement));
+
+        expect(await purge()).toEqual(NOTHING);
+        expect(await purge()).toEqual(NOTHING);
+        expect((await familyRows(withFolder.groupId, [withFolder.areaId])).workspaces).toBe(1);
+        for (const family of [withFolder, withoutFolder])
+            expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(1);
     });
 
     test('another family, dissolved recently or live, and personal drives are untouched', async () => {
@@ -598,6 +644,7 @@ describe('purging a dissolved family', () => {
             cancelAtPeriodEnd: true,
             endedAt,
         });
+        // One subscription as a webhook delivers it (not a full reconcile, which ends what it omits).
         const apply = (subscription: ReturnType<typeof plan>) =>
             billing.applyGroupState({
                 groupId: family.groupId,
@@ -605,6 +652,7 @@ describe('purging a dissolved family', () => {
                 customerId: 'cus_family',
                 subscriptions: [subscription],
                 graceMs: 3 * 86_400_000,
+                complete: false,
             });
         expect(await apply(plan(null, 'active'))).toBe(true);
         await dissolvedAgo(family.groupId, DAYS + 1);
@@ -614,6 +662,11 @@ describe('purging a dissolved family', () => {
         const kept = await familyRows(family.groupId, [family.areaId]);
         expect([kept.groups, kept.rosters, kept.workspaces, kept.objects]).toEqual([1, 2, 0, 0]);
         expect(await outbox(family.shared.objectId)).not.toBeNull();
+        // Any state the plan can still become active from keeps them too.
+        for (const status of ['past_due', 'unpaid', 'incomplete', 'trialing']) {
+            expect(await apply(plan(null, status))).toBe(true);
+            expect([status, await purge()]).toEqual([status, NOTHING]);
+        }
 
         expect(await apply(plan(new Date(), 'canceled'))).toBe(true);
         expect(await purge()).toEqual({ ...NOTHING, families: 1 });
@@ -748,16 +801,85 @@ describe('a dissolved family during its retention', () => {
             );
         expect(await drive.isMember(creator.userId, family.areaId)).toBe(false);
 
-        // Purged, a resent creation of the same family is refused: its area commitment stays.
+        // Purged, a resent creation of the same family is refused: its id stays taken.
         await dissolvedAgo(family.groupId, DAYS + 1);
         expect((await purge()).families).toBe(1);
         expect(
             await rows(s.groupAreaCommitments, eq(s.groupAreaCommitments.groupId, family.groupId)),
         ).toBe(1);
-        expect(await groups.createGroup(family.input)).toEqual({
-            status: 'invalid',
-            reason: 'area-commitment',
-        });
+        expect(await groups.createGroup(family.input)).toEqual({ status: 'taken' });
         expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(0);
+    });
+
+    test('a purged family’s id stays taken by its billing records when its rosters listed no folder key', async () => {
+        const family = await dissolvedFamily({ commitments: false });
+        expect(
+            await billing.applyGroupState({
+                groupId: family.groupId,
+                provider: 'polar',
+                customerId: 'cus_family',
+                subscriptions: [],
+                graceMs: 3 * 86_400_000,
+            }),
+        ).toBe(true);
+        await dissolvedAgo(family.groupId, DAYS + 1);
+        expect((await purge()).families).toBe(1);
+        expect(
+            await rows(s.groupAreaCommitments, eq(s.groupAreaCommitments.groupId, family.groupId)),
+        ).toBe(0);
+        expect(await groups.createGroup(family.input)).toEqual({ status: 'taken' });
+        expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(0);
+    });
+});
+
+describe('a plan billing writes while the purge waits for the family', () => {
+    test('is seen: the family stays', async () => {
+        const family = await dissolvedFamily();
+        await dissolvedAgo(family.groupId, DAYS + 1);
+        expect(await groups.purgeDeletedAreas(DAYS)).toBe(1);
+
+        // A webhook's write as applyGroupState makes it: the group's row held while a live plan lands.
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => (release = resolve));
+        let taken!: () => void;
+        const holding = new Promise<void>((resolve) => (taken = resolve));
+        const webhook = db.transaction(async (tx) => {
+            await tx
+                .select({ id: s.groups.id })
+                .from(s.groups)
+                .where(eq(s.groups.id, family.groupId))
+                .for('no key update');
+            await tx.insert(s.groupBillingSubscriptions).values({
+                id: 'sub_resumed',
+                groupId: family.groupId,
+                provider: 'polar',
+                productId: 'prod_family',
+                productName: 'Family Plus (monthly)',
+                status: 'active',
+                recurringInterval: 'month',
+                units: 4,
+                includedMembers: 4,
+                quotaBytes: 100n,
+                currentPeriodStart: new Date(),
+                currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+            });
+            taken();
+            await released;
+        });
+        await holding;
+        const purging = groups.purgeDissolvedFamilies(DAYS);
+        // The purge chose the family before the plan was committed, and now waits for its row.
+        for (let tries = 0; ; tries++) {
+            const waiting = await db.execute<{ n: number }>(
+                sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`,
+            );
+            if (waiting.rows[0]!.n > 0) break;
+            if (tries > 200) throw new Error('the purge never waited for the family');
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        release();
+        await webhook;
+        expect(await purging).toEqual({ retired: 0, families: 0, busy: 0 });
+        expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(1);
     });
 });

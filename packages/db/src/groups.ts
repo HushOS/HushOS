@@ -41,10 +41,12 @@ import {
     groupKeySeals,
     groupKeySuccessions,
     groupMemberships,
+    groupBillingCustomers,
     groupBillingSubscriptions,
     groupRosters,
     groupStorage,
     groups,
+    personalPlanEndings,
     users,
     workspaceDocuments,
     workspaceKeys,
@@ -1279,6 +1281,17 @@ export async function createGroup(input: {
                     .from(groups)
                     .where(eq(groups.id, input.id));
                 if (landed) return refuse(await replay());
+                // A purged family's id stays taken: the commitments its rosters listed and its
+                // billing records outlive it, and a family made again under it would be read as
+                // the old one's by anything still naming the id.
+                const traced = await tx.execute<{ traced: boolean }>(sql`
+                    select exists (select 1 from ${groupAreaCommitments} where group_id = ${input.id})
+                        or exists (select 1 from ${groupBillingCustomers} where group_id = ${input.id})
+                        or exists (select 1 from ${groupBillingSubscriptions} where group_id = ${input.id})
+                        or exists (select 1 from ${personalPlanEndings} where group_id = ${input.id})
+                        as traced
+                `);
+                if (traced.rows[0]?.traced) return refuse({ status: 'taken' });
                 // Admissions elsewhere don't take that lock: group_memberships_one_family_idx
                 // refuses the loser of such a race, and `answering` reads it as in-family.
                 const family =
@@ -3396,12 +3409,18 @@ async function retireAllAreas(tx: Tx, groupId: string, at: Date | SQL) {
  *
  * - a family dissolved before folders were retired on dissolving (an earlier
  *   release, or one still serving during a rolling update) has its folders
- *   retired now, as of when it was dissolved;
+ *   retired now, as of now: whoever dissolved it was never told they would go,
+ *   so they get the whole retention from here, never a purge on the next run;
  * - a family dissolved more than `days` ago with no folder left (one an open
  *   or held report names is still there, so the family waits for the report)
- *   and, with billing on, no subscription still live (a payer may dissolve
- *   once the plan is set to cancel; billing projects a live plan onto the
- *   group's row until it ends) loses its row, which takes its memberships,
+ *   and, with billing on, no subscription that can still become active (any
+ *   not ended, canceled or expired incomplete: a payer may dissolve once the
+ *   plan is set to cancel, may take that back in Polar's portal, and billing
+ *   projects such a plan onto the group's row) loses its row. It is read again
+ *   in a statement of its own once the row is locked: applyGroupState writes a
+ *   subscription holding that row, so whatever it committed while this waited
+ *   is seen, and anything later waits for the delete and finds no group. The
+ *   row takes its memberships,
  *   rosters, successions, seals, invitations, departures, holds, chain cache
  *   and pool.
  *
@@ -3438,7 +3457,7 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
                 .for('update');
             if (!group?.dissolvedAt) return;
             await lockAreas(tx, id);
-            counts.retired += await retireAllAreas(tx, id, group.dissolvedAt);
+            counts.retired += await retireAllAreas(tx, id, new Date());
         });
 
     const purgeable = and(
@@ -3447,7 +3466,7 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
         sql`not exists (select 1 from ${workspaces} w where w.group_id = ${groups.id})`,
         billingEnv.BILLING_PROVIDER === 'none'
             ? undefined
-            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status in ('active', 'trialing', 'past_due'))`,
+            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in ('canceled', 'incomplete_expired'))`,
     );
     const due = await db
         .select({ id: groups.id })
@@ -3461,9 +3480,15 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
             const [group] = await tx
                 .select({ id: groups.id })
                 .from(groups)
-                .where(and(eq(groups.id, id), purgeable))
+                .where(eq(groups.id, id))
                 .for('update');
             if (!group) return;
+            // A statement of its own, after the lock: it sees what billing committed meanwhile.
+            const [still] = await tx
+                .select({ id: groups.id })
+                .from(groups)
+                .where(and(eq(groups.id, id), purgeable));
+            if (!still) return;
             await tx.delete(groups).where(eq(groups.id, id));
             counts.families++;
         });
