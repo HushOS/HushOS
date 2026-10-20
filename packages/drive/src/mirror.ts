@@ -19,19 +19,20 @@ export interface TreeMirror {
     cursor(workspaceId: string): Promise<number>;
     /*
      * Applies a page of the feed asked for from `from` and advances the cursor to
-     * `nextCursor`, atomically; true when it did. Every tab of this device writes here, each
-     * pulling from where its own catalogue stands, so changes at or below the cursor are
-     * already here or newer and are left alone: a slow page never puts back what another tab
-     * moved on or deleted. A page asked for from past the cursor is refused, since the mirror
-     * was cleared after it was asked for and the cursor would claim the gap: the caller pulls
-     * again from the cursor.
+     * `nextCursor`, atomically. Every tab of this device writes here, each pulling from where
+     * its own catalogue stands, so changes at or below the cursor are already here or newer
+     * and are left alone: a slow page never puts back what another tab moved on or deleted.
+     * A page asked for from past the cursor is refused (null), since the mirror was cleared
+     * after it was asked for and the cursor would claim the gap: the caller pulls again from
+     * no later than the cursor. Otherwise it returns the folders its tombstones took off,
+     * which may have left rows below them (see dropBelow).
      */
     apply(
         workspaceId: string,
         from: number,
         changes: NodeChange[],
         nextCursor: number,
-    ): Promise<boolean>;
+    ): Promise<string[] | null>;
     rows(workspaceId: string): Promise<NodeView[]>;
     /*
      * Drops every row below these nodes, which the feed tombstoned. The server purges a
@@ -39,9 +40,10 @@ export interface TreeMirror {
      * reach them meanwhile, so they leave now rather than linger as rows without a parent
      * (which a build would take for a missed page and start over), whether or not this
      * device held the folder itself (a pull from nothing gets the contents, then the folder's
-     * tombstone). One read of the whole workspace in a write transaction, once per pull that
-     * carried tombstones: while the server empties a deleted folder, that is once a poll in
-     * every visible tab.
+     * tombstone). One read of the whole workspace in a write transaction, so the caller asks
+     * only when something can be below: a folder `apply` took off, or a tombstoned node that
+     * rows of the same pull name as their parent. The fan-out's own tombstones, of rows already
+     * dropped, ask for nothing.
      */
     dropBelow(workspaceId: string, nodeIds: string[]): Promise<void>;
     /* The rows and the cursor they stand at, read together: another tab may clear in between. */
@@ -96,16 +98,22 @@ export function createIndexedDbMirror(name = 'hushos-drive-mirror'): TreeMirror 
             const current = (await cursors.get(workspaceId))?.cursor ?? 0;
             if (from > current) {
                 await tx.done;
-                return false;
+                return null;
             }
+            const folders: string[] = [];
             for (const change of changes) {
                 if (change.changeSeq <= current) continue;
                 if (change.kind === 'node') await nodes.put(change.node);
-                else if (change.kind === 'tombstone') await nodes.delete(change.nodeId);
+                else if (change.kind === 'tombstone') {
+                    const row = await nodes.get(change.nodeId);
+                    if (!row) continue;
+                    await nodes.delete(change.nodeId);
+                    if (row.kind === 'folder') folders.push(row.id);
+                }
             }
             await cursors.put({ workspaceId, cursor: Math.max(current, nextCursor) });
             await tx.done;
-            return true;
+            return folders;
         },
         async rows(workspaceId) {
             const db = await open();
@@ -161,14 +169,19 @@ export function createMemoryMirror(): TreeMirror {
         },
         async apply(workspaceId, from, changes, nextCursor) {
             const current = cursors.get(workspaceId) ?? 0;
-            if (from > current) return false;
+            if (from > current) return null;
+            const folders: string[] = [];
             for (const change of changes) {
                 if (change.changeSeq <= current) continue;
                 if (change.kind === 'node') nodes.set(change.node.id, change.node);
-                else if (change.kind === 'tombstone') nodes.delete(change.nodeId);
+                else if (change.kind === 'tombstone') {
+                    const row = nodes.get(change.nodeId);
+                    nodes.delete(change.nodeId);
+                    if (row?.kind === 'folder') folders.push(row.id);
+                }
             }
             cursors.set(workspaceId, Math.max(current, nextCursor));
-            return true;
+            return folders;
         },
         async rows(workspaceId) {
             return [...nodes.values()].filter((node) => node.workspaceId === workspaceId);

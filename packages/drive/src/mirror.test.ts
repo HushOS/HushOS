@@ -51,8 +51,8 @@ describe.each([
         await mirror.apply(WS, 3, [put('a', 'b', 4)], 4);
         await mirror.apply(WS, 4, [put('a', 'root', 5), gone('b', 'root', 6)], 6);
         // This tab's slower pages, fetched before either.
-        expect(await mirror.apply(WS, 3, [put('a', 'b', 4)], 4)).toBe(true);
-        expect(await mirror.apply(WS, 2, [put('b', 'root', 3, 'folder')], 3)).toBe(true);
+        expect(await mirror.apply(WS, 3, [put('a', 'b', 4)], 4)).toEqual([]);
+        expect(await mirror.apply(WS, 2, [put('b', 'root', 3, 'folder')], 3)).toEqual([]);
 
         expect(await held(mirror)).toEqual({ root: [null, 1], a: ['root', 5] });
         expect(await mirror.cursor(WS)).toBe(6);
@@ -63,7 +63,7 @@ describe.each([
         await mirror.apply(WS, 0, [put('root', null, 1, 'folder'), put('a', 'root', 2)], 2);
         // Another tab clears it and starts over; this tab's page, from 2, lands meanwhile.
         await mirror.clear(WS);
-        expect(await mirror.apply(WS, 2, [put('b', 'root', 3)], 3)).toBe(false);
+        expect(await mirror.apply(WS, 2, [put('b', 'root', 3)], 3)).toBeNull();
         expect(await mirror.cursor(WS)).toBe(0);
         // The other tab's pull goes on from where the mirror stands, and misses nothing.
         await mirror.apply(WS, 0, [put('root', null, 1, 'folder'), put('a', 'root', 2)], 2);
@@ -82,10 +82,20 @@ describe.each([
                 put('receipts', 'taxes', 3, 'folder'),
                 put('scan.pdf', 'receipts', 4),
                 put('notes.md', 'root', 5),
+                put('old.txt', 'root', 6),
             ],
-            5,
+            6,
         );
-        await mirror.apply(WS, 5, [gone('taxes', 'root', 6)], 6);
+        // The folder is named as one that can have left rows below it; a file, or a node
+        // already gone, is not.
+        expect(
+            await mirror.apply(
+                WS,
+                6,
+                [gone('taxes', 'root', 7), gone('old.txt', 'root', 8), gone('never', 'root', 9)],
+                9,
+            ),
+        ).toEqual(['taxes']);
         await mirror.dropBelow(WS, ['taxes']);
         expect(await held(mirror)).toEqual({ root: [null, 1], 'notes.md': ['root', 5] });
     });

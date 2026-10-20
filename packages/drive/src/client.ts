@@ -14,7 +14,7 @@ import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
-import { Catalogue, parentsFirst } from './catalogue';
+import { Catalogue, parentsBefore, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
 import {
     TAGS_DOCUMENT,
@@ -610,7 +610,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * and the cursor it reached. It starts at the mirror's cursor, or earlier at `from` (where
      * a catalogue stands that another tab's pull left behind); the mirror keeps only what is
      * past its own cursor, and refuses a page from past it (another tab cleared it meanwhile),
-     * after which the pull goes on from wherever the mirror now stands.
+     * after which the pull goes on from the mirror's cursor or its own, whichever is earlier:
+     * the clearing tab may have pulled past this one's start by then, and this catalogue still
+     * needs what lies in between.
      *
      * A start so old the server dropped tombstones since (`resync`, said of the first page)
      * means deletions went by unnamed: when the start was this tab's own, the mirror may still
@@ -636,7 +638,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             // What was inside a folder deleted forever leaves with it (TreeMirror.dropBelow), for
             // every page applied, even when a later one fails: no later pull names that deletion
             // again. A tab closed mid-pull leaves the rows until the server's fan-out tombstones them.
-            const tombstoned: string[] = [];
+            // Only where something can be below: a folder the mirror took off, or a tombstoned
+            // node that rows of this pull name as their parent (a pull from nothing gets a
+            // purged folder's contents, and the folder only as its tombstone).
+            const foldersDropped: string[] = [];
+            const tombstoned = new Set<string>();
+            const parents = new Set<string>();
             let failed = true;
             try {
                 for (;;) {
@@ -655,22 +662,35 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     first = false;
                     for (const change of page.changes)
                         if (change.kind === 'node') remember([change.node]);
-                    if (!(await mirror.apply(workspaceId, cursor, page.changes, page.nextCursor))) {
-                        cursor = await mirror.cursor(workspaceId);
+                    const dropped = await mirror.apply(
+                        workspaceId,
+                        cursor,
+                        page.changes,
+                        page.nextCursor,
+                    );
+                    if (dropped === null) {
+                        cursor = Math.min(cursor, await mirror.cursor(workspaceId));
                         if (cursor === 0 && from) refile = true;
                         continue;
                     }
                     arrived.push(...page.changes);
+                    foldersDropped.push(...dropped);
                     for (const change of page.changes)
-                        if (change.kind === 'tombstone') tombstoned.push(change.nodeId);
+                        if (change.kind === 'tombstone') tombstoned.add(change.nodeId);
+                        else if (change.kind === 'node' && change.node.parentId)
+                            parents.add(change.node.parentId);
                     cursor = page.nextCursor;
-                    setCatalogueState({ pulled: catalogueState.pulled + page.changes.length });
+                    // A poll that brought nothing redraws nothing.
+                    if (page.changes.length)
+                        setCatalogueState({ pulled: catalogueState.pulled + page.changes.length });
                     if (!page.hasMore) break;
                 }
                 failed = false;
             } finally {
-                if (generation === startedIn && tombstoned.length) {
-                    const sweep = mirror.dropBelow(workspaceId, tombstoned);
+                const below = new Set(foldersDropped);
+                for (const id of tombstoned) if (parents.has(id)) below.add(id);
+                if (generation === startedIn && below.size) {
+                    const sweep = mirror.dropBelow(workspaceId, [...below]);
                     await (failed ? sweep.catch(() => {}) : sweep);
                 }
             }
@@ -770,34 +790,45 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 return;
             }
             const { ordered } = parentsFirst(snapshot.rows);
-            // What changed is filed over what was held, so answers stay whole meanwhile.
+            // What changed is filed over what was held, so answers stay whole meanwhile; so is
+            // what would not open before, which may have been for want of its folder's key.
             const left = new Set(ordered.map((row) => row.id));
+            let removed = false;
             for (const node of catalogue.values())
-                if (!left.has(node.id)) catalogue.remove(node.id);
+                if (!left.has(node.id)) removed = catalogue.remove(node.id) || removed;
             await fileRows(
-                ordered.filter((row) => catalogue.get(row.id)?.changeSeq !== row.changeSeq),
+                ordered.filter((row) => {
+                    const held = catalogue.get(row.id);
+                    return !held || held.changeSeq !== row.changeSeq || held.openError !== null;
+                }),
                 startedIn,
             );
             if (generation !== startedIn) return;
-            catalogueCursor = cursor;
-            setCatalogueState({});
+            // The rows filed stand where the snapshot does, which may be past the pull.
+            catalogueCursor = snapshot.cursor;
+            // What was filed was heard as it opened; a removal alone is heard here.
+            if (removed) setCatalogueState({});
             return;
         }
     }
     async function fileArrived(arrived: NodeChange[], cursor: number, startedIn: number) {
         const changed: NodeView[] = [];
-        for (const change of arrived) {
+        const purged: string[] = [];
+        for (const change of arrived)
             if (change.kind === 'node') changed.push(change.node);
-            // What was inside a purged folder goes with it: its own tombstones come minutes later.
-            else if (change.kind === 'tombstone') catalogue.removeTree(change.nodeId);
-        }
-        // In change order. A new folder comes before what was made in it, unless it changed
-        // again after them (the feed holds each node once, at its latest change).
-        await fileRows(changed, startedIn);
+            else if (change.kind === 'tombstone') purged.push(change.nodeId);
+        // The feed holds each node once, at its latest change: a folder made, filled and then
+        // renamed comes after what is inside it, and the worker opens a child only under a
+        // parent it has opened. Folders made together share one change, in no set order.
+        await fileRows(parentsBefore(changed), startedIn);
         if (generation !== startedIn) return;
+        // What was inside a purged folder goes with it: its own tombstones come minutes later.
+        // After the changes are filed, so a child changed before its folder went goes too.
+        let removed = 0;
+        for (const id of purged) removed += catalogue.removeTree(id);
         catalogueCursor = Math.max(catalogueCursor, cursor);
-        // Removals change answers too; the listeners redraw from them.
-        setCatalogueState({});
+        // What was filed was heard as it opened; a removal alone is heard here.
+        if (removed) setCatalogueState({});
     }
 
     /*

@@ -82,6 +82,8 @@ function server() {
         file: (id: string, parentId: string) => write(id, parentId),
         trash: (id: string) => write(id, rows.get(id)!.node.parentId, { trashedAt: 'now' }),
         restore: (id: string) => write(id, rows.get(id)!.node.parentId, { trashedAt: null }),
+        rename: (id: string, name: string) =>
+            write(id, rows.get(id)!.node.parentId, { metadataEnvelope: name }),
         /* Delete forever: the node alone, as purgeNode does; its contents wait for the fan-out. */
         purge: (id: string) => {
             write(id, rows.get(id)!.node.parentId);
@@ -107,8 +109,35 @@ const rpc = (async (operation: string, input: { nodes: { metadataEnvelope: strin
     };
 }) as unknown as Rpc;
 
-function tab(api: DriveApi, mirror: TreeMirror) {
-    return createDriveClient(rpc, api, {
+/*
+ * A tab's own worker, as the real one: it opens a node only under a parent it opened before
+ * (the workspace key for the root), and `failOnce` names nodes whose first open fails.
+ */
+function worker(failOnce: string[] = []) {
+    const opened = new Set<string>();
+    const failing = new Set(failOnce);
+    return (async (
+        operation: string,
+        input: { nodes: { id: string; parentId: string; metadataEnvelope: string }[] },
+    ) => {
+        if (operation !== 'driveOpenNodes') throw new Error(`unexpected ${operation}`);
+        opening?.();
+        return {
+            nodes: input.nodes.map((n) => {
+                if ((n.parentId !== WS && !opened.has(n.parentId)) || failing.delete(n.id))
+                    return { id: n.id, error: 'This item could not be opened.' };
+                opened.add(n.id);
+                return {
+                    id: n.id,
+                    metadata: { name: n.metadataEnvelope, mime: null, size: null, modified: null },
+                };
+            }),
+        };
+    }) as unknown as Rpc;
+}
+
+function tab(api: DriveApi, mirror: TreeMirror, worker: Rpc = rpc) {
+    return createDriveClient(worker, api, {
         mirror,
         verify: async (_ws, nodes) =>
             nodes.map((n) => ({
@@ -427,5 +456,147 @@ describe('a pull that fails after a page carrying a deletion', () => {
         expect(ids).not.toContain('receipts');
         expect(ids).not.toContain('scan.pdf');
         expect(ids).not.toContain('return.pdf');
+    });
+});
+
+describe('a tab whose page is refused while the tab that cleared the mirror pulls past it', () => {
+    test('still files what changed between where it stood and where the mirror got to', async () => {
+        const s = drive();
+        const base = createMemoryMirror();
+        // This tab's page is on its way when another tab clears the mirror to start over, and
+        // that tab's pull lands between this one's refusal and its look at the mirror's cursor.
+        let race: 'clear' | 'pull' | null = null;
+        const other = tab(s.api, base);
+        const mirror: TreeMirror = {
+            ...base,
+            apply: async (ws, from, changes, next) => {
+                const applied = await base.apply(ws, from, changes, next);
+                if (applied === null && race === 'pull') {
+                    race = null;
+                    await other.buildCatalogue(WS);
+                }
+                return applied;
+            },
+        };
+        const client = tab(s.api, mirror);
+        await client.buildCatalogue(WS);
+        const changes = s.api.changes.bind(s.api);
+        s.api.changes = async (ws, since, limit) => {
+            const page = await changes(ws, since, limit);
+            if (race === 'clear') {
+                race = 'pull';
+                await base.clear(WS);
+            }
+            return page;
+        };
+        s.trash('notes.md');
+        s.purge('notes.md');
+        s.file('budget.xlsx', 'root');
+        race = 'clear';
+        await client.catchUp();
+
+        expect(race).toBeNull();
+        expect(recentIds(client)).toEqual(['budget.xlsx']);
+        expect(client.search('notes')).toEqual([]);
+    });
+});
+
+const named = (client: ReturnType<typeof tab>) =>
+    client
+        .recent(50)
+        .map((node) => [node.id, node.name])
+        .sort(([a], [b]) => (a! < b! ? -1 : 1));
+
+describe('a folder made, filled and renamed while a tab was hidden', () => {
+    test('opens in that tab with everything inside it readable', async () => {
+        const s = drive();
+        const mirror = createMemoryMirror();
+        const visible = tab(s.api, mirror, worker());
+        const hidden = tab(s.api, mirror, worker());
+        await visible.buildCatalogue(WS);
+        await hidden.buildCatalogue(WS);
+
+        s.folder('trip', 'root');
+        s.file('ticket.pdf', 'trip');
+        s.file('hotel.pdf', 'trip');
+        await visible.catchUp();
+        // The feed now holds the folder after its files.
+        s.rename('trip', 'Trip 2026');
+        await visible.catchUp();
+        await hidden.catchUp();
+
+        const expected = [
+            ['hotel.pdf', 'hotel.pdf'],
+            ['notes.md', 'notes.md'],
+            ['ticket.pdf', 'ticket.pdf'],
+            ['trip', 'Trip 2026'],
+        ];
+        expect(named(visible)).toEqual(expected);
+        expect(named(hidden)).toEqual(expected);
+    });
+
+    test('an item that would not open is opened again when the tab refiles', async () => {
+        const s = drive();
+        s.file('lease.pdf', 'root');
+        const mirror = createMemoryMirror();
+        const awake = tab(s.api, mirror, worker());
+        const asleep = tab(s.api, mirror, worker(['lease.pdf']));
+        await awake.buildCatalogue(WS);
+        await asleep.buildCatalogue(WS);
+        expect(asleep.search('unreadable').map((hit) => hit.node.id)).toEqual(['lease.pdf']);
+
+        // The sleeping tab slept past an expired tombstone, so it refiles from the mirror.
+        s.trash('notes.md');
+        s.purge('notes.md');
+        await awake.catchUp();
+        s.expire('notes.md');
+        await asleep.catchUp();
+
+        expect(named(asleep)).toEqual([['lease.pdf', 'lease.pdf']]);
+    });
+});
+
+describe('the server emptying a folder already deleted here', () => {
+    test('never reads the whole mirror again for the tombstones of rows already gone', async () => {
+        const s = drive();
+        const base = createMemoryMirror();
+        // Each sweep reads every row of the workspace in a write transaction.
+        let sweeps = 0;
+        const mirror: TreeMirror = {
+            ...base,
+            dropBelow: (ws, ids) => {
+                sweeps++;
+                return base.dropBelow(ws, ids);
+            },
+        };
+        const client = tab(s.api, mirror);
+        await client.buildCatalogue(WS);
+        s.purge('taxes');
+        await client.catchUp();
+        expect(sweeps).toBe(1);
+
+        // The fan-out, a level at a time.
+        s.purge('receipts');
+        s.purge('return.pdf');
+        await client.catchUp();
+        s.purge('scan.pdf');
+        await client.catchUp();
+
+        expect(sweeps).toBe(1);
+        expect((await base.rows(WS)).map((row) => row.id).sort()).toEqual(['notes.md', 'root']);
+    });
+});
+
+describe('a folder changed just before what held it was deleted forever', () => {
+    test('goes with it, though both arrive in one pull', async () => {
+        const s = drive();
+        const client = tab(s.api, createMemoryMirror());
+        await client.buildCatalogue(WS);
+        s.rename('receipts', 'Receipts 2025');
+        s.purge('taxes');
+        await client.catchUp();
+
+        expect(client.localListing('receipts')).toBeNull();
+        expect(client.localListing('taxes')).toBeNull();
     });
 });

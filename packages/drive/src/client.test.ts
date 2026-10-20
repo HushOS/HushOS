@@ -956,7 +956,7 @@ describe('a pull of the feed on its way when the client closes', () => {
             apply: async (_ws, _from, _changes, next) => {
                 applied.push(next);
                 cursor = next;
-                return true;
+                return [];
             },
             rows: async () => [],
             snapshot: async () => ({ cursor, rows: [] }),

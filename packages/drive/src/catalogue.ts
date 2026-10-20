@@ -113,30 +113,35 @@ export class Catalogue {
         return this.tagsByNode.get(nodeId) ?? [];
     }
 
+    /* True when the node was here. */
     remove(id: string) {
         const previous = this.nodes.get(id);
-        if (!previous) return;
+        if (!previous) return false;
         this.nodes.delete(id);
         if (previous.parentId) {
             const siblings = this.children.get(previous.parentId);
             siblings?.delete(id);
             if (siblings?.size === 0) this.children.delete(previous.parentId);
         }
+        return true;
     }
 
     /*
      * A purged node and everything below it. The server tombstones what was inside a purged
      * folder only when its background fan-out reaches it, minutes later, and until then
      * those rows would hang here without a parent: unreachable, yet live by their own word.
+     * Returns how many nodes it removed.
      */
     removeTree(id: string) {
         const ids = [id];
         for (let index = 0; index < ids.length; index++)
             for (const child of this.children.get(ids[index]!) ?? []) ids.push(child);
+        let removed = 0;
         for (const each of ids) {
-            this.remove(each);
+            if (this.remove(each)) removed++;
             this.children.delete(each);
         }
+        return removed;
     }
 
     /* Everything, keys and tags alike: what a lock calls for. */
@@ -322,4 +327,28 @@ export function parentsFirst(rows: NodeView[]) {
     }
     const orphans = [...byParent.values()].flat();
     return { ordered, orphans };
+}
+
+/*
+ * Orders a batch of changes so a node comes after its parent whenever the parent is in the
+ * batch too, keeping change order otherwise; what is not in the batch is taken as opened.
+ */
+export function parentsBefore(rows: NodeView[]) {
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const placed = new Set<string>();
+    const ordered: NodeView[] = [];
+    for (const row of rows) {
+        // Up the chain to the first ancestor placed or outside the batch, then back down.
+        const chain: NodeView[] = [];
+        for (
+            let at: NodeView | undefined = row;
+            at && !placed.has(at.id);
+            at = at.parentId === null ? undefined : byId.get(at.parentId)
+        ) {
+            placed.add(at.id);
+            chain.push(at);
+        }
+        for (let index = chain.length - 1; index >= 0; index--) ordered.push(chain[index]!);
+    }
+    return ordered;
 }
