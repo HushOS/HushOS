@@ -53,29 +53,33 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
 }
 
 class TrashSteps(
-    /* The whole batch in one call (Vault.trashMany): one outcome per item, in order. */
-    val send: suspend (List<Opened>) -> List<Result<Unit>>,
-    /* Takes the moved rows off every list, the moment the server has agreed to all of them. */
-    val drop: (moved: List<Opened>) -> Unit,
-    /* The notice; `undo` is exactly what moved, and empty when nothing did (no Undo then). */
-    val announce: (text: String, undo: List<Opened>) -> Unit,
+    /*
+     * The whole batch in one call (Vault.trashMany): one outcome per item, in order, and `moved`
+     * told of each item the moment the server confirms it.
+     */
+    val send: suspend (items: List<Opened>, moved: (Opened) -> Unit) -> List<Result<Unit>>,
+    /* Takes one confirmed row off every list, as soon as the server confirms it. */
+    val drop: (Opened) -> Unit,
+    /* The notice; `undo` brings back exactly what moved, and is null when nothing did. */
+    val announce: (text: String, undo: (() -> Unit)?) -> Unit,
+    /* What the notice's Undo runs, with exactly the items that moved. */
+    val restore: (moved: List<Opened>) -> Unit,
     /* The feed, the listings and the system's view, once for the batch and in the background. */
     val settle: (folders: Set<String>) -> Unit,
 )
 
 /*
- * Move to Trash for one item or many: the batch sent, then, in this order, the rows off the lists,
- * the notice, and one follow-up that runs on its own. A follow-up that fails leaves the lists as
- * they are: the moved rows were taken off from the server's answers, not from a listing.
+ * Move to Trash for one item or many: each row leaves the lists as the server confirms it; after
+ * the last answer come the notice and one follow-up that runs on its own. A follow-up that fails
+ * leaves the lists as they are: the rows were taken off from the server's answers, not from a listing.
  */
 suspend fun trashMany(items: List<Opened>, steps: TrashSteps): TrashResult {
-    val outcomes = steps.send(items)
+    val outcomes = steps.send(items) { steps.drop(it) }
     check(outcomes.size == items.size) { "One outcome per item" }
     val moved = items.filterIndexed { index, _ -> outcomes[index].isSuccess }
     val failed = items.mapIndexedNotNull { index, item -> outcomes[index].exceptionOrNull()?.let { item to it } }
     val result = TrashResult(items, moved, failed)
-    if (moved.isNotEmpty()) steps.drop(moved)
-    result.notice()?.let { steps.announce(it, moved) }
+    result.notice()?.let { text -> steps.announce(text, if (moved.isEmpty()) null else ({ steps.restore(moved) })) }
     if (moved.isNotEmpty()) steps.settle(result.folders)
     return result
 }

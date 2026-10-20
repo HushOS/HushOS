@@ -14,10 +14,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /*
- * Move to Trash for many: only what the server moved is counted, offered back and taken off the
- * lists; the batch reaches the data layer in one call (Vault.trashMany, the seam a batch route
- * replaces); and the follow-up (feed, listings, the system's view) runs once for the batch, after
- * the rows are gone and the notice is up.
+ * Move to Trash for many: only what the server moved is counted, offered back by the notice's
+ * Undo and taken off the lists, each row as its request is confirmed; the batch reaches the data
+ * layer in one call (Vault.trashMany, the seam a batch route replaces); and the follow-up (feed,
+ * listings, the system's view) runs once for the batch, after the last answer and the notice.
  */
 class TrashBatchTest {
     private fun item(id: String, parent: String = "work") = Opened(
@@ -31,15 +31,24 @@ class TrashBatchTest {
     private class Recorder {
         val events = ArrayList<String>()
         val batches = ArrayList<List<String>>()
-        val dropped = ArrayList<List<String>>()
-        val notices = ArrayList<Pair<String, List<String>>>()
+        val dropped = ArrayList<String>()
+        /* Each notice's text, and what tapping its Undo restores (null: the notice has no Undo). */
+        val notices = ArrayList<Pair<String, List<String>?>>()
         val settled = ArrayList<Set<String>>()
+        private var restored: List<String>? = null
 
         /* `send` answers for one item, as the server would; the batch goes through the data layer's sequencing. */
         fun steps(send: (Opened) -> Unit) = TrashSteps(
-            send = { batch -> batches.add(batch.map { it.id }); oneAfterAnother(batch) { send(it); events.add("sent ${it.id}") } },
-            drop = { moved -> events.add("drop"); dropped.add(moved.map { it.id }) },
-            announce = { text, undo -> events.add("announce"); notices.add(text to undo.map { it.id }) },
+            send = { batch, moved -> batches.add(batch.map { it.id }); oneAfterAnother(batch) { send(it); events.add("sent ${it.id}"); moved(it) } },
+            drop = { item -> events.add("drop ${item.id}"); dropped.add(item.id) },
+            announce = { text, undo ->
+                events.add("announce")
+                // Tap Undo at once: what reaches `restore` is what the person gets back.
+                restored = null
+                undo?.invoke()
+                notices.add(text to if (undo == null) null else restored)
+            },
+            restore = { moved -> restored = moved.map { it.id } },
             settle = { folders -> events.add("settle"); settled.add(folders) },
         )
     }
@@ -62,18 +71,17 @@ class TrashBatchTest {
         trashMany(thirteen, recorder.steps(failsSome))
         assertEquals(thirteen.map { it.id } - failing, recorder.notices.single().second)
         // Rows that stayed are not taken off the lists either.
-        assertEquals(thirteen.map { it.id } - failing, recorder.dropped.single())
+        assertEquals(thirteen.map { it.id } - failing, recorder.dropped)
     }
 
     @Test
-    fun theFollowUpRunsOnceAfterEveryRequestNotOncePerItem() = runBlocking {
+    fun eachRowLeavesAsItIsConfirmedAndTheFollowUpRunsOnceAtTheEnd() = runBlocking {
         val recorder = Recorder()
         trashMany(thirteen, recorder.steps { })
         assertEquals(listOf(setOf("work", "photos")), recorder.settled)
-        // Every request answered, then the rows go, then the notice, then the follow-up.
-        val after = recorder.events.drop(13)
-        assertTrue(recorder.events.take(13).all { it.startsWith("sent ") })
-        assertEquals(listOf("drop", "announce", "settle"), after)
+        // Each row goes right after its own answer; the notice and one follow-up come after the last.
+        val expected = thirteen.flatMap { listOf("sent ${it.id}", "drop ${it.id}") } + listOf("announce", "settle")
+        assertEquals(expected, recorder.events)
     }
 
     @Test
@@ -106,7 +114,7 @@ class TrashBatchTest {
     fun nothingMovedOfManySaysSoWithNoUndoAndNoFollowUp() = runBlocking {
         val recorder = Recorder()
         trashMany(thirteen, recorder.steps { throw Unreachable() })
-        assertEquals("Couldn’t move to Trash. You’re offline. Try again once you’re connected." to emptyList<String>(), recorder.notices.single())
+        assertEquals("Couldn’t move to Trash. You’re offline. Try again once you’re connected." to null, recorder.notices.single())
         assertTrue(recorder.dropped.isEmpty() && recorder.settled.isEmpty())
     }
 

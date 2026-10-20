@@ -192,7 +192,10 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selecting by rememberSaveable { mutableStateOf(false) }
-    val clearSelection = { picked = emptySet(); selecting = false }
+    // A Move to Trash under way keeps its selection and the bar, pending, until the last request answers.
+    var trashing by remember { mutableStateOf(false) }
+    val trashScope = rememberCoroutineScope()
+    val clearSelection = { if (!trashing) { picked = emptySet(); selecting = false } }
     var movingMany by remember { mutableStateOf(false) }
     var sendingMany by remember { mutableStateOf<List<Opened>?>(null) }
     var taggingMany by remember { mutableStateOf<List<Opened>?>(null) }
@@ -248,17 +251,27 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             if (selecting) {
                 // The contextual bar: the same actions, in the same order, as iOS and the web.
                 TopAppBar(
-                    title = { Text("${picked.size} selected") },
-                    navigationIcon = { IconButton(onClick = clearSelection) { Icon(Icons.Outlined.Close, "Clear selection") } },
+                    title = { Text(if (trashing) "Moving to Trash" else "${picked.size} selected") },
+                    navigationIcon = { IconButton(enabled = !trashing, onClick = clearSelection) { Icon(Icons.Outlined.Close, "Clear selection") } },
                     actions = {
                         val one = chosen.singleOrNull()
                         // Each icon says what it does, aloud and on a long press.
-                        if (owner == Owner.ME) Labelled("Share") { IconButton(enabled = one != null, onClick = { sharing = one }) { Icon(Icons.Outlined.Share, "Share") } }
-                        if (owner != Owner.VIEW) Labelled("Move") { IconButton(enabled = chosen.isNotEmpty(), onClick = { movingMany = true }) { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, "Move") } }
-                        Labelled("Copy") { IconButton(enabled = chosen.isNotEmpty(), onClick = { /* The paste bar is the confirmation: no notice over it. */ model.copy(chosen); clearSelection() }) { Icon(Icons.Outlined.ContentCopy, "Copy") } }
-                        if (owner != Owner.VIEW) Labelled("Move to Trash") { IconButton(enabled = chosen.isNotEmpty(), onClick = { model.trashAll(chosen); clearSelection() }) { Icon(Icons.Outlined.Delete, "Move to Trash") } }
+                        if (owner == Owner.ME) Labelled("Share") { IconButton(enabled = one != null && !trashing, onClick = { sharing = one }) { Icon(Icons.Outlined.Share, "Share") } }
+                        if (owner != Owner.VIEW) Labelled("Move") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { movingMany = true }) { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, "Move") } }
+                        Labelled("Copy") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { /* The paste bar is the confirmation: no notice over it. */ model.copy(chosen); clearSelection() }) { Icon(Icons.Outlined.ContentCopy, "Copy") } }
+                        // While it runs, the same slot holds a ring the icon's size, so nothing in the bar moves.
+                        if (owner != Owner.VIEW) Labelled(if (trashing) "Moving to Trash" else "Move to Trash") {
+                            IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = {
+                                trashing = true
+                                val batch = model.trashAll(chosen)
+                                trashScope.launch { batch.join(); trashing = false; clearSelection() }
+                            }) {
+                                if (trashing) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Outlined.Delete, "Move to Trash")
+                            }
+                        }
                         Box {
-                            IconButton(onClick = { selectMenu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
+                            IconButton(enabled = !trashing, onClick = { selectMenu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                             DropdownMenu(expanded = selectMenu, onDismissRequest = { selectMenu = false }, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu) {
                                 // Several files go out together; folders can't be sent.
                                 DropdownMenuItem(text = { Text("Send a copy") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Send, null) }, enabled = chosen.isNotEmpty() && chosen.none { it.isFolder },

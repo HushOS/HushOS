@@ -1160,10 +1160,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * Move to Trash for many, one outcome per id in order: the one place a batch reaches the
-     * server. One request each, one after another, until the server takes a batch in one request.
+     * Move to Trash for many, one outcome per id in order, `moved` told of each id as the server
+     * confirms it: the one place a batch reaches the server. One request each, one after another,
+     * until the server takes a batch in one request.
      */
-    fun trashMany(ids: List<String>): List<Result<Unit>> = oneAfterAnother(ids) { trash(it) }
+    fun trashMany(ids: List<String>, moved: (String) -> Unit = {}): List<Result<Unit>> = oneAfterAnother(ids) { trash(it); moved(it) }
 
     fun restore(entry: TrashItem): Opened {
         val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)

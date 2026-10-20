@@ -1318,9 +1318,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun trashAll(items: List<Opened>) = viewModelScope.launch { trashBatch(items) }
 
     /*
-     * Move to Trash, one item or many (TrashBatch.kt): the batch goes through Vault.trashMany; then
-     * the moved rows leave every list, the notice says what moved with an Undo for exactly that, and the
-     * feed, the listings, the system's view and kept folders follow once, in the background.
+     * Move to Trash, one item or many (TrashBatch.kt): the batch goes through Vault.trashMany and
+     * each row leaves every list as the server confirms it; then the notice says what moved, with
+     * an Undo for exactly that, and the feed, the listings, the system's view and kept folders
+     * follow once, in the background.
      */
     private suspend fun trashBatch(items: List<Opened>) {
         val vault = vault ?: return
@@ -1328,9 +1329,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(busy = true) }
         val result = try {
             trashMany(items, TrashSteps(
-                send = { batch -> withContext(Dispatchers.IO) { vault.trashMany(batch.map { it.id }) } },
-                drop = { moved -> dropRows(moved.map { it.id }.toSet()) },
-                announce = { text, undo -> if (undo.isEmpty()) notify(text) else notify(text) { viewModelScope.launch { undoTrash(undo) } } },
+                send = { batch, moved ->
+                    val byId = batch.associateBy { it.id }
+                    withContext(Dispatchers.IO) { vault.trashMany(batch.map { it.id }) { id -> byId[id]?.let(moved) } }
+                },
+                drop = { item -> dropRows(setOf(item.id)) },
+                announce = { text, undo -> notify(text, undo = undo) },
+                restore = { moved -> viewModelScope.launch { undoTrash(moved) } },
                 settle = { folders -> viewModelScope.launch { settle(folders) } },
             ))
         } finally {
