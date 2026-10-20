@@ -28,6 +28,8 @@ final class NoticeCenter {
     /* Bars a screen adds above the tab bar (Paste, the selection toolbar), by screen: notices sit above them too. */
     var bars: [String: CGFloat] = [:]
     var lift: CGFloat { bars.values.max() ?? 0 }
+    /* Where the notice is on screen, in the window's coordinates, while one shows: the only place the window takes touches. */
+    var frame: CGRect?
 
     func show(_ text: String, undo: (() -> Void)? = nil, actionLabel: String = "Undo", important: Bool = false) {
         let notice = Notice(text: text, undo: undo, actionLabel: actionLabel, important: important)
@@ -38,7 +40,10 @@ final class NoticeCenter {
         }
     }
 
-    func dismiss() { withAnimation(.snappy) { current = nil } }
+    func dismiss() {
+        frame = nil
+        withAnimation(.snappy) { current = nil }
+    }
 }
 
 @MainActor
@@ -59,11 +64,19 @@ enum NoticeWindow {
     }
 }
 
-/* Touches land on the notice; everywhere else they fall through to the app below. */
+/*
+ * Touches land on the notice; everywhere else they fall through to the app below. SwiftUI draws
+ * its controls inside the hosting view, so a tap on the notice's Undo hits that view too, the
+ * same as a tap on empty space (seen on the iOS 27 simulator): passing every touch that hit it
+ * sent Undo through to the app and it never ran. The notice's own frame decides instead.
+ */
 private final class PassThroughWindow: UIWindow {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
-        return hit == rootViewController?.view ? nil : hit
+        if hit !== rootViewController?.view { return hit }
+        // Only while a notice shows: a frame left behind after the notice went never takes a touch.
+        let center = NoticeCenter.shared
+        return center.current != nil && center.frame?.contains(point) == true ? hit : nil
     }
 }
 
@@ -107,6 +120,9 @@ struct NoticeBar: View {
         .frame(minHeight: 48)
         .frame(maxWidth: 370)
         .background(Alpine.snackbar, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        // The capsule's own frame, not its margins: the window takes touches only there.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { NoticeCenter.shared.frame = $0 }
+        .onDisappear { NoticeCenter.shared.frame = nil }
         .alpineRaised(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .padding(.horizontal)
         .accessibilityElement(children: .contain)
