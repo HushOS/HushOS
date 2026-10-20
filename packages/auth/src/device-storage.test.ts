@@ -1,3 +1,16 @@
+import {
+    IDBCursor,
+    IDBCursorWithValue,
+    IDBDatabase,
+    IDBFactory,
+    IDBIndex,
+    IDBKeyRange,
+    IDBObjectStore,
+    IDBOpenDBRequest,
+    IDBRequest,
+    IDBTransaction,
+    IDBVersionChangeEvent,
+} from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createBrowserDeviceIdentityStore,
@@ -71,20 +84,88 @@ describe.each(stores)('%s', (_, read) => {
         requests[0]!.onsuccess!();
         expect(late.close).toHaveBeenCalledTimes(1);
     });
+});
 
-    it('lets go of an open connection when another tab deletes or upgrades the database', async () => {
-        void read().catch(() => {});
-        const db = {
-            ...connection(),
-            // The read itself stays pending: the store never answers it.
-            transaction: () => ({ objectStore: () => ({ get: () => ({}) }) }),
+/*
+ * At sign-in, only a store that answers "no key" lets this browser register as a new device.
+ * A browser that keeps no IndexedDB for the page at all is such an answer; a store that fails
+ * to open is not.
+ */
+describe('the device identity store with nowhere to keep a key', () => {
+    it('answers that it holds none when the browser has no IndexedDB', async () => {
+        vi.stubGlobal('indexedDB', undefined);
+        await expect(createBrowserDeviceIdentityStore().load()).resolves.toBeNull();
+    });
+
+    it('answers that it holds none when site storage is refused outright', async () => {
+        vi.stubGlobal('indexedDB', {
+            open: () => {
+                throw new DOMException('The operation is insecure.', 'SecurityError');
+            },
+        });
+        await expect(createBrowserDeviceIdentityStore().load()).resolves.toBeNull();
+    });
+
+    it('does not answer when the store fails to open', async () => {
+        const reading = createBrowserDeviceIdentityStore().load();
+        const failed = expect(reading).rejects.toThrow('Device storage is unavailable.');
+        requests[0]!.onerror!();
+        await failed;
+    });
+});
+
+/*
+ * Another tab upgrading the device key database while this one writes a key: the connection
+ * lets go on versionchange, and the write already under way must land rather than abort, so the
+ * key is there for the next restore. A real IndexedDB in memory (fake-indexeddb).
+ */
+describe('a key write when another tab upgrades the database', () => {
+    beforeEach(() => {
+        vi.useRealTimers();
+        const globals = {
+            IDBCursor,
+            IDBCursorWithValue,
+            IDBDatabase,
+            IDBIndex,
+            IDBKeyRange,
+            IDBObjectStore,
+            IDBOpenDBRequest,
+            IDBRequest,
+            IDBTransaction,
+            IDBVersionChangeEvent,
         };
-        requests[0]!.result = db;
-        requests[0]!.onsuccess!();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(db.close).not.toHaveBeenCalled();
+        for (const [name, value] of Object.entries(globals)) vi.stubGlobal(name, value);
+    });
 
-        db.onversionchange!();
-        expect(db.close).toHaveBeenCalledTimes(1);
+    it('lands, and the other tab’s upgrade goes ahead once it has', async () => {
+        const factory = new IDBFactory();
+        let upgrade: Promise<IDBDatabase> | undefined;
+        const open = factory.open.bind(factory);
+        factory.open = (name: string, version?: number) => {
+            const request = open(name, version);
+            // The moment this tab's connection opens, before its write starts, the other tab
+            // asks for version 2; this tab hears versionchange while the write is under way.
+            if (name === 'hushos-device-keys' && version === 1 && !upgrade)
+                request.addEventListener('success', () => {
+                    upgrade = new Promise((resolve, reject) => {
+                        const other = open('hushos-device-keys', 2);
+                        other.onsuccess = () => resolve(other.result);
+                        other.onerror = () => reject(other.error);
+                    });
+                });
+            return request;
+        };
+        vi.stubGlobal('indexedDB', factory);
+
+        const { id } = await createBrowserDeviceKeyStore().create();
+        const other = await upgrade!;
+        const stored = await new Promise((resolve, reject) => {
+            const request = other.transaction('keys').objectStore('keys').get(id);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        other.close();
+        expect(stored).toBeInstanceOf(CryptoKey);
+        expect((stored as CryptoKey).extractable).toBe(false);
     });
 });

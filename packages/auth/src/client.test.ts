@@ -6,7 +6,12 @@ import {
 import { describe, expect, test } from 'vitest';
 import type { AuthApi } from './api';
 import type { CryptoTransport } from './crypto-transport';
-import type { DeviceIdentityStore, DeviceKeyStore, StoredDeviceIdentity } from './device-storage';
+import {
+    DeviceStorageTimeout,
+    type DeviceIdentityStore,
+    type DeviceKeyStore,
+    type StoredDeviceIdentity,
+} from './device-storage';
 import type { SessionUser } from './protocol';
 
 /*
@@ -43,7 +48,7 @@ Object.defineProperty(globalThis, 'window', {
     },
 });
 
-const { createAuthClient } = await import('./client');
+const { createAuthClient, DEVICE_STORAGE_BUSY } = await import('./client');
 
 const user = { id: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4', credentialVersion: 1 } as SessionUser;
 const bundle = {
@@ -237,6 +242,108 @@ describe('the device key at sign-in', () => {
         expect(stored()?.deviceId).toBe(deviceId);
         await auth.logout();
         expect(stored()).toBeNull();
+    });
+});
+
+/*
+ * A device store that is busy (another tab holding it), slow (the open gave up) or failing is
+ * not a store without a key. Signing in past it would register this browser as a new device,
+ * with a notice and an email about a sign-in that was this device all along.
+ */
+describe('a device store that does not answer at sign-in', () => {
+    const deviceId = '5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d';
+
+    async function client(answers: (() => Promise<StoredDeviceIdentity | null>)[]) {
+        items.clear();
+        const key = await createDeviceSigningKey();
+        if (!key) throw new Error('This runtime has no Ed25519 in Web Crypto.');
+        const stored: StoredDeviceIdentity = {
+            userId: user.id,
+            emailHash: await emailDigest('maya@example.com'),
+            deviceId,
+            privateKey: key.privateKey,
+            publicKey: key.publicKey,
+        };
+        let reads = 0;
+        const identities: DeviceIdentityStore = {
+            load: async () => {
+                const answer = answers[reads++] ?? (async () => stored);
+                return answer();
+            },
+            save: async () => {},
+            clear: async () => {},
+        };
+        const finished: { device?: { id: string } }[] = [];
+        let registered = 0;
+        const signing = {
+            ...api,
+            loginFinish: async (input: (typeof finished)[number]) => {
+                finished.push(input);
+                return {
+                    user: { ...user, email: 'maya@example.com' },
+                    envelope: { keyVersion: 1, credentialVersion: 1 },
+                    // A sign-in without a proof is a new device the server has not described yet.
+                    device: input.device
+                        ? { id: deviceId, attached: true, registered: true }
+                        : { id: 'new-device', attached: false, registered: false },
+                };
+            },
+            session: async () => ({
+                user: { ...user, email: 'maya@example.com' },
+                device: { id: 'new-device', registered: false },
+            }),
+            registerDevice: async () => {
+                registered++;
+                return { device: { id: 'new-device' } };
+            },
+        } as unknown as AuthApi;
+        const auth = createAuthClient(() => transport, keyStore([]).store, signing, {
+            identities,
+            describeDevice: () => ({ kind: 'web', name: 'Test browser' }),
+        });
+        return { auth, finished, reads: () => reads, registered: () => registered, stored };
+    }
+    const busy = async () => {
+        throw new Error('Device storage is busy in another tab.');
+    };
+    const slow = async () => {
+        throw new DeviceStorageTimeout();
+    };
+
+    test.each([
+        ['busy', busy],
+        ['slow', slow],
+    ])(
+        'stops the sign-in when it is %s twice, before a session or a new device',
+        async (_, fail) => {
+            const { auth, finished, reads, registered } = await client([fail, fail]);
+            await expect(auth.login('maya@example.com', 'correct horse')).rejects.toThrow(
+                DEVICE_STORAGE_BUSY,
+            );
+            expect(reads()).toBe(2);
+            // No session was asked for, so nothing registers and no new-sign-in email goes out.
+            expect(finished).toEqual([]);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(registered()).toBe(0);
+            expect(auth.store.getState().unlockedUserId).toBeNull();
+        },
+    );
+
+    test('signs in as this device when the store answers the second time', async () => {
+        const { auth, finished, reads, registered } = await client([busy]);
+        await auth.login('maya@example.com', 'correct horse');
+        expect(reads()).toBe(2);
+        expect(finished).toHaveLength(1);
+        expect(finished[0]!.device?.id).toBe(deviceId);
+        expect(registered()).toBe(0);
+    });
+
+    test('registers a new device only when the store answers that it holds no key', async () => {
+        const { auth, finished, registered } = await client([async () => null]);
+        await auth.login('maya@example.com', 'correct horse');
+        expect(finished).toHaveLength(1);
+        expect(finished[0]!.device).toBeUndefined();
+        await expect.poll(registered).toBe(1);
     });
 });
 

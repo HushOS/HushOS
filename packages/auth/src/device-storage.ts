@@ -12,6 +12,17 @@ export class DeviceStorageTimeout extends Error {
         this.name = 'DeviceStorageTimeout';
     }
 }
+/*
+ * This browser keeps no IndexedDB for the page at all (no API, or site storage refused outright
+ * with SecurityError), so nothing can be stored here: unlike a store that is busy, slow or
+ * failing, it is known to hold no key.
+ */
+export class NoDeviceStorage extends Error {
+    constructor(options?: { cause?: unknown }) {
+        super('This browser keeps no device storage for HushOS.', options);
+        this.name = 'NoDeviceStorage';
+    }
+}
 const STORAGE_TIMEOUT_MS = 8_000;
 function withTimeout<T>(work: Promise<T>) {
     return new Promise<T>((resolve, reject) => {
@@ -36,6 +47,18 @@ function withTimeout<T>(work: Promise<T>) {
  * when another tab wants to delete or upgrade the database.
  */
 function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
+    if (typeof indexedDB === 'undefined' || !indexedDB)
+        return Promise.reject(new NoDeviceStorage());
+    let request: IDBOpenDBRequest;
+    try {
+        request = indexedDB.open(name, 1);
+    } catch (error) {
+        return Promise.reject(
+            error instanceof DOMException && error.name === 'SecurityError'
+                ? new NoDeviceStorage({ cause: error })
+                : error,
+        );
+    }
     return new Promise((resolve, reject) => {
         let settled = false;
         const timer = setTimeout(() => {
@@ -48,7 +71,6 @@ function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
             clearTimeout(timer);
             return true;
         };
-        const request = indexedDB.open(name, 1);
         request.onupgradeneeded = () => request.result.createObjectStore(store);
         request.onsuccess = () => {
             const db = request.result;
@@ -171,7 +193,14 @@ export function createBrowserDeviceIdentityStore(): DeviceIdentityStore {
     }
     return {
         async load() {
-            const db = await open();
+            let db: IDBDatabase;
+            try {
+                db = await open();
+            } catch (error) {
+                // Nowhere to keep a key is an answer: there is none. Anything else is not.
+                if (error instanceof NoDeviceStorage) return null;
+                throw error;
+            }
             try {
                 return await withTimeout(
                     new Promise<StoredDeviceIdentity | null>((resolve, reject) => {

@@ -13,6 +13,7 @@ import {
     IDBVersionChangeEvent,
 } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NodeChange } from './api';
 import { createIndexedDbJournal, type JournalEntry } from './journal';
 import { createIndexedDbMirror } from './mirror';
 
@@ -135,6 +136,36 @@ describe('the tree mirror', () => {
         expect(await mirror.cursor('ws-1')).toBe(7);
         await mirror.apply('ws-1', [], 9);
         expect(await mirror.workspaces()).toEqual(['ws-1']);
+        expect(opened).toHaveLength(2);
+    });
+
+    it('keeps the connection that replaced one the browser then closed while it was letting go', async () => {
+        const name = `mirror-${Math.random()}`;
+        const mirror = createIndexedDbMirror(name);
+        await mirror.apply('ws-1', [], 1);
+        const first = opened[0]!;
+        // A long write, still running when another tab deletes the database.
+        const changes = Array.from({ length: 300 }, (_, index) => ({
+            kind: 'node',
+            node: { id: `n-${index}`, workspaceId: 'ws-1' },
+        })) as unknown as NodeChange[];
+        const writing = mirror.apply('ws-1', changes, 2);
+        let reading: Promise<number> | undefined;
+        // Once the mirror let go of the first connection (whose close waits for the write), the
+        // next read takes a new one; then the browser closes the first for good (site data
+        // cleared, storage lost), which fires "close" on it when its write is done.
+        first.addEventListener('versionchange', () => {
+            reading = mirror.cursor('ws-1');
+            forceCloseDatabase(first as never);
+        });
+        expect(await deleteFromAnotherTab(name)).toBe('deleted');
+        await writing.catch(() => {});
+        expect(await reading!).toBe(0);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        // The late "close" from the first connection did not drop the second: no third is opened.
+        await mirror.apply('ws-1', [], 5);
+        expect(await mirror.cursor('ws-1')).toBe(5);
         expect(opened).toHaveLength(2);
     });
 

@@ -43,6 +43,14 @@ export type AuthClientOptions = {
 };
 
 const REMOVED_NOTICE = 'hushos-device-removed';
+/*
+ * The sign-in's words when this browser's device key could not be read. Fixed, so the sign-in
+ * page shows them as they are: a busy or slow store is never read as "no key here".
+ */
+export const DEVICE_STORAGE_BUSY =
+    'This browser’s storage for HushOS is busy. Close other HushOS tabs, then sign in again.';
+/* How long a sign-in waits before reading a store that did not answer once more. */
+export const DEVICE_STORAGE_RETRY_MS = 1_000;
 
 export function createAuthClient(
     createTransport: () => CryptoTransport,
@@ -187,9 +195,9 @@ export function createAuthClient(
      */
     async function deviceProof(email: string, attemptToken: string) {
         if (!identities) return undefined;
+        const stored = await storedIdentity(identities);
+        if (!stored || stored.emailHash !== (await emailDigest(email))) return undefined;
         try {
-            const stored = await identities.load();
-            if (!stored || stored.emailHash !== (await emailDigest(email))) return undefined;
             const signature = await signDeviceSession(stored.privateKey, {
                 userId: stored.userId,
                 deviceId: stored.deviceId,
@@ -197,8 +205,27 @@ export function createAuthClient(
             });
             return { id: stored.deviceId, signature };
         } catch {
-            // No key, or storage that did not answer: the sign-in goes on as a new device.
+            // A key that was read but cannot sign will never sign: this browser starts over as a
+            // new device rather than refuse every sign-in.
             return undefined;
+        }
+    }
+    /*
+     * The stored device key, or null only when the store answered that it holds none. A store
+     * that is busy (another tab holding it), slow (the open gave up) or failing is read once more
+     * after a pause, and then the sign-in stops: going on would register this browser as a new
+     * device, with a notice and an email about a sign-in that was this device all along.
+     */
+    async function storedIdentity(store: DeviceIdentityStore) {
+        try {
+            return await store.load();
+        } catch {
+            await new Promise((resolve) => setTimeout(resolve, DEVICE_STORAGE_RETRY_MS));
+            try {
+                return await store.load();
+            } catch (error) {
+                throw new Error(DEVICE_STORAGE_BUSY, { cause: error });
+            }
         }
     }
     /*
