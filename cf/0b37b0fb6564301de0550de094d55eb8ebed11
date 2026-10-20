@@ -1,0 +1,31 @@
+docs/groups-design.md
+  s_c56e31c87cddde::t_3eb3279354f6ce 335
+docs/groups-server.md
+  s_c56e31c87cddde::t_50f780feeb2fb6 96
+docs/self-hosting.md
+  s_c56e31c87cddde::t_c951c177418cf4 74-75,206,693,695-696,698,703
+packages/db/src/groups.purge.test.ts
+  s_c56e31c87cddde::t_214111a77fc0a7 2,312-315,321-335,337,386,388-394,406,411,426-476,488,492-496,561,578,612-616,619-620,623,638-639,646,655,663,681,692,694,699,753
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_fbf68229c91720 3,1927-1929,3353-3354,3362-3366,3368-3386,3390-3412,3414-3416,3420-3442,3444-3451,3455,3459-3469
+packages/drive/src/jobs.dissolved.test.ts
+  s_c56e31c87cddde::t_6f5ed2dce6d9ca 12,16-20,65-69,71-72,75-77,84,89
+packages/jobs/src/jobs/groups.ts
+  s_c56e31c87cddde::t_f671f3f43b7f81 7-15,23,27,29,32-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf0b37b0fb6564301de0550de094d55eb8ebed11",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
