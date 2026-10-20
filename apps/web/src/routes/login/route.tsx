@@ -6,7 +6,7 @@ import {
     type SearchSchemaInput,
 } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DeviceStorageUnreadable } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
@@ -88,7 +88,6 @@ function LoginPage() {
     const [error, setError] = useState('');
     // This browser's device key could not be read: the person may sign in as a new device instead.
     const [offerNewDevice, setOfferNewDevice] = useState(false);
-    const asNewDevice = useRef(false);
     // A browser that lands here because its device was removed from the account (the
     // server rendered this page without a session) asks once: the auth client then clears
     // what this browser kept for that account.
@@ -103,13 +102,16 @@ function LoginPage() {
         defaultValues: { email: '', password: '' },
         validationLogic: revalidateLogic(),
         validators: { onDynamic: loginFields },
-        onSubmit: async ({ value }) => {
+        // What the press asked for, given with that press and never kept: a press that fails
+        // validation leaves nothing behind for the next one.
+        onSubmitMeta: { asNewDevice: false },
+        onSubmit: async ({ value, meta }) => {
             setError('');
             setPending(true);
-            const newDevice = asNewDevice.current;
-            asNewDevice.current = false;
             try {
-                await authClient.login(value.email, value.password, { asNewDevice: newDevice });
+                await authClient.login(value.email, value.password, {
+                    asNewDevice: meta.asNewDevice,
+                });
                 // The form keeps what was typed and stays busy until the app replaces it:
                 // emptied first, it would look for a moment as if signing in had failed.
                 cue('success');
@@ -172,7 +174,8 @@ function LoginPage() {
             <form
                 onSubmit={(event) => {
                     event.preventDefault();
-                    void form.handleSubmit();
+                    // Sign in, Unlock and Try again: always as this device.
+                    void form.handleSubmit({ asNewDevice: false });
                 }}
                 aria-busy={pending}
                 noValidate
@@ -243,10 +246,7 @@ function LoginPage() {
                                 size="lg"
                                 className="h-11 w-full text-[15px]"
                                 disabled={pending}
-                                onClick={() => {
-                                    asNewDevice.current = true;
-                                    void form.handleSubmit();
-                                }}
+                                onClick={() => void form.handleSubmit({ asNewDevice: true })}
                             >
                                 Sign in as a new device
                             </Button>

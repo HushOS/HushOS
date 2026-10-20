@@ -64,13 +64,13 @@ function withTimeout<T>(work: Promise<T>) {
  * open blocks the database's deletion or upgrade from any tab. One open now can also be let go
  * when another tab wants to delete or upgrade the database.
  */
-function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
+function openDeviceDatabase(name: string, store: string, version: number): Promise<IDBDatabase> {
     let request: IDBOpenDBRequest;
     try {
         // Reading `indexedDB` itself can throw (SecurityError where site storage is refused).
         const factory = typeof indexedDB === 'undefined' ? undefined : indexedDB;
         if (!factory) return Promise.reject(new NoDeviceStorage());
-        request = factory.open(name, 1);
+        request = factory.open(name, version);
     } catch (error) {
         return Promise.reject(
             error instanceof DOMException && error.name === 'SecurityError'
@@ -92,9 +92,12 @@ function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
             clearTimeout(timer);
             return true;
         };
-        request.onupgradeneeded = () => {
-            created = true;
-            request.result.createObjectStore(store);
+        request.onupgradeneeded = (event) => {
+            // Only an upgrade from nothing creates the database. A later version's upgrade runs
+            // on a database that may already hold a key, which must still be read.
+            if (event.oldVersion === 0) created = true;
+            if (!request.result.objectStoreNames.contains(store))
+                request.result.createObjectStore(store);
         };
         request.onsuccess = () => {
             const db = request.result;
@@ -124,8 +127,10 @@ export type DeviceKeyStore = {
     load: (id: string) => Promise<CryptoKey | null>;
     clear: () => Promise<void>;
 };
+/* The device databases' version; bumped only with an upgrade that keeps what they hold. */
+const DEVICE_DATABASE_VERSION = 1;
 export function createBrowserDeviceKeyStore(): DeviceKeyStore {
-    const open = () => openDeviceDatabase('hushos-device-keys', 'keys');
+    const open = () => openDeviceDatabase('hushos-device-keys', 'keys', DEVICE_DATABASE_VERSION);
     async function write(action: (store: IDBObjectStore) => void) {
         const db = await open();
         try {
@@ -201,8 +206,11 @@ export type DeviceIdentityStore = {
     clear: () => Promise<void>;
 };
 const IDENTITY_KEY = 'current';
-export function createBrowserDeviceIdentityStore(): DeviceIdentityStore {
-    const open = () => openDeviceDatabase('hushos-device-identity', 'identity');
+/* `version` is for an upgrade's own test: a later version must still read an earlier one's key. */
+export function createBrowserDeviceIdentityStore({
+    version = DEVICE_DATABASE_VERSION,
+}: { version?: number } = {}): DeviceIdentityStore {
+    const open = () => openDeviceDatabase('hushos-device-identity', 'identity', version);
     async function write(action: (store: IDBObjectStore) => void) {
         const db = await open();
         try {

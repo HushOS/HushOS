@@ -1,5 +1,5 @@
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { DeviceStorageUnreadable } from '@hushos/auth/client';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
@@ -31,18 +31,20 @@ export function UnlockDevice({
     const [error, setError] = useState('');
     // This browser's device key could not be read: the person may unlock as a new device instead.
     const [offerNewDevice, setOfferNewDevice] = useState(false);
-    const asNewDevice = useRef(false);
     const form = useForm({
         defaultValues: { password: '' },
         validationLogic: revalidateLogic(),
         validators: { onDynamic: unlockFields },
-        onSubmit: async ({ value }) => {
+        // What the press asked for, given with that press and never kept: a press that fails
+        // validation leaves nothing behind for the next one.
+        onSubmitMeta: { asNewDevice: false },
+        onSubmit: async ({ value, meta }) => {
             setPending(true);
             setError('');
-            const newDevice = asNewDevice.current;
-            asNewDevice.current = false;
             try {
-                await authClient.login(user.email, value.password, { asNewDevice: newDevice });
+                await authClient.login(user.email, value.password, {
+                    asNewDevice: meta.asNewDevice,
+                });
                 cue('success');
                 // Kept, and busy, while what unlocking opens takes over; emptied after,
                 // in case this form stays on screen.
@@ -62,7 +64,8 @@ export function UnlockDevice({
             className={className}
             onSubmit={(event) => {
                 event.preventDefault();
-                void form.handleSubmit();
+                // Sign in, Unlock and Try again: always as this device.
+                void form.handleSubmit({ asNewDevice: false });
             }}
             aria-busy={pending}
             noValidate
@@ -105,10 +108,7 @@ export function UnlockDevice({
                             variant="outline"
                             size={onCancel ? 'default' : 'lg'}
                             disabled={pending}
-                            onClick={() => {
-                                asNewDevice.current = true;
-                                void form.handleSubmit();
-                            }}
+                            onClick={() => void form.handleSubmit({ asNewDevice: true })}
                         >
                             Unlock as a new device
                         </Button>
