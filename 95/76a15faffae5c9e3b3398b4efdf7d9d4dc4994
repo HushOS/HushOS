@@ -1,0 +1,25 @@
+packages/drive/src/catalogue.ts
+  s_566b8e0c4467a4::t_2ae0f41c521040 335-336,339-343,346
+packages/drive/src/client.catalogue.test.ts
+  s_566b8e0c4467a4::t_451b6a72f0a56c 603-626
+packages/drive/src/client.ts
+  s_566b8e0c4467a4::t_5e7f4273cf1916 640-643
+packages/drive/src/mirror.ts
+  s_566b8e0c4467a4::t_769fd4d0f0d5a2 46-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9576a15faffae5c9e3b3398b4efdf7d9d4dc4994",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
