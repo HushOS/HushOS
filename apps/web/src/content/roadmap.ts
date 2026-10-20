@@ -224,7 +224,7 @@ export const sections: RoadmapSection[] = [
                 status: 'next',
                 area: 'Platform',
                 title: 'Two-step sign-in and device approval',
-                body: 'Sign in with your password and a code from an authenticator app, or a security key, and approve a new device from one you already use. The second step is a check the server makes when you sign in; device approval goes further, holding back your keys from a new device until you approve it.',
+                body: 'Sign in with your password and a code from an authenticator app, or a security key, and approve each new device from one you already use. Both are checks the server makes; approval can also be set so your keys reach a new device only from one you already have.',
                 links: [
                     {
                         kind: 'docs',
