@@ -84,6 +84,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hushos.app.data.PlanDisplay
 import com.hushos.tokens.AlpineRadius
 import com.hushos.tokens.AlpineSpace
 import kotlinx.coroutines.launch
@@ -281,7 +282,7 @@ private fun PlanCard(state: DriveState, onClick: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Plan and storage", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted)
-                Text(state.billing?.planName?.takeIf { it.isNotEmpty() } ?: "Free", style = MaterialTheme.typography.titleMedium)
+                Text(plan(state).name, style = MaterialTheme.typography.titleMedium)
             }
             Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
         }
@@ -293,8 +294,12 @@ private fun PlanCard(state: DriveState, onClick: () -> Unit) {
     }
 }
 
-private fun planLine(state: DriveState): String? = state.billing?.periodEnd?.let { shortDate(it) }?.let { date ->
-    (if (state.billing.cancelAtPeriodEnd) "Ends $date" else "Renews $date")
+/* The plan as Account shows it: the family's while the storage is its pool (docs/families-shared-pool.md 9). */
+private fun plan(state: DriveState) = PlanDisplay.of(state.allowance, state.billing)
+
+/* Whose plan it is while pooled, else when the personal plan renews or ends. */
+private fun planLine(state: DriveState): String? = plan(state).let { plan ->
+    plan.source ?: shortDate(plan.periodEnd)?.let { date -> if (plan.cancelAtPeriodEnd) "Ends $date" else "Renews $date" }
 }
 
 /* A pushed page inside Account: a back arrow, a title, and its own scrolling column. */
@@ -331,10 +336,13 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
         val shape = RoundedCornerShape(AlpineRadius.Card)
         Column(Modifier.padding(AlpineSpace.S4).fillMaxWidth().background(alpine.surface, shape).then(if (alpine.high) Modifier.border(1.dp, alpine.edge, shape) else Modifier).padding(AlpineSpace.S4)) {
             Text("Your plan", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted)
-            Text(state.billing?.planName?.takeIf { it.isNotEmpty() } ?: "Free", style = MaterialTheme.typography.titleLarge)
+            Text(plan(state).name, style = MaterialTheme.typography.titleLarge)
             // The plan's name and storage only: no way to the web's billing page (Google Play's
-            // payments policy; Apple's 3.1.3(f)). The renewal date is account information.
-            Text(listOfNotNull(state.allowance?.let { formatQuota(it.quotaBytes) }, planLine(state)?.replaceFirstChar { it.lowercase() }).joinToString(" · "),
+            // payments policy; Apple's 3.1.3(f)). The renewal date is account information; while
+            // pooled, whose plan it is ("From <family>’s plan") comes first.
+            val pooled = plan(state).source != null
+            Text((if (pooled) listOfNotNull(planLine(state), state.allowance?.let { formatQuota(it.quotaBytes) })
+                else listOfNotNull(state.allowance?.let { formatQuota(it.quotaBytes) }, planLine(state)?.replaceFirstChar { it.lowercase() })).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
         }
         val allowance = state.allowance
@@ -345,9 +353,13 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
             val files = (allowance.usedBytes - trash - versions).coerceAtLeast(0L)
             Text("${formatSpace(allowance.usedBytes)} of ${formatQuota(allowance.quotaBytes)}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = AlpineSpace.S4))
             SplitMeter(listOf(files to alpine.primary, versions to alpine.folderBack, trash to alpine.inkMuted), allowance.quotaBytes, Modifier.padding(AlpineSpace.S4))
-            StorageRow("Files", formatSpace(files), alpine.primary, null)
+            // In a pool the rest is everyone's: the family folders and each member's own files.
+            val family = plan(state).family
+            StorageRow(if (family == null) "Files" else "Files in the family’s storage", formatSpace(files), alpine.primary, null)
             StorageRow("Earlier versions", formatSpace(versions), alpine.folderBack, if (versions > 0) "Remove" to { removing = true } else null)
             StorageRow("Trash", "${formatSpace(trash)} · empties itself after 30 days", alpine.inkMuted, "Open trash" to { showingTrash = true })
+            if (family != null) Text("$family’s storage, counted in whole GB. Your trash and earlier versions count until they’re removed.",
+                style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
             if (busy) Row(Modifier.padding(AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Text("Removing…", modifier = Modifier.padding(start = AlpineSpace.S2))
             }

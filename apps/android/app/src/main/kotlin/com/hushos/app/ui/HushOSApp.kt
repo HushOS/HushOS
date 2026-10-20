@@ -510,7 +510,7 @@ private fun StorageFullSheet(model: DriveViewModel, state: DriveState, waiting: 
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount() }
     val trash = state.storage?.trashBytes ?: 0L
     val versions = state.storage?.supersededBytes ?: 0L
-    val free = state.allowance?.let { formatSpace(maxOf(0L, it.quotaBytes - it.usedBytes)) } ?: "little room"
+    val free = state.allowance?.let { formatSpace(maxOf(0L, it.quotaBytes - it.usedBytes)) + (it.pool?.let { pool -> " in ${pool.name}’s storage" } ?: "") } ?: "little room"
     val what = when (waiting.size) { 0 -> "This upload doesn’t fit"; 1 -> "“${waiting[0].name}” doesn’t fit"; else -> "These ${waiting.size} files don’t fit" }
     // Space freed: what didn't fit goes again.
     val retry = { waiting.forEach { it.retry?.invoke() }; dismiss() }
