@@ -1,0 +1,31 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_3920d8495cac68 207
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_58049cafea63ff 14
+docs/drive-design.md
+  s_566b8e0c4467a4::t_5d87c00b8d365e 346
+packages/db/drizzle/20261020213416_change_seq_renumber/migration.sql
+  s_566b8e0c4467a4::t_8f43a981086800 1-56
+packages/db/src/drive.changes.test.ts
+  s_566b8e0c4467a4::t_81fc6b565fc9d9 2,13,306-544
+packages/db/src/drive.ts
+  s_566b8e0c4467a4::t_9d9bcf1f6dd50a 842-844,852-857,874,918,920-921,2838-2839,4336-4340,4405-4406
+packages/db/drizzle/20261020213416_change_seq_renumber/snapshot.json
+  s_566b8e0c4467a4::t_28807e19b6cc24 1-13462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "97076f44ad6e48e8c2a0325951c938779f40e828",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
