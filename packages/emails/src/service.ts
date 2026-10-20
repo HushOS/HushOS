@@ -108,12 +108,19 @@ function escapeHtml(value: string) {
  * The templates were rendered at build time (scripts/render.tsx). Filling them is
  * substitution: values are escaped for the HTML variant because they sit in
  * hrefs and visible text, and left as they are for the plain-text variant.
+ * One pass, with a function for each value: what a person typed is never read as
+ * a replacement pattern ($& or $') or as another placeholder. A placeholder no
+ * value fills refuses the message rather than sending the raw token.
  */
 function fillTemplate(template: string, values: Record<string, string>, html: boolean) {
-    let output = template;
-    for (const [name, value] of Object.entries(values))
-        output = output.replaceAll(`{{${name}}}`, html ? escapeHtml(value) : value);
-    return output;
+    return template.replace(/\{\{(\w+)\}\}/g, (_token, name: string) => {
+        const value = Object.hasOwn(values, name) ? values[name] : undefined;
+        if (value === undefined)
+            throw Object.assign(new Error(`No value fills the email placeholder ${name}.`), {
+                name: 'EmailPlaceholderError',
+            });
+        return html ? escapeHtml(value) : value;
+    });
 }
 
 /*
