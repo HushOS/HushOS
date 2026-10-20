@@ -77,7 +77,7 @@ function privateFileSystem() {
             ...[...directories.values()].flatMap((d) => [...d.values()]),
         ],
         stashes: () => [...(directories.get('upload-stash-sealed')?.values() ?? [])],
-        failRemovals: () => (failRemovals = true),
+        failRemovals: (on = true) => (failRemovals = on),
     };
 }
 
@@ -290,5 +290,60 @@ describe('the sealed upload stash', () => {
         expect(fs.directories.has('upload-stash')).toBe(false);
         expect(fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)))).toBe(false);
         expect(textOf(await stash.open(kept!, described))).toBe(plain);
+    });
+});
+
+describe('the unsealed stash left from before sealing', () => {
+    /* What an unsealed stash left on disk: decrypted bytes in the old folder. */
+    async function plantPlaintext(fs: ReturnType<typeof privateFileSystem>) {
+        const old = await fs.root.getDirectoryHandle('upload-stash', { create: true });
+        const writable = await (
+            await old.getFileHandle('legacy', { create: true })
+        ).createWritable();
+        await writable.write(canary);
+        await writable.close();
+    }
+    const plaintextOnDisk = (fs: ReturnType<typeof privateFileSystem>) =>
+        fs.disk().some((bytes) => contains(bytes, canary.subarray(0, 16)));
+
+    it('never rejects at start-up when the private file system does not answer', async () => {
+        const fs = privateFileSystem();
+        const { stash, state } = setup(fs, await worker());
+        state.rootFails = true;
+        // Called as `void uploadStash.dropPlaintext()`: a rejection here is an unhandled one.
+        await expect(stash.dropPlaintext()).resolves.toBeUndefined();
+    });
+
+    it('goes at the next use of the private file system once it answers', async () => {
+        const fs = privateFileSystem();
+        const { stash, state } = setup(fs, await worker());
+        await plantPlaintext(fs);
+        state.rootFails = true;
+        await stash.dropPlaintext();
+        expect(plaintextOnDisk(fs)).toBe(true);
+
+        state.rootFails = false;
+        const kept = await stash.put(canary);
+        expect(fs.directories.has('upload-stash')).toBe(false);
+        expect(plaintextOnDisk(fs)).toBe(false);
+        // The use that cleared it did its own work too.
+        expect(textOf(await stash.open(kept!, described))).toBe(plain);
+    });
+
+    it('is tried again after a removal that failed, and the use that retries it still works', async () => {
+        const fs = privateFileSystem();
+        const { stash } = setup(fs, await worker());
+        await plantPlaintext(fs);
+        fs.failRemovals();
+        await expect(stash.dropPlaintext()).resolves.toBeUndefined();
+        expect(plaintextOnDisk(fs)).toBe(true);
+        // Still refused: the stash goes on regardless.
+        const first = await stash.put(canary);
+        expect(first).not.toBeNull();
+        expect(plaintextOnDisk(fs)).toBe(true);
+
+        fs.failRemovals(false);
+        await stash.open(first!, described);
+        expect(fs.directories.has('upload-stash')).toBe(false);
     });
 });

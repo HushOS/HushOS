@@ -29,6 +29,45 @@ function withTimeout<T>(work: Promise<T>) {
     });
 }
 
+/*
+ * Opens one of the device databases, giving up after STORAGE_TIMEOUT_MS. An open that answers
+ * after that is closed as it lands: nothing would ever use or close it, and a connection left
+ * open blocks the database's deletion or upgrade from any tab. One open now can also be let go
+ * when another tab wants to delete or upgrade the database.
+ */
+function openDeviceDatabase(name: string, store: string): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+            settled = true;
+            reject(new DeviceStorageTimeout());
+        }, STORAGE_TIMEOUT_MS);
+        const settle = () => {
+            if (settled) return false;
+            settled = true;
+            clearTimeout(timer);
+            return true;
+        };
+        const request = indexedDB.open(name, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore(store);
+        request.onsuccess = () => {
+            const db = request.result;
+            if (!settle()) {
+                db.close();
+                return;
+            }
+            db.onversionchange = () => db.close();
+            resolve(db);
+        };
+        request.onerror = () => {
+            if (settle()) reject(new Error('Device storage is unavailable.'));
+        };
+        request.onblocked = () => {
+            if (settle()) reject(new Error('Device storage is busy in another tab.'));
+        };
+    });
+}
+
 // Storage is an adapter; crypto owns the portable, versioned device envelope.
 export type DeviceKeyStore = {
     create: () => Promise<{ id: string; key: CryptoKey }>;
@@ -36,18 +75,7 @@ export type DeviceKeyStore = {
     clear: () => Promise<void>;
 };
 export function createBrowserDeviceKeyStore(): DeviceKeyStore {
-    function open(): Promise<IDBDatabase> {
-        return withTimeout(
-            new Promise((resolve, reject) => {
-                const request = indexedDB.open('hushos-device-keys', 1);
-                request.onupgradeneeded = () => request.result.createObjectStore('keys');
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(new Error('Device storage is unavailable.'));
-                request.onblocked = () =>
-                    reject(new Error('Device storage is busy in another tab.'));
-            }),
-        );
-    }
+    const open = () => openDeviceDatabase('hushos-device-keys', 'keys');
     async function write(action: (store: IDBObjectStore) => void) {
         const db = await open();
         try {
@@ -124,18 +152,7 @@ export type DeviceIdentityStore = {
 };
 const IDENTITY_KEY = 'current';
 export function createBrowserDeviceIdentityStore(): DeviceIdentityStore {
-    function open(): Promise<IDBDatabase> {
-        return withTimeout(
-            new Promise((resolve, reject) => {
-                const request = indexedDB.open('hushos-device-identity', 1);
-                request.onupgradeneeded = () => request.result.createObjectStore('identity');
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(new Error('Device storage is unavailable.'));
-                request.onblocked = () =>
-                    reject(new Error('Device storage is busy in another tab.'));
-            }),
-        );
-    }
+    const open = () => openDeviceDatabase('hushos-device-identity', 'identity');
     async function write(action: (store: IDBObjectStore) => void) {
         const db = await open();
         try {

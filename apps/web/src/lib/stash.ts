@@ -38,7 +38,10 @@ export type SealedStash = UploadStash & {
     forget(): Promise<void>;
     /* Deletes the stash when an explicit lock happened since it was written. */
     settle(): Promise<void>;
-    /* Deletes what the unsealed stash left on disk; once, at start-up. */
+    /*
+     * Deletes what the unsealed stash left on disk, at start-up. Never rejects: where the private
+     * file system did not answer, the next use of it that does tries again.
+     */
     dropPlaintext(): Promise<void>;
 };
 
@@ -63,12 +66,31 @@ export function createSealedStash(options: {
 }): SealedStash {
     // Moves on every wipe, so a write that began before one never lands after it.
     let generation = 0;
+    // Set once start-up asked for the unsealed stash's folder to go, until a removal got through.
+    let plaintextLeft = false;
+    async function removePlaintext(root: StashRoot) {
+        await root.removeEntry(PLAINTEXT_DIRECTORY, { recursive: true }).catch((error: unknown) => {
+            if (!notFound(error)) throw error;
+        });
+        plaintextLeft = false;
+    }
+    /*
+     * The private file system. WebKit's getDirectory() can reject (always under automation, now
+     * and then elsewhere); each caller handles that. Once it answers, a removal of the unsealed
+     * stash that start-up could not make is tried again, quietly: it is housekeeping, and the
+     * caller's own work must not fail for it.
+     */
+    async function root() {
+        const handle = await options.root();
+        if (plaintextLeft) await removePlaintext(handle).catch(() => {});
+        return handle;
+    }
     async function directory() {
-        return (await options.root()).getDirectoryHandle(DIRECTORY, { create: true });
+        return (await root()).getDirectoryHandle(DIRECTORY, { create: true });
     }
     async function writtenUnder() {
         try {
-            const file = await (await (await options.root()).getFileHandle(REVISION)).getFile();
+            const file = await (await (await root()).getFileHandle(REVISION)).getFile();
             const value = Number(await file.text());
             return Number.isFinite(value) ? value : null;
         } catch (error) {
@@ -77,16 +99,16 @@ export function createSealedStash(options: {
         }
     }
     async function remember(revision: number) {
-        const handle = await (await options.root()).getFileHandle(REVISION, { create: true });
+        const handle = await (await root()).getFileHandle(REVISION, { create: true });
         const writable = await handle.createWritable();
         await writable.write(String(revision));
         await writable.close();
     }
     async function wipe() {
         generation++;
-        let root: StashRoot;
+        let handle: StashRoot;
         try {
-            root = await options.root();
+            handle = await options.root();
         } catch (error) {
             // No usable private file system (WebKit under automation, a private window). If no
             // stash was ever written here there is nothing to wipe; if one was, files may be left
@@ -95,10 +117,11 @@ export function createSealedStash(options: {
             return;
         }
         // The unsealed stash's folder too, should start-up not have got to it.
-        for (const name of [DIRECTORY, REVISION, PLAINTEXT_DIRECTORY])
-            await root.removeEntry(name, { recursive: true }).catch((error: unknown) => {
+        for (const name of [DIRECTORY, REVISION])
+            await handle.removeEntry(name, { recursive: true }).catch((error: unknown) => {
                 if (!notFound(error)) throw error;
             });
+        await removePlaintext(handle);
         options.written.clear();
     }
     const stash: SealedStash = {
@@ -175,11 +198,12 @@ export function createSealedStash(options: {
             if (written !== null && options.lockRevision() > written) await wipe();
         },
         async dropPlaintext() {
-            await (
-                await options.root()
-            )
-                .removeEntry(PLAINTEXT_DIRECTORY, { recursive: true })
-                .catch(() => {});
+            plaintextLeft = true;
+            try {
+                await removePlaintext(await options.root());
+            } catch {
+                // Left for the next use of the private file system that gets through (see root()).
+            }
         },
     };
     return stash;

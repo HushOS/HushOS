@@ -1,4 +1,5 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import type { DBSchema } from 'idb';
+import { cachedConnection } from './connection';
 
 /*
  * The upload journal from the design: what a device remembers about an upload
@@ -130,22 +131,18 @@ interface Schema extends DBSchema {
 }
 
 export function createIndexedDbJournal(name = 'hushos-drive'): UploadJournal {
-    let database: Promise<IDBPDatabase<Schema>> | undefined;
-    const open = () =>
-        (database ??= openDB<Schema>(name, 2, {
-            upgrade(db) {
-                if (!db.objectStoreNames.contains('uploads'))
-                    db.createObjectStore('uploads', { keyPath: 'id' }).createIndex(
-                        'workspace',
-                        'workspaceId',
-                    );
-                if (!db.objectStoreNames.contains('queued'))
-                    db.createObjectStore('queued', { keyPath: 'id' }).createIndex(
-                        'workspace',
-                        'workspaceId',
-                    );
-            },
-        }));
+    const open = cachedConnection<Schema>(name, 2, (db) => {
+        if (!db.objectStoreNames.contains('uploads'))
+            db.createObjectStore('uploads', { keyPath: 'id' }).createIndex(
+                'workspace',
+                'workspaceId',
+            );
+        if (!db.objectStoreNames.contains('queued'))
+            db.createObjectStore('queued', { keyPath: 'id' }).createIndex(
+                'workspace',
+                'workspaceId',
+            );
+    });
     return {
         async list(workspaceId) {
             const db = await open();

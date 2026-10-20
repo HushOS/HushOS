@@ -1,4 +1,5 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import type { DBSchema } from 'idb';
+import { cachedConnection } from './connection';
 import type { NodeChange, NodeView } from './api';
 
 /*
@@ -31,23 +32,12 @@ interface Schema extends DBSchema {
 }
 
 export function createIndexedDbMirror(name = 'hushos-drive-mirror'): TreeMirror {
-    let database: Promise<IDBPDatabase<Schema>> | undefined;
-    const open = () =>
-        (database ??= openDB<Schema>(name, 1, {
-            upgrade(db) {
-                db.createObjectStore('nodes', { keyPath: 'id' }).createIndex(
-                    'workspace',
-                    'workspaceId',
-                );
-                db.createObjectStore('cursors', { keyPath: 'workspaceId' });
-            },
-            // Another tab, or this one, deleting the database (a family wiped from this device,
-            // sign-out): let go at once rather than block it; the next read opens it again.
-            blocking() {
-                void database?.then((db) => db.close());
-                database = undefined;
-            },
-        }));
+    // Another tab, or this one, deleting the database (a family wiped from this device, sign-out)
+    // makes it let go at once rather than block that; the next read opens it again.
+    const open = cachedConnection<Schema>(name, 1, (db) => {
+        db.createObjectStore('nodes', { keyPath: 'id' }).createIndex('workspace', 'workspaceId');
+        db.createObjectStore('cursors', { keyPath: 'workspaceId' });
+    });
     return {
         async cursor(workspaceId) {
             const db = await open();
