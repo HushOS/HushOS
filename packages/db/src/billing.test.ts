@@ -261,25 +261,58 @@ describe('a personal plan Polar holds but that gives nothing', () => {
         expect((await getStorageAllowance(userId))?.quotaBytes).toBe(GIB.toString());
     });
 
-    test('a lapsed plan HushOS revoked is recorded as a settled ending with no family, once', async () => {
+    test('a lapsed plan about to be revoked gets a settled ending with no family, once; a dropped one is taken over', async () => {
         const { userId } = await createTestAccount();
-        const revokedAt = new Date('2026-10-21T10:00:00Z');
-        const input = {
+        const at = new Date('2026-10-21T10:00:00Z');
+        expect(
+            await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at }),
+        ).toMatchObject({ groupId: null, pooledAt: at, revokedAt: null, outcome: 'settled' });
+        // Asked again (a retry): the first stands.
+        await billing.beginLapsedRevoke({
             subscriptionId: 'sub_1',
             userId,
-            revokedAt,
-            periodStart: new Date('2026-10-01T00:00:00Z'),
-            periodEnd: new Date('2026-11-01T00:00:00Z'),
-        };
-        await billing.recordLapsedRevoke(input);
-        await billing.recordLapsedRevoke({ ...input, revokedAt: new Date('2026-10-22T00:00:00Z') });
-        expect(await billing.getPlanEnding('sub_1')).toMatchObject({
-            groupId: null,
-            revokedAt,
-            pooledAt: revokedAt,
-            outcome: 'settled',
+            at: new Date('2026-10-22T00:00:00Z'),
         });
+        expect((await billing.getPlanEnding('sub_1'))?.pooledAt).toEqual(at);
         expect(await billing.listOpenPlanEndings(userId)).toEqual([]);
+        // A pooled ending its owner left before the revoke (dropped) is taken over; one still
+        // being worked is left to its own job.
+        const groupId = '00000000-0000-4000-8000-000000000001';
+        for (const id of ['sub_dropped', 'sub_open'])
+            await billing.ensurePlanEnding({
+                subscriptionId: id,
+                userId,
+                groupId,
+                admittedAt: at,
+                pooledAt: at,
+            });
+        await billing.closePlanEnding('sub_dropped', 'dropped');
+        expect(
+            await billing.beginLapsedRevoke({ subscriptionId: 'sub_dropped', userId, at }),
+        ).toMatchObject({ groupId: null, outcome: 'settled' });
+        expect(
+            await billing.beginLapsedRevoke({ subscriptionId: 'sub_open', userId, at }),
+        ).toMatchObject({ groupId, outcome: null });
+    });
+
+    test('an ending isn’t settled while a refund noted on it was never asked for', async () => {
+        const { userId } = await createTestAccount();
+        const at = new Date('2026-10-21T10:00:00Z');
+        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at });
+        await billing.reopenPlanEnding('sub_1');
+        await billing.notePlanRefund({
+            orderId: 'order_1',
+            subscriptionId: 'sub_1',
+            refundKey: 'key_1',
+            amount: 0,
+            currency: 'usd',
+        });
+        expect(await billing.closePlanEnding('sub_1', 'settled')).toBe(false);
+        expect((await billing.getPlanEnding('sub_1'))?.outcome).toBeNull();
+        // Asked for once: no longer unworked.
+        await billing.markPlanRefundAttempt('order_1');
+        expect(await billing.closePlanEnding('sub_1', 'settled')).toBe(true);
+        expect((await billing.getPlanEnding('sub_1'))?.outcome).toBe('settled');
     });
 
     test('one Polar answers as canceled or expired without saying when it ended is ended now', async () => {

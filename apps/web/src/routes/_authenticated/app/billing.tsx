@@ -36,6 +36,7 @@ import {
     familyTierName,
     FAMILY_POOL_LINE,
     personalPairs,
+    personalPlanEnding,
     priceOf,
     tiersOf,
     twoMonthsFree,
@@ -550,7 +551,7 @@ function BillingPage() {
                                             onClick={() => void portal()}
                                         >
                                             {busy === 'portal'
-                                                ? 'Opening…'
+                                                ? 'Opening portal'
                                                 : paused
                                                   ? 'Resume in portal'
                                                   : overdue
@@ -746,7 +747,10 @@ function BillingPage() {
                     open={creating !== null}
                     onOpenChange={(open) => !open && setCreating(null)}
                     plan={creating ? { plan: creating, currency: familyCurrency } : undefined}
-                    personalPlan={live ? familyTierName({ name: live.productName }) : null}
+                    personalPlan={personalPlanEnding(
+                        summary.data?.subscription,
+                        'the family’s plan starts',
+                    )}
                 />
             )}
 
@@ -798,7 +802,7 @@ function BillingPage() {
                                     }}
                                 >
                                     {busy === switching.id
-                                        ? 'Opening…'
+                                        ? 'Opening checkout'
                                         : `Choose ${familyTierName(switching)}`}
                                 </Button>
                             </DialogFooter>

@@ -1,4 +1,3 @@
-import { livePlan } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -12,7 +11,7 @@ import {
     storageQueryOptions,
     useBillingEnabled,
 } from '@/lib/queries';
-import { familyTierName } from '@/lib/plans';
+import { personalPlanEnding } from '@/lib/plans';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy, familyField, joinInFamilyCopy } from '@/lib/groups/copy';
 import { rememberReturn } from '@/lib/return-to';
@@ -265,13 +264,12 @@ function OpenInvitation({
         (code === 'in-family' && error instanceof GroupApiError ? familyField(error.data) : null);
     const ownFiles =
         storage.data && !storage.data.pool ? formatSpace(storage.data.usedBytes) : null;
-    const plan = livePlan(personal.data?.subscription);
-    const ownPlan = plan ? familyTierName({ name: plan.productName }) : null;
+    const ownPlan = personalPlanEnding(personal.data?.subscription, 'you’re let in');
     const storageLine =
         !ownFiles || code === 'email-mismatch' || code === 'already-member'
             ? null
             : ownPlan
-              ? `Your ${ownPlan} plan ends when you’re let in, and the unused days are refunded. From then on your files use ${invitation.name}’s storage. They take ${ownFiles} now.`
+              ? `${ownPlan} From then on your files use ${invitation.name}’s storage. They take ${ownFiles} now.`
               : `Once you’re let in, your files use ${invitation.name}’s storage. They take ${ownFiles} now.`;
     return (
         <AuthLayout

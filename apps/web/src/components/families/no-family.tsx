@@ -1,4 +1,3 @@
-import { livePlan } from '@hushos/billing/protocol';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -9,7 +8,7 @@ import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
-import { familyTierName } from '@/lib/plans';
+import { personalPlanEnding } from '@/lib/plans';
 import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
 import type { GroupSummary } from '@/lib/groups/api';
 import type { GroupNotice } from '@/lib/groups/context';
@@ -51,7 +50,6 @@ export function NoFamily({
     const plan = chosen
         ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
         : undefined;
-    const live = livePlan(personal.data?.subscription);
     // Arrived from Plans with a tier: the dialog opens with it, until it is closed.
     const [dismissed, setDismissed] = useState(false);
     const open = creating || (Boolean(chosen) && !dismissed);
@@ -135,7 +133,10 @@ export function NoFamily({
                     if (!next) setDismissed(true);
                 }}
                 plan={plan}
-                personalPlan={live ? familyTierName({ name: live.productName }) : null}
+                personalPlan={personalPlanEnding(
+                    personal.data?.subscription,
+                    'the family’s plan starts',
+                )}
             />
         </div>
     );

@@ -1,5 +1,5 @@
 import type { FamilyPlan } from '@hushos/billing/api';
-import { FAMILY_MAX_MEMBERS, livePlan, spaceOf } from '@hushos/billing/protocol';
+import { FAMILY_MAX_MEMBERS, spaceOf } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
@@ -65,7 +65,12 @@ import {
 import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
-import { familyPairs, familyTierName as tierName, twoMonthsFree } from '@/lib/plans';
+import {
+    familyPairs,
+    familyTierName as tierName,
+    personalPlanEnding,
+    twoMonthsFree,
+} from '@/lib/plans';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -532,8 +537,7 @@ function ChoosePlan({
     // A personal plan the person pays for ends when the family's plan starts, with the unused
     // days refunded (docs/families-shared-pool.md 3.3): said before they pay.
     const personal = useQuery(billingQueryOptions).data?.subscription;
-    const live = livePlan(personal);
-    const ownPlan = live ? tierName({ name: live.productName }) : null;
+    const ownPlan = personalPlanEnding(personal, 'the family’s plan starts');
     const hint = useQuery(localeHintQueryOptions);
     const plans = summary.plans;
     const currencies = familyCurrencies(plans);
@@ -588,8 +592,7 @@ function ChoosePlan({
                 )}
                 {ownPlan && (
                     <p className="max-w-[43em] text-sm" data-personal-plan-ends>
-                        Your {ownPlan} plan ends when the family’s plan starts, and the unused days
-                        are refunded. From then on your files use {family}’s storage.
+                        {ownPlan} From then on your files use {family}’s storage.
                     </p>
                 )}
             </div>

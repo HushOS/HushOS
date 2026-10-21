@@ -640,6 +640,17 @@ const fakeClient = {
         },
     },
     subscriptions: {
+        // A customer's subscriptions, ended ones included, as Polar lists them.
+        async list(query: { external_customer_id?: string }) {
+            polar.calls.push(`subscriptions.list:${query.external_customer_id}`);
+            const customer = query.external_customer_id
+                ? polar.customers.get(query.external_customer_id)
+                : undefined;
+            return {
+                items: (customer?.subscriptions ?? []).map((sub) => structuredClone(sub)),
+                pagination: { total_count: 0, max_page: 1 },
+            };
+        },
         async get(id: string) {
             polar.calls.push(`subscriptions.get:${id}`);
             if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
@@ -1474,36 +1485,83 @@ describe('a personal plan whose payment failed, or that is paused', () => {
         expect(polar.calls).toContain('subscriptions.revoke:sub_gone');
     });
 
-    test('a payment Polar takes after the checkout revoked it is refunded whole; an earlier order is left alone', async () => {
-        const { userId, subscription } = await lapsedSubscriber('unpaid');
+    test('a payment Polar takes after the checkout revoked it is refunded whole; an order paid before is left alone', async () => {
+        const { userId, subscription } = await lapsedSubscriber('paused');
         subscription.current_period_start = new Date(Date.now() - 2 * DAY).toISOString();
+        // The paused plan's last period, paid and used before the pause took effect.
+        addPaidOrder(subscription, 'order_used', subscription.current_period_start);
         await billing.startCheckout(userOfId(userId), MAX);
-        // A late redelivery of the previous period's renewal, which its owner used: not refunded.
-        await paidLate(
-            userId,
-            subscription,
-            'order_used',
-            new Date(Date.now() - 40 * DAY).toISOString(),
-        );
+        // A late delivery of that order's order.paid: not refunded, nothing queued.
+        await deliverPaid(userId, subscription, 'order_used');
         expect(endingJobs).toEqual([]);
-        expect(await billingRepository.getPlanEnding('sub_lapsed')).toMatchObject({
-            outcome: 'settled',
-        });
-        // The last period's renewal, made when the period began and left unpaid, paid in the
-        // portal after the revoke: refunded whole, not for what was left of the period.
-        await paidLate(userId, subscription, 'order_late', subscription.current_period_start);
+        // An order Polar takes after the revoke (made when the period began, paid now in the
+        // portal): refunded whole, not for what was left of the period.
+        addPaidOrder(subscription, 'order_late', subscription.current_period_start);
+        await deliverPaid(userId, subscription, 'order_late');
         expect(endingJobs).toEqual([expect.objectContaining({ userId, groupId: null })]);
         await runQueued(0);
         expect(refundsMade()).toEqual([['order_late', 999]]);
-        expect(polar.refunds[0]?.metadata).toEqual({
-            hushos_refund: expect.stringContaining(':order_late'),
+        expect(polar.refunds[0]).toMatchObject({
+            comment: 'Paid after HushOS ended this plan, which no longer runs',
+            metadata: { hushos_refund: expect.stringContaining(':order_late') },
         });
         expect(await billingRepository.getPlanEnding('sub_lapsed')).toMatchObject({
             outcome: 'settled',
         });
-        // Run again (a retry, the daily reconcile): nothing refunded twice.
+        // Run again (a retry, the daily reconcile), and the delivery again: nothing twice.
+        await deliverPaid(userId, subscription, 'order_late');
         await runQueued(0);
         expect(refundsMade()).toEqual([['order_late', 999]]);
+    });
+
+    test('a second payment noted while the job is refunding the first is refunded too', async () => {
+        const { userId, subscription } = await lapsedSubscriber('unpaid');
+        await billing.startCheckout(userOfId(userId), MAX);
+        addPaidOrder(subscription, 'order_late');
+        await deliverPaid(userId, subscription, 'order_late');
+        const [job] = endingJobs;
+        // The second order.paid lands after the run read the orders, before it closes.
+        polar.onRefundList = async () => {
+            addPaidOrder(subscription, 'order_later');
+            await deliverPaid(userId, subscription, 'order_later');
+        };
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        try {
+            await expect(billing.endPersonalPlans(job!)).rejects.toThrow();
+            expect(refundsMade()).toEqual([['order_late', 999]]);
+            expect((await billingRepository.getPlanEnding('sub_lapsed'))?.outcome).toBeNull();
+            // pg-boss's retry of the same job.
+            await billing.endPersonalPlans(job!);
+        } finally {
+            warn.mockRestore();
+        }
+        expect(refundsMade()).toEqual([
+            ['order_late', 999],
+            ['order_later', 999],
+        ]);
+        expect((await billingRepository.getPlanEnding('sub_lapsed'))?.outcome).toBe('settled');
+    });
+
+    test('a revoke whose answer is lost still has a later payment refunded', async () => {
+        const { userId, subscription } = await lapsedSubscriber('unpaid');
+        // The revoke lands at Polar; its answer doesn't arrive, so the checkout is refused.
+        polar.revokeAnswerLost = true;
+        await expect(billing.startCheckout(userOfId(userId), MAX)).rejects.toMatchObject({
+            status: 503,
+        });
+        expect(subscription.ended_at).toBeTruthy();
+        expect(await billingRepository.getPlanEnding('sub_lapsed')).toMatchObject({
+            groupId: null,
+            revokedAt: null,
+            outcome: 'settled',
+        });
+        addPaidOrder(subscription, 'order_late');
+        await deliverPaid(userId, subscription, 'order_late');
+        await runQueued(0);
+        expect(refundsMade()).toEqual([['order_late', 999]]);
+        expect((await billingRepository.getPlanEnding('sub_lapsed'))?.revokedAt).toBeInstanceOf(
+            Date,
+        );
     });
 
     test('such a payment partly made from the customer’s balance is refunded on that order only; the rest goes to operators', async () => {
@@ -1563,10 +1621,30 @@ describe('a personal plan whose payment failed, or that is paused', () => {
         ]);
     });
 
+    test('such a payment made wholly from the customer’s balance settles with nothing refunded, listed for operators', async () => {
+        const { userId, subscription } = await lapsedSubscriber('unpaid');
+        await billing.startCheckout(userOfId(userId), MAX);
+        addPaidOrder(subscription, 'order_late');
+        polar.orders.at(-1)!.applied_balance_amount = -999;
+        await deliverPaid(userId, subscription, 'order_late');
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        try {
+            await runQueued(0);
+        } finally {
+            warn.mockRestore();
+        }
+        expect(refundsMade()).toEqual([]);
+        expect(await billingRepository.getPlanEnding('sub_lapsed')).toMatchObject({
+            outcome: 'settled',
+            unrefundableAmount: 999,
+        });
+    });
+
     test('a refund of such a payment that keeps failing is logged as an error and listed as owed', async () => {
         const { userId, subscription } = await lapsedSubscriber('unpaid');
         await billing.startCheckout(userOfId(userId), MAX);
-        await paidLate(userId, subscription, 'order_late');
+        addPaidOrder(subscription, 'order_late');
+        await deliverPaid(userId, subscription, 'order_late');
         const [job] = endingJobs;
         polar.refundRefusals = 5;
         const error = vi.spyOn(log, 'error').mockImplementation(() => {});
@@ -1639,14 +1717,33 @@ describe('a personal plan whose payment failed, or that is paused', () => {
         expect(subscription.product_id).toBe(MAX);
     });
 
-    test('a revoke Polar fails stops the checkout, so two plans never run', async () => {
-        const { userId } = await lapsedSubscriber('unpaid');
+    test('a revoke Polar fails stops the checkout, and a payment that then restores the plan is theirs', async () => {
+        const { userId, subscription } = await lapsedSubscriber('unpaid');
         polar.revokeFailures = 1;
         await expect(billing.startCheckout(userOfId(userId), MAX)).rejects.toMatchObject({
             status: 503,
         });
         expect(polar.calls).not.toContain('checkouts.create');
         expect(await mirrored(userId)).toMatchObject({ status: 'unpaid', endedAt: null });
+        // Never revoked: they pay in the portal, and the plan runs again, unrefunded.
+        expect((await billingRepository.getPlanEnding('sub_lapsed'))?.outcome).toBe('dropped');
+        subscription.status = 'active';
+        addPaidOrder(subscription, 'order_late');
+        await deliverPaid(userId, subscription, 'order_late');
+        expect(endingJobs).toEqual([]);
+        await billing.reconcileCustomer(userId);
+        expect(await mirrored(userId)).toMatchObject({ status: 'active', endedAt: null });
+        expect(refundsMade()).toEqual([]);
+    });
+
+    test('deleting the account revokes a past-due plan HushOS never recorded', async () => {
+        const { userId } = await lapsedSubscriber('unpaid');
+        // A plan that went past due before any delivery reached HushOS.
+        subscribe(userId, { id: 'sub_unrecorded', status: 'past_due' });
+        await billing.revokeForDeletion(userId);
+        const revoked = polar.calls.indexOf('subscriptions.revoke:sub_unrecorded');
+        expect(revoked).toBeGreaterThanOrEqual(0);
+        expect(revoked).toBeLessThan(polar.calls.indexOf(`customers.deleteExternal:${userId}`));
     });
 });
 
@@ -1811,6 +1908,22 @@ describe('affiliates', () => {
         await growth.attributeNewAccount(late.userId, 'CREATOR25');
         await billing.startCheckout({ id: late.userId, name: 'Late', email: late.email }, PRO);
         expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: null });
+    });
+
+    test('a payment refunded because its plan was revoked earns no commission', async () => {
+        await creator();
+        const { userId } = await createTestAccount();
+        await growth.attributeNewAccount(userId, 'creator25');
+        const subscription = subscribe(userId, { id: 'sub_lapsed' });
+        await billing.reconcileCustomer(userId);
+        subscription.status = 'unpaid';
+        await billing.reconcileCustomer(userId);
+        await billing.startCheckout({ id: userId, name: 'Fan', email: 'x@hushos.test' }, MAX);
+        addPaidOrder(subscription, 'order_late');
+        await deliverPaid(userId, subscription, 'order_late');
+        const [row] = await growth.listAffiliates();
+        expect(row!.stats.orders).toBe(0);
+        expect(row!.stats.earnings).toEqual({});
     });
 
     test('a paid order pays the commission once, however often Polar reports it', async () => {
@@ -5346,9 +5459,8 @@ describe('a personal plan ends when its owner’s files join a family', () => {
     });
 });
 
-/* Polar reports a payment on `subscription`'s order `orderId` (paid now), as its `order.paid` does. */
-async function paidLate(
-    userId: string,
+/* An order of `subscription` that Polar holds as paid, made at `createdAt` (now by default). */
+function addPaidOrder(
     subscription: FakeSubscription,
     orderId: string,
     createdAt = new Date().toISOString(),
@@ -5365,21 +5477,30 @@ async function paidLate(
         net_amount: 999,
         tax_amount: 180,
     });
+}
+
+/* Polar's `order.paid` for an order `addPaidOrder` made. */
+async function deliverPaid(userId: string, subscription: FakeSubscription, orderId: string) {
+    const order = polar.orders.find((candidate) => candidate.id === orderId)!;
     const delivery = await signedWebhook({
         type: 'order.paid',
         data: {
             id: orderId,
             subscription_id: subscription.id,
-            created_at: createdAt,
+            created_at: order.created_at,
             currency: 'usd',
+            net_amount: order.net_amount,
+            discount_id: null,
             customer: { external_id: userId },
         },
     });
     const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
     try {
         expect((await billing.handleWebhook(delivery)).status).toBe(200);
     } finally {
         error.mockRestore();
+        warn.mockRestore();
     }
 }
 
@@ -5409,7 +5530,8 @@ describe('a pooled member’s lapsed personal plan', () => {
             // Polar takes a payment for it all the same (a dunning email answered): refunded
             // whole, before tax, that order alone.
             const before = endingJobs.length;
-            await paidLate(member.userId, subscription, 'order_late');
+            addPaidOrder(subscription, 'order_late');
+            await deliverPaid(member.userId, subscription, 'order_late');
             await runQueued(before);
             expect(refundsMade()).toEqual([['order_late', 999]]);
             expect(await billingRepository.getPlanEnding('sub_personal')).toMatchObject({
@@ -5417,6 +5539,42 @@ describe('a pooled member’s lapsed personal plan', () => {
             });
         },
     );
+});
+
+describe('a pooled member’s lapsed plan after leaving and coming back', () => {
+    test('a plan whose ending was dropped is revoked once it lapses, and a later payment is refunded', async () => {
+        const { member, groupId, job, subscription } = await pooledSubscriber();
+        // The first revoke can't reach Polar; they leave before the retry: the ending is dropped.
+        polar.revokeFailures = 1;
+        await expect(billing.endPersonalPlans(job)).rejects.toThrow();
+        await setTestMember({ groupId, userId: member.userId, state: 'left' });
+        await billing.endPersonalPlans(job);
+        expect((await billingRepository.getPlanEnding('sub_personal'))?.outcome).toBe('dropped');
+        // Back in the family; their plan's payment fails.
+        await setTestMember({ groupId, userId: member.userId, state: 'active' });
+        subscription.status = 'unpaid';
+        const before = endingJobs.length;
+        await billing.reconcileCustomer(member.userId);
+        await runQueued(before);
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            'subscriptions.revoke:sub_personal',
+            'subscriptions.revoke:sub_personal',
+        ]);
+        expect(await billingRepository.getPlanEnding('sub_personal')).toMatchObject({
+            groupId: null,
+            outcome: 'settled',
+        });
+        expect(refundsMade()).toEqual([]);
+        // The daily reconcile has nothing more to queue for them.
+        const daily = endingJobs.length;
+        await billing.reconcilePlanEndings();
+        expect(endingJobs.slice(daily)).toEqual([]);
+        // A payment Polar takes for it afterwards is refunded whole.
+        addPaidOrder(subscription, 'order_late');
+        await deliverPaid(member.userId, subscription, 'order_late');
+        await runQueued(daily);
+        expect(refundsMade()).toEqual([['order_late', 999]]);
+    });
 });
 
 describe('a personal plan while pooled', () => {

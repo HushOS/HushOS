@@ -15,6 +15,7 @@ import {
     getFamilyCatalogue,
     offeredFamilies,
     polar,
+    polarErrorName,
     statusOf,
     unavailable,
     type BillingUser,
@@ -551,11 +552,6 @@ const endsOnFormat = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'UTC',
 });
 
-/* Polar's error name on a refused call (`InactiveSubscription`, `SubscriptionLocked`). */
-function errorName(error: unknown) {
-    return (error as PolarClientError<{ error?: string }>).error?.error ?? null;
-}
-
 const endingOrEnded = (subscription: models.Subscription) =>
     Boolean(subscription.ended_at) ||
     subscription.cancel_at_period_end ||
@@ -666,7 +662,7 @@ async function setDissolvedToEnd(groupId: string, outcome: { cancelled: number; 
                     await polar().subscriptions.update(row.id, { cancel_at_period_end: true });
                 } catch (error) {
                     const status = statusOf(error);
-                    const name = errorName(error);
+                    const name = polarErrorName(error);
                     if (status === 403 && name === 'AlreadyCanceledSubscription') {
                         const again = await read();
                         if (!again || endingOrEnded(again)) return 'already' as const;

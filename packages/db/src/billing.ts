@@ -1181,17 +1181,19 @@ export async function ensurePlanEnding(input: {
 }
 
 /*
- * A lapsed personal plan (unpaid, incomplete, paused) HushOS revoked itself: an ending with
- * no family, settled, since nothing of it was paid for. A payment Polar takes for it later
- * opens it again (notePaidAfterRevoke), and the plan-ending job refunds that order whole.
- * An ending the plan already has (its owner was pooled while it was live) is left as it is.
+ * The ending of a lapsed personal plan (unpaid, incomplete, paused) HushOS is about to
+ * revoke itself, before a checkout or because its owner was pooled: one with no family,
+ * written before Polar is asked, so a revoke whose answer is lost and a payment that lands
+ * meanwhile still find it. Settled, since nothing of it is in force: a payment Polar takes
+ * for it afterwards opens it again (notePaidAfterRevoke), and the plan-ending job refunds
+ * that order whole. `revoked_at` is set once Polar's answer says when (recordPlanRevoked).
+ * One its owner's leaving had dropped (`dropped`, never revoked) is taken over; any other
+ * ending the plan has is left as it is. Returns the plan's ending as it stands.
  */
-export async function recordLapsedRevoke(input: {
+export async function beginLapsedRevoke(input: {
     subscriptionId: string;
     userId: string;
-    revokedAt: Date;
-    periodStart: Date;
-    periodEnd: Date;
+    at: Date;
 }) {
     await db
         .insert(personalPlanEndings)
@@ -1199,14 +1201,31 @@ export async function recordLapsedRevoke(input: {
             subscriptionId: input.subscriptionId,
             userId: input.userId,
             groupId: null,
-            admittedAt: input.revokedAt,
-            pooledAt: input.revokedAt,
-            revokedAt: input.revokedAt,
-            periodStart: input.periodStart,
-            periodEnd: input.periodEnd,
+            admittedAt: input.at,
+            pooledAt: input.at,
             outcome: 'settled',
         })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+            target: personalPlanEndings.subscriptionId,
+            set: {
+                groupId: null,
+                admittedAt: input.at,
+                pooledAt: input.at,
+                revokedAt: null,
+                periodStart: null,
+                periodEnd: null,
+                outcome: 'settled',
+                unrefundableAmount: null,
+                unrefundableCurrency: null,
+                updatedAt: new Date(),
+            },
+            where: eq(personalPlanEndings.outcome, 'dropped'),
+        });
+    const [row] = await db
+        .select()
+        .from(personalPlanEndings)
+        .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId));
+    return row!;
 }
 
 /* Endings with work left for this person, oldest first. */
@@ -1251,14 +1270,29 @@ export async function recordPlanRevoked(
     return row!;
 }
 
+/*
+ * Closes an ending. `settled` only while no refund of it is still unworked (noted,
+ * `requested`, never asked for): an order a payment delivery noted while the run that
+ * settles it was already past reading the orders keeps the ending open, for that run's
+ * retry. Returns whether it closed.
+ */
 export async function closePlanEnding(
     subscriptionId: string,
     outcome: 'settled' | 'dropped' | 'ended',
 ) {
-    await db
+    const rows = await db
         .update(personalPlanEndings)
         .set({ outcome, updatedAt: new Date() })
-        .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                outcome === 'settled'
+                    ? sql`not exists (select 1 from ${personalPlanRefunds} where ${personalPlanRefunds.subscriptionId} = ${subscriptionId} and ${personalPlanRefunds.status} = 'requested' and ${personalPlanRefunds.firstAttemptedAt} is null)`
+                    : undefined,
+            ),
+        )
+        .returning({ subscriptionId: personalPlanEndings.subscriptionId });
+    return rows.length > 0;
 }
 
 export async function getPlanRefund(orderId: string) {

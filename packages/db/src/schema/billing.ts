@@ -268,7 +268,7 @@ export const personalPlanEndings = pgTable(
          * lapsed plan (unpaid, incomplete, paused) HushOS revoked itself, before a checkout or
          * because its owner was pooled: nothing is refunded then unless Polar takes a payment
          * for it afterwards, which is refunded whole (`admitted_at` and `pooled_at` are then
-         * when it was revoked).
+         * when HushOS set out to revoke it, `revoked_at` when Polar says it ended).
          */
         groupId: uuid('group_id'),
         admittedAt: timestamp('admitted_at', { withTimezone: true }).notNull(),

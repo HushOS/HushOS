@@ -71,6 +71,8 @@ export {
 export { quoteTierChange } from './protocol';
 
 const WEBHOOK_MAX_BYTES = 256 * 1024;
+/* Polar's statuses after which a subscription has ended (with or without `ended_at`). */
+const ENDED_STATUSES = new Set<string>(billingRepository.ENDED_SUBSCRIPTION_STATUSES);
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function listCatalogue(): Promise<Catalogue> {
@@ -669,19 +671,21 @@ export async function revokeForDeletion(userId: string) {
         } catch (error) {
             if (statusOf(error) !== 404) throw error;
         }
-        for (const subscription of state?.active_subscriptions ?? []) {
-            try {
-                await polar().subscriptions.revoke(subscription.id);
-            } catch (error) {
-                if (statusOf(error) !== 404 && statusOf(error) !== 403) throw error;
-            }
+        // Every plan that can still charge: the customer's state lists only active and trialing
+        // ones, so Polar's own list of their subscriptions and the mirror are read too, for one
+        // past due (in dunning), unpaid, incomplete or paused (which resumes on its date).
+        const ids = new Set((state?.active_subscriptions ?? []).map((s) => s.id));
+        if (state) {
+            const page = await polar().subscriptions.list({
+                external_customer_id: userId,
+                limit: 100,
+            });
+            for (const subscription of page.items)
+                if (!subscription.ended_at && !ENDED_STATUSES.has(subscription.status))
+                    ids.add(subscription.id);
         }
-        // The customer's state lists only active and trialing plans. One past due (in
-        // dunning), unpaid, incomplete or paused (which resumes on its date) can still
-        // charge, so every plan the mirror holds as not ended is revoked too.
-        const listed = new Set((state?.active_subscriptions ?? []).map((s) => s.id));
-        for (const id of await billingRepository.listUnendedSubscriptionIds(userId)) {
-            if (listed.has(id)) continue;
+        for (const id of await billingRepository.listUnendedSubscriptionIds(userId)) ids.add(id);
+        for (const id of ids) {
             try {
                 await polar().subscriptions.revoke(id);
             } catch (error) {
@@ -761,12 +765,18 @@ export async function handleWebhook(request: Request): Promise<Response> {
         if (event.type === 'refund.updated')
             await noteRefundUpdated(event.data as Parameters<typeof noteRefundUpdated>[0]);
         if (event.type === 'order.paid') {
-            // A payment for a lapsed plan HushOS revoked is refunded whole.
-            await notePaidAfterRevoke(event.data as Parameters<typeof notePaidAfterRevoke>[0]);
-            await recordAffiliateEarning(
-                event.data as Parameters<typeof recordAffiliateEarning>[0],
+            // A payment for a lapsed plan HushOS revoked is refunded whole, so it earns no
+            // commission and no referral reward. (A pooled member's renewal refunded by the
+            // plan-ending job below still does: an existing gap.)
+            const refunded = await notePaidAfterRevoke(
+                event.data as Parameters<typeof notePaidAfterRevoke>[0],
             );
-            if (userId) await rewardPaidReferral(userId);
+            if (!refunded) {
+                await recordAffiliateEarning(
+                    event.data as Parameters<typeof recordAffiliateEarning>[0],
+                );
+                if (userId) await rewardPaidReferral(userId);
+            }
             // A personal order paid while its owner's files draw from a family's pool (a
             // renewal that slipped past the revoke, a checkout that raced the admission):
             // the plan is ended and the order refunded by the same job (5.1).
