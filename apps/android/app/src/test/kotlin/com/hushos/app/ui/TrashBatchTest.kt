@@ -35,6 +35,8 @@ class TrashBatchTest {
         val events = ArrayList<String>()
         val batches = ArrayList<List<String>>()
         val dropped = ArrayList<String>()
+        /* What each call to `drop` took off the lists: one call is one update of the lists. */
+        val drops = ArrayList<List<String>>()
         /* Each notice's text, and what tapping its Undo restores (null: the notice has no Undo). */
         val notices = ArrayList<Pair<String, List<String>?>>()
         val settled = ArrayList<Set<String>>()
@@ -53,7 +55,7 @@ class TrashBatchTest {
                     if (it.id in withFolder) TrashMove.WITH_FOLDER else TrashMove.TRASHED
                 }
             },
-            drop = { items -> items.forEach { item -> events.add("drop ${item.id}"); dropped.add(item.id) } },
+            drop = { items -> drops.add(items.map { it.id }); items.forEach { item -> events.add("drop ${item.id}"); dropped.add(item.id) } },
             announce = { text, undo ->
                 events.add("announce")
                 // Tap Undo at once: what reaches `restore` is what the person gets back.
@@ -64,6 +66,14 @@ class TrashBatchTest {
             restore = { moved -> restored = moved.map { it.id } },
             settle = { folders -> events.add("settle"); settled.add(folders) },
         )
+
+        /* As the batch route answers: every item moved, a request of `size` at a time, each request's landing told at once. */
+        fun requests(size: Int) = steps { }.let { base ->
+            TrashSteps(
+                send = { batch, moved -> batch.chunked(size).forEach { moved(it) }; batch.map { Result.success(TrashMove.TRASHED) } },
+                drop = base.drop, announce = base.announce, restore = base.restore, settle = base.settle,
+            )
+        }
     }
 
     private val failing = setOf("f3", "f8")
@@ -95,6 +105,15 @@ class TrashBatchTest {
         // Each row goes right after its own answer; the notice and one follow-up come after the last.
         val expected = thirteen.flatMap { listOf("sent ${it.id}", "drop ${it.id}") } + listOf("announce", "settle")
         assertEquals(expected, recorder.events)
+    }
+
+    @Test
+    fun aRequestsRowsLeaveTheListsInOneUpdate() = runBlocking {
+        // 251 rows dropped one at a time redraw the list 251 times; a request's worth goes in one.
+        val many = (1..251).map { item("m$it") }
+        val recorder = Recorder()
+        trashMany(many, recorder.requests(200))
+        assertEquals(listOf(many.take(200).map { it.id }, many.drop(200).map { it.id }), recorder.drops)
     }
 
     @Test

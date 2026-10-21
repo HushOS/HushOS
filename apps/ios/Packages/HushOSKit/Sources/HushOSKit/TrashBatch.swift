@@ -332,12 +332,15 @@ public enum TrashBatch {
      * order given, and `moved` told of what each request moved as its answer lands. A request that fails as
      * a whole fails its items with its error; no network, an ended session or a cancellation fails
      * the rest unsent. `sequential` is the per-item route, for a server without the batch one; from
-     * then on every remaining chunk goes that way.
+     * then on every remaining chunk goes that way. `forget` hears the same ids only after `moved`
+     * returned: the lists let go of a row first, or a row still on screen whose node is gone is
+     * looked up again (a thumbnail, a listing).
      */
     public static func trashInBatches(
         _ items: [(id: String, workspace: String)],
         send: @Sendable (String, [String]) async throws -> [Answer],
         sequential: @Sendable ([String]) async -> [Result<Move, Error>],
+        forget: @Sendable ([String]) async -> Void = { _ in },
         moved: @Sendable ([(id: String, how: Move)]) async -> Void
     ) async -> [Result<Move, Error>] {
         var outcomes = [Result<Move, Error>?](repeating: nil, count: items.count)
@@ -364,7 +367,10 @@ public enum TrashBatch {
                         outcomes[index] = outcome
                         if case .success(let how) = outcome { landed.append((id, how)) }
                     }
-                    if !landed.isEmpty { await moved(landed) }
+                    if !landed.isEmpty {
+                        await moved(landed)
+                        await forget(landed.map(\.id))
+                    }
                     continue
                 } catch is Unsupported {
                     perItem = true

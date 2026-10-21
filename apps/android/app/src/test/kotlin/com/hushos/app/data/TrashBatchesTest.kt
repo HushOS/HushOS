@@ -49,6 +49,23 @@ class TrashBatchesTest {
     }
 
     @Test
+    fun aRowIsForgottenOnlyOnceTheListsLetGoOfIt() = runBlocking {
+        // The screen: a row it still shows whose node this device forgot is looked up again (a
+        // thumbnail, a listing), which cost 115 to 156 listings a 251-item batch. Refused rows stay known.
+        val onScreen = ids(250).toMutableSet()
+        val forgotten = ArrayList<String>()
+        var lookedUpAgain = 0
+        val server = Server { if (it == "n7") BatchRefusal(it, "forbidden", "You can’t change this.") else Trashed(it, "now", 1) }
+        trashInBatches(
+            ids(250).map { it to "own" }, server::send, { error("not used") },
+            forget = { landed -> landed.forEach { id -> if (id in onScreen) lookedUpAgain++; forgotten.add(id) } },
+        ) { landed -> onScreen.removeAll(landed.map { it.first }.toSet()) }
+        assertEquals(0, lookedUpAgain)
+        assertEquals(ids(250) - "n7", forgotten)
+        assertEquals(setOf("n7"), onScreen)
+    }
+
+    @Test
     fun coveredOrAlreadyInTheTrashCountsAsMovedWithItsFolder() = runBlocking {
         val server = Server { id ->
             when (id) {

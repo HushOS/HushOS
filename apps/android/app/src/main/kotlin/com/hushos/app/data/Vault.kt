@@ -1172,12 +1172,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
             items,
             send = { ws, chunk -> api.trashBatch(ws, chunk) },
             sequential = { chunk -> trashEach(chunk, ::trash) { moved(listOf(it)) }.map { outcome -> outcome.map { TrashMove.TRASHED } } },
-            // The row leaves the lists first, then this device forgets it: a row still on screen whose
-            // node is gone would be looked up again for each one in the batch.
-            moved = { landed ->
-                moved(landed.map { it.first })
-                for ((id, _) in landed) workspaces[id]?.let { forget(it, id) }
-            },
+            // Called after `moved`: the row leaves the lists first, then this device forgets it.
+            forget = { landed -> for (id in landed) workspaces[id]?.let { forget(it, id) } },
+            moved = { landed -> moved(landed.map { it.first }) },
         )
     }
 

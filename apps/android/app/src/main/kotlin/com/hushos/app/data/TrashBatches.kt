@@ -61,12 +61,14 @@ private fun chunks(items: List<Pair<String, String>>): List<Pair<String, List<In
  * per row). A request that fails as a whole fails its items with
  * its error; no network or an ended session fails the rest unsent. `sequential` is the per-item
  * route, for a server without the batch one (the request answers BatchUnsupported); from then on
- * every remaining chunk goes that way.
+ * every remaining chunk goes that way. `forget` hears the same ids only after `moved` returned:
+ * the lists let go of a row first, or a row still on screen whose node is gone is looked up again.
  */
 suspend fun trashInBatches(
     items: List<Pair<String, String>>,
     send: (workspaceId: String, ids: List<String>) -> List<BatchAnswer>,
     sequential: suspend (ids: List<String>) -> List<Result<TrashMove>>,
+    forget: (ids: List<String>) -> Unit = {},
     moved: (landed: List<Pair<String, TrashMove>>) -> Unit,
 ): List<Result<TrashMove>> {
     val outcomes = arrayOfNulls<Result<TrashMove>>(items.size)
@@ -102,7 +104,10 @@ suspend fun trashInBatches(
                     outcomes[index] = outcome
                     outcome.getOrNull()?.let { landed.add(id to it) }
                 }
-                if (landed.isNotEmpty()) moved(landed)
+                if (landed.isNotEmpty()) {
+                    moved(landed)
+                    forget(landed.map { it.first })
+                }
                 continue
             }
         }

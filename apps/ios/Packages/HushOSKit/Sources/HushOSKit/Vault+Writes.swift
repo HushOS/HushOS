@@ -260,13 +260,9 @@ extension Vault {
                 await TrashBatch.trashEach(chunk, trash: { id in try await self.trash(id) }, moved: { id in await moved([id]) })
                     .map { $0.map { TrashBatch.Move.trashed } }
             },
-            // The row leaves the lists first, then this device forgets it: a row still on screen whose
-            // node is gone would be looked up again (a thumbnail, a listing) for each one in the batch.
-            moved: { landed in
-                let ids = landed.map(\.id)
-                await moved(ids)
-                await self.forget(ids)
-            }
+            // Called after `moved`: the row leaves the lists first, then this device forgets it.
+            forget: { ids in await self.forget(ids) },
+            moved: { landed in await moved(landed.map(\.id)) }
         )
     }
 

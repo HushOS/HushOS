@@ -63,6 +63,27 @@ import Testing
         #expect(await sizes.ids == ["200", "50"])
     }
 
+    /* The screen: a row it still shows whose node this device forgot is looked up again. */
+    actor Screen {
+        var rows: Set<String>
+        var forgotten: [String] = []
+        var lookedUpAgain = 0
+        init(_ rows: [String]) { self.rows = Set(rows) }
+        func drop(_ ids: [String]) { rows.subtract(ids) }
+        func forget(_ ids: [String]) { for id in ids { if rows.contains(id) { lookedUpAgain += 1 }; forgotten.append(id) } }
+    }
+
+    @Test func aRowIsForgottenOnlyOnceTheListsLetGoOfIt() async {
+        // Forgetting rows still on screen cost 115 to 156 listings and 8 to 11 s a 251-item batch. Refused rows stay known.
+        let screen = Screen(ids(250))
+        let server = Server(answer: { id, _ in id == "n7" ? .refused(id: id, reason: "forbidden", message: "You can’t change this.") : .trashed(id: id, changeSeq: 1) })
+        _ = await TrashBatch.trashInBatches(ids(250).map { ($0, "own") }, send: { try await server.send($0, $1) }, sequential: { _ in [] },
+                                            forget: { await screen.forget($0) }) { landed in await screen.drop(landed.map(\.id)) }
+        #expect(await screen.lookedUpAgain == 0)
+        #expect(await screen.forgotten == ids(250).filter { $0 != "n7" })
+        #expect(await screen.rows == ["n7"])
+    }
+
     @Test func coveredOrAlreadyInTheTrashCountsAsMovedWithItsFolder() async {
         let server = Server(answer: { id, _ in
             switch id {

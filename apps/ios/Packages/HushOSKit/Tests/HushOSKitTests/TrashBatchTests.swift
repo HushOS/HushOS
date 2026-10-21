@@ -25,6 +25,8 @@ import Testing
         var events: [String] = []
         var batches: [[String]] = []
         var dropped: [String] = []
+        /* What each call to `drop` took off the lists: one call is one update of the lists. */
+        var drops: [[String]] = []
         /* Each notice's text, and what tapping its Undo restores (nil: the notice has no Undo). */
         var notices: [(text: String, undo: [String]?)] = []
         var settled: [Set<String>] = []
@@ -45,7 +47,10 @@ import Testing
                         return withFolder.contains(item.id) ? TrashBatch.Move.withFolder : .trashed
                     }
                 },
-                drop: { items in for item in items { self.events.append("drop \(item.id)"); self.dropped.append(item.id) } },
+                drop: { items in
+                    self.drops.append(items.map(\.id))
+                    for item in items { self.events.append("drop \(item.id)"); self.dropped.append(item.id) }
+                },
                 announce: { text, undo in
                     self.events.append("announce")
                     // Tap Undo at once: what reaches `restore` is what the person gets back.
@@ -57,6 +62,16 @@ import Testing
                 settle: { folders in self.events.append("settle"); self.settled.append(folders) }
             )
         }
+
+        /* As the batch route answers: every item moved, a request of `size` at a time, each request's landing told at once. */
+        func requests(_ size: Int) -> TrashBatch.Steps {
+            var steps = self.steps { _ in }
+            steps.send = { batch, moved in
+                for start in stride(from: 0, to: batch.count, by: size) { await moved(Array(batch[start ..< min(start + size, batch.count)])) }
+                return batch.map { _ in .success(.trashed) }
+            }
+            return steps
+        }
     }
 
     nonisolated static let failing: Set<String> = ["f3", "f8"]
@@ -64,6 +79,14 @@ import Testing
         if TrashBatchTests.failing.contains(item.id) { throw DriveAPIError.server(500, "Server said something internal") }
     }
     var movedIds: [String] { thirteen.map(\.id).filter { !Self.failing.contains($0) } }
+
+    @Test func aRequestsRowsLeaveTheListsInOneUpdate() async {
+        // 251 rows dropped one at a time redraw the list 251 times; a request's worth goes in one.
+        let many = (1...251).map { item("m\($0)") }
+        let recorder = Recorder()
+        _ = await TrashBatch.trash(many, recorder.requests(200))
+        #expect(recorder.drops == [many.prefix(200).map(\.id), many.dropFirst(200).map(\.id)])
+    }
 
     @Test func aFailedItemIsNotCountedAsMoved() async {
         let recorder = Recorder()
