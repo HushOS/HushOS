@@ -1041,13 +1041,14 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const [overview, stuck, owed, unrefundable, doubled, unended] = await Promise.all([
+    const [overview, stuck, owed, unrefundable, doubled, unended, orphaned] = await Promise.all([
         adminRepository.getOverview(),
         billingRepository.listGivenUpReissues(),
         billingRepository.listRefundsOwed(),
         billingRepository.listUnrefundable(),
         billingRepository.listDoubleCharging(),
         billingRepository.listLapsedRevokeRefusals(),
+        billingRepository.listOrphanedPlans(),
     ]);
     return {
         ...overview,
@@ -1107,6 +1108,23 @@ export async function getAdminOverview(sessionToken: string | null) {
             status: row.status,
             refusal: row.refusal,
             since: row.since?.toISOString() ?? null,
+        })),
+        /*
+         * Plans of families HushOS has deleted that Polar billed again (reinstated or resumed
+         * after they ended): revoked by HushOS, and what they took after the family's plans had
+         * ended refunded whole by the plan-ending job. Listed while one still bills, while its
+         * refunds are being made, and for 30 days after. Ids and amounts only.
+         */
+        orphanedPlans: orphaned.map((row) => ({
+            groupId: row.groupId,
+            subscriptionId: row.subscriptionId,
+            status: row.status,
+            revoked: row.revokedAt !== null,
+            refunded: row.refunded,
+            toRefund: row.toRefund,
+            currency: row.currency ?? 'usd',
+            settled: row.outcome === 'settled',
+            since: new Date(row.since).toISOString(),
         })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },
         objects: {

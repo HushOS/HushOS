@@ -1118,7 +1118,22 @@ export async function endPersonalPlans(
                 // if Polar shows it ended (the revoke landed). Still running, it was never
                 // revoked, and the payment restored the plan its owner kept: theirs, untouched.
                 // Gone at Polar (404) counts as ended, as for a family's ending: it can't run.
-                const ended = await lapsedEnd(subscriptionId, ending);
+                let ended = await lapsedEnd(subscriptionId, ending);
+                // A deleted family's plan never runs again: revoked here, never given back.
+                if (
+                    !ended &&
+                    (await billingRepository.familyPlanOf(subscriptionId))?.exists === false
+                ) {
+                    const revoked = await revoke(subscriptionId);
+                    if (revoked) {
+                        const { already: _already, ...instant } = revoked;
+                        ended = instant;
+                    } else ended = await lapsedEnd(subscriptionId, ending);
+                    log.error({
+                        message: 'A deleted family’s plan was still billing; revoked by its job',
+                        billing: { group: userId, subscription: subscriptionId },
+                    });
+                }
                 if (!ended) {
                     // Its payments are its owner's (`kept`, in the drop's transaction); their
                     // commission and referral reward, which the delivery held back, are granted
@@ -1436,6 +1451,98 @@ async function revokeHeldLapsed(
         billing: { ...ownerOf(userId, kind), subscription: subscriptionId },
     });
     return true;
+}
+
+/*
+ * A plan of a family HushOS has deleted (purged after it was dissolved) that Polar bills
+ * again: reinstated, or resumed, after it had ended (docs/groups-design.md 3.3). The family
+ * is gone, so nothing such a plan charges for can be given: it is revoked at once, and every
+ * order of it paid after the family's plans had ended (`since`) is refunded whole by the
+ * plan-ending job, keyed by the family's id, as a payment on a lapsed plan HushOS revoked is
+ * (same ending, same refunds, same retries and Refunds owed). Orders paid before `since`
+ * paid for a period the family had, and are noted as used.
+ *
+ * The ending is written first, the orders noted, then Polar asked, so a revoke whose answer
+ * is lost still leaves the payments to refund once Polar shows the plan ended. Held under
+ * the plan-ending lease: one a running job holds is left to it (it revokes too). Never
+ * dropped: a refusal or an outage is logged at error level, the plan stays listed for
+ * operators, and the next reconcile (a delivery, the daily one at the latest) or the job's
+ * retry asks again. Returns whether Polar shows the plan ended now.
+ */
+export async function endOrphanedFamilyPlan(groupId: string, subscriptionId: string, since: Date) {
+    const existing = await billingRepository.getPlanEnding(subscriptionId);
+    // Revoked once already, and billing again: reinstated a second time.
+    if (existing && isLapsedEnding(existing) && existing.revokedAt)
+        await billingRepository.restartLapsedEnding(subscriptionId);
+    const begun = await billingRepository.beginLapsedRevoke({
+        subscriptionId,
+        userId: groupId,
+        at: new Date(),
+    });
+    if (!isLapsedEnding(begun)) return false;
+    const owner = randomUUID();
+    if (!(await billingRepository.takePlanEndingLease(subscriptionId, owner, PLAN_ENDING_LEASE_MS)))
+        return false;
+    let ended = false;
+    try {
+        const orders = (await polar().orders.list({ subscription_id: subscriptionId, limit: 100 }))
+            .items;
+        const paid = orders.filter((order) => order.paid);
+        const after = (order: models.Order) => Date.parse(order.created_at) >= since.getTime();
+        const ending = (await billingRepository.getPlanEnding(subscriptionId))!;
+        await billingRepository.notePaidBeforeRevoke(
+            paid
+                .filter((order) => !after(order))
+                .map((order) => ({
+                    orderId: order.id,
+                    subscriptionId,
+                    refundKey: refundKey(ending, order.id),
+                    currency: order.currency,
+                })),
+        );
+        for (const order of paid.filter(after))
+            await billingRepository.notePaidOnLapsed({
+                orderId: order.id,
+                subscriptionId,
+                refundKey: refundKey(ending, order.id),
+                currency: order.currency,
+            });
+        try {
+            const revoked = await polar().subscriptions.revoke(subscriptionId);
+            await billingRepository.recordPlanRevoked(subscriptionId, {
+                revokedAt: new Date(revoked.ended_at ?? Date.now()),
+                periodStart: new Date(revoked.current_period_start),
+                periodEnd: new Date(revoked.current_period_end),
+            });
+            ended = true;
+        } catch (error) {
+            const status = statusOf(error);
+            if (status === 404) ended = true;
+            else if (status === 403 && polarErrorName(error) === 'AlreadyCanceledSubscription') {
+                const gone = await endedSince(subscriptionId, new Date(0));
+                if (gone) {
+                    const { already: _already, ...instant } = gone;
+                    await billingRepository.recordPlanRevoked(subscriptionId, instant);
+                    ended = true;
+                }
+            }
+            if (!ended)
+                log.error({
+                    message: 'A deleted family’s plan could not be revoked; tried again',
+                    billing: { group: groupId, subscription: subscriptionId, status },
+                });
+        }
+    } finally {
+        await billingRepository.releasePlanEndingLease(subscriptionId, owner);
+    }
+    if ((await billingRepository.getPlanEnding(subscriptionId))?.outcome === null)
+        await send({
+            userId: groupId,
+            groupId: null,
+            admittedAt: new Date().toISOString(),
+            seenAt: new Date().toISOString(),
+        });
+    return ended;
 }
 
 /*

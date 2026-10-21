@@ -1277,6 +1277,181 @@ export async function listLapsedRevokeRefusals() {
 }
 
 /*
+ * When the family's plans last ended at Polar (the latest `ended_at` the mirror holds for
+ * it), or null when none has: for a deleted family's plan billing again, a payment on it
+ * made after this paid for nothing the family had (endOrphanedFamilyPlan).
+ */
+export async function lastGroupPlanEnd(groupId: string) {
+    const [row] = await db
+        .select({ at: sql<Date | null>`max(${groupBillingSubscriptions.endedAt})` })
+        .from(groupBillingSubscriptions)
+        .where(eq(groupBillingSubscriptions.groupId, groupId));
+    return row?.at ? new Date(row.at) : null;
+}
+
+/*
+ * A subscription of a deleted family (its `groups` row purged; its billing rows kept, with
+ * no foreign key) as Polar answers for it, written to the mirror without the group's lock
+ * or any pool or seat projection: there is no family left to give them to. Its status is
+ * Polar's; its `ended_at`, once set, is kept even while Polar bills it again. Read by the
+ * operators' list of deleted families' plans. `ended` alone (Polar no longer has it):
+ * recorded as ended now, if it wasn't, and as `canceled`: it can't charge.
+ */
+export async function recordOrphanedSubscription(
+    groupId: string,
+    input:
+        | { id: string; ended: true }
+        | {
+              id: string;
+              ended?: false;
+              productId: string;
+              productName: string;
+              status: string;
+              recurringInterval: string;
+              amount: number | null;
+              currency: string | null;
+              units: number;
+              includedMembers: number;
+              quotaBytes: bigint;
+              currentPeriodStart: Date;
+              currentPeriodEnd: Date;
+              cancelAtPeriodEnd: boolean;
+              endedAt: Date | null;
+          },
+) {
+    const now = new Date();
+    if (input.ended) {
+        await db
+            .update(groupBillingSubscriptions)
+            .set({
+                status: sql`case when ${groupBillingSubscriptions.status} in ('canceled', 'incomplete_expired') then ${groupBillingSubscriptions.status} else 'canceled' end`,
+                endedAt: sql`coalesce(${groupBillingSubscriptions.endedAt}, now())`,
+                updatedAt: now,
+            })
+            .where(
+                and(
+                    eq(groupBillingSubscriptions.id, input.id),
+                    eq(groupBillingSubscriptions.groupId, groupId),
+                ),
+            );
+        return;
+    }
+    const { id, ended: _ended, ...values } = input;
+    // Polar's answer, or Polar's end; an end without one (canceled or expired) is now.
+    const endedAt = values.endedAt ?? (ENDED.has(values.status) ? now : null);
+    await db
+        .insert(groupBillingSubscriptions)
+        .values({ id, groupId, provider: 'polar', ...values, endedAt })
+        .onConflictDoUpdate({
+            target: groupBillingSubscriptions.id,
+            set: {
+                status: values.status,
+                currentPeriodStart: values.currentPeriodStart,
+                currentPeriodEnd: values.currentPeriodEnd,
+                cancelAtPeriodEnd: values.cancelAtPeriodEnd,
+                units: values.units,
+                amount: values.amount,
+                // Never cleared: the first end recorded is when the family's plans ended, from
+                // which a payment paid for nothing (lastGroupPlanEnd), however often Polar
+                // brings the plan back.
+                endedAt: sql`coalesce(${groupBillingSubscriptions.endedAt}, ${endedAt})`,
+                updatedAt: now,
+            },
+        });
+}
+
+/* How long a deleted family's plan HushOS revoked stays on the operators' list once settled. */
+export const ORPHANED_LISTED_DAYS = 30;
+
+/*
+ * Plans of deleted families that billed again, the operators' list: every one Polar last
+ * answered for as able to charge (its revoke hasn't landed yet), and every one HushOS ended for that
+ * reason (a lapsed-shaped ending keyed by the family's id) whose refunds are still being
+ * made or settled within ORPHANED_LISTED_DAYS. `refunded` is what HushOS has refunded on
+ * it (succeeded), `toRefund` how many of its payments are still being refunded. Ids only.
+ */
+export async function listOrphanedPlans() {
+    const orphan = sql`not exists (select 1 from ${groups} where ${groups.id} = ${groupBillingSubscriptions.groupId})`;
+    const charging = sql`${groupBillingSubscriptions.status} not in ('canceled', 'incomplete_expired')`;
+    const rows = await db
+        .select({
+            groupId: groupBillingSubscriptions.groupId,
+            subscriptionId: groupBillingSubscriptions.id,
+            status: groupBillingSubscriptions.status,
+            endedAt: groupBillingSubscriptions.endedAt,
+            revokedAt: personalPlanEndings.revokedAt,
+            outcome: personalPlanEndings.outcome,
+            since: sql<Date>`coalesce(${personalPlanEndings.createdAt}, ${groupBillingSubscriptions.updatedAt})`,
+            refunded:
+                sql<number>`coalesce((select sum(${personalPlanRefunds.amount}) from ${personalPlanRefunds} where ${personalPlanRefunds.subscriptionId} = ${groupBillingSubscriptions.id} and ${personalPlanRefunds.status} = 'succeeded'), 0)::bigint`.mapWith(
+                    Number,
+                ),
+            toRefund:
+                sql<number>`(select count(*) from ${personalPlanRefunds} where ${personalPlanRefunds.subscriptionId} = ${groupBillingSubscriptions.id} and ${personalPlanRefunds.status} in ('requested', 'pending', 'failed'))::int`.mapWith(
+                    Number,
+                ),
+            currency: groupBillingSubscriptions.currency,
+        })
+        .from(groupBillingSubscriptions)
+        .leftJoin(
+            personalPlanEndings,
+            and(
+                eq(personalPlanEndings.subscriptionId, groupBillingSubscriptions.id),
+                isNull(personalPlanEndings.groupId),
+            ),
+        )
+        .where(
+            and(
+                orphan,
+                sql`(${charging} and ${groupBillingSubscriptions.endedAt} is null) or (${personalPlanEndings.subscriptionId} is not null and (${charging} or ${personalPlanEndings.outcome} is null or ${personalPlanEndings.updatedAt} > now() - make_interval(days => ${ORPHANED_LISTED_DAYS})))`,
+            ),
+        )
+        .orderBy(
+            desc(
+                sql`coalesce(${personalPlanEndings.createdAt}, ${groupBillingSubscriptions.updatedAt})`,
+            ),
+        );
+    return rows;
+}
+
+/*
+ * The plans an owner (a person, or a family by its id) has a lapsed-shaped ending for that
+ * HushOS set out to revoke and hasn't seen ended (not revoked, not dropped): a deleted
+ * family's reconcile asks Polar again for each, even once it has left the customer state.
+ */
+export async function listUnrevokedLapsedEndings(ownerId: string) {
+    const rows = await db
+        .select({ id: personalPlanEndings.subscriptionId })
+        .from(personalPlanEndings)
+        .where(
+            and(
+                eq(personalPlanEndings.userId, ownerId),
+                isNull(personalPlanEndings.groupId),
+                isNull(personalPlanEndings.revokedAt),
+                sql`${personalPlanEndings.outcome} is distinct from 'dropped'`,
+            ),
+        );
+    return rows.map((row) => row.id);
+}
+
+/*
+ * A lapsed-shaped ending revoked once whose plan Polar bills again (a deleted family's plan
+ * reinstated a second time): back to not revoked, so it is revoked again and a payment
+ * since is refunded. Its refund rows stay, matched by key, so nothing is refunded twice.
+ */
+export async function restartLapsedEnding(subscriptionId: string) {
+    await db
+        .update(personalPlanEndings)
+        .set({ revokedAt: null, periodStart: null, periodEnd: null, updatedAt: new Date() })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                isNull(personalPlanEndings.groupId),
+            ),
+        );
+}
+
+/*
  * Every family and every person with more than one subscription that can still charge
  * (not ended, not `canceled` or `incomplete_expired`): live, or lapsed but able to come
  * back. A live plan already set to end at its period's end is left out: it charges no more
