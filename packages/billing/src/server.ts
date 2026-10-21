@@ -159,6 +159,12 @@ async function currentSubscription(user: BillingUser) {
     return livePlan((await billingRepository.getBillingSummary(user.id)).subscription);
 }
 
+/* "Pro" for a plan named "Pro (monthly)" in the catalogue; "personal" when it isn't there. */
+async function planNameOf(productId: string) {
+    const product = (await getCatalogue()).find((candidate) => candidate.id === productId);
+    return product?.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '') ?? 'personal';
+}
+
 /*
  * Before a checkout: every personal plan of theirs that Polar still holds but that gives
  * nothing (`unpaid`, `incomplete`, `paused`) is revoked at Polar, so a payment taken
@@ -171,35 +177,36 @@ async function currentSubscription(user: BillingUser) {
  * already ended (403 `AlreadyCanceledSubscription`, a second click) is nothing to do. A
  * revoke that fails otherwise stops the checkout, so two plans never run.
  */
-/* "Pro" for a summary's plan named "Pro (monthly)"; "current" when there is none. */
-function productNameOf(summary: { subscription: { productName: string } | null }) {
-    return (
-        summary.subscription?.productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '') ??
-        'current'
-    );
-}
-
 async function revokeLapsedPlans(userId: string) {
     const ids = await billingRepository.listLapsedPlanIds(userId);
     if (!ids.length) return;
     for (const id of ids) {
+        let productId: string | null = null;
         try {
             const subscription = await polar().subscriptions.get(id);
+            productId = subscription.product_id;
             if (subscription.ended_at || livePlan({ status: subscription.status, endedAt: null }))
                 continue;
             await revokeLapsed(userId, id);
         } catch (error) {
             if (statusOf(error) === 404) continue;
-            const name = productNameOf(await billingRepository.getBillingSummary(userId));
+            // The plan whose revoke failed, by its own product.
+            const name = productId ? await planNameOf(productId) : 'personal';
             if (statusOf(error) === 409 && polarErrorName(error) === 'SubscriptionLocked')
                 throw new BillingError(
-                    `Polar can’t end your ${name} plan right now: it has a change waiting on it. Cancel that change in the billing portal, or contact support, then choose a plan again.`,
+                    `Polar is still working on a change to your ${name} plan, so it can’t be ended yet. Try again later, or contact support.`,
+                    409,
+                    { cause: error },
+                );
+            if (error instanceof LapsedRevokeError && error.reason === 'paid')
+                throw new BillingError(
+                    `Polar shows a payment for your ${name} plan that hasn’t taken effect yet, so it can’t be ended. Try again in a few minutes, or contact support.`,
                     409,
                     { cause: error },
                 );
             if (error instanceof LapsedRevokeError)
                 throw new BillingError(
-                    `Your ${name} plan is still being ended. Please try again in a few minutes.`,
+                    `Your ${name} plan is still being ended. Try again in a few minutes.`,
                     409,
                     { cause: error },
                 );

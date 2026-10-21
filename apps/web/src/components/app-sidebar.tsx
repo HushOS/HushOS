@@ -234,7 +234,7 @@ function OwnMeter({ label }: { label: string | null }) {
         : ending
           ? `${ending.productName} ends ${formatDay(ending.currentPeriodEnd)}`
           : lapsed
-            ? `${familyTierName({ name: lapsed.productName })} ${planStanding(lapsed) === 'paused' ? 'paused' : 'payment failed'}`
+            ? `${familyTierName({ name: lapsed.productName })}${planStanding(lapsed) === 'paused' ? ' is paused' : '’s payment failed'}`
             : `${formatSpace(storage.availableBytes)} free`;
     const usedLine = storage
         ? `${formatSpace(storage.usedBytes)} of ${formatQuota(storage.quotaBytes)} used`

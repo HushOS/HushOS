@@ -23,7 +23,6 @@ import { lapsedPlan, livePlan, planStanding } from '@hushos/billing/protocol';
 import { billingQueryOptions, catalogueQueryOptions } from '@/lib/billing';
 import { driveClient, driveError, formatBytes, invalidateFolders } from '@/lib/drive';
 import { formatQuota, storageQueryOptions, useBillingEnabled } from '@/lib/queries';
-import { familyTierName } from '@/lib/plans';
 import { cue } from '@/lib/sounds';
 import { onTransferEvent, transfers, useTransfers } from '@/lib/transfers';
 
@@ -190,12 +189,8 @@ export function StorageFullDialog() {
                     {lapsed && (
                         <Way
                             icon={CreditCardIcon}
-                            label="Your plan"
-                            detail={
-                                planStanding(lapsed) === 'paused'
-                                    ? `${familyTierName({ name: lapsed.productName })} is paused`
-                                    : `${familyTierName({ name: lapsed.productName })}’s payment failed`
-                            }
+                            label="Open your plan"
+                            detail={planStanding(lapsed) === 'paused' ? 'Paused' : 'Payment failed'}
                             primary
                             disabled={working !== null}
                             onClick={() => {

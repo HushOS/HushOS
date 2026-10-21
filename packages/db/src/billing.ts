@@ -1190,11 +1190,18 @@ const unworkedRefund = (subscriptionId: string) =>
         isNull(personalPlanRefunds.firstAttemptedAt),
     );
 
-/* Settles a plan's unworked refund rows as `none` (nothing owed on them); returns their orders. */
-async function clearUnworkedRefunds(tx: Tx, subscriptionId: string) {
+/*
+ * Settles a plan's unworked refund rows as `none` (nothing owed on them), or `kept` (its
+ * owner's, rewards still to grant); returns their orders.
+ */
+async function clearUnworkedRefunds(
+    tx: Tx,
+    subscriptionId: string,
+    status: 'none' | 'kept' = 'none',
+) {
     const rows = await tx
         .update(personalPlanRefunds)
-        .set({ status: 'none', updatedAt: new Date() })
+        .set({ status, updatedAt: new Date() })
         .where(unworkedRefund(subscriptionId))
         .returning({ orderId: personalPlanRefunds.orderId });
     return rows.map((row) => row.orderId);
@@ -1258,8 +1265,10 @@ export async function beginLapsedRevoke(input: {
 /*
  * An ending HushOS gives up on: the plan stays its owner's (they left the family before
  * it was revoked, or a lapsed plan's revoke never landed). Its unworked refund rows are
- * settled `none` in the same transaction, so a later ending of the plan never refunds
- * them. Returns those rows' orders: payments its owner keeps.
+ * marked `kept` in the same transaction: never refunded by a later ending of the plan,
+ * and their commission and referral reward, which the payment delivery held back, are
+ * still owed (grantKeptRewards, then `none`), so a failure granting them loses nothing.
+ * Returns those rows' orders.
  */
 export async function dropPlanEnding(subscriptionId: string) {
     return db.transaction(async (tx) => {
@@ -1267,8 +1276,46 @@ export async function dropPlanEnding(subscriptionId: string) {
             .update(personalPlanEndings)
             .set({ outcome: 'dropped', updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
-        return clearUnworkedRefunds(tx, subscriptionId);
+        return clearUnworkedRefunds(tx, subscriptionId, 'kept');
     });
+}
+
+/* Payments kept by their owner whose rewards are still to grant, this person's. */
+export async function listKeptPayments(userId: string) {
+    return db
+        .select({
+            orderId: personalPlanRefunds.orderId,
+            subscriptionId: personalPlanRefunds.subscriptionId,
+        })
+        .from(personalPlanRefunds)
+        .innerJoin(
+            personalPlanEndings,
+            eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
+        )
+        .where(and(eq(personalPlanEndings.userId, userId), eq(personalPlanRefunds.status, 'kept')));
+}
+
+/* People with a kept payment whose rewards are still to grant: the daily reconcile's. */
+export async function listUsersWithKeptPayments() {
+    const rows = await db
+        .selectDistinct({ userId: personalPlanEndings.userId })
+        .from(personalPlanRefunds)
+        .innerJoin(
+            personalPlanEndings,
+            eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
+        )
+        .where(eq(personalPlanRefunds.status, 'kept'));
+    return rows.map((row) => row.userId);
+}
+
+/* A kept payment's rewards are granted: nothing more to do on it. */
+export async function settleKeptPayment(orderId: string) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ status: 'none', updatedAt: new Date() })
+        .where(
+            and(eq(personalPlanRefunds.orderId, orderId), eq(personalPlanRefunds.status, 'kept')),
+        );
 }
 
 /*
