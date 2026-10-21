@@ -1,0 +1,41 @@
+packages/db/drizzle/20261021134807_family_orphan_paid_after/migration.sql
+  s_566b8e0c4467a4::t_65e1eaea15f196 1-25
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_249c1a4c16cd2d 731-732,745-746
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_0074a5259a0ff9 1470-1479,1542,1701-1711
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_6c7e4037e545f2 590-594,596-604,625-629,651-664
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_024f80fad4d262 4792-4793,4795,4989-5252
+packages/db/drizzle/20261021134807_family_orphan_paid_after/snapshot.json
+  s_566b8e0c4467a4::t_e69a74185a63db 4,6144-6156
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_bcb80bff0c3557 383-407
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_cd38666a6c2958 1107-1115,1772-1775,1779,1781-1786,1795
+packages/db/src/groups.purge-none.test.ts
+  s_566b8e0c4467a4::t_ff792f05a2fb57 71-109
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_62369b6b867721 3497-3500,3504
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_b45b5be8aae04f 14
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_33f90f485b2191 238-247
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd4fdbc840965df7d9db04911bb2ae3880b7a570",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
