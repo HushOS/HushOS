@@ -1,0 +1,33 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_bf4c68f0f3c893 731
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_b453f3bfaeb4c7 10,335-337,506-591
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_c5a9c1af3e9cc1 1121-1136,1456-1547
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_b75d237d6cfb0e 1279-1453
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_3a405df3ea109b 1051,1112-1128
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_3fafad60c70eca 220-225,479-537
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_e392edc8216d33 1,4394-4680
+packages/db/src/billing.groups.test.ts
+  s_566b8e0c4467a4::t_cb519416f98083 681-763
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "186760a815801e8c552637cb6f312fded1bd4523",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
