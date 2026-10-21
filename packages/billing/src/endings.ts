@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { billingRepository, groupsRepository } from '@hushos/db';
+import { billingRepository, groupsRepository, growthRepository } from '@hushos/db';
 import { log } from '@hushos/logging';
 import type { models } from '@polar-sh/sdk/2026-10';
 import { billingEnabled, getCatalogue, polar, polarErrorName, statusOf } from './provider';
@@ -1453,7 +1453,7 @@ async function revokeHeldLapsed(
 }
 
 /*
- * Whether an ending is of a deleted family's plan: one endOrphanedFamilyPlan wrote (it carries
+ * Whether an ending is of a plan never given back: one endUnwantedFamilyPlan wrote (it carries
  * `paid_after`), or a family's own plan whose family's record is gone. Such a plan is never
  * given back to its owner: there is none.
  */
@@ -1464,19 +1464,20 @@ async function ofDeletedFamily(ending: billingRepository.PlanEnding) {
 }
 
 /*
- * A plan of a family HushOS has deleted (purged after it was dissolved) that Polar bills
- * again: reinstated, or resumed, after it had ended (docs/groups-design.md 3.3). The family
- * is gone, so nothing such a plan charges for can be given: it is revoked at once, and every
- * paid order of it made at or after `paidAfter` (by the order's `created_at`, so a late payment
- * of a period the family had is still its own) is refunded whole by the plan-ending job, keyed
- * by the family's id, as a payment on a lapsed plan HushOS revoked is (same ending, same
- * refunds, same retries and Refunds owed). `paidAfter` is unwantedPlanCutoff's: the end of the
- * last period the plan gave the family, or the epoch for one that never served it; it is
- * written once, with the ending, and every later run uses the stored value, never a new one.
- * Paid orders made before it paid for time the family had: noted as used, though never over a
- * refund an earlier ending already owes. Rewards: an order noted to refund earns nothing (its
- * `order.paid` delivery runs this first, through reconcileGroup, so it finds the order noted);
- * one made before earns what its delivery gave it while the family existed.
+ * A family plan nothing can be given for: one of a family HushOS has deleted (purged after it
+ * was dissolved) that Polar bills again, reinstated or resumed after it had ended
+ * (docs/groups-design.md 3.3), or a family's second plan, beside the one it already has. It is
+ * revoked at once, and every paid order of it made at or after `paidAfter` (by the order's
+ * `created_at`, so a late payment of a period the family had is still its own) is refunded
+ * whole by the plan-ending job, keyed by the family's id, as a payment on a lapsed plan HushOS
+ * revoked is (same ending, same refunds, same retries and Refunds owed). `paidAfter` is
+ * unwantedPlanCutoff's: the end of the last period the plan gave the family, or the epoch for
+ * one that never served it; it is written once, with the ending, and every later run uses the
+ * stored value, never a new one. Paid orders made before it paid for time the family had:
+ * noted as used, though never over a refund an earlier ending already owes. Rewards: an order
+ * noted to refund earns nothing (its `order.paid` delivery runs this first, through
+ * reconcileGroup, so it finds the order noted); one made before earns what its delivery gave
+ * it while the family existed.
  *
  * Under the plan-ending lease, taken in the write that begins the ending (or takes it over, a
  * revoked one made unrevoked when Polar bills it again): one a running job holds is left to it,
@@ -1485,11 +1486,12 @@ async function ofDeletedFamily(ending: billingRepository.PlanEnding) {
  * refusal or an outage is logged at error level, the plan stays listed for operators, and the
  * next reconcile or the job's retry asks again. Returns whether Polar shows the plan ended now.
  */
-export async function endOrphanedFamilyPlan(
+export async function endUnwantedFamilyPlan(
     groupId: string,
     subscriptionId: string,
     paidAfter: Date,
     options: { onlyIfPaidSince?: boolean } = {},
+    why: 'deleted-family' | 'second-plan' = 'deleted-family',
 ) {
     // A plan already ended at Polar (reinstated, charged and ended between two reads): an ending
     // is written only if it took a payment since its cutoff, which the job then refunds.
@@ -1541,13 +1543,21 @@ export async function endOrphanedFamilyPlan(
                 })),
             { keepOwed: true },
         );
-        for (const order of paid.filter(after))
+        for (const order of paid.filter(after)) {
             await billingRepository.notePaidOnLapsed({
                 orderId: order.id,
                 subscriptionId,
                 refundKey: refundKey(ending, order.id),
                 currency: order.currency,
             });
+            // Refunded whole: it earns no commission. One its delivery already recorded is taken
+            // back while unpaid; one already paid out is said, for an operator.
+            if ((await growthRepository.withdrawEarning(order.id)) === 'paid')
+                log.error({
+                    message: 'An affiliate was paid commission on an order HushOS refunds whole',
+                    billing: { group: groupId, subscription: subscriptionId, order: order.id },
+                });
+        }
         try {
             const revoked = await polar().subscriptions.revoke(subscriptionId);
             await billingRepository.recordPlanRevoked(subscriptionId, {
@@ -1576,7 +1586,10 @@ export async function endOrphanedFamilyPlan(
             }
             if (!ended)
                 log.error({
-                    message: 'A deleted family’s plan could not be revoked; tried again',
+                    message:
+                        why === 'second-plan'
+                            ? 'A family’s second plan could not be revoked; tried again'
+                            : 'A deleted family’s plan could not be revoked; tried again',
                     billing: { group: groupId, subscription: subscriptionId, status },
                 });
         }

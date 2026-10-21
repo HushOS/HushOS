@@ -134,6 +134,12 @@ export const affiliateEarnings = pgTable(
         netAmount: integer('net_amount').notNull(),
         commissionAmount: integer('commission_amount').notNull(),
         paidAt: timestamp('paid_at', { withTimezone: true }),
+        /*
+         * Its order was refunded whole after this commission was paid out (a second family plan,
+         * a deleted family's): for an operator to settle with the affiliate. Set once, so it is
+         * logged once.
+         */
+        orderRefundedAt: timestamp('order_refunded_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [index('affiliate_earnings_affiliate_idx').on(table.affiliateId)],

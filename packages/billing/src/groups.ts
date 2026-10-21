@@ -9,7 +9,7 @@ import type { PolarClientError } from '@polar-sh/sdk';
 import type { FamilyLapsedGlance, FamilyLapsedPlan, FamilyUsage, GroupBillingSummary } from './api';
 import {
     LapsedRevokeError,
-    endOrphanedFamilyPlan,
+    endUnwantedFamilyPlan,
     queuePlanEnding,
     recordOrphanEnded,
     revokeLapsed,
@@ -306,6 +306,49 @@ const recordUnread = (groupId: string, subscription: models.Subscription) =>
     });
 
 /*
+ * Two live plans for one family (two checkouts both paid; a cancelled plan Polar reinstated
+ * beside the one the family bought since): the family can use one. The one kept is the plan
+ * HushOS was already treating as the family's (the one that has served it longest: its places,
+ * tier and pool); with none, the oldest by Polar's creation time. Every other is marked
+ * superseded in the same write that applies Polar's state (applyGroupState), so the live-plan
+ * read, the pool and the places never pick it while its revoke waits on Polar, nor a later run
+ * take it for the family's own; then revoked through endUnwantedFamilyPlan, never given back.
+ * What it took that bought nothing is refunded whole by the plan-ending job, from
+ * unwantedPlanCutoff of its row as the mirror held it before this read: everything, for a plan
+ * that never served the family (it was never the family's plan: made beside it, recorded while
+ * still incomplete, or racing in with another delivery); for one that did, what it took after
+ * the last period it served (a reinstated plan's payments since it ended).
+ *
+ * Without Polar's creation times for every plan, nothing says for sure which came first: none
+ * is revoked, on this reconcile or any later one (the plan the pool happens to follow is no
+ * answer), and it is said at error level every time, with both plans under More than one plan,
+ * for an operator to decide in Polar.
+ */
+async function secondPlanCure(groupId: string, liveSeen: { id: string; createdAt: number }[]) {
+    if (liveSeen.length < 2) return null;
+    if (liveSeen.some((plan) => Number.isNaN(plan.createdAt))) {
+        log.error({
+            message: 'A family has two live plans and Polar gives no creation time; none revoked',
+            billing: { group: groupId, plans: liveSeen.map((plan) => plan.id) },
+        });
+        return null;
+    }
+    const established = (await billingRepository.getLiveGroupSubscription(groupId))?.id ?? null;
+    const keep =
+        liveSeen.find((plan) => plan.id === established) ??
+        [...liveSeen].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0]!;
+    const ended: { id: string; paidAfter: Date }[] = [];
+    for (const plan of liveSeen) {
+        if (plan.id === keep.id) continue;
+        ended.push({
+            id: plan.id,
+            paidAfter: unwantedPlanCutoff(await billingRepository.getGroupSubscription(plan.id)),
+        });
+    }
+    return { kept: keep.id, ended };
+}
+
+/*
  * A webhook says only that something changed: the team customer's state says
  * what is true now. Every subscription it lists, and every one HushOS still
  * holds as live, is read in full (the state carries no pending cut, and an
@@ -332,9 +375,14 @@ export async function reconcileGroup(
         subscriptionId?: string;
         /* A delivery (not a sync or the daily run): a deleted family's list is read once. */
         fromDelivery?: boolean;
+        /* The second pass after a second plan was revoked: never cures again. */
+        afterCure?: boolean;
     } = {},
 ) {
     if (!billingEnabled() || !UUID.test(groupId)) return;
+    // Rows written after this (a delivery for another plan, reconciling at the same time) are
+    // never swept as ended by this run's write, which didn't see them.
+    const readAt = new Date();
     let state: models.CustomerState | null;
     try {
         state = await polar().customers.getStateExternal(customerKey(groupId));
@@ -352,8 +400,11 @@ export async function reconcileGroup(
             listPolar: options.fromDelivery,
         });
     const ids = new Set((state?.active_subscriptions ?? []).map((subscription) => subscription.id));
+    if (options.subscriptionId) ids.add(options.subscriptionId);
     for (const id of await billingRepository.listUnendedGroupSubscriptionIds(groupId)) ids.add(id);
     const subscriptions: billingRepository.GroupSubscriptionSnapshot[] = [];
+    // Every live family plan Polar holds for the family, and when Polar made it.
+    const liveSeen: { id: string; createdAt: number }[] = [];
     const unresolved: string[] = [];
     const stale: string[] = [];
     // Products bigger than the tier paid for, for more than STALE_RAISE_DAYS (an unpaid upgrade).
@@ -381,6 +432,8 @@ export async function reconcileGroup(
         // Only a live plan's orders and tier matter: one ended, unpaid, incomplete or paused gives
         // no pool or places, and keeps what it last paid for until it is live again.
         const ended = Boolean(subscription.ended_at) || !LIVE.has(subscription.status);
+        if (!ended)
+            liveSeen.push({ id: subscription.id, createdAt: Date.parse(subscription.created_at) });
         const orders = ended ? null : await orderState(subscription.id);
         if (orders?.oldestAt != null && Date.now() - orders.oldestAt > STALE_RAISE_DAYS * DAY)
             stale.push(subscription.id);
@@ -393,6 +446,7 @@ export async function reconcileGroup(
             staleTier.push(subscription.id);
         subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false, tier));
     }
+    const cure = options.afterCure ? null : await secondPlanCure(groupId, liveSeen);
     const applied = await billingRepository.applyGroupState({
         groupId,
         provider: PROVIDER,
@@ -401,6 +455,8 @@ export async function reconcileGroup(
         graceMs: graceMs(),
         complete: true,
         keepIds: unresolved,
+        readAt,
+        ...(cure ? { superseded: { ids: cure.ended.map((plan) => plan.id), by: cure.kept } } : {}),
     });
     // The family was purged between the read above and the write (applyGroupState found no row):
     // its plans are a deleted family's, ended as any other's would be.
@@ -409,6 +465,16 @@ export async function reconcileGroup(
             subscriptionId: options.subscriptionId,
             listPolar: options.fromDelivery,
         });
+    if (cure) {
+        for (const plan of cure.ended) {
+            log.error({
+                message: 'A family had two live plans: one is revoked and its overlap refunded',
+                billing: { group: groupId, kept: cure.kept, revoked: plan.id },
+            });
+            await endUnwantedFamilyPlan(groupId, plan.id, plan.paidAfter, {}, 'second-plan');
+        }
+        return reconcileGroup(groupId, { ...options, afterCure: true });
+    }
     // Everyone whose files now draw from a live pool with a personal plan still live has that
     // plan ended (docs/families-shared-pool.md 5.1): the organizer's first purchase, a family's
     // lapsed plan bought again, a checkout that raced an admission.
@@ -432,6 +498,8 @@ export async function reconcileGroup(
             billing: { group: groupId, live: liveCount },
         });
     let live = await billingRepository.getLiveGroupSubscription(groupId);
+    // The family has its plan: the checkout that bought it is done with.
+    if (live) await billingRepository.clearGroupCheckout(groupId);
     if (live && (await revokeWithoutPayer(groupId, live))) return;
     const used = await groupsRepository.seatsUsed(groupId);
     // Changed outside HushOS (the dashboard, support): never remove anyone, but say so.
@@ -530,7 +598,7 @@ export async function reconcileGroup(
  * A family HushOS has deleted (its records purged after it was dissolved; its billing
  * rows kept) whose team customer Polar shows a plan for that can still charge: reinstated
  * or resumed after it ended. Nothing it charges for exists any more, so each such plan is
- * revoked (endOrphanedFamilyPlan), logged at error level, written to the mirror (which no
+ * revoked (endUnwantedFamilyPlan), logged at error level, written to the mirror (which no
  * longer projects anything: there is no family to give a pool) and listed for operators;
  * what it took after that plan had ended is refunded whole by the plan-ending job. Only a
  * family HushOS made a customer for: a stray `group:` customer made by hand at Polar is
@@ -628,14 +696,14 @@ async function revokeOrphanedPlans(
             // delivery notes it on that ending (notePaidAfterRevoke) for the job to refund: the
             // only guard there, since nothing else lists that plan's orders again.
             if (!(await recordOrphanEnded(id, subscription.ended_at ?? null)))
-                await endOrphanedFamilyPlan(groupId, id, paidAfter, { onlyIfPaidSince: true });
+                await endUnwantedFamilyPlan(groupId, id, paidAfter, { onlyIfPaidSince: true });
             continue;
         }
         log.error({
             message: 'A deleted family’s plan is billing again: revoked, and what it took refunded',
             billing: { group: groupId, subscription: id, status: subscription.status },
         });
-        if (await endOrphanedFamilyPlan(groupId, id, paidAfter)) {
+        if (await endUnwantedFamilyPlan(groupId, id, paidAfter)) {
             try {
                 await billingRepository.recordOrphanedSubscription(
                     groupId,
@@ -1873,6 +1941,153 @@ export async function startGroupCheckout(
             409,
             { code: 'ends-lapsed' },
         );
+    // The family's one open checkout (H3): two billing holders, or two tabs, can't each open one
+    // and both pay. Claimed before anything else changes, so a second checkout is refused before
+    // it takes the family over or ends anything; the same person choosing the same plan again gets
+    // the same link back. A claim whose checkout is never made is let go.
+    // The same plan on the same terms (places, currency, address) gets the same link back; any
+    // other choice waits for the open one.
+    const terms = JSON.stringify([units, input.currency ?? null, input.address ?? null]);
+    const claimIt = () =>
+        billingRepository.claimGroupCheckout(groupId, user.id, plan.id, CHECKOUT_CLAIM_MS, terms);
+    let claim = await claimIt();
+    // An open claim that can't be paid any more is let go, and the family claimed again, once:
+    // its holder no longer holds `billing` here (they left, were removed, or lost it), or Polar,
+    // asked about its checkout, says it expired or failed. One Polar says was paid means the
+    // family has its plan (its delivery may not have arrived).
+    if (claim.status === 'other' || claim.status === 'reuse') {
+        const gone = claim.status === 'other' && !(await holdsBilling(groupId, claim.holderUserId));
+        const polarStatus = gone ? null : await checkoutStatus(groupId, claim.providerCheckoutId);
+        if (polarStatus === 'succeeded' || polarStatus === 'confirmed') {
+            await reconcileGroup(groupId);
+            throw new BillingError(
+                'This family’s plan was just paid for. Refresh to see it; it may take a minute.',
+                409,
+            );
+        }
+        if (gone || polarStatus === 'expired' || polarStatus === 'failed') {
+            await billingRepository.freeGroupCheckout(groupId, claim.token);
+            claim = await claimIt();
+        }
+    }
+    if (claim.status === 'reuse') {
+        // Unless it was paid already: then the family has its plan.
+        let state: models.CustomerState | null = null;
+        try {
+            state = await polar().customers.getStateExternal(customerKey(groupId));
+        } catch (error) {
+            if (statusOf(error) !== 404) throw unavailable(error);
+        }
+        if (chargingNow(state)) {
+            await reconcileGroup(groupId);
+            throw new BillingError('This family already has a plan.', 409);
+        }
+        return { url: claim.url };
+    }
+    if (claim.status === 'opening')
+        throw new BillingError(
+            'A checkout for this family is opening. Try again in a moment.',
+            409,
+        );
+    if (claim.status === 'other') {
+        const wait = minutesWord(Math.ceil((claim.until.getTime() - Date.now()) / 60_000));
+        const ago = minutesWord(Math.floor((Date.now() - claim.openedAt.getTime()) / 60_000));
+        throw new BillingError(
+            claim.mine
+                ? claim.samePlan
+                    ? `You opened a checkout for this plan, with other places or another currency, ${ago} ago. Finish it, or choose again in about ${wait}, once it has expired.`
+                    : `You opened a checkout for another plan ${ago} ago. Finish it, or choose again in about ${wait}, once it has expired.`
+                : `Someone else in the family opened a checkout for a plan ${ago} ago. If they finish, the family has its plan; if not, try again in about ${wait}.`,
+            409,
+        );
+    }
+    const token = claim.token;
+    try {
+        return await openGroupCheckout({
+            user,
+            groupId,
+            plan,
+            lapsed,
+            currency: input.currency,
+            units,
+            floor,
+            address: input.address,
+            token,
+        });
+    } catch (error) {
+        await billingRepository.releaseGroupCheckout(groupId, token);
+        throw error;
+    }
+}
+
+/* Whether this person still holds `billing` in the family: a claim of one who doesn't is let go. */
+async function holdsBilling(groupId: string, userId: string) {
+    const found = await groupsRepository.getGroupFor(groupId, userId);
+    return Boolean(
+        found?.membership.state === 'active' && found.membership.roles.includes('billing'),
+    );
+}
+
+/* What Polar says of a family's open checkout: its status, `expired` once gone (404), null unknown. */
+async function checkoutStatus(groupId: string, checkoutId: string | null) {
+    if (!checkoutId) return null;
+    try {
+        return (await polar().checkouts.get(checkoutId)).status;
+    } catch (error) {
+        if (statusOf(error) === 404) return 'expired';
+        log.warn({
+            message: 'An open family checkout could not be read at Polar',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+        return null;
+    }
+}
+
+/* "1 minute", "5 minutes"; under a minute reads as one. */
+const minutesWord = (n: number) => {
+    const whole = Math.max(1, n);
+    return `${whole} ${whole === 1 ? 'minute' : 'minutes'}`;
+};
+
+/*
+ * Before anything is asked of Polar, a family checkout holds this long: its checkout is then held
+ * until Polar's own expiry (`expires_at`). A claim that outlives a stalled request lapses.
+ */
+const CHECKOUT_CLAIM_MS = 2 * 60 * 1000;
+
+/*
+ * A checkout's expiry when Polar's answer has none: an hour. Polar's checkout sessions carry
+ * `expires_at`, which is what the claim normally holds to; this guess is used only without one,
+ * and is not a figure confirmed against Polar.
+ */
+const CHECKOUT_DEFAULT_MS = 60 * 60 * 1000;
+
+async function openGroupCheckout(input: {
+    user: BillingUser;
+    groupId: string;
+    plan: FamilyCatalogueProduct;
+    lapsed: LapsedFamilyPlan[];
+    currency: string | undefined;
+    units: number;
+    floor: number;
+    address: string | undefined;
+    /* The family's checkout claim this request holds (claimGroupCheckout). */
+    token: string;
+}) {
+    const { user, groupId, plan, lapsed, units, floor, token } = input;
+    // The claim, taken just now, is renewed before each later step that changes anything (the
+    // takeover, the checkout): a request that stalled past its hold (a slow revoke, a slow Polar),
+    // whose family another request has claimed since, stops there before it changes anything more.
+    const renew = async () => {
+        if (await billingRepository.renewGroupCheckout(groupId, token, CHECKOUT_CLAIM_MS)) return;
+        // Cleared because a plan went live (the lapsed one paid again meanwhile, say).
+        if (await billingRepository.getLiveGroupSubscription(groupId))
+            throw new BillingError('This family already has a plan.', 409);
+        throw new BillingError(
+            'This took too long, and someone else in the family has opened a checkout since. If they finish, the family has its plan; if not, try again in a few minutes.',
+            409,
+        );
+    };
     // A live plan, here or at Polar (findLapsedFamilyPlans reads every plan Polar lists), was
     // refused above, before anything is ended: what the takeover itself refuses. The lapsed
     // plans are ended before the takeover changes anything at Polar: a revoke refused leaves the
@@ -1891,6 +2106,7 @@ export async function startGroupCheckout(
         await reconcileGroup(groupId);
         throw new BillingError('This family already has a plan.', 409);
     }
+    await renew();
     const customerId = await ensureTeamCustomer(groupId, user);
     // Live again meanwhile (paid in the portal: past due, which Polar's customer state doesn't
     // list), as the mirror now reads it: the family has a plan.
@@ -1907,8 +2123,10 @@ export async function startGroupCheckout(
         await reconcileGroup(groupId);
         throw new BillingError('This family already has a plan.', 409);
     }
+    await renew();
+    let checkout: Awaited<ReturnType<ReturnType<typeof polar>['checkouts']['create']>>;
     try {
-        const checkout = await polar().checkouts.create({
+        checkout = await polar().checkouts.create({
             products: [plan.id],
             customer_id: customerId,
             currency: (input.currency as models.PresentmentCurrency | undefined) ?? null,
@@ -1923,10 +2141,25 @@ export async function startGroupCheckout(
             allow_discount_codes: true,
             metadata: { hushos_group_id: groupId },
         });
-        return { url: checkout.url };
     } catch (error) {
         throw unavailable(error);
     }
+    const expires = Date.parse(checkout.expires_at ?? '');
+    const recorded = await billingRepository.recordGroupCheckout({
+        groupId,
+        token,
+        providerCheckoutId: checkout.id,
+        url: checkout.url,
+        until: new Date(Number.isNaN(expires) ? Date.now() + CHECKOUT_DEFAULT_MS : expires),
+    });
+    // Lost after the renewal (a stall past two minutes): a live checkout HushOS isn't holding the
+    // family for. Said loudly; if both are paid, the reconcile's cure keeps one plan.
+    if (!recorded)
+        log.error({
+            message: 'A family checkout was made after its claim was lost',
+            billing: { group: groupId, checkout: checkout.id },
+        });
+    return { url: checkout.url };
 }
 
 /*

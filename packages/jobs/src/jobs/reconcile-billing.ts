@@ -42,6 +42,13 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
                 if (error instanceof Error) event.error(error);
             }
         }
+        // Family checkout claims past their hold (purged families, gone accounts, plain expiry).
+        try {
+            await billingRepository.deleteExpiredGroupCheckouts();
+        } catch (error) {
+            failed += 1;
+            if (error instanceof Error) event.error(error);
+        }
         // Pooled members' personal plans still live, and endings with a refund pending or owed.
         let endings = 0;
         try {
