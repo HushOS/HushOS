@@ -670,6 +670,61 @@ describe('admission with billing on', () => {
         expect(subscription.ended_at).toBeNull();
     });
 
+    test('a removal refused (an outsider, a member who doesn’t manage, a stale member list) ends nothing', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 3);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        const outsider = await kit.member();
+        // The organizer pays for a paused plan.
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        const forged = await kit.forgedRoster(fam, plain, (roster) => ({
+            ...roster,
+            members: roster.members.map((entry) =>
+                entry.userId === fam.organizer.userId
+                    ? { ...entry, status: 'left' as const }
+                    : entry,
+            ),
+        }));
+        const { revision } = await kit.head(fam.groupId);
+        for (const remover of [outsider.userId, plain.userId])
+            await expect(
+                groups.removeMember(remover, fam.groupId, fam.organizer.userId, {
+                    expectedRevision: revision,
+                    roster: kit.wire(forged),
+                }),
+            ).rejects.toBeInstanceOf(groups.GroupError);
+        // The organizer's own removal of the payer, built on a member list already replaced.
+        await expect(
+            groups.removeMember(fam.organizer.userId, fam.groupId, fam.organizer.userId, {
+                expectedRevision: revision - 1,
+                roster: kit.wire(forged),
+            }),
+        ).rejects.toBeTruthy();
+        expect(polar.revokes).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(await billingRepository.getPlanEnding(subscription.id)).toBeNull();
+    });
+
+    test('a leave its own rule refuses ends nothing; a member who doesn’t pay leaves without touching the plan', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        // The organizer (who pays) may not leave while others stay: refused before anything ends.
+        expect(await refusal(groups.leave(fam.organizer.userId, fam.groupId))).toMatchObject({
+            code: 'organizer',
+        });
+        expect(polar.revokes).toEqual([]);
+        // Someone who doesn't pay for it leaves: the family's plan is not theirs to end.
+        expect(await groups.leave(plain.userId, fam.groupId)).toEqual({ state: 'left' });
+        expect(polar.revokes).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+    });
+
     test('a member removed while they pay for a paused plan has it revoked first', async () => {
         const fam = await kit.family();
         const subscription = await onPlan(fam, 2);

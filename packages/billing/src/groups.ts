@@ -653,9 +653,20 @@ async function setDissolvedToEnd(
                 // payment taken afterwards refunded whole. A refusal is recorded and listed for
                 // operators; an outage, or the plan-ending job holding it, is retried.
                 if (LAPSED.has(current.status)) {
+                    // A first checkout still waiting on the bank is left to finish or expire, as a
+                    // family checkout leaves it (INCOMPLETE_WAIT_MS); the next reconcile queues this
+                    // job again. Ending it now would refund a payment that lands, Polar keeping its
+                    // fee; if it is paid, it is an active plan, set to end at its period's end.
+                    if (
+                        current.status === 'incomplete' &&
+                        Date.now() - Date.parse(current.created_at) < INCOMPLETE_WAIT_MS
+                    )
+                        return 'waiting' as const;
                     try {
-                        await revokeLapsed(groupId, row.id, 'family');
-                        return 'revoked' as const;
+                        // False: Polar had ended it, no longer has it, or it is live again.
+                        return (await revokeLapsed(groupId, row.id, 'family'))
+                            ? ('revoked' as const)
+                            : ('already' as const);
                     } catch (error) {
                         if (error instanceof LapsedRevokeError && error.reason === 'held')
                             return 'busy' as const;
@@ -1138,6 +1149,27 @@ function anotherPayer() {
 }
 
 /*
+ * The takeover's own refusals, read only (takeOverPayer runs them again before it writes): a
+ * live plan here or at Polar keeps its payer. Asked before a lapsed plan is ended for the
+ * checkout, so a refused takeover ends nothing.
+ */
+async function checkTakeover(groupId: string, user: BillingUser) {
+    const existing = await billingRepository.getGroupCustomer(groupId);
+    if (!existing || existing.payerUserId === user.id) return;
+    if (await billingRepository.getLiveGroupSubscription(groupId)) throw anotherPayer();
+    let state: models.CustomerState | null = null;
+    try {
+        state = await polar().customers.getStateExternal(customerKey(groupId));
+    } catch (error) {
+        if (statusOf(error) !== 404) throw unavailable(error);
+    }
+    if (chargingNow(state)) {
+        await reconcileGroup(groupId);
+        throw anotherPayer();
+    }
+}
+
+/*
  * A family with no live plan, whose payer is someone else (their plan ended,
  * they left, or a checkout was never finished): a `billing` holder starting a
  * checkout becomes the payer. At Polar they join the team customer and take
@@ -1316,19 +1348,35 @@ export async function endLapsedFamilyPlans(groupId: string, found: LapsedFamilyP
         if (plan.status === 'incomplete' && Date.now() - plan.createdAt < INCOMPLETE_WAIT_MS)
             throw new LapsedFamilyPlanError('waiting', plan.name);
     for (const plan of found) {
+        let refusal: LapsedFamilyPlanError | null = null;
         try {
             await revokeLapsed(groupId, plan.id, 'family');
         } catch (error) {
-            if (error instanceof LapsedRevokeError)
-                throw new LapsedFamilyPlanError(error.reason, plan.name, { cause: error });
             const status = statusOf(error);
-            if (status === 404) continue;
-            if (status === 409 && polarErrorName(error) === 'SubscriptionLocked')
-                throw new LapsedFamilyPlanError('locked', plan.name, { cause: error });
-            if (status !== null && status < 500)
-                throw new LapsedFamilyPlanError('refused', plan.name, { cause: error });
-            throw new LapsedFamilyPlanError('unavailable', plan.name, { cause: error });
+            if (error instanceof LapsedRevokeError)
+                refusal = new LapsedFamilyPlanError(error.reason, plan.name, { cause: error });
+            else if (status === 404) continue;
+            else if (status === 409 && polarErrorName(error) === 'SubscriptionLocked')
+                refusal = new LapsedFamilyPlanError('locked', plan.name, { cause: error });
+            else if (status !== null && status < 500)
+                refusal = new LapsedFamilyPlanError('refused', plan.name, { cause: error });
+            else refusal = new LapsedFamilyPlanError('unavailable', plan.name, { cause: error });
         }
+        if (!refusal) {
+            await billingRepository.recordLapsedRevokeRefusal(plan.id, null);
+            continue;
+        }
+        // Another run working its ending is no refusal; anything else blocks whatever asked (a
+        // deletion, a leave, a new plan), so it is logged and listed for operators.
+        if (refusal.reason !== 'held') {
+            const kind = refusal.reason === 'paid' ? 'paid-period' : refusal.reason;
+            log.error({
+                message: 'A lapsed family plan could not be revoked',
+                billing: { group: groupId, subscription: plan.id, refusal: kind },
+            });
+            await billingRepository.recordLapsedRevokeRefusal(plan.id, kind);
+        }
+        throw refusal;
     }
     await reconcileGroup(groupId);
 }
@@ -1384,21 +1432,31 @@ function checkoutRefusal(error: LapsedFamilyPlanError) {
  * What a refused leave, removal or deletion says: the lapsed plan is still on its payer's card,
  * so they don't go until it is ended.
  */
-export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError) {
+export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError, who: 'payer' | 'remover') {
     const name = error.plan;
+    // The payer is told what to do themselves; whoever removes them, what stands in the way.
+    const self = who === 'payer';
     switch (error.reason) {
         case 'waiting':
-            return `A checkout for the family’s ${name} plan is still waiting for the bank. Finish or abandon it, then try again tomorrow.`;
+            return self
+                ? `A checkout for the family’s ${name} plan is still waiting for the bank. Finish or abandon it, then try again tomorrow.`
+                : `A checkout for the family’s ${name} plan, which they pay for, is still waiting for the bank. Try again tomorrow.`;
         case 'paid':
-            return `Polar shows a payment for the family’s ${name} plan in this period, so it can’t be ended yet. Update the card in the billing portal, or contact support.`;
+            return self
+                ? `Polar shows a payment for the family’s ${name} plan in this period, so it can’t be ended yet. Update the card in the billing portal, or contact support.`
+                : `Polar shows a payment for the family’s ${name} plan, which they pay for, in this period, so it can’t be ended yet and they can’t be removed. Try again later, or contact support.`;
         case 'locked':
             return `Polar is still working on a change to the family’s ${name} plan, so it can’t be ended yet. Try again later, or contact support.`;
         case 'held':
             return `The family’s ${name} plan is still being ended. Try again in a few minutes.`;
         case 'refused':
-            return `Polar wouldn’t end the family’s ${name} plan, which is still on your card. Contact support.`;
+            return self
+                ? `Polar wouldn’t end the family’s ${name} plan, which is still on your card. Contact support.`
+                : `Polar wouldn’t end the family’s ${name} plan, which is still on their card, so they can’t be removed yet. Contact support.`;
         case 'unavailable':
-            return `The family’s ${name} plan couldn’t be ended just now, and it is still on your card. Try again in a few minutes.`;
+            return self
+                ? `The family’s ${name} plan couldn’t be ended just now, and it is still on your card. Try again in a few minutes.`
+                : `The family’s ${name} plan couldn’t be ended just now, and it is still on their card. Try again in a few minutes.`;
     }
 }
 
@@ -1417,8 +1475,11 @@ export async function startGroupCheckout(
         currency?: string;
         units?: number;
         address?: string;
-        /* The person confirmed that a lapsed plan of the family ends now (code `ends-lapsed`). */
-        endLapsed?: boolean;
+        /*
+         * The lapsed plans the person confirmed end now (their subscription ids, as the page showed
+         * them): ended only when they are exactly the ones found; otherwise `ends-lapsed` again.
+         */
+        endLapsed?: string[];
     },
 ) {
     requireFamilyBilling();
@@ -1466,21 +1527,29 @@ export async function startGroupCheckout(
     for (const plan of lapsed)
         if (plan.status === 'incomplete' && Date.now() - plan.createdAt < INCOMPLETE_WAIT_MS)
             throw checkoutRefusal(new LapsedFamilyPlanError('waiting', plan.name));
-    if (lapsed.length && !input.endLapsed)
+    const confirmed = new Set(input.endLapsed ?? []);
+    if (
+        lapsed.length &&
+        (lapsed.length !== confirmed.size || lapsed.some((plan) => !confirmed.has(plan.id)))
+    )
         throw new BillingError(
             `Choosing a plan ends the family’s ${lapsed.map((plan) => plan.name).join(' and ')} plan now, even if you don’t finish the checkout.`,
             409,
             { code: 'ends-lapsed' },
         );
-    // The payer first (a takeover can fail at Polar): only then is anything ended, so a takeover
-    // that fails leaves the old plan as it was.
-    const customerId = await ensureTeamCustomer(groupId, user);
+    // Whether this person may take the family over, read only: refused here, nothing is ended.
+    await checkTakeover(groupId, user);
+    // Ended before the takeover changes anything at Polar: a revoke refused leaves the payer as
+    // they were (their card, their leave and deletion still see the plan), never the family
+    // taken over with the old plan still on the old payer's card. A takeover that fails after
+    // the revoke leaves the plan ended, as the dialog said it would be.
     try {
         await endLapsedFamilyPlans(groupId, lapsed);
     } catch (error) {
         if (error instanceof LapsedFamilyPlanError) throw checkoutRefusal(error);
         throw error;
     }
+    const customerId = await ensureTeamCustomer(groupId, user);
     // Live again meanwhile (paid in the portal: past due, which Polar's customer state doesn't
     // list), as the mirror now reads it: the family has a plan.
     if (lapsed.length && (await billingRepository.getLiveGroupSubscription(groupId)))
@@ -2317,6 +2386,7 @@ async function lapsedOf(groupId: string): Promise<FamilyLapsedPlan | null> {
     return {
         productName: row.productName,
         standing: row.status === 'paused' ? 'paused' : 'payment-failed',
+        ids: await billingRepository.listLapsedGroupSubscriptionIds(groupId),
     };
 }
 

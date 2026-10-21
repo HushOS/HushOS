@@ -1041,12 +1041,13 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const [overview, stuck, owed, unrefundable, doubled] = await Promise.all([
+    const [overview, stuck, owed, unrefundable, doubled, unended] = await Promise.all([
         adminRepository.getOverview(),
         billingRepository.listGivenUpReissues(),
         billingRepository.listRefundsOwed(),
         billingRepository.listUnrefundable(),
         billingRepository.listDoubleCharging(),
+        billingRepository.listLapsedRevokeRefusals(),
     ]);
     return {
         ...overview,
@@ -1095,6 +1096,18 @@ export async function getAdminOverview(sessionToken: string | null) {
          * revoke a lapsed plan first, so a row here slipped past them. Ids and statuses only.
          */
         doubleCharges: doubled,
+        /*
+         * Lapsed family plans (unpaid, incomplete, paused) HushOS set out to revoke and couldn't:
+         * each blocks what asked for it (its payer's deletion or leave, a new plan) until it ends.
+         * Ids and the refusal only.
+         */
+        lapsedRevokeRefusals: unended.map((row) => ({
+            groupId: row.groupId,
+            subscriptionId: row.subscriptionId,
+            status: row.status,
+            refusal: row.refusal,
+            since: row.since?.toISOString() ?? null,
+        })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },
         objects: {
             ...overview.objects,

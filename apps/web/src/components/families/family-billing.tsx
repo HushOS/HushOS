@@ -662,6 +662,7 @@ function ChoosePlan({
     // Only while every tier's year is at most ten of its months, in this currency.
     const saving = twoMonthsFree(familyPairs(plans, currency));
     const shown = plans.filter((plan) => plan.interval === period);
+    const queryClient = useQueryClient();
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState('');
     // A plan Polar still holds that gives nothing ends when another is chosen: asked first.
@@ -675,24 +676,29 @@ function ChoosePlan({
         if (!endLapsed && lapsed && lapsedName) {
             setConfirming({
                 plan,
-                words: `This ends ${lapsedName}, ${lapsed.standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through'}, now, even if you don’t finish the checkout. Then Polar’s checkout opens.`,
+                words: `This ends ${lapsedName} now, even if you don’t finish the checkout. ${lapsed.standing === 'paused' ? 'It is paused.' : 'Its payment didn’t go through.'} Then Polar’s checkout opens.`,
             });
             return;
         }
         setBusy(plan.id);
         setError('');
         try {
+            // Exactly the plans the page showed: the server ends them only if they are the family's.
             const { url } = await groupBillingApi.checkout(
                 groupId,
                 plan.id,
                 currency,
-                endLapsed || undefined,
+                endLapsed ? (lapsed?.ids ?? []) : undefined,
             );
             window.location.assign(url);
         } catch (cause) {
             setBusy(null);
-            // One the page didn't know of (its payment failed since it loaded): asked first, too.
-            if ((cause as { code?: string }).code === 'ends-lapsed' && !endLapsed) {
+            // One the page didn't know of (its payment failed since it loaded, or another): the
+            // page reads the family's plan again and asks, with the server's words.
+            if ((cause as { code?: string }).code === 'ends-lapsed') {
+                await queryClient.invalidateQueries({
+                    queryKey: familyBillingQueryOptions(userId, groupId).queryKey,
+                });
                 setConfirming({ plan, words: (cause as Error).message });
                 return;
             }

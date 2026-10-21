@@ -1237,8 +1237,10 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 productId: t.String({ minLength: 1, maxLength: 100 }),
                 currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
                 units: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
-                // Confirmed: the family's lapsed plan ends now (refusal code `ends-lapsed`).
-                endLapsed: t.Optional(t.Boolean()),
+                // Confirmed: these lapsed plans of the family end now (refusal code `ends-lapsed`).
+                endLapsed: t.Optional(
+                    t.Array(t.String({ minLength: 1, maxLength: 100 }), { maxItems: 20 }),
+                ),
             }),
         },
         async ({ request, sessionToken, params, body }) =>

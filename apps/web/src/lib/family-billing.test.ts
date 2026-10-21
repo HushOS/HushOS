@@ -10,6 +10,7 @@ import {
     needsPlan,
     nextCharge,
     placesOf,
+    lapsedPlanEndsLine,
     planState,
     quoteAdd,
     removeRange,
@@ -592,7 +593,11 @@ describe('tierTooSmall', () => {
 
 describe('a family plan whose payment didn’t go through', () => {
     const organizer = ['billing', 'members'];
-    const unpaid = { productName: 'Family Pro (monthly)', standing: 'payment-failed' as const };
+    const unpaid = {
+        productName: 'Family Pro (monthly)',
+        standing: 'payment-failed' as const,
+        ids: ['sub_unpaid'],
+    };
     const lapsed = { productName: 'Family (monthly)', endedAt: end.toISOString() };
 
     test('is the plan the page shows while none is live, ahead of an older one that ended', () => {
@@ -618,5 +623,36 @@ describe('a family plan whose payment didn’t go through', () => {
         expect(
             Object.values(familyActions({ ...glance(false), lapsedPlan: unpaid }, organizer)),
         ).not.toContain(true);
+    });
+});
+
+describe('lapsedPlanEndsLine', () => {
+    const paused = { productName: 'Family Pro (monthly)', standing: 'paused' as const, ids: ['s'] };
+
+    test('says the plan ends at once only when the one who goes pays for it', () => {
+        const mine = { ...summary({ live: false }), lapsedPlan: paused };
+        expect(lapsedPlanEndsLine(mine, 'Lindqvist family', { userId: 'payer', you: true })).toBe(
+            'Lindqvist family’s Family Pro plan, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+        );
+        expect(
+            lapsedPlanEndsLine(mine, 'Lindqvist family', {
+                userId: 'payer',
+                you: false,
+                name: 'Maya',
+            }),
+        ).toBe(
+            'Maya pays for Lindqvist family’s Family Pro plan, which is paused. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Someone who doesn't pay, no lapsed plan, or a glance that names no payer: nothing said.
+        expect(lapsedPlanEndsLine(mine, 'F', { userId: 'someone', you: true })).toBeNull();
+        expect(
+            lapsedPlanEndsLine(summary({ live: false }), 'F', { userId: 'payer', you: true }),
+        ).toBeNull();
+        expect(
+            lapsedPlanEndsLine({ ...glance(false), lapsedPlan: paused }, 'F', {
+                userId: 'payer',
+                you: true,
+            }),
+        ).toBeNull();
     });
 });

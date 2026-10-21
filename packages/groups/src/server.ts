@@ -2059,10 +2059,16 @@ export async function removeMember(
             'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
             409,
         );
-    // One that gives nothing (unpaid, incomplete, paused) is ended first: it would otherwise
-    // resume, or take a retried payment, on the card of someone no longer in the family.
-    await endPayersLapsedPlan(groupId, targetId, 'They');
-    return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
+    // One that gives nothing (unpaid, incomplete, paused) is ended once the removal is certain:
+    // after every check (the remover holds `members`, the roster is current and valid), right
+    // before it is written. A refused or stale removal ends nothing.
+    return writeChain(
+        groupId,
+        userId,
+        call,
+        { kind: 'remove', userId: targetId },
+        { beforeAppend: () => endPayersLapsedPlan(groupId, targetId, 'They') },
+    );
 }
 
 /*
@@ -2076,10 +2082,9 @@ async function endPayersLapsedPlan(groupId: string, payerId: string, who: 'You' 
         await endLapsedPlansPaidBy(groupId, payerId);
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
-        const words = lapsedPlanStaysRefusal(error);
         throw new GroupError(
             'payer',
-            who === 'You' ? words : words.replace('your card', 'their card'),
+            lapsedPlanStaysRefusal(error, who === 'You' ? 'payer' : 'remover'),
             409,
         );
     }
@@ -2100,14 +2105,21 @@ const youPay = () =>
  */
 export async function leave(userId: string, groupId: string) {
     if (await paysForGroup(groupId, userId)) throw youPay();
+    // The leave's own rule first (its refusals end nothing), then the payer's lapsed plan, then
+    // the leave.
+    const preview = await groupsRepository.previewLeave(groupId, userId);
+    if (preview.status !== 'left' && preview.status !== 'dissolved') return leaveAnswer(preview);
     await endPayersLapsedPlan(groupId, userId, 'You');
-    const result = await groupsRepository.leaveGroup(groupId, userId);
+    return leaveAnswer(await groupsRepository.leaveGroup(groupId, userId), groupId);
+}
+
+async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: string) {
     switch (result.status) {
         case 'left':
             return { state: 'left' as const };
         case 'dissolved':
             // A plan that can still charge is set to end at its period's end, by the worker.
-            await queueDissolvedCancel(groupId);
+            if (groupId) await queueDissolvedCancel(groupId);
             return { state: 'left' as const, dissolved: true };
         case 'not-member':
             throw notMember();

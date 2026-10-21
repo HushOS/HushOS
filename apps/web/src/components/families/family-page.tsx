@@ -43,7 +43,12 @@ import { familySynced } from '@/lib/families-keys';
 import type { GroupNotice } from '@/lib/groups/context';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
-import { paymentNeedsYou, placesOf } from '@/lib/family-billing';
+import {
+    familyBillingQueryOptions,
+    lapsedPlanEndsLine,
+    paymentNeedsYou,
+    placesOf,
+} from '@/lib/family-billing';
 import { formatQuota, formatSpace, storageQueryOptions } from '@/lib/queries';
 import { leaveBlocker } from '@/lib/family-leave';
 import { useFamilyWork } from '@/lib/family-work';
@@ -455,6 +460,8 @@ function LeaveDialog({
     const storage = useQuery(storageQueryOptions);
     const own = storage.data?.pool?.groupId === groupId ? storage.data.own : null;
     const over = own !== null && BigInt(own.usedBytes) > BigInt(own.allowanceBytes);
+    const billing = useQuery(familyBillingQueryOptions(userId, groupId));
+    const planLine = lapsedPlanEndsLine(billing.data, family, { userId, you: true });
     const ownLine = !own
         ? null
         : over
@@ -517,6 +524,11 @@ function LeaveDialog({
                 {ownLine && (
                     <p className="text-sm" data-leave-storage={over ? 'over' : 'fits'}>
                         {ownLine}
+                    </p>
+                )}
+                {planLine && (
+                    <p className="text-sm" data-leave-plan-ends>
+                        {planLine}
                     </p>
                 )}
                 {error && (
