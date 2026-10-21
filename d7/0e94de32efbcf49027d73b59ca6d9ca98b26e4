@@ -1,0 +1,57 @@
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_359158d9ff2a4d 665,679,686,691,696-701
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_07acecc810a56b 46-51,463-464,529-533
+apps/web/src/components/families/remove-dialog.tsx
+  s_566b8e0c4467a4::t_5753fe078b94ae 1,23,73-78,118-122
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_22a0a45947e2a2 1240-1243
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_5d9c2585fc8533 13,596-600,628-658
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_a1a41b6abd6bab 80-101
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_0af65e54a2b7dd 99-102,109-119,214-219,385-428
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_5f05e99f004ad4 1044,1050,1099-1110
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_329a919d4e1b45 65-70,307-309,315
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_9291394dac1b73 656-664,666-669,1151-1171,1351,1356-1363,1365-1379,1435,1437-1438,1441-1443,1445-1447,1453-1455,1457-1459,1478-1482,1530-1534,1540-1545,1552,2389
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_4063ac8a49e55c 3563,3570-3571,3573-3575,3643-3651,3756-3757,3768-3774,3778-3886,3967-3969,7309-7342
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_384af4f64d7146 791
+packages/db/drizzle/20261021122714_family_lapsed_revoke_refusal/migration.sql
+  s_566b8e0c4467a4::t_e7d130c40bdaa1 1-11
+packages/db/drizzle/20261021122714_family_lapsed_revoke_refusal/snapshot.json
+  s_566b8e0c4467a4::t_682cf48f3c122a 1-13592
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_f423b51ad8fdd4 710,1186-1220
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_35677fd99503e4 2048-2074
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_7df6f14b5392b2 14
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_2fd5344a64d854 229-237
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_70d7040ee47c4e 673-727
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_4ddea326a5b825 2062-2071,2087,2108-2111,2113-2116,2122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d70e94de32efbcf49027d73b59ca6d9ca98b26e4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
