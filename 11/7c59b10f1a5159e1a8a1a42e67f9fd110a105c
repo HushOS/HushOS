@@ -1,0 +1,45 @@
+packages/db/src/billing.groups.test.ts
+  s_566b8e0c4467a4::t_0c0550f9045a9a 1,15-16,535-662
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_9a6f5f15659bc7 9-10,1173-1258,1262-1264,1302-1305,2132-2141,2191-2192,2202,2241
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_375d27cfcb420d 59-66,78-79,142-146
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_e2db9e400aaec4 1110-1210,1812-1816,1823,1834-1837
+docs/groups-design.md
+  s_566b8e0c4467a4::t_bd22663fb901e9 354
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_e9c096fe2091f1 503-511
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_1ab7c89eed224f 296-317,503-548,593-633
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_2b93a976c6e317 201-202,276-281,449-454,1097,3538,3548-3550,3557,3564-3574,3619-3975
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_b08f0d7bcbe45d 1189-1192,1289-1291,1293-1297,1323,1329-1337,1382-1387,1418-1419,1433-1434,1447,1449-1451,1455-1456
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_8257010acbde0f 199-204,328,338-340,356-404
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_56c3409c201a2b 13,592-622
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_4fec2391afc770 51-55,75
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_8b8950e0224775 1044,1049,1074,1091-1096
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_d01f3bd789a54d 583-584
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "117c59b10f1a5159e1a8a1a42e67f9fd110a105c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
