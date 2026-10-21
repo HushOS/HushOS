@@ -1,0 +1,21 @@
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_695cc9e3a744f3 77-78,88,116-120
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_038e31b2899baa 2576-2583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2d71c22f42cc256efd5123f3eae896af316f9ef3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
