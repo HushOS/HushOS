@@ -43,6 +43,8 @@ const polar = {
     /* A revoke Polar refuses (status, error name) while set. */
     revokeRefusal: null as { status: number; error: string } | null,
     revokes: [] as string[],
+    /* Runs once as Polar lists a plan's orders: the revoke's own read, a payment landing then. */
+    beforeOrders: null as (() => void) | null,
 };
 
 /* A family plan with one member included, so a family of two already needs a paid place. */
@@ -151,6 +153,9 @@ const fakeClient = {
     // checkout order was paid, which is what gives the family its tier and pool.
     orders: {
         async list(query: { subscription_id?: string; status?: string }) {
+            const hook = polar.beforeOrders;
+            polar.beforeOrders = null;
+            hook?.();
             const subscription = query.subscription_id
                 ? polar.subscriptions.get(query.subscription_id)
                 : undefined;
@@ -194,6 +199,8 @@ const { tombstoneAt } = await import('../../crypto/src/group-testkit');
 const { closeDatabase, createTestAccount, createTestFamily, resetDatabase, setTestUsedBytes } =
     await import('../../db/test/helpers');
 const kit = await import('../test/kit');
+const { db } = await import('../../db/src/client');
+const { sql } = await import('drizzle-orm');
 const groups = await import('./server');
 const billing = await import('@hushos/billing/server');
 
@@ -205,6 +212,7 @@ beforeEach(async () => {
     polar.updates = [];
     polar.revokeRefusal = null;
     polar.revokes = [];
+    polar.beforeOrders = null;
 });
 afterAll(closeDatabase);
 
@@ -837,7 +845,7 @@ describe('admission with billing on', () => {
                     endsLapsed: [subscription.id],
                 }),
             ),
-        ).toMatchObject({ status: expect.any(Number) });
+        ).toEqual({ code: 'invalid', status: 400, data: { reason: 'no-billing' } });
         expect(polar.revokes).toEqual([]);
         expect(subscription.ended_at).toBeNull();
         expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
@@ -852,7 +860,7 @@ describe('admission with billing on', () => {
         ).rejects.toMatchObject({
             code: 'payer',
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in Billing on the family’s page first; it may take a minute to show there.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
         });
         expect(polar.revokes).toEqual([]);
         expect(await state(fam.groupId, plain.userId)).toBe('active');
@@ -860,10 +868,15 @@ describe('admission with billing on', () => {
         expect((await billingRepository.getLiveGroupSubscription(fam.groupId))?.status).toBe(
             'active',
         );
-        // Billing marked live now: paysForGroup refuses the removal as for any live plan.
+        // Billing marked live now: the removal's own first question refuses it, as for any live
+        // plan, before anything starts.
         await expect(
             groups.removalPreview(fam.organizer.userId, fam.groupId, plain.userId),
-        ).resolves.toEqual({ plans: [] });
+        ).rejects.toMatchObject({
+            code: 'payer',
+            message:
+                'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
+        });
     });
 
     test('a payer whose plan was paid again a moment ago can’t be removed either, before the mirror knows', async () => {
@@ -874,9 +887,61 @@ describe('admission with billing on', () => {
         ).rejects.toMatchObject({
             code: 'payer',
             message:
-                'They pay for the family’s plan, which was just paid for again. They can cancel it in Billing on the family’s page; then you can remove them.',
+                'They pay for the family’s plan, which was just paid for again. They can cancel it in the billing portal; then you can remove them.',
         });
         expect(polar.revokes).toEqual([]);
+    });
+
+    test('a plan resumed while it is being ended keeps its payer: the leave or the removal is refused, nothing ended', async () => {
+        for (const how of ['leave', 'remove'] as const) {
+            const { fam, subscription, plain } = await pausedPayer();
+            const call = how === 'remove' ? await removal(fam, [plain], []) : null;
+            // Resumed in the portal just as the revoke reads the plan's orders.
+            polar.beforeOrders = () => {
+                subscription.status = 'active';
+            };
+            const going =
+                how === 'leave'
+                    ? groups.leave(plain.userId, fam.groupId, { endsLapsed: [subscription.id] })
+                    : groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+                          ...call!,
+                          endsLapsed: [subscription.id],
+                      });
+            await expect(going).rejects.toMatchObject({ code: 'payer', status: 409 });
+            expect(polar.revokes).toEqual([]);
+            expect(subscription.ended_at).toBeNull();
+            expect(await state(fam.groupId, plain.userId)).toBe('active');
+            polar.revokes = [];
+        }
+    });
+
+    test('a payer’s removal the write refuses after its member-list rules (a folder key overtaken) ends nothing', async () => {
+        const { fam, subscription, plain } = await pausedPayer();
+        const call = await removal(fam, [plain], []);
+        // A node written at the epoch the removal's rotation drew: the write's rotation step refuses.
+        await db.execute(
+            sql`update drive_nodes set key_epoch = ${call.rotations[0]!.targetEpoch} where workspace_id = ${fam.areaId} and parent_id is null`,
+        );
+        expect(
+            await refusal(
+                groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+                    ...call,
+                    endsLapsed: [subscription.id],
+                }),
+            ),
+        ).toMatchObject({ code: 'epoch-stale', status: 409 });
+        expect(polar.revokes).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(await state(fam.groupId, plain.userId)).toBe('active');
+    });
+
+    test('the removal preview is paced: it reads Polar each time', async () => {
+        const { fam, plain } = await pausedPayer();
+        for (let i = 0; i < 20; i++)
+            await groups.removalPreview(fam.organizer.userId, fam.groupId, plain.userId);
+        await expect(
+            groups.removalPreview(fam.organizer.userId, fam.groupId, plain.userId),
+        ).rejects.toMatchObject({ code: 'rate-limited', status: 429 });
     });
 
     test('the removal preview names nothing for someone who doesn’t pay, and is only for managers', async () => {
