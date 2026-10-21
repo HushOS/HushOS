@@ -1,0 +1,31 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TrashBatch.kt
+  s_566b8e0c4467a4::t_6aae6174a32b1d 48-53,55,135-137,139,163,165-167
+apps/android/app/src/test/kotlin/com/hushos/app/ui/TrashBatchTest.kt
+  s_566b8e0c4467a4::t_29fc48ef5e8ef9 206,208,232-233,236-249
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TrashBatch.swift
+  s_566b8e0c4467a4::t_747b523e210724 86-91,93,203-205,207,233-236
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_3f74fac20783bd 601
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_4695e599b4732d 940-943
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ThumbnailOfTests.swift
+  s_566b8e0c4467a4::t_a28a9122a98011 1-102
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchTests.swift
+  s_566b8e0c4467a4::t_c291533abcb0e2 249,251,272-273,278-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19ac9abd54a2a6a85e587b04923ce2fc1eef537f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
