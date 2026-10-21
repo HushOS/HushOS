@@ -68,3 +68,42 @@ test('with billing off, a dissolved family whose mirror still holds a plan able 
     expect(await groups.getGroupRow(ended)).toBeNull();
     expect(await groups.getGroupRow(never)).toBeNull();
 });
+
+test('with billing off, a plan set to end whose period is over has ended: its family goes; one set to end still in its period waits', async () => {
+    const ranOut = await dissolvedLongAgo();
+    const stillRunning = await dissolvedLongAgo();
+    for (const groupId of [ranOut, stillRunning])
+        await db.insert(groupBillingCustomers).values({
+            groupId,
+            provider: 'polar',
+            providerCustomerId: `cus_${groupId.slice(0, 8)}`,
+        });
+    const row = (groupId: string, id: string, periodEnd: Date) => ({
+        id,
+        groupId,
+        provider: 'polar',
+        productId: 'prod_family',
+        productName: 'Family (monthly)',
+        // Set to end when the family was dissolved with billing on; billing was turned off since.
+        status: 'active',
+        cancelAtPeriodEnd: true,
+        recurringInterval: 'month',
+        units: 4,
+        includedMembers: 4,
+        quotaBytes: 0n,
+        currentPeriodStart: new Date(periodEnd.getTime() - 30 * DAY),
+        currentPeriodEnd: periodEnd,
+        endedAt: null,
+    });
+    await db
+        .insert(groupBillingSubscriptions)
+        .values([
+            row(ranOut, 'sub_ran_out', new Date(Date.now() - DAY)),
+            row(stillRunning, 'sub_still', new Date(Date.now() + DAY)),
+        ]);
+    expect(
+        await groups.purgeDissolvedFamilies(groups.DISSOLVED_FAMILY_RETENTION_DAYS),
+    ).toMatchObject({ families: 1 });
+    expect(await groups.getGroupRow(ranOut)).toBeNull();
+    expect(await groups.getGroupRow(stillRunning)).not.toBeNull();
+});

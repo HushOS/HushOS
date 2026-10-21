@@ -173,8 +173,6 @@ const polar = {
     beforeCut: null as (() => Promise<void>) | null,
     /* Orders cannot be read (a token without orders:read, an outage). */
     ordersFail: false,
-    /* Polar refuses to list subscriptions with this status while set. */
-    listFailure: null as number | null,
     /* Runs once as Polar takes the next product change: an admission landing mid-flight. */
     beforeProductChange: null as (() => Promise<void>) | null,
     /* Runs once as Polar takes the next raise: an upgrade landing mid-flight. */
@@ -284,7 +282,6 @@ const polar = {
      * types (`active` or `trialing`) rule out, kept so HushOS is right either way.
      */
     stateListsLapsed: false,
-    /* Listing a customer's subscriptions answers 404 (a filter Polar doesn't take for it). */
     /* Listing a customer's subscriptions fails with this status (404, 429, 503) while set. */
     listFailure: null as number | null,
     /* The next product change's order is made but not listed yet. */
@@ -1086,7 +1083,6 @@ beforeEach(async () => {
     polar.cutFailures = 0;
     polar.beforeCut = null;
     polar.ordersFail = false;
-    polar.listFailure = null;
     polar.beforeProductChange = null;
     polar.ignoresMoves = false;
     polar.ordersLag = false;
@@ -4991,9 +4987,10 @@ describe('a deleted family’s plan billing again', () => {
     test('a mirror row with no end refunds from the end of its last period: what paid for the family’s time is kept', async () => {
         const family = await familyOnPlan({ product: PRO_FAMILY });
         const { groupId, subscription } = family;
-        // Left `canceled` with no end (a partial write), its last period ending five days ago.
+        // Left `canceled` with no end (a partial write), its last period, which served the
+        // family, ending five days ago.
         await rawSql(
-            `update group_billing_subscriptions set status = 'canceled', ended_at = null, current_period_end = now() - interval '5 days' where id = '${subscription.id}'`,
+            `update group_billing_subscriptions set status = 'canceled', ended_at = null, current_period_end = now() - interval '5 days', served_until = now() - interval '5 days' where id = '${subscription.id}'`,
         );
         expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
             status: 'dissolved',
@@ -5186,6 +5183,289 @@ describe('a deleted family’s plan billing again', () => {
         }
         expect(callsTo('subscriptions.revoke')).toEqual([]);
         expect(endingJobs).toEqual([]);
+    });
+
+    /* A plan the family never had, made on its Polar customer: `ended` once it has ended at Polar. */
+    function neverHeld(groupId: string, orderAt = new Date(Date.now() - DAY).toISOString()) {
+        const unknown = familySubscription(groupId, { id: 'sub_unknown', product_id: PRO_FAMILY });
+        polar.checkoutOrders = polar.checkoutOrders.filter(
+            (order) => order.subscription_id !== 'sub_unknown',
+        );
+        addPaidOrder(unknown, 'order_unknown', orderAt);
+        return unknown;
+    }
+    const failsOnce = async (run: () => Promise<unknown>) => {
+        polar.ordersFail = true;
+        const quiet = [vi.spyOn(log, 'warn'), vi.spyOn(log, 'error')].map((spy) =>
+            spy.mockImplementation(() => {}),
+        );
+        try {
+            await expect(run()).rejects.toBeDefined();
+        } finally {
+            polar.ordersFail = false;
+            for (const spy of quiet) spy.mockRestore();
+        }
+    };
+    const quietly = async (run: () => Promise<unknown>) => {
+        const quiet = [vi.spyOn(log, 'warn'), vi.spyOn(log, 'error')].map((spy) =>
+            spy.mockImplementation(() => {}),
+        );
+        try {
+            await run();
+        } finally {
+            for (const spy of quiet) spy.mockRestore();
+        }
+    };
+
+    test('a plan never held that ended at Polar with a charge: a run that fails midway and is retried still refunds it', async () => {
+        const { groupId } = await purgedFamily();
+        const unknown = neverHeld(groupId);
+        unknown.status = 'canceled';
+        unknown.ended_at = new Date().toISOString();
+        const delivery = () =>
+            billing.reconcileGroup(groupId, { subscriptionId: 'sub_unknown', fromDelivery: true });
+        // Polar's order list fails after the run wrote the plan, ended, to the mirror.
+        await failsOnce(delivery);
+        expect((await billingRepository.getGroupSubscription('sub_unknown'))?.endedAt).toBeTruthy();
+        await quietly(async () => {
+            await delivery();
+            await runQueued(0);
+        });
+        expect(refundsMade()).toEqual([['order_unknown', 999]]);
+    });
+
+    test('a plan never held that a run wrote to the mirror and then died on: the next run still refunds everything', async () => {
+        const { groupId } = await purgedFamily();
+        const unknown = neverHeld(groupId, new Date().toISOString());
+        // What the first run wrote before it could write the ending (a crash, a lost connection).
+        await billingRepository.recordOrphanedSubscription(groupId, {
+            id: 'sub_unknown',
+            productId: unknown.product_id,
+            productName: 'Family Pro (monthly)',
+            status: 'active',
+            recurringInterval: 'month',
+            amount: 999,
+            currency: 'usd',
+            units: 1,
+            includedMembers: 1,
+            quotaBytes: 0n,
+            currentPeriodStart: new Date(unknown.current_period_start!),
+            currentPeriodEnd: new Date(unknown.current_period_end),
+            cancelAtPeriodEnd: false,
+            endedAt: null,
+        });
+        await deliver(stateChanged(groupId));
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_unknown']);
+        await quietly(() => runQueued(0));
+        expect((await billingRepository.getPlanEnding('sub_unknown'))?.paidAfter).toEqual(
+            new Date(0),
+        );
+        expect(refundsMade()).toEqual([['order_unknown', 999]]);
+    });
+
+    test('a plan the family had, reinstated, charged and ended between reads: a run that fails midway and is retried refunds the charge', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        // Recorded as cancelled with no end (an earlier version), its last period ending 5 days ago.
+        await rawSql(
+            `update group_billing_subscriptions set status = 'canceled', ended_at = null, current_period_end = now() - interval '5 days', served_until = now() - interval '5 days' where id = '${subscription.id}'`,
+        );
+        expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        await rawSql(
+            `update groups set dissolved_at = now() - interval '31 days' where id = '${groupId}'`,
+        );
+        await rawSql(
+            `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${groupId}'`,
+        );
+        await groupsRepository.purgeDeletedAreas(30);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 1 });
+        addPaidOrder(subscription, 'order_since', new Date(Date.now() - DAY).toISOString());
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        polar.calls = [];
+        endingJobs.length = 0;
+        const delivery = () =>
+            billing.reconcileGroup(groupId, {
+                subscriptionId: subscription.id,
+                fromDelivery: true,
+            });
+        await failsOnce(delivery);
+        await quietly(async () => {
+            await delivery();
+            await runQueued(0);
+        });
+        expect(refundsMade()).toEqual([['order_since', 999]]);
+    });
+
+    /* Purges the family `groupId` (dissolved by `payerId` leaving), its folders first. */
+    async function purge(groupId: string, payerId: string) {
+        expect(await groupsRepository.leaveGroup(groupId, payerId)).toEqual({
+            status: 'dissolved',
+        });
+        await rawSql(
+            `update groups set dissolved_at = now() - interval '31 days' where id = '${groupId}'`,
+        );
+        await rawSql(
+            `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${groupId}'`,
+        );
+        await groupsRepository.purgeDeletedAreas(30);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 1 });
+    }
+
+    test('a past-due period gave nothing: a dunning order paid after the family was deleted is refunded, though HushOS ended the plan after the period began', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        // A month that served the family, ended 10 days ago, as the reconciles saw it.
+        await rawSql(
+            `update group_billing_subscriptions set served_until = null where id = '${subscription.id}'`,
+        );
+        const periodEnd = new Date(Date.now() - 10 * DAY);
+        subscription.current_period_start = new Date(periodEnd.getTime() - 30 * DAY).toISOString();
+        subscription.current_period_end = periodEnd.toISOString();
+        await billing.reconcileGroup(groupId);
+        // The renewal failed: past due through the new period, which gives nothing.
+        subscription.status = 'past_due';
+        subscription.current_period_start = periodEnd.toISOString();
+        subscription.current_period_end = new Date(periodEnd.getTime() + 30 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(
+            (await billingRepository.getGroupSubscription(subscription.id))?.servedUntil,
+        ).toEqual(periodEnd);
+        // HushOS ended it 2 days ago, and the family was deleted.
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date(Date.now() - 2 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        await purge(groupId, family.payer.id);
+        // The payer pays the dunning order, made when the past-due period began; Polar resumes it.
+        addPaidOrder(
+            subscription,
+            'order_dunning',
+            new Date(periodEnd.getTime() + 60_000).toISOString(),
+        );
+        subscription.status = 'active';
+        subscription.ended_at = null;
+        polar.calls = [];
+        endingJobs.length = 0;
+        await deliver(stateChanged(groupId));
+        await quietly(() => runQueued(0));
+        expect(refundsMade()).toEqual([['order_dunning', 999]]);
+    });
+
+    test('a refund owed under the family’s earlier ending stays owed when the deleted family’s plan comes back', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        // Unpaid, then revoked by the job for the dissolved family (#188), its ending the family's.
+        subscription.status = 'unpaid';
+        await billing.reconcileGroup(groupId);
+        expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        await quietly(() => billing.cancelDissolvedPlan(groupId));
+        expect(subscription.ended_at).toBeTruthy();
+        // An invoice from the family's own time, paid only after the revoke: owed back, not yet
+        // worked (its job hasn't run).
+        addPaidOrder(
+            subscription,
+            'order_owed',
+            new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        );
+        await deliver(
+            signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_owed',
+                    subscription_id: subscription.id,
+                    created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+                    currency: 'usd',
+                    net_amount: 999,
+                    customer: { external_id: `group:${groupId}` },
+                },
+            }),
+        );
+        expect((await billingRepository.getPlanRefund('order_owed'))?.status).toBe('requested');
+        // The family is deleted, and Polar resumes the plan.
+        await rawSql(
+            `update groups set dissolved_at = now() - interval '31 days' where id = '${groupId}'`,
+        );
+        await rawSql(
+            `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${groupId}'`,
+        );
+        await groupsRepository.purgeDeletedAreas(30);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 1 });
+        subscription.status = 'active';
+        subscription.ended_at = null;
+        endingJobs.length = 0;
+        await deliver(stateChanged(groupId));
+        expect((await billingRepository.getPlanRefund('order_owed'))?.status).toBe('requested');
+        await quietly(() => runQueued(0));
+        expect(refundsMade().map(([order]) => order)).toContain('order_owed');
+    });
+
+    test('a plan HushOS revoked, reinstated, charged and ended again between reads: its own order.paid has the charge refunded', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        subscription.status = 'active';
+        subscription.ended_at = null;
+        await deliver(stateChanged(groupId));
+        await quietly(() => runQueued(0));
+        expect((await billingRepository.getPlanEnding(subscription.id))?.revokedAt).toBeTruthy();
+        // Reinstated, charged and ended again, with only the end seen by the next read.
+        addPaidOrder(subscription, 'order_between');
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await deliver(stateChanged(groupId));
+        endingJobs.length = 0;
+        await deliver(
+            signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_between',
+                    subscription_id: subscription.id,
+                    created_at: new Date().toISOString(),
+                    currency: 'usd',
+                    net_amount: 999,
+                    customer: { external_id: `group:${groupId}` },
+                },
+            }),
+        );
+        await quietly(() => runQueued(0));
+        expect(refundsMade()).toEqual([['order_between', 999]]);
+    });
+
+    test('a deleted family’s plan past due beyond Polar’s first page of 100 is found by a delivery, and revoked', async () => {
+        const { groupId } = await purgedFamily();
+        for (let i = 0; i < 100; i++)
+            familySubscription(groupId, {
+                id: `sub_gone_${String(i).padStart(3, '0')}`,
+                status: 'canceled',
+                ended_at: new Date(Date.now() - 3 * DAY).toISOString(),
+                product_id: PRO_FAMILY,
+            });
+        const hidden = familySubscription(groupId, {
+            id: 'sub_zz_beyond',
+            status: 'past_due',
+            product_id: PRO_FAMILY,
+        });
+        await deliver(stateChanged(groupId));
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_zz_beyond']);
+        expect(hidden.ended_at).toBeTruthy();
+    });
+
+    test('a subscription another family’s row holds is never revoked for a deleted family', async () => {
+        const { groupId } = await purgedFamily();
+        const other = await familyOnPlan({ product: PRO_FAMILY });
+        // Polar lists the other family's plan on the deleted family's customer (a hand edit).
+        const theirs = polar.subscriptions.get(other.subscription.id)!;
+        polar.customers.get(`group:${groupId}`)!.subscriptions.push(theirs);
+        const errors = await deliver(stateChanged(groupId));
+        expect(errors).toContain(
+            'A deleted family’s plan is held by another family’s row; left alone',
+        );
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect((await billingRepository.getGroupSubscription(other.subscription.id))?.groupId).toBe(
+            other.groupId,
+        );
     });
 });
 

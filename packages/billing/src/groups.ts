@@ -563,15 +563,12 @@ async function revokeOrphanedPlans(
     // (past due, unpaid): asked about again until Polar shows it ended.
     for (const id of await billingRepository.listUnrevokedLapsedEndings(groupId)) ids.add(id);
     const customer = await billingRepository.getGroupCustomer(groupId);
-    // Best effort, one page of 100 (a family has a handful of plans): a listing Polar refuses or
-    // can't answer (404, 429, a 5xx) is logged, and the plans already named are still read.
+    // Best effort, every page (listFamilySubscriptions): a listing Polar refuses or can't answer
+    // (429, a 5xx) is logged and owed (the daily reconcile lists it again), and the plans already
+    // named are still read.
     if (customer && options.listPolar) {
         try {
-            const listed = await polar().subscriptions.list({
-                external_customer_id: customerKey(groupId),
-                limit: 100,
-            });
-            for (const subscription of listed.items)
+            for (const subscription of (await listFamilySubscriptions(groupId)) ?? [])
                 if (!subscription.ended_at && !ENDED.has(subscription.status))
                     ids.add(subscription.id);
         } catch (error) {
@@ -591,15 +588,21 @@ async function revokeOrphanedPlans(
         return;
     }
     for (const id of ids) {
-        // That plan's own first recorded end, read before this run writes its row: what was paid
-        // from then on bought nothing. A row with no end (a family a worker with billing off purged
-        // while its plan ran, before #189; a row left `canceled` with no end): the end of the last
-        // period the mirror knew of, so what paid for that period, the family's time, is kept, as a
-        // dissolved family's payer keeps what they paid for. A plan the mirror never held:
-        // everything it took, since HushOS gave nothing for it. Stored on the ending the first time;
-        // never recomputed.
+        // What was paid from the end of the last period this plan gave the family bought nothing
+        // (unwantedPlanCutoff): read from `served_until`, which only a reconcile of the living
+        // family sets, so nothing this path writes to the row (its status, period or end) moves
+        // it, however often a run fails midway and is retried. Stored on the ending the first
+        // time; never recomputed.
         const row = await billingRepository.getGroupSubscription(id);
-        const paidAfter = row ? (row.endedAt ?? row.currentPeriodEnd) : new Date(0);
+        // A subscription id the mirror holds for another family is never this family's to end.
+        if (row && row.groupId !== groupId) {
+            log.error({
+                message: 'A deleted family’s plan is held by another family’s row; left alone',
+                billing: { group: groupId, subscription: id, other: row.groupId },
+            });
+            continue;
+        }
+        const paidAfter = unwantedPlanCutoff(row);
         let subscription: models.Subscription;
         try {
             subscription = await polar().subscriptions.get(id);
@@ -620,8 +623,11 @@ async function revokeOrphanedPlans(
             await orphanSnapshot(subscription),
         );
         if (subscription.ended_at || ENDED.has(subscription.status)) {
-            // Ended again before HushOS saw it bill (reinstated, charged, ended between reads): its
-            // charges since the cutoff are still refunded, through an ending written now.
+            // Ended again before HushOS saw it bill (reinstated, charged, ended between reads).
+            // With no ending yet, its charges since the cutoff are refunded through an ending
+            // written now. With one (HushOS revoked it before), each charge's own `order.paid`
+            // delivery notes it on that ending (notePaidAfterRevoke) for the job to refund: the
+            // only guard there, since nothing else lists that plan's orders again.
             if (!(await recordOrphanEnded(id, subscription.ended_at ?? null)))
                 await endOrphanedFamilyPlan(groupId, id, paidAfter, { onlyIfPaidSince: true });
             continue;
@@ -643,6 +649,20 @@ async function revokeOrphanedPlans(
     }
 }
 
+/*
+ * From when a family's plan bought nothing, by its mirror row: the end of the last period it was
+ * the family's plan while active or trialing (`served_until`), or its own end if that is earlier
+ * (revoked mid-period); the epoch for one that never served the family (no row, or a row that was
+ * never the family's plan: an incomplete checkout, a plan beside the family's, one first seen after
+ * the family was deleted). A past-due or unpaid period gave nothing, so it never moves the cutoff.
+ * Orders made at or after it are refunded whole; those before paid for the family's time.
+ */
+export function unwantedPlanCutoff(row: { servedUntil: Date | null; endedAt: Date | null } | null) {
+    if (!row?.servedUntil) return new Date(0);
+    const end = row.endedAt?.getTime() ?? Number.POSITIVE_INFINITY;
+    return new Date(Math.min(row.servedUntil.getTime(), end));
+}
+
 /* A deleted family's subscription as the mirror keeps it (recordOrphanedSubscription). */
 async function orphanSnapshot(subscription: models.Subscription) {
     const plan = await planOf(subscription.product_id);
@@ -650,6 +670,7 @@ async function orphanSnapshot(subscription: models.Subscription) {
         id: subscription.id,
         productId: subscription.product_id,
         productName: plan?.name ?? subscription.product_id,
+        productUnread: !plan,
         status: subscription.status,
         recurringInterval: subscription.recurring_interval,
         amount: subscription.amount,

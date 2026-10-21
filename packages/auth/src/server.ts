@@ -1041,16 +1041,17 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const [overview, stuck, owed, unrefundable, doubled, unended, unlisted, orphaned] = await Promise.all([
-        adminRepository.getOverview(),
-        billingRepository.listGivenUpReissues(),
-        billingRepository.listRefundsOwed(),
-        billingRepository.listUnrefundable(),
-        billingRepository.listDoubleCharging(),
-        billingRepository.listLapsedRevokeRefusals(),
-        billingRepository.listUnlistedFamilies(),
-        billingRepository.listOrphanedPlans(),
-    ]);
+    const [overview, stuck, owed, unrefundable, doubled, unended, unlisted, orphaned] =
+        await Promise.all([
+            adminRepository.getOverview(),
+            billingRepository.listGivenUpReissues(),
+            billingRepository.listRefundsOwed(),
+            billingRepository.listUnrefundable(),
+            billingRepository.listDoubleCharging(),
+            billingRepository.listLapsedRevokeRefusals(),
+            billingRepository.listUnlistedFamilies(),
+            billingRepository.listOrphanedPlans(),
+        ]);
     return {
         ...overview,
         /*
