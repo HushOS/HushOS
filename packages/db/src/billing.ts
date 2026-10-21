@@ -352,7 +352,11 @@ export async function listGroupCustomerIds(provider: string) {
     return rows.map((row) => row.groupId);
 }
 
-export async function listLiveGroupSubscriptionIds(groupId: string) {
+/*
+ * Every subscription of the group not recorded as ended, live or not (`unpaid`,
+ * `incomplete` and `paused` too): what the next reconcile reads from Polar again.
+ */
+export async function listUnendedGroupSubscriptionIds(groupId: string) {
     const rows = await db
         .select({ id: groupBillingSubscriptions.id })
         .from(groupBillingSubscriptions)
@@ -600,10 +604,17 @@ export const DISSOLVE_FAILING_RENEWAL_HOURS = 48;
  * end for over a day, or at all within two days of its renewal (`dissolved-failing`: a
  * token error, Polar down), which an operator
  * cancels. Those go from the list once the plan is set to end, whoever set it (the
- * operator in Polar, or its payer), as soon as the mirror shows it.
+ * operator in Polar, or its payer), as soon as the mirror shows it. A refused plan that
+ * isn't live (`unpaid`, `incomplete`, `paused`: `dissolved-inactive`) stays until it has
+ * ended, since setting it to end doesn't end it and the purge waits for the end; an
+ * operator revokes it. A scheduled change given up on is listed only while the plan is live.
  */
 export async function listGivenUpReissues() {
-    const refused = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is not null and not ${groupBillingSubscriptions.cancelAtPeriodEnd})`;
+    const live = sql`(${groupBillingSubscriptions.status} in (${sql.join(
+        [...LIVE_STATUSES].map((status) => sql`${status}`),
+        sql`, `,
+    )}))`;
+    const refused = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is not null and (not ${groupBillingSubscriptions.cancelAtPeriodEnd} or not ${live}))`;
     // Not filtered on `cancel_at_period_end`: a run fails before it can read Polar (a revoked
     // token), so the mirror's may be stale. It clears once a reconcile sees the plan ending.
     const failing = sql`(${groupBillingSubscriptions.dissolveRefusedAt} is null and (${groupBillingSubscriptions.dissolveFailingSince} < now() - make_interval(hours => ${DISSOLVE_FAILING_LISTED_HOURS}) or (${groupBillingSubscriptions.dissolveFailingSince} is not null and ${groupBillingSubscriptions.currentPeriodEnd} < now() + make_interval(hours => ${DISSOLVE_FAILING_RENEWAL_HOURS}))))`;
@@ -615,14 +626,14 @@ export async function listGivenUpReissues() {
             wanted: groupBillingSubscriptions.reissuedState,
             reason: sql<
                 string | null
-            >`case when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            >`case when ${refused} and not ${live} then 'dissolved-inactive' when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
             since: since.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 isNull(groupBillingSubscriptions.endedAt),
-                sql`(${groupBillingSubscriptions.reissueGaveUpAt} is not null or ${refused} or ${failing})`,
+                sql`((${groupBillingSubscriptions.reissueGaveUpAt} is not null and ${live}) or ${refused} or ${failing})`,
             ),
         )
         .orderBy(desc(since));
@@ -633,6 +644,7 @@ export async function listGivenUpReissues() {
  * ended (`active`, `trialing`, `past_due`, `unpaid`, `incomplete`, `paused`) still can.
  */
 export const ENDED_SUBSCRIPTION_STATUSES = ['canceled', 'incomplete_expired'] as const;
+const ENDED = new Set<string>(ENDED_SUBSCRIPTION_STATUSES);
 const canStillCharge = and(
     isNull(groupBillingSubscriptions.endedAt),
     notInArray(groupBillingSubscriptions.status, [...ENDED_SUBSCRIPTION_STATUSES]),
@@ -921,15 +933,13 @@ export async function applyGroupState(input: {
                     },
                 });
         }
-        // Kept as not ended: what is live, and a plan Polar just answered as paused, which its
-        // payer may resume and which may charge again (a dissolved family's purge waits for it).
-        // `unpaid` and `incomplete` are still swept as ended here.
-        const liveIds = input.subscriptions
-            .filter(
-                (subscription) =>
-                    !subscription.endedAt &&
-                    (LIVE_STATUSES.has(subscription.status) || subscription.status === 'paused'),
-            )
+        // Kept as not ended: every subscription Polar just answered for that it hasn't ended
+        // itself (no `ended_at`, not `canceled` or `incomplete_expired`), whatever its status:
+        // `paused`, `unpaid` and `incomplete` too, which can still charge, so a dissolved
+        // family's job and purge see them. They give no pool or places (liveGroupSubscription
+        // below). What Polar no longer lists, or has ended without saying when, ends here.
+        const keptIds = input.subscriptions
+            .filter((subscription) => !subscription.endedAt && !ENDED.has(subscription.status))
             .map((subscription) => subscription.id)
             .concat(input.keepIds ?? []);
         if (input.complete !== false)
@@ -945,8 +955,8 @@ export async function applyGroupState(input: {
                         eq(groupBillingSubscriptions.groupId, input.groupId),
                         eq(groupBillingSubscriptions.provider, input.provider),
                         isNull(groupBillingSubscriptions.endedAt),
-                        liveIds.length
-                            ? notInArray(groupBillingSubscriptions.id, liveIds)
+                        keptIds.length
+                            ? notInArray(groupBillingSubscriptions.id, keptIds)
                             : undefined,
                     ),
                 );
