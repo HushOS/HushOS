@@ -339,7 +339,8 @@ export type GroupStageOp =
      * account checked are let in (the core's admit_body).
      */
     | { kind: 'admit'; userId: string; served: ServedIdentity; roles: GroupRole[] }
-    | { kind: 'remove'; userId: string; rotations: AreaRotationInput[] }
+    /* `endsLapsed`: the remover confirmed that the plan the person pays for, which gives nothing, ends. */
+    | { kind: 'remove'; userId: string; rotations: AreaRotationInput[]; endsLapsed?: true }
     | { kind: 'markLeft'; userIds: string[]; rotations: AreaRotationInput[] }
     | { kind: 'roles'; userId: string; roles: GroupRole[] }
     | {

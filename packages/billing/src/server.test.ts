@@ -3794,13 +3794,20 @@ describe('a family plan whose payment failed, or that is paused', () => {
             const error = vi.spyOn(log, 'error').mockImplementation(() => {});
             try {
                 await expect(checkout(userOf(heir), groupId)).rejects.toBeTruthy();
-                // Every refusal is logged at error level with the plan, and listed for operators.
-                expect(error).toHaveBeenCalledWith(
+                // Every refusal is logged once at error level with the plan (a locked one with
+                // Polar's reason), and listed for operators.
+                const logged = error.mock.calls
+                    .map(([entry]) => entry as { message?: string; billing?: object })
+                    .filter((entry) => entry.message?.startsWith('A lapsed family plan'));
+                expect(logged).toEqual([
                     expect.objectContaining({
-                        message: 'A lapsed family plan could not be revoked',
+                        message:
+                            _kind === 'locked'
+                                ? 'A lapsed family plan could not be revoked: Polar says it is locked'
+                                : 'A lapsed family plan could not be revoked',
                         billing: expect.objectContaining({ subscription: subscription.id }),
                     }),
-                );
+                ]);
             } finally {
                 error.mockRestore();
             }
@@ -3841,7 +3848,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
         expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(payer.id);
     });
 
-    test('the plans confirmed must be exactly the family’s: another one since the page loaded is asked about again', async () => {
+    test('every plan found must be among those confirmed: another one since the page loaded is asked about again', async () => {
         const { payer, groupId, subscription } = await lapsedFamily('unpaid');
         await expect(
             billing.startGroupCheckout(payer, groupId, {
@@ -3866,10 +3873,121 @@ describe('a family plan whose payment failed, or that is paused', () => {
         expect(
             (await priced(billing.getGroupBilling(payer, groupId))).lapsedPlan?.ids.sort(),
         ).toEqual(['sub_second', subscription.id].sort());
-        await checkout(payer, groupId);
+        // One the page still shows that has gone since is no matter.
+        await billing.startGroupCheckout(payer, groupId, {
+            productId: PRO_FAMILY,
+            endLapsed: [subscription.id, 'sub_second', 'sub_gone_since'],
+        });
         expect(callsTo('subscriptions.revoke').sort()).toEqual(
             [`subscriptions.revoke:${subscription.id}`, 'subscriptions.revoke:sub_second'].sort(),
         );
+    });
+
+    test('a lapsed plan whose product HushOS can’t read is named, ended once confirmed, and a payment on it afterwards is refunded as the family’s', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('unpaid');
+        // An archived product, its plan unpaid, its delivery lost.
+        const unread = familySubscription(groupId, {
+            id: 'sub_unread',
+            status: 'unpaid',
+            product_id: 'prod_archived',
+        });
+        await expect(checkout(payer, groupId)).rejects.toMatchObject({ code: 'ends-lapsed' });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        // Written to the mirror by the lookup: the page names it, so the next confirm ends it.
+        expect(
+            (await priced(billing.getGroupBilling(payer, groupId))).lapsedPlan?.ids.sort(),
+        ).toEqual(['sub_unread', subscription.id].sort());
+        await checkout(payer, groupId);
+        expect(callsTo('subscriptions.revoke').sort()).toEqual(
+            ['subscriptions.revoke:sub_unread', `subscriptions.revoke:${subscription.id}`].sort(),
+        );
+        expect(await billingRepository.familyPlanOf('sub_unread')).toBeTruthy();
+        // A payment Polar takes on it afterwards: the family's, refunded whole by the job.
+        addPaidOrder(unread, 'order_unread');
+        await deliverFamilyPaid(groupId, 'sub_unread', 'order_unread');
+        await runQueued(0);
+        expect(refundsMade()).toEqual([['order_unread', 999]]);
+        // Ended at Polar, so the next reconcile leaves the page with nothing lapsed.
+        await billing.reconcileGroup(groupId);
+        expect((await priced(billing.getGroupBilling(payer, groupId))).lapsedPlan).toBeNull();
+    });
+
+    test('a past-due plan the mirror missed is the family’s plan: the checkout is refused, nothing ended, and the plan written to the mirror', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('unpaid');
+        // Paid in another tab, and past due since: Polar's state doesn't list it.
+        familySubscription(groupId, {
+            id: 'sub_pastdue',
+            status: 'past_due',
+            product_id: PRO_FAMILY,
+        });
+        await expect(checkout(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: 'This family already has a plan.',
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(callsTo('checkouts.create')).toEqual([]);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_pastdue');
+    });
+
+    test('a refused plan that turns live again leaves the operators’ list', async () => {
+        const { groupId, subscription } = await lapsedFamily('paused');
+        const heir = await createTestAccount();
+        await setTestMember({ groupId, userId: heir.userId, state: 'active', roles: ['billing'] });
+        polar.revokeRefusals.set(subscription.id, { status: 422, error: 'HTTPValidationError' });
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            await expect(checkout(userOf(heir), groupId)).rejects.toBeTruthy();
+        } finally {
+            error.mockRestore();
+        }
+        expect(await billingRepository.listLapsedRevokeRefusals()).toEqual([
+            expect.objectContaining({ subscriptionId: subscription.id }),
+        ]);
+        // Resumed by its payer: a live plan, never one for an operator to revoke.
+        subscription.status = 'active';
+        await billing.reconcileGroup(groupId);
+        expect(await billingRepository.listLapsedRevokeRefusals()).toEqual([]);
+    });
+
+    test('a live plan on a product HushOS can’t read never becomes the family’s plan', async () => {
+        const { groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
+        const seats = (await groupsRepository.getGroupRow(groupId))?.seatLimit;
+        // Made in Polar's dashboard on an archived product, running longer than the family's.
+        familySubscription(groupId, {
+            id: 'sub_unread_live',
+            product_id: 'prod_archived',
+            current_period_end: new Date(Date.now() + 300 * DAY).toISOString(),
+        });
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        try {
+            await billing.reconcileGroup(groupId);
+        } finally {
+            warn.mockRestore();
+        }
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe(
+            subscription.id,
+        );
+        expect((await groupsRepository.getGroupRow(groupId))?.seatLimit).toBe(seats);
+        expect(await billingRepository.getGroupSubscription('sub_unread_live')).toBeNull();
+    });
+
+    test('a member’s glance names the lapsed plan without its ids, and says whether they pay for it', async () => {
+        const { payer, groupId } = await lapsedFamily('paused');
+        const plain = await createTestAccount();
+        await setTestMember({ groupId, userId: plain.userId, state: 'active', roles: [] });
+        expect((await billing.getGroupBilling(userOf(plain), groupId)).lapsedPlan).toEqual({
+            productName: 'Family Pro (monthly)',
+            standing: 'paused',
+            youPay: false,
+        });
+        // The payer whose `billing` was taken still pays: their glance says so, for their Leave.
+        await setTestMember({ groupId, userId: payer.id, state: 'active', roles: [] });
+        expect((await billing.getGroupBilling(payer, groupId)).lapsedPlan).toEqual({
+            productName: 'Family Pro (monthly)',
+            standing: 'paused',
+            youPay: true,
+        });
     });
 
     test('an incomplete plan less than a day old is said to be waiting even before anyone confirms anything', async () => {

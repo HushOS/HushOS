@@ -152,7 +152,11 @@ export function createGroupsApi(client = () => apiClient()) {
         patchMember: (groupId: string, userId: string, call: RosterCallBody) =>
             answer(groups(groupId).members({ userId }).patch(body(call))) as Promise<ChainHead>,
         /* 19 */
-        removeMember: (groupId: string, userId: string, call: RosterCallBody) =>
+        removeMember: (
+            groupId: string,
+            userId: string,
+            call: RosterCallBody & { endsLapsed?: boolean },
+        ) =>
             answer(
                 groups(groupId).members({ userId }).remove.post(body(call)),
             ) as Promise<ChainHead>,
