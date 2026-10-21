@@ -1084,6 +1084,7 @@ export async function getAdminOverview(sessionToken: string | null) {
         unrefundable: unrefundable.map((row) => ({
             subscriptionId: row.subscriptionId,
             userId: row.userId,
+            groupId: row.planOfGroupId,
             amount: row.amount ?? 0,
             currency: row.currency ?? 'usd',
             since: row.since.toISOString(),

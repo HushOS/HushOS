@@ -1189,7 +1189,7 @@ export async function endPersonalPlans(
     // The plan has ended: its entitlement goes now, not at the next delivery. A family's job
     // (its `userId` is the family's id) has no person's plans to read: the delivery that
     // opened its ending, or the revoke before a checkout, has reconciled the family already.
-    if ((revokedAny || refresh) && !(await billingRepository.getGroupCustomer(userId))) {
+    if ((revokedAny || refresh) && !(await billingRepository.isFamilyOwner(userId))) {
         const { reconcileCustomer } = await import('./server');
         await reconcileCustomer(userId);
     }
@@ -1305,17 +1305,19 @@ export async function revokeLapsed(
     )
         await billingRepository.dropPlanEnding(subscriptionId);
     const held = () => new LapsedRevokeError('held', 'The plan’s ending is still being worked.');
+    // Held like the job holds an ending, so neither works it while the other does: the lease is
+    // taken in the same write that begins (or takes over) the ending, and one another run holds
+    // is never written to.
+    const owner = randomUUID();
     const begun = await billingRepository.beginLapsedRevoke({
         subscriptionId,
         userId,
         at: new Date(),
+        owner,
+        leaseMs: PLAN_ENDING_LEASE_MS,
     });
-    // A family's ending still being worked, or a lapsed one a payment opened: the job's.
-    if (!isLapsedEnding(begun) || begun.outcome === null) throw held();
-    // Held like the job holds an ending, so neither works it while the other does.
-    const owner = randomUUID();
-    if (!(await billingRepository.takePlanEndingLease(subscriptionId, owner, PLAN_ENDING_LEASE_MS)))
-        throw held();
+    // Another run's, a family's ending still being worked, or a lapsed one a payment opened.
+    if (!begun.leased) throw held();
     try {
         const ending = (await billingRepository.getPlanEnding(subscriptionId))!;
         if (!isLapsedEnding(ending) || ending.outcome !== 'settled' || ending.revokedAt)

@@ -664,18 +664,40 @@ function ChoosePlan({
     const shown = plans.filter((plan) => plan.interval === period);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState('');
+    // A plan Polar still holds that gives nothing ends when another is chosen: asked first.
+    const [confirming, setConfirming] = useState<{ plan: FamilyPlan; words: string } | null>(null);
     usePageRestored(() => setBusy(null));
+    const lapsed = summary.lapsedPlan ?? null;
+    const lapsedName = lapsed ? tierName({ name: lapsed.productName }) : null;
 
-    async function choose(plan: FamilyPlan) {
+    async function choose(plan: FamilyPlan, endLapsed = false) {
+        // Ending it can't be taken back, and happens whether or not the checkout is finished.
+        if (!endLapsed && lapsed && lapsedName) {
+            setConfirming({
+                plan,
+                words: `This ends ${lapsedName}, ${lapsed.standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through'}, now, even if you don’t finish the checkout. Then Polar’s checkout opens.`,
+            });
+            return;
+        }
         setBusy(plan.id);
         setError('');
         try {
-            const { url } = await groupBillingApi.checkout(groupId, plan.id, currency);
+            const { url } = await groupBillingApi.checkout(
+                groupId,
+                plan.id,
+                currency,
+                endLapsed || undefined,
+            );
             window.location.assign(url);
         } catch (cause) {
+            setBusy(null);
+            // One the page didn't know of (its payment failed since it loaded): asked first, too.
+            if ((cause as { code?: string }).code === 'ends-lapsed' && !endLapsed) {
+                setConfirming({ plan, words: (cause as Error).message });
+                return;
+            }
             cue('error');
             setError(authError(cause));
-            setBusy(null);
         }
     }
 
@@ -771,6 +793,40 @@ function ChoosePlan({
             <p className="text-[13px] text-muted-foreground">
                 {TAX_LINE} Payments are handled by Polar.
             </p>
+            <Dialog
+                open={confirming !== null}
+                onOpenChange={(open) => !open && busy === null && setConfirming(null)}
+            >
+                <DialogContent className="sm:max-w-[480px]" data-ends-lapsed>
+                    {confirming && (
+                        <>
+                            <DialogHeader>
+                                <DialogTitle>Choose {tierName(confirming.plan)}?</DialogTitle>
+                                <DialogDescription>{confirming.words}</DialogDescription>
+                            </DialogHeader>
+                            <DialogFooter>
+                                <Button
+                                    variant="outline"
+                                    disabled={busy !== null}
+                                    onClick={() => setConfirming(null)}
+                                >
+                                    Not now
+                                </Button>
+                                <Button
+                                    disabled={busy !== null}
+                                    onClick={() => {
+                                        const plan = confirming.plan;
+                                        setConfirming(null);
+                                        void choose(plan, true);
+                                    }}
+                                >
+                                    {lapsedName ? `End ${lapsedName} and continue` : 'Continue'}
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
         </section>
     );
 }

@@ -1237,12 +1237,15 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 productId: t.String({ minLength: 1, maxLength: 100 }),
                 currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
                 units: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
+                // Confirmed: the family's lapsed plan ends now (refusal code `ends-lapsed`).
+                endLapsed: t.Optional(t.Boolean()),
             }),
         },
         async ({ request, sessionToken, params, body }) =>
             billing.startGroupCheckout(await billingMutation(request, sessionToken), params.id, {
                 productId: body.productId,
                 units: body.units,
+                endLapsed: body.endLapsed,
                 address: requestAddress(request),
                 currency: chargeableCurrency(body.currency, requestCountry(request)) ?? undefined,
             }),
