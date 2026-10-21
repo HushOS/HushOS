@@ -1467,14 +1467,16 @@ async function ofDeletedFamily(ending: billingRepository.PlanEnding) {
  * A plan of a family HushOS has deleted (purged after it was dissolved) that Polar bills
  * again: reinstated, or resumed, after it had ended (docs/groups-design.md 3.3). The family
  * is gone, so nothing such a plan charges for can be given: it is revoked at once, and every
- * order of it paid at or after `paidAfter` is refunded whole by the plan-ending job, keyed by
- * the family's id, as a payment on a lapsed plan HushOS revoked is (same ending, same refunds,
- * same retries and Refunds owed). `paidAfter` is that plan's own first recorded end, or the
- * epoch for one the mirror never held; it is written once, with the ending, and every later run
- * uses the stored value, never a new one. Orders paid before it paid for time the family had:
- * noted as used. Rewards: an order noted to refund earns nothing (its `order.paid` delivery
- * runs this first, through reconcileGroup, so it finds the order noted); one paid before earns
- * what its delivery gave it while the family existed.
+ * paid order of it made at or after `paidAfter` (by the order's `created_at`, so a late payment
+ * of a period the family had is still its own) is refunded whole by the plan-ending job, keyed
+ * by the family's id, as a payment on a lapsed plan HushOS revoked is (same ending, same
+ * refunds, same retries and Refunds owed). `paidAfter` is unwantedPlanCutoff's: the end of the
+ * last period the plan gave the family, or the epoch for one that never served it; it is
+ * written once, with the ending, and every later run uses the stored value, never a new one.
+ * Paid orders made before it paid for time the family had: noted as used, though never over a
+ * refund an earlier ending already owes. Rewards: an order noted to refund earns nothing (its
+ * `order.paid` delivery runs this first, through reconcileGroup, so it finds the order noted);
+ * one made before earns what its delivery gave it while the family existed.
  *
  * Under the plan-ending lease, taken in the write that begins the ending (or takes it over, a
  * revoked one made unrevoked when Polar bills it again): one a running job holds is left to it,
@@ -1537,6 +1539,7 @@ export async function endOrphanedFamilyPlan(
                     refundKey: refundKey(ending, order.id),
                     currency: order.currency,
                 })),
+            { keepOwed: true },
         );
         for (const order of paid.filter(after))
             await billingRepository.notePaidOnLapsed({
@@ -1695,14 +1698,17 @@ export async function notePaidAfterRevoke(order: {
     if (ending.paidAfter !== null) {
         const made = Date.parse(order.created_at ?? '');
         if (!Number.isNaN(made) && made < ending.paidAfter.getTime()) {
-            await billingRepository.notePaidBeforeRevoke([
-                {
-                    orderId: order.id,
-                    subscriptionId: ending.subscriptionId,
-                    refundKey: refundKey(ending, order.id),
-                    currency: order.currency ?? 'usd',
-                },
-            ]);
+            await billingRepository.notePaidBeforeRevoke(
+                [
+                    {
+                        orderId: order.id,
+                        subscriptionId: ending.subscriptionId,
+                        refundKey: refundKey(ending, order.id),
+                        currency: order.currency ?? 'usd',
+                    },
+                ],
+                { keepOwed: true },
+            );
             return false;
         }
     }

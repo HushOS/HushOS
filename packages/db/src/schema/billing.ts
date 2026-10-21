@@ -236,6 +236,16 @@ export const groupBillingSubscriptions = pgTable(
         lapsedRevokeRefusal: text('lapsed_revoke_refusal'),
         lapsedRevokeRefusedAt: timestamp('lapsed_revoke_refused_at', { withTimezone: true }),
         /*
+         * The end of the last period in which this was the family's plan while `active` or
+         * `trialing` (applyGroupState sets it when it picks the family's plan): what a payment on
+         * it bought. Null for a plan that never served the family (an incomplete checkout, one
+         * made beside the family's plan, one a deleted family's Polar customer was billed for),
+         * which bought nothing. A past-due or unpaid period never moves it, nor anything after the
+         * family is deleted: the cutoff a deleted family's plan, or a second plan, is refunded
+         * from (unwantedPlanCutoff).
+         */
+        servedUntil: timestamp('served_until', { withTimezone: true }),
+        /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
          */

@@ -1104,6 +1104,15 @@ export async function applyGroupState(input: {
             .where(liveGroupSubscription(input.groupId))
             .orderBy(desc(groupBillingSubscriptions.currentPeriodEnd))
             .limit(1);
+        // The family's plan, while active or trialing, has served it through this period: what a
+        // payment on it bought (servedUntil). A past-due or unpaid period never moves it.
+        if (plan && (plan.status === 'active' || plan.status === 'trialing'))
+            await tx
+                .update(groupBillingSubscriptions)
+                .set({
+                    servedUntil: sql`greatest(${groupBillingSubscriptions.servedUntil}, ${plan.currentPeriodEnd})`,
+                })
+                .where(eq(groupBillingSubscriptions.id, plan.id));
         await tx
             .update(groups)
             .set({ seatLimit: plan ? seatLimitOf(plan) : null, updatedAt: now })
@@ -1761,16 +1770,21 @@ export async function rekeyUnattemptedRefunds(rows: { orderId: string; refundKey
 /*
  * The orders of a lapsed plan already paid when HushOS revokes it, noted `none`: never
  * refunded, even when an `order.paid` for one arrives late. One noted earlier and never
- * worked (a payment delivery before the takeover) is settled `none` too.
+ * worked (a payment delivery before the takeover) is settled `none` too, unless `keepOwed`:
+ * a deleted family's plan or a second plan (endUnwantedFamilyPlan), whose orders before its
+ * cutoff are noted as used, leaves an order an earlier ending noted for a refund owed (a payment
+ * after #188's revoke of the family's lapsed plan, then the family purged and the plan resumed).
  */
 export async function notePaidBeforeRevoke(
     rows: { orderId: string; subscriptionId: string; refundKey: string; currency: string }[],
+    options: { keepOwed?: boolean } = {},
 ) {
-    for (const row of rows)
-        await db
-            .insert(personalPlanRefunds)
-            .values({ ...row, amount: 0, status: 'none' })
-            .onConflictDoUpdate({
+    for (const row of rows) {
+        const insert = db.insert(personalPlanRefunds).values({ ...row, amount: 0, status: 'none' });
+        if (options.keepOwed)
+            await insert.onConflictDoNothing({ target: personalPlanRefunds.orderId });
+        else
+            await insert.onConflictDoUpdate({
                 target: personalPlanRefunds.orderId,
                 // Noted for a refund by its `order.paid`, which then held its rewards back: kept
                 // after all, so they are owed (`rewardsPending`, granted by the job once).
@@ -1781,6 +1795,7 @@ export async function notePaidBeforeRevoke(
                     isNull(personalPlanRefunds.firstAttemptedAt),
                 ),
             });
+    }
 }
 
 /*

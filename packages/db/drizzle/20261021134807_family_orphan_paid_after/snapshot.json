@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "8318f926-645b-4852-a19d-0a84abf9183a",
+    "id": "e1bfe8f2-c9b1-4798-9027-26d67671edeb",
     "prevIds": ["988befcd-3122-4903-95ab-8e52c59b4bb3"],
     "ddl": [
         {
@@ -6137,6 +6137,19 @@
             "generated": null,
             "identity": null,
             "name": "lapsed_revoke_refused_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "served_until",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"
