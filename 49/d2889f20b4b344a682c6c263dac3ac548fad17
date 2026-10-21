@@ -1,0 +1,51 @@
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_75f84fbd371236 734-735
+docs/groups-design.md
+  s_566b8e0c4467a4::t_ad3187b3f1d169 365
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_4a66d32dbb8b29 14
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_3faf14e9074e85 1,451-452,467-475,483-520,523-542,545,550,559-573,577-590,597,603,1085-1089,1196-1209,1480-1481
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_aa08630f85fb4f 292-336,429,438,447-448,450-451,453,669,1770,1776-1807,1828-1829,1832-1833,1837,1848,1851,1856-1861,1868-1872,1884-1885,1887,1916-1923,1925,1943-1958
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_d4d8612b90866e 238-245,279-280
+packages/db/drizzle/20261021124856_family_one_checkout/snapshot.json
+  s_566b8e0c4467a4::t_aba2cc16061736 1-13762
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_566b8e0c4467a4::t_92798170a46012 45-51
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_fe0747d7e5a32b 584
+packages/db/drizzle/20261021124856_family_one_checkout/migration.sql
+  s_566b8e0c4467a4::t_9b7603f96a432a 1-25
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_a5c2ed8689bc36 473-490
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_fef766cb8d088c 541
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_a48d5e4c9723ca 2,1544,1551-1558
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_befdb62c7205f0 47,3526-3527
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_e740fc739154ff 1121
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_7f83b2bca5b0f8 5159-5160
+  s_566b8e0c4467a4::t_4992e9df514183 290-291,672,676,680-685,1129,4918-4921,4932,4934-4935,4939-4974,4990,4995-5053,5060-5072,5076,5082,5102-5106,5108,5112,5115,5129,5141,5143-5144,5146,5148-5153,5155-5157,5161-5234,5236-5237,5247,5250,5257,5264,5267-5275,5277-5285,5287-5288,5290-5313
+  s_566b8e0c4467a4::t_f6661498e71f1b 5132-5133,5136-5140,5142,5145,5147,5154,5158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "49d2889f20b4b344a682c6c263dac3ac548fad17",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
