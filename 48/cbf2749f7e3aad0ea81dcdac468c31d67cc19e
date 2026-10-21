@@ -1,0 +1,29 @@
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_0b30141c15f302 103-109
+apps/web/src/lib/family-checkout.ts
+  s_566b8e0c4467a4::t_c626e26cad787d 69-73,75,77,79,81,85,87-90,111-116
+apps/web/src/routes/_authenticated/app/_drive/family/index.tsx
+  s_566b8e0c4467a4::t_164da7ef70fcd0 45-47,57-58,71,73
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_2f6842c9bdb684 2724-2768
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_821378713cf0d8 1204-1205
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_05c251afcb8557 5160-5208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "48cbf2749f7e3aad0ea81dcdac468c31d67cc19e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
