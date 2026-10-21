@@ -7,7 +7,13 @@ import { log } from '@hushos/logging';
 import type { models } from '@polar-sh/sdk/2026-10';
 import type { PolarClientError } from '@polar-sh/sdk';
 import type { FamilyLapsedGlance, FamilyLapsedPlan, FamilyUsage, GroupBillingSummary } from './api';
-import { LapsedRevokeError, endOrphanedFamilyPlan, queuePlanEnding, revokeLapsed } from './endings';
+import {
+    LapsedRevokeError,
+    endOrphanedFamilyPlan,
+    queuePlanEnding,
+    recordOrphanEnded,
+    revokeLapsed,
+} from './endings';
 import {
     BillingError,
     PROVIDER,
@@ -320,7 +326,13 @@ const recordUnread = (groupId: string, subscription: models.Subscription) =>
  */
 export async function reconcileGroup(
     groupId: string,
-    options: { fromDissolveCancel?: boolean } = {},
+    options: {
+        fromDissolveCancel?: boolean;
+        /* The subscription a delivery is about, read even if Polar's state doesn't list it. */
+        subscriptionId?: string;
+        /* A delivery (not a sync or the daily run): a deleted family's list is read once. */
+        fromDelivery?: boolean;
+    } = {},
 ) {
     if (!billingEnabled() || !UUID.test(groupId)) return;
     let state: models.CustomerState | null;
@@ -334,7 +346,11 @@ export async function reconcileGroup(
     if (!state && !(await billingRepository.getGroupCustomer(groupId))) return;
     // A family HushOS has deleted (purged after it was dissolved) has nothing a plan can buy:
     // one Polar bills again is revoked, and what it took refunded.
-    if (!(await groupsRepository.getGroupRow(groupId))) return revokeOrphanedPlans(groupId, state);
+    if (!(await groupsRepository.getGroupRow(groupId)))
+        return revokeOrphanedPlans(groupId, state, {
+            subscriptionId: options.subscriptionId,
+            listPolar: options.fromDelivery,
+        });
     const ids = new Set((state?.active_subscriptions ?? []).map((subscription) => subscription.id));
     for (const id of await billingRepository.listUnendedGroupSubscriptionIds(groupId)) ids.add(id);
     const subscriptions: billingRepository.GroupSubscriptionSnapshot[] = [];
@@ -509,39 +525,71 @@ export async function reconcileGroup(
  * or resumed after it ended. Nothing it charges for exists any more, so each such plan is
  * revoked (endOrphanedFamilyPlan), logged at error level, written to the mirror (which no
  * longer projects anything: there is no family to give a pool) and listed for operators;
- * what it took after the family's plans had ended is refunded whole by the plan-ending
- * job. Only a family HushOS made a customer for: a stray `group:` customer made by hand
- * at Polar is logged, never revoked.
+ * what it took after that plan had ended is refunded whole by the plan-ending job. Only a
+ * family HushOS made a customer for: a stray `group:` customer made by hand at Polar is
+ * logged, never revoked.
  *
- * Found by every delivery for the customer and by the daily reconcile, which already reads
- * every family customer HushOS ever made, deleted ones included: one customer-state read a
- * deleted family a day, and nothing more unless it lists a plan. A plan reinstated straight
- * into `past_due` or `unpaid` (not in the customer state's `active_subscriptions`) is not
- * found by the daily read; its deliveries still find it. One HushOS has set out to revoke is
- * asked about at every reconcile until it has ended, whatever its status.
+ * Which plans are read: those the customer state lists (`active`, `trialing`); the one a
+ * delivery names (`subscriptionId`), whatever its status, so a plan reinstated into
+ * `past_due` or `unpaid` is found by its own `subscription.*` or `order.*` delivery; every
+ * mirror row not ended and every lapsed ending HushOS hasn't seen end. A delivery for a
+ * deleted family also lists the customer's subscriptions at Polar (`listPolar`), once: such
+ * deliveries are rare. The daily reconcile doesn't: one customer-state read a deleted family a
+ * day, and nothing more unless something is listed or still being ended. So a plan reinstated
+ * straight into `past_due` or `unpaid` whose deliveries all failed is found only once it is
+ * active. A plan Polar shows ended, or no longer has, closes an ending whose revoke HushOS
+ * never saw land (recordOrphanEnded).
  */
-async function revokeOrphanedPlans(groupId: string, state: models.CustomerState | null) {
+async function revokeOrphanedPlans(
+    groupId: string,
+    state: models.CustomerState | null,
+    options: { subscriptionId?: string; listPolar?: boolean },
+) {
     const ids = new Set((state?.active_subscriptions ?? []).map((subscription) => subscription.id));
+    if (options.subscriptionId) ids.add(options.subscriptionId);
     for (const id of await billingRepository.listUnendedGroupSubscriptionIds(groupId)) ids.add(id);
     // One HushOS set out to revoke and hasn't seen end, even once it left the customer state
     // (past due, unpaid): asked about again until Polar shows it ended.
     for (const id of await billingRepository.listUnrevokedLapsedEndings(groupId)) ids.add(id);
+    const customer = await billingRepository.getGroupCustomer(groupId);
+    if (customer && options.listPolar) {
+        try {
+            const listed = await polar().subscriptions.list({
+                external_customer_id: customerKey(groupId),
+                limit: 100,
+            });
+            for (const subscription of listed.items)
+                if (!subscription.ended_at && !ENDED.has(subscription.status))
+                    ids.add(subscription.id);
+        } catch (error) {
+            if (statusOf(error) !== 404) throw unavailable(error);
+        }
+    }
     if (!ids.size) return;
-    if (!(await billingRepository.getGroupCustomer(groupId))) {
+    if (!customer) {
         log.error({
             message: 'Polar bills a family customer HushOS never made; left alone',
             billing: { group: groupId, subscriptions: [...ids] },
         });
         return;
     }
-    const since = (await billingRepository.lastGroupPlanEnd(groupId)) ?? new Date();
     for (const id of ids) {
+        // That plan's own first recorded end, read before this run writes its row: what was paid
+        // from then on bought nothing. A plan the mirror never held: everything it took, since
+        // HushOS gave nothing for it. Stored on the ending the first time; never recomputed.
+        const row = await billingRepository.getGroupSubscription(id);
+        const paidAfter = row?.endedAt ?? new Date(0);
         let subscription: models.Subscription;
         try {
             subscription = await polar().subscriptions.get(id);
         } catch (error) {
             if (statusOf(error) === 404) {
-                await billingRepository.recordOrphanedSubscription(groupId, { id, ended: true });
+                if (row)
+                    await billingRepository.recordOrphanedSubscription(groupId, {
+                        id,
+                        ended: true,
+                    });
+                await recordOrphanEnded(id, null);
                 continue;
             }
             throw unavailable(error);
@@ -550,12 +598,15 @@ async function revokeOrphanedPlans(groupId: string, state: models.CustomerState 
             groupId,
             await orphanSnapshot(subscription),
         );
-        if (subscription.ended_at || ENDED.has(subscription.status)) continue;
+        if (subscription.ended_at || ENDED.has(subscription.status)) {
+            await recordOrphanEnded(id, subscription.ended_at ?? null);
+            continue;
+        }
         log.error({
             message: 'A deleted family’s plan is billing again: revoked, and what it took refunded',
             billing: { group: groupId, subscription: id, status: subscription.status },
         });
-        if (await endOrphanedFamilyPlan(groupId, id, since)) {
+        if (await endOrphanedFamilyPlan(groupId, id, paidAfter)) {
             try {
                 await billingRepository.recordOrphanedSubscription(
                     groupId,

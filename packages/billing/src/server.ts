@@ -800,6 +800,17 @@ async function endLapsedFamilyPlansFor(userId: string) {
     }
 }
 
+/* The subscription a delivery is about: a subscription's own id, or an order's subscription. */
+function subscriptionOf(event: webhooks.WebhookPayload) {
+    const data = event.data as { id?: unknown; subscription_id?: unknown };
+    const id = event.type.startsWith('subscription.')
+        ? data.id
+        : event.type.startsWith('order.')
+          ? data.subscription_id
+          : null;
+    return typeof id === 'string' && id.length > 0 && id.length <= 100 ? id : undefined;
+}
+
 /* Whom a delivery concerns: a person (their user id) or a group (`group:<groupId>`). */
 function ownerOf(event: webhooks.WebhookPayload) {
     const data = event.data as {
@@ -852,7 +863,14 @@ export async function handleWebhook(request: Request): Promise<Response> {
         const owner = ownerOf(event);
         const userId = owner?.kind === 'user' ? owner.id : null;
         if (userId) await reconcileCustomer(userId);
-        if (owner?.kind === 'group') await reconcileGroup(owner.id);
+        // A family's delivery names the subscription it is about (`data.id` for subscription.*,
+        // `data.subscription_id` for order.*): read even when Polar's state doesn't list it, so
+        // a deleted family's plan reinstated into past due is found by its own delivery.
+        if (owner?.kind === 'group')
+            await reconcileGroup(owner.id, {
+                subscriptionId: subscriptionOf(event),
+                fromDelivery: true,
+            });
         // A refund HushOS made that failed after it succeeded: its plan's refunds are placed again.
         if (event.type === 'refund.updated')
             await noteRefundUpdated(event.data as Parameters<typeof noteRefundUpdated>[0]);

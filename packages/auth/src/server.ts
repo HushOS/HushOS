@@ -1123,7 +1123,6 @@ export async function getAdminOverview(sessionToken: string | null) {
             refunded: row.refunded,
             toRefund: row.toRefund,
             currency: row.currency ?? 'usd',
-            settled: row.outcome === 'settled',
             since: new Date(row.since).toISOString(),
         })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },

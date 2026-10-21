@@ -700,26 +700,27 @@ describe('a deleted family’s plans', () => {
         ...overrides,
     });
 
-    test('the first end recorded is kept however often Polar brings the plan back, and dates what is refunded', async () => {
+    test('a plan’s first recorded end is kept however often Polar brings it back', async () => {
         const gone = randomUUID();
         const ended = new Date(Date.now() - 2 * DAY);
-        expect(await billing.lastGroupPlanEnd(gone)).toBeNull();
         await billing.recordOrphanedSubscription(
             gone,
             orphan({ status: 'canceled', endedAt: ended }),
         );
-        expect(await billing.lastGroupPlanEnd(gone)).toEqual(ended);
+        expect((await billing.getGroupSubscription('sub_orphan'))?.endedAt).toEqual(ended);
         // Reinstated: Polar answers it live, with no end; the end HushOS recorded stays.
         await billing.recordOrphanedSubscription(gone, orphan());
         expect(await billing.getGroupSubscription('sub_orphan')).toMatchObject({
             status: 'active',
             endedAt: ended,
         });
-        expect(await billing.lastGroupPlanEnd(gone)).toEqual(ended);
         // Gone at Polar: an end it never had is now.
         await billing.recordOrphanedSubscription(gone, orphan({ id: 'sub_other' }));
         await billing.recordOrphanedSubscription(gone, { id: 'sub_other', ended: true });
-        expect((await billing.getGroupSubscription('sub_other'))?.endedAt).toBeInstanceOf(Date);
+        expect(await billing.getGroupSubscription('sub_other')).toMatchObject({
+            status: 'canceled',
+            endedAt: expect.any(Date),
+        });
     });
 
     test('operators see a deleted family’s plan while it can still charge, never a living family’s, nor an old swept row', async () => {
@@ -742,6 +743,8 @@ describe('a deleted family’s plans', () => {
             subscriptionId: 'sub_orphan',
             userId: gone,
             at: new Date(),
+            owner: 'run',
+            leaseMs: 60_000,
         });
         expect(await billing.listOrphanedPlans()).toEqual([
             expect.objectContaining({
@@ -755,6 +758,8 @@ describe('a deleted family’s plans', () => {
             subscriptionId: 'sub_living',
             userId: groupId,
             at: new Date(),
+            owner: 'run',
+            leaseMs: 60_000,
         });
         expect((await billing.listOrphanedPlans()).map((row) => row.subscriptionId)).toEqual([
             'sub_orphan',

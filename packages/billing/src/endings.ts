@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { billingRepository } from '@hushos/db';
+import { billingRepository, groupsRepository } from '@hushos/db';
 import { log } from '@hushos/logging';
 import type { models } from '@polar-sh/sdk/2026-10';
 import { billingEnabled, getCatalogue, polar, polarErrorName, statusOf } from './provider';
@@ -1120,17 +1120,16 @@ export async function endPersonalPlans(
                 // Gone at Polar (404) counts as ended, as for a family's ending: it can't run.
                 let ended = await lapsedEnd(subscriptionId, ending);
                 // A deleted family's plan never runs again: revoked here, never given back.
-                if (
-                    !ended &&
-                    (await billingRepository.familyPlanOf(subscriptionId))?.exists === false
-                ) {
+                if (!ended && (await ofDeletedFamily(ending))) {
                     const revoked = await revoke(subscriptionId);
                     if (revoked) {
                         const { already: _already, ...instant } = revoked;
                         ended = instant;
                     } else ended = await lapsedEnd(subscriptionId, ending);
                     log.error({
-                        message: 'A deleted family’s plan was still billing; revoked by its job',
+                        message: revoked
+                            ? 'A deleted family’s plan was still billing; revoked by its job'
+                            : 'A deleted family’s plan was still billing; gone at Polar when its job revoked it',
                         billing: { group: userId, subscription: subscriptionId },
                     });
                 }
@@ -1454,42 +1453,65 @@ async function revokeHeldLapsed(
 }
 
 /*
+ * Whether an ending is of a deleted family's plan: one endOrphanedFamilyPlan wrote (it carries
+ * `paid_after`), or a family's own plan whose family's record is gone. Such a plan is never
+ * given back to its owner: there is none.
+ */
+async function ofDeletedFamily(ending: billingRepository.PlanEnding) {
+    if (ending.paidAfter !== null) return true;
+    const family = await billingRepository.familyPlanOf(ending.subscriptionId);
+    return family !== null && !(await groupsRepository.getGroupRow(family.groupId));
+}
+
+/*
  * A plan of a family HushOS has deleted (purged after it was dissolved) that Polar bills
  * again: reinstated, or resumed, after it had ended (docs/groups-design.md 3.3). The family
  * is gone, so nothing such a plan charges for can be given: it is revoked at once, and every
- * order of it paid after the family's plans had ended (`since`) is refunded whole by the
- * plan-ending job, keyed by the family's id, as a payment on a lapsed plan HushOS revoked is
- * (same ending, same refunds, same retries and Refunds owed). Orders paid before `since`
- * paid for a period the family had, and are noted as used.
+ * order of it paid at or after `paidAfter` is refunded whole by the plan-ending job, keyed by
+ * the family's id, as a payment on a lapsed plan HushOS revoked is (same ending, same refunds,
+ * same retries and Refunds owed). `paidAfter` is that plan's own first recorded end, or the
+ * epoch for one the mirror never held; it is written once, with the ending, and every later run
+ * uses the stored value, never a new one. Orders paid before it paid for time the family had:
+ * noted as used. Rewards: an order noted to refund earns nothing (its `order.paid` delivery
+ * runs this first, through reconcileGroup, so it finds the order noted); one paid before earns
+ * what its delivery gave it while the family existed.
  *
- * The ending is written first, the orders noted, then Polar asked, so a revoke whose answer
- * is lost still leaves the payments to refund once Polar shows the plan ended. Held under
- * the plan-ending lease: one a running job holds is left to it (it revokes too). Never
- * dropped: a refusal or an outage is logged at error level, the plan stays listed for
- * operators, and the next reconcile (a delivery, the daily one at the latest) or the job's
- * retry asks again. Returns whether Polar shows the plan ended now.
+ * Under the plan-ending lease, taken in the write that begins the ending (or takes it over, a
+ * revoked one made unrevoked when Polar bills it again): one a running job holds is left to it,
+ * which revokes too. Then the orders are noted, then Polar is asked, so a revoke whose answer
+ * is lost still leaves the payments to refund once Polar shows the plan ended. Never dropped: a
+ * refusal or an outage is logged at error level, the plan stays listed for operators, and the
+ * next reconcile or the job's retry asks again. Returns whether Polar shows the plan ended now.
  */
-export async function endOrphanedFamilyPlan(groupId: string, subscriptionId: string, since: Date) {
-    const existing = await billingRepository.getPlanEnding(subscriptionId);
-    // Revoked once already, and billing again: reinstated a second time.
-    if (existing && isLapsedEnding(existing) && existing.revokedAt)
-        await billingRepository.restartLapsedEnding(subscriptionId);
+export async function endOrphanedFamilyPlan(
+    groupId: string,
+    subscriptionId: string,
+    paidAfter: Date,
+) {
+    const owner = randomUUID();
     const begun = await billingRepository.beginLapsedRevoke({
         subscriptionId,
         userId: groupId,
         at: new Date(),
+        owner,
+        leaseMs: PLAN_ENDING_LEASE_MS,
+        restart: true,
+        paidAfter,
     });
-    if (!isLapsedEnding(begun)) return false;
-    const owner = randomUUID();
-    if (!(await billingRepository.takePlanEndingLease(subscriptionId, owner, PLAN_ENDING_LEASE_MS)))
-        return false;
+    if (!begun.leased || !isLapsedEnding(begun.ending)) return false;
     let ended = false;
     try {
-        const orders = (await polar().orders.list({ subscription_id: subscriptionId, limit: 100 }))
-            .items;
+        const ending = begun.ending;
+        const since = (ending.paidAfter ?? paidAfter).getTime();
+        const orders = (
+            await polar().orders.list({
+                subscription_id: subscriptionId,
+                sorting: ['-created_at'],
+                limit: 100,
+            })
+        ).items;
         const paid = orders.filter((order) => order.paid);
-        const after = (order: models.Order) => Date.parse(order.created_at) >= since.getTime();
-        const ending = (await billingRepository.getPlanEnding(subscriptionId))!;
+        const after = (order: models.Order) => Date.parse(order.created_at) >= since;
         await billingRepository.notePaidBeforeRevoke(
             paid
                 .filter((order) => !after(order))
@@ -1517,8 +1539,15 @@ export async function endOrphanedFamilyPlan(groupId: string, subscriptionId: str
             ended = true;
         } catch (error) {
             const status = statusOf(error);
-            if (status === 404) ended = true;
-            else if (status === 403 && polarErrorName(error) === 'AlreadyCanceledSubscription') {
+            if (status === 404) {
+                const now = new Date();
+                await billingRepository.recordPlanRevoked(subscriptionId, {
+                    revokedAt: now,
+                    periodStart: now,
+                    periodEnd: now,
+                });
+                ended = true;
+            } else if (status === 403 && polarErrorName(error) === 'AlreadyCanceledSubscription') {
                 const gone = await endedSince(subscriptionId, new Date(0));
                 if (gone) {
                     const { already: _already, ...instant } = gone;
@@ -1543,6 +1572,23 @@ export async function endOrphanedFamilyPlan(groupId: string, subscriptionId: str
             seenAt: new Date().toISOString(),
         });
     return ended;
+}
+
+/*
+ * A deleted family's plan Polar shows ended (or no longer has) while HushOS's lapsed-shaped
+ * ending of it never recorded the revoke (its answer was lost, by #186/#188's revoke or this
+ * one): the end is recorded from Polar's `ended_at` (now, for one gone), so the ending stops
+ * being asked about and the job refunds what is noted on it.
+ */
+export async function recordOrphanEnded(subscriptionId: string, endedAt: string | null) {
+    const ending = await billingRepository.getPlanEnding(subscriptionId);
+    if (!ending || !isLapsedEnding(ending) || ending.revokedAt) return;
+    const at = endedAt ? new Date(endedAt) : new Date();
+    await billingRepository.recordPlanRevoked(subscriptionId, {
+        revokedAt: at,
+        periodStart: at,
+        periodEnd: at,
+    });
 }
 
 /*

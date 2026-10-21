@@ -284,6 +284,8 @@ const polar = {
      * types (`active` or `trialing`) rule out, kept so HushOS is right either way.
      */
     stateListsLapsed: false,
+    /* Listing a customer's subscriptions answers 404 (a filter Polar doesn't take for it). */
+    listNotFound: false,
     /* The next product change's order is made but not listed yet. */
     ordersLag: false,
     /* Each family subscription's checkout order (kept apart so tests can index `orders`). */
@@ -666,6 +668,7 @@ const fakeClient = {
         // A customer's subscriptions, ended ones included, as Polar lists them.
         async list(query: { external_customer_id?: string }) {
             polar.calls.push(`subscriptions.list:${query.external_customer_id}`);
+            if (polar.listNotFound) throw notFound();
             if (polar.listFailure !== null)
                 throw new PolarClientError(polar.listFailure, { error: 'ListFailed' });
             const customer = query.external_customer_id
@@ -1103,6 +1106,7 @@ beforeEach(async () => {
     polar.cancelAnswerLost = false;
     polar.unauthorized = false;
     polar.stateListsLapsed = false;
+    polar.listNotFound = false;
     planEndingMail.length = 0;
     mailer.failures = 0;
     cancelJobs.length = 0;
@@ -4518,6 +4522,41 @@ describe('a deleted family’s plan billing again', () => {
         cancelJobs.length = 0;
         return family;
     }
+    let currentGroup = '';
+    const groupId_ = () => currentGroup;
+    /* As purgedFamily, with more of the family's plans made at Polar (by `more`) before the purge. */
+    async function purgedFamilyWith(more: () => void) {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        currentGroup = family.groupId;
+        more();
+        family.subscription.status = 'canceled';
+        family.subscription.ended_at = new Date(Date.now() - 10 * DAY).toISOString();
+        await billing.reconcileGroup(family.groupId);
+        expect(await groupsRepository.leaveGroup(family.groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        await rawSql(
+            `update groups set dissolved_at = now() - interval '31 days' where id = '${family.groupId}'`,
+        );
+        await rawSql(
+            `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${family.groupId}'`,
+        );
+        await groupsRepository.purgeDeletedAreas(30);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 1 });
+        polar.calls = [];
+        endingJobs.length = 0;
+        cancelJobs.length = 0;
+        return family;
+    }
+    const creatorWithCode = () =>
+        growth.createAffiliate({
+            name: 'Creator',
+            slug: 'creator',
+            code: 'creator25',
+            percentOff: 25,
+            duration: 'forever',
+            commissionBps: 2000,
+        });
     /* Polar brings it back: active, a new period, its charge paid now. */
     function reinstate(subscription: FakeSubscription, orderId = 'order_reinstated') {
         subscription.status = 'active';
@@ -4673,7 +4712,8 @@ describe('a deleted family’s plan billing again', () => {
         polar.revokeRefusals.set(subscription.id, { status: 409, error: 'SubscriptionLocked' });
         await deliver(stateChanged(groupId));
         expect(subscription.ended_at).toBeNull();
-        expect(endingJobs).toEqual([]);
+        // Nothing paid after its end: nothing to refund (no ending opened for a refund).
+        expect((await billingRepository.getPlanEnding(subscription.id))?.outcome).toBe('settled');
         // Its renewal fails: past due, out of the customer state; no delivery reaches HushOS.
         subscription.status = 'past_due';
         polar.revokeRefusals.delete(subscription.id);
@@ -4749,6 +4789,171 @@ describe('a deleted family’s plan billing again', () => {
             ['order_reinstated', 999],
             ['order_again', 999],
         ]);
+    });
+
+    test('each plan is refunded from its own end: another plan’s earlier or later end changes nothing', async () => {
+        const { groupId, subscription } = await purgedFamilyWith(() => {
+            // Plan A ended long before; plan C, a later one, ended yesterday.
+            familySubscription(groupId_(), {
+                id: 'sub_a',
+                status: 'canceled',
+                ended_at: new Date(Date.now() - 120 * DAY).toISOString(),
+                product_id: PRO_FAMILY,
+            });
+            familySubscription(groupId_(), {
+                id: 'sub_c',
+                status: 'canceled',
+                ended_at: new Date(Date.now() - DAY).toISOString(),
+                product_id: PRO_FAMILY,
+            });
+        });
+        // B (the family's plan) ended ten days ago. Its period before that was used; a charge five
+        // days ago (after its end) and today's reinstatement charge bought nothing.
+        addPaidOrder(subscription, 'order_used', new Date(Date.now() - 40 * DAY).toISOString());
+        reinstate(subscription, 'order_now');
+        addPaidOrder(subscription, 'order_after', new Date(Date.now() - 5 * DAY).toISOString());
+        await deliver(stateChanged(groupId));
+        await runQueued(0);
+        expect(refundsMade().sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+            ['order_after', 999],
+            ['order_now', 999],
+        ]);
+        expect((await billingRepository.getPlanRefund('order_used'))?.status).toBe('none');
+    });
+
+    test('a plan the mirror never held has every payment refunded: HushOS gave nothing for it', async () => {
+        const { groupId } = await purgedFamily();
+        const unknown = familySubscription(groupId, { id: 'sub_unknown', product_id: PRO_FAMILY });
+        // Made at Polar after the family was gone (no checkout HushOS saw): only its own charges.
+        polar.checkoutOrders = polar.checkoutOrders.filter(
+            (order) => order.subscription_id !== 'sub_unknown',
+        );
+        addPaidOrder(unknown, 'order_unknown_old', new Date(Date.now() - 40 * DAY).toISOString());
+        addPaidOrder(unknown, 'order_unknown_now');
+        await deliver(stateChanged(groupId));
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_unknown']);
+        await runQueued(0);
+        expect(refundsMade().sort((a, b) => String(a[0]).localeCompare(String(b[0])))).toEqual([
+            ['order_unknown_now', 999],
+            ['order_unknown_old', 999],
+        ]);
+        // Stored with the ending, never recomputed from rows the run itself writes.
+        expect((await billingRepository.getPlanEnding('sub_unknown'))?.paidAfter).toEqual(
+            new Date(0),
+        );
+    });
+
+    test('a plan reinstated into past due is found by its own delivery, though Polar’s state doesn’t list it', async () => {
+        await creatorWithCode();
+        const { groupId, subscription } = await purgedFamily();
+        reinstate(subscription);
+        subscription.status = 'past_due';
+        polar.orders.at(-1)!.discount_id = 'disc_creator25';
+        // Its first delivery is the charge's own: the ending is written before the order is noted.
+        await deliver(
+            signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_reinstated',
+                    subscription_id: subscription.id,
+                    currency: 'usd',
+                    net_amount: 999,
+                    discount_id: 'disc_creator25',
+                    customer: { external_id: `group:${groupId}` },
+                },
+            }),
+        );
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            `subscriptions.revoke:${subscription.id}`,
+        ]);
+        await runQueued(0);
+        expect(refundsMade()).toEqual([['order_reinstated', 999]]);
+        // Refunded whole, so no commission, at the delivery or after.
+        expect((await growth.listAffiliates())[0]!.stats.orders).toBe(0);
+    });
+
+    test('a delivery naming the plan finds it even when Polar’s list of the customer’s plans can’t be read', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        subscription.status = 'past_due';
+        subscription.ended_at = null;
+        polar.listNotFound = true;
+        await deliver(
+            signedWebhook({
+                type: 'subscription.updated',
+                data: { id: subscription.id, customer: { external_id: `group:${groupId}` } },
+            }),
+        );
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            `subscriptions.revoke:${subscription.id}`,
+        ]);
+    });
+
+    test('a delivery naming no plan still finds one reinstated into past due, in Polar’s list', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        subscription.status = 'past_due';
+        subscription.ended_at = null;
+        await deliver(stateChanged(groupId));
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            `subscriptions.revoke:${subscription.id}`,
+        ]);
+        // The daily reconcile reads no list: one state read, nothing found there.
+        subscription.status = 'canceled';
+        polar.calls = [];
+        await billing.reconcileGroup(groupId);
+        expect(callsTo('subscriptions.list')).toEqual([]);
+    });
+
+    test('a subscription.updated for a plan reinstated into past due revokes it', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        subscription.status = 'past_due';
+        subscription.ended_at = null;
+        await deliver(
+            signedWebhook({
+                type: 'subscription.updated',
+                data: { id: subscription.id, customer: { external_id: `group:${groupId}` } },
+            }),
+        );
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            `subscriptions.revoke:${subscription.id}`,
+        ]);
+    });
+
+    test('an ending whose revoke answer was lost is closed from Polar’s end, and stops being read', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        reinstate(subscription);
+        polar.revokeAnswerLost = true;
+        await deliver(stateChanged(groupId));
+        expect((await billingRepository.getPlanEnding(subscription.id))?.revokedAt).toBeNull();
+        // The next reconcile sees Polar's end, and records it.
+        await billing.reconcileGroup(groupId);
+        expect((await billingRepository.getPlanEnding(subscription.id))?.revokedAt).toEqual(
+            new Date(subscription.ended_at!),
+        );
+        await runQueued(0);
+        expect(refundsMade()).toEqual([['order_reinstated', 999]]);
+        expect(await listed()).toEqual([expect.objectContaining({ revoked: true })]);
+        // From then on, one read of the customer's state a day.
+        polar.calls = [];
+        await billing.reconcileGroup(groupId);
+        expect(polar.calls).toEqual([`customers.getStateExternal:group:${groupId}`]);
+    });
+
+    test('a run that finds the job holding the ending leaves it to the job, which revokes it', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        reinstate(subscription);
+        polar.revokeRefusals.set(subscription.id, { status: 409, error: 'SubscriptionLocked' });
+        await deliver(stateChanged(groupId));
+        polar.revokeRefusals.delete(subscription.id);
+        expect(await billingRepository.takePlanEndingLease(subscription.id, 'a-job', 60_000)).toBe(
+            true,
+        );
+        polar.calls = [];
+        await deliver(stateChanged(groupId));
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(await billingRepository.getPlanEnding(subscription.id)).toMatchObject({
+            leaseOwner: 'a-job',
+            revokedAt: null,
+        });
     });
 
     test('a group customer HushOS never made is logged and never revoked', async () => {
