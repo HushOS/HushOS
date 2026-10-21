@@ -36,6 +36,7 @@ import {
     familyTierName,
     FAMILY_POOL_LINE,
     personalPairs,
+    personalPlanEnding,
     priceOf,
     tiersOf,
     twoMonthsFree,
@@ -66,6 +67,9 @@ import type {
 import {
     CANCELLATION_REASONS,
     cancellationReasonLabels,
+    lapsedPlan,
+    livePlan,
+    planStanding,
     type CancellationReason,
 } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -205,23 +209,24 @@ function billingCurrencies(
     summary: BillingSummary | undefined,
     hint: LocaleHint | undefined,
 ) {
-    const subscription = summary?.subscription;
-    const live = subscription && !subscription.endedAt ? subscription : null;
+    const live = livePlan(summary?.subscription);
+    // A plan whose payment failed, or that is paused: Polar still holds it, but it gives nothing.
+    const lapsed = lapsedPlan(summary?.subscription);
     const currencies = currenciesOf(catalogue?.plans ?? []);
     const currency = pickCurrency({
-        requested: live?.currency,
+        requested: live?.currency ?? lapsed?.currency,
         hint,
         available: currencies,
         fallback: currencies[0] ?? 'usd',
     });
     const familyCurrencyList = familyCurrencies(catalogue?.families ?? []);
     const familyCurrency = pickCurrency({
-        requested: live?.currency,
+        requested: live?.currency ?? lapsed?.currency,
         hint,
         available: familyCurrencyList,
         fallback: familyCurrencyList[0] ?? 'usd',
     });
-    return { live, currency, familyCurrency };
+    return { live, lapsed, currency, familyCurrency };
 }
 
 function BillingPage() {
@@ -235,7 +240,7 @@ function BillingPage() {
     const [busy, setBusy] = useState<string | null>(null);
     const [cancelling, setCancelling] = useState(false);
     const [notice, setNotice] = useState<{ tone: Tone; text: string; busy?: boolean } | null>(null);
-    const { live, currency, familyCurrency } = billingCurrencies(
+    const { live, lapsed, currency, familyCurrency } = billingCurrencies(
         catalogue.data,
         summary.data,
         hint.data,
@@ -351,11 +356,12 @@ function BillingPage() {
 
     // `?plan=` is the plan being considered. A new subscriber goes straight to
     // Polar's checkout, which is its own confirmation; a paid subscriber sees a
-    // confirmation here, and the plan stays in the URL until they decide, so a
-    // refresh or a shared link lands on the same question.
+    // confirmation here, and so does someone whose plan's payment failed (or is
+    // paused), since a checkout ends that plan first. The plan stays in the URL
+    // until they decide, so a refresh or a shared link lands on the same question.
     const summaryLoaded = summary.data !== undefined;
     const switching =
-        live && intendedPlan && intendedPlan !== live.productId
+        (live || lapsed) && intendedPlan && intendedPlan !== live?.productId
             ? (plans?.find((candidate) => candidate.id === intendedPlan) ?? null)
             : null;
     const clearPlan = () => navigate({ to: '/app/billing', search: {}, replace: true });
@@ -364,8 +370,8 @@ function BillingPage() {
         if (!intendedPlan || !plans || !summaryLoaded || started.current === intendedPlan) return;
         started.current = intendedPlan;
         const plan = plans.find((candidate) => candidate.id === intendedPlan);
-        if (plan && !live) void choose(plan);
-        // `choose` and `live` are read once, when the intent is consumed.
+        if (plan && !live && !lapsed) void choose(plan);
+        // `choose`, `live` and `lapsed` are read once, when the intent is consumed.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [intendedPlan, plans, summaryLoaded]);
 
@@ -403,8 +409,12 @@ function BillingPage() {
                 search: { create: plan.id, currency: familyCurrency },
             });
     };
-    const livePlan = live ? plans?.find((plan) => plan.id === live.productId) : undefined;
+    const heldPlan = live ? plans?.find((plan) => plan.id === live.productId) : undefined;
     const overdue = live?.status === 'past_due';
+    const paused = lapsed !== null && planStanding(lapsed) === 'paused';
+    const unpaid = lapsed !== null && !paused;
+    const lapsedName = lapsed ? familyTierName({ name: lapsed.productName }) : '';
+    const freeSize = catalogue.data ? formatQuota(catalogue.data.freeQuotaBytes) : null;
     const shown =
         notice ??
         (returning && returning.kind !== 'received'
@@ -481,7 +491,7 @@ function BillingPage() {
                         <div
                             className={cn(
                                 'mt-4 flex flex-col gap-4 rounded-xl border p-5',
-                                overdue ? 'border-destructive' : 'border-rule',
+                                overdue || unpaid ? 'border-destructive' : 'border-rule',
                             )}
                         >
                             <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
@@ -496,7 +506,7 @@ function BillingPage() {
                                     <span className="text-sm text-muted-foreground">
                                         {live ? (
                                             <>
-                                                {paying(live, livePlan, currency)} ·{' '}
+                                                {paying(live, heldPlan, currency)} ·{' '}
                                                 {live.cancelAtPeriodEnd ? (
                                                     <span className="font-semibold text-foreground">
                                                         ends {longDay(live.currentPeriodEnd)}
@@ -509,6 +519,17 @@ function BillingPage() {
                                                     `renews ${longDay(live.currentPeriodEnd)}`
                                                 )}
                                             </>
+                                        ) : lapsed ? (
+                                            <span
+                                                className={cn(
+                                                    'font-semibold',
+                                                    unpaid ? 'text-destructive' : 'text-foreground',
+                                                )}
+                                            >
+                                                {paused
+                                                    ? `${lapsedName} is paused`
+                                                    : `${lapsedName}’s payment didn’t go through`}
+                                            </span>
                                         ) : (
                                             'Choose a plan below when you need more room.'
                                         )}
@@ -522,12 +543,20 @@ function BillingPage() {
                                         >
                                             {busy === 'resume' ? 'Resuming…' : 'Resume plan'}
                                         </Button>
-                                    ) : overdue ? (
+                                    ) : overdue || lapsed ? (
+                                        // Unpaid: choosing a plan leads; the portal may not take the payment.
                                         <Button
+                                            variant={unpaid ? 'outline' : 'default'}
                                             disabled={busy !== null}
                                             onClick={() => void portal()}
                                         >
-                                            {busy === 'portal' ? 'Opening…' : 'Update card'}
+                                            {busy === 'portal'
+                                                ? 'Opening portal'
+                                                : paused
+                                                  ? 'Resume in portal'
+                                                  : overdue
+                                                    ? 'Update card'
+                                                    : 'Billing portal'}
                                             <ArrowUpRightIcon />
                                         </Button>
                                     ) : (
@@ -550,6 +579,17 @@ function BillingPage() {
                                 <Notice tone="danger">
                                     Your last payment didn’t go through. Update your card to keep{' '}
                                     {live.productName}.
+                                </Notice>
+                            )}
+                            {lapsed && (
+                                <Notice tone={paused ? 'warning' : 'danger'}>
+                                    {paused
+                                        ? `${lapsedName} is paused, so you have Free’s ${freeSize ?? 'storage'} until it resumes.`
+                                        : `Your payment for ${lapsedName} didn’t go through, so you have Free’s ${freeSize ?? 'storage'} for now.`}{' '}
+                                    Nothing is deleted, and uploads pause while you’re over it.{' '}
+                                    {paused
+                                        ? `Resume it in the billing portal, or choose a plan below, which ends ${lapsedName} first.`
+                                        : `Choose a plan below to get more room; that ends ${lapsedName} first. If the billing portal offers to retry the payment, that restores ${lapsedName}.`}
                                 </Notice>
                             )}
                             {live && !live.cancelAtPeriodEnd && !overdue && (
@@ -622,7 +662,7 @@ function BillingPage() {
                                                         }
                                                         disabled={busy !== null || activating}
                                                         onClick={() => {
-                                                            if (live)
+                                                            if (live || lapsed)
                                                                 void navigate({
                                                                     to: '/app/billing',
                                                                     search: { plan: plan.id },
@@ -707,14 +747,17 @@ function BillingPage() {
                     open={creating !== null}
                     onOpenChange={(open) => !open && setCreating(null)}
                     plan={creating ? { plan: creating, currency: familyCurrency } : undefined}
-                    personalPlan={live ? familyTierName({ name: live.productName }) : null}
+                    personalPlan={personalPlanEnding(
+                        summary.data?.subscription,
+                        'the family’s plan starts',
+                    )}
                 />
             )}
 
             {live && (
                 <CancelDialog
                     live={live}
-                    freeSize={catalogue.data ? formatQuota(catalogue.data.freeQuotaBytes) : null}
+                    freeSize={freeSize}
                     open={cancelling}
                     onOpenChange={setCancelling}
                     onDone={(next) => {
@@ -729,7 +772,43 @@ function BillingPage() {
                 onOpenChange={(open) => !open && busy === null && void clearPlan()}
             >
                 <DialogContent className="sm:max-w-[480px]">
-                    {switching && (
+                    {switching && !live && lapsed && (
+                        <>
+                            <DialogHeader>
+                                <DialogTitle>Choose {familyTierName(switching)}?</DialogTitle>
+                                <DialogDescription>
+                                    {formatQuota(switching.quotaBytes)} for{' '}
+                                    {priceLine(switching, currency)}. This ends {lapsedName}
+                                    {paused
+                                        ? ', which is paused,'
+                                        : ', whose payment didn’t go through,'}{' '}
+                                    then opens Polar’s checkout.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <DialogFooter>
+                                <Button
+                                    variant="outline"
+                                    disabled={busy !== null}
+                                    onClick={() => void clearPlan()}
+                                >
+                                    Not now
+                                </Button>
+                                <Button
+                                    disabled={busy !== null}
+                                    onClick={() => {
+                                        void choose(switching).then((done) => {
+                                            if (done) void clearPlan();
+                                        });
+                                    }}
+                                >
+                                    {busy === switching.id
+                                        ? 'Opening checkout'
+                                        : `Choose ${familyTierName(switching)}`}
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    )}
+                    {switching && live && (
                         <>
                             <DialogHeader>
                                 <DialogTitle>Switch to {switching.name}?</DialogTitle>

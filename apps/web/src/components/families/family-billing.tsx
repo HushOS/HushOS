@@ -65,7 +65,12 @@ import {
 import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
-import { familyPairs, familyTierName as tierName, twoMonthsFree } from '@/lib/plans';
+import {
+    familyPairs,
+    familyTierName as tierName,
+    personalPlanEnding,
+    twoMonthsFree,
+} from '@/lib/plans';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -532,7 +537,7 @@ function ChoosePlan({
     // A personal plan the person pays for ends when the family's plan starts, with the unused
     // days refunded (docs/families-shared-pool.md 3.3): said before they pay.
     const personal = useQuery(billingQueryOptions).data?.subscription;
-    const ownPlan = personal && !personal.endedAt ? tierName({ name: personal.productName }) : null;
+    const ownPlan = personalPlanEnding(personal, 'the family’s plan starts');
     const hint = useQuery(localeHintQueryOptions);
     const plans = summary.plans;
     const currencies = familyCurrencies(plans);
@@ -587,8 +592,7 @@ function ChoosePlan({
                 )}
                 {ownPlan && (
                     <p className="max-w-[43em] text-sm" data-personal-plan-ends>
-                        Your {ownPlan} plan ends when the family’s plan starts, and the unused days
-                        are refunded. From then on your files use {family}’s storage.
+                        {ownPlan} From then on your files use {family}’s storage.
                     </p>
                 )}
             </div>

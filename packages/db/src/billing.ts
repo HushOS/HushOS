@@ -21,6 +21,11 @@ import {
 
 // past_due keeps its allowance through the retry window; the entitlement's own expiry bounds it.
 const LIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+/*
+ * Polar still holds the plan, but it gives nothing: its retries ran out, its first payment
+ * never went through, or it is paused. Named, so a status Polar adds later is never revoked.
+ */
+const LAPSED_STATUSES = ['unpaid', 'incomplete', 'paused'];
 
 export type SubscriptionSnapshot = {
     id: string;
@@ -61,11 +66,50 @@ export async function markWebhookProcessed(id: string) {
         .where(eq(billingWebhookEvents.id, id));
 }
 
-export async function listLiveSubscriptionIds(userId: string) {
+/*
+ * Every personal subscription not recorded as ended, whatever its status: what a
+ * reconcile reads from Polar one by one, since an `unpaid`, `incomplete` or
+ * `paused` plan leaves the customer's state but can still come back.
+ */
+export async function listUnendedSubscriptionIds(userId: string) {
     const rows = await db
         .select({ id: billingSubscriptions.id })
         .from(billingSubscriptions)
         .where(and(eq(billingSubscriptions.userId, userId), isNull(billingSubscriptions.endedAt)));
+    return rows.map((row) => row.id);
+}
+
+/* The personal plans that give storage now: not ended, and `active`, `trialing` or `past_due`. */
+export async function listLivePlanIds(userId: string) {
+    const rows = await db
+        .select({ id: billingSubscriptions.id })
+        .from(billingSubscriptions)
+        .where(
+            and(
+                eq(billingSubscriptions.userId, userId),
+                isNull(billingSubscriptions.endedAt),
+                inArray(billingSubscriptions.status, [...LIVE_STATUSES]),
+            ),
+        );
+    return rows.map((row) => row.id);
+}
+
+/*
+ * Personal plans Polar still holds that give no storage: not ended, and `unpaid`,
+ * `incomplete` or `paused`. A new checkout revokes them first, so a later payment or
+ * resume can't run one beside the new plan; so does the plan-ending job of someone pooled.
+ */
+export async function listLapsedPlanIds(userId: string) {
+    const rows = await db
+        .select({ id: billingSubscriptions.id })
+        .from(billingSubscriptions)
+        .where(
+            and(
+                eq(billingSubscriptions.userId, userId),
+                isNull(billingSubscriptions.endedAt),
+                inArray(billingSubscriptions.status, LAPSED_STATUSES),
+            ),
+        );
     return rows.map((row) => row.id);
 }
 
@@ -87,8 +131,14 @@ export async function listCustomerIds(provider: string) {
 
 /*
  * Replaces what is known about a user's subscriptions with the provider's current
- * answer. Subscriptions absent from the snapshot have ended; their entitlements are
- * revoked in the same transaction, so the allowance can never outlive the plan.
+ * answer, in one transaction. Only a live plan (`active`, `trialing`, `past_due`, no
+ * `ended_at`) holds an entitlement; every other plan's is revoked at once, so the
+ * allowance never outlives the plan. A plan in the snapshot that Polar hasn't ended
+ * (no `ended_at`, not `canceled` or `incomplete_expired`) is kept unended with Polar's
+ * status, `unpaid`, `incomplete` and `paused` included, and read again by the next
+ * reconcile: a payment or a resume can still bring it back. One absent from the
+ * snapshot (Polar answered 404), or that Polar answers as ended without saying when,
+ * is recorded as ended now.
  */
 export async function applyCustomerState(input: {
     userId: string;
@@ -118,6 +168,10 @@ export async function applyCustomerState(input: {
                 });
         const live = input.subscriptions.filter(
             (subscription) => !subscription.endedAt && LIVE_STATUSES.has(subscription.status),
+        );
+        const ended = new Set<string>(ENDED_SUBSCRIPTION_STATUSES);
+        const kept = input.subscriptions.filter(
+            (subscription) => !subscription.endedAt && !ended.has(subscription.status),
         );
         for (const subscription of input.subscriptions) {
             await tx
@@ -171,12 +225,11 @@ export async function applyCustomerState(input: {
                     set: { quotaBytes: subscription.quotaBytes, expiresAt, revokedAt: null },
                 });
         }
-        const liveIds = live.map((subscription) => subscription.id);
-        const ended = and(
+        const ofUser = and(
             eq(billingSubscriptions.userId, input.userId),
             eq(billingSubscriptions.provider, input.provider),
-            liveIds.length ? notInArray(billingSubscriptions.id, liveIds) : undefined,
         );
+        const keptIds = kept.map((subscription) => subscription.id);
         await tx
             .update(billingSubscriptions)
             .set({
@@ -184,11 +237,25 @@ export async function applyCustomerState(input: {
                 endedAt: sql`coalesce(${billingSubscriptions.endedAt}, now())`,
                 updatedAt: now,
             })
-            .where(and(ended, isNull(billingSubscriptions.endedAt)));
+            .where(
+                and(
+                    ofUser,
+                    isNull(billingSubscriptions.endedAt),
+                    keptIds.length ? notInArray(billingSubscriptions.id, keptIds) : undefined,
+                ),
+            );
+        // Everything that isn't live gives nothing, kept or ended: mid-period too, since the
+        // grace days stretch a period that ran out, not a payment that lapsed.
+        const liveIds = live.map((subscription) => subscription.id);
         const endedIds = await tx
             .select({ id: billingSubscriptions.id })
             .from(billingSubscriptions)
-            .where(ended);
+            .where(
+                and(
+                    ofUser,
+                    liveIds.length ? notInArray(billingSubscriptions.id, liveIds) : undefined,
+                ),
+            );
         if (endedIds.length)
             await tx
                 .update(storageEntitlements)
@@ -208,7 +275,11 @@ export async function applyCustomerState(input: {
     });
 }
 
-/* The current subscription is the live one, or failing that the most recently updated. */
+/*
+ * The current subscription: the live one; failing that, one Polar still holds that
+ * gives nothing (unpaid, incomplete, paused), so the page can say why; failing that,
+ * the most recently updated.
+ */
 export async function getBillingSummary(userId: string) {
     const [customer] = await db
         .select({ providerCustomerId: billingCustomers.providerCustomerId })
@@ -220,6 +291,7 @@ export async function getBillingSummary(userId: string) {
         .where(eq(billingSubscriptions.userId, userId))
         .orderBy(
             sql`${billingSubscriptions.endedAt} is not null`,
+            notInArray(billingSubscriptions.status, [...LIVE_STATUSES]),
             sql`${billingSubscriptions.updatedAt} desc`,
         )
         .limit(1);
@@ -1051,8 +1123,9 @@ export async function getMemberUsage(groupId: string) {
 
 /*
  * People whose own files draw from a family's live pool while the mirror still
- * holds a live personal subscription of theirs: every one of them is owed the
- * end of that plan. One family's, or every family's (the daily reconcile).
+ * holds a live or lapsed (unpaid, incomplete, paused) personal subscription of
+ * theirs: every one of them is owed the end of that plan. One family's, or every
+ * family's (the daily reconcile).
  */
 export async function listPooledWithPersonalPlan(groupId?: string) {
     const rows = await db
@@ -1067,7 +1140,7 @@ export async function listPooledWithPersonalPlan(groupId?: string) {
                 eq(groupMemberships.state, 'active'),
                 sql`${groupStorage.expiresAt} > ${new Date().toISOString()}::timestamptz`,
                 isNull(billingSubscriptions.endedAt),
-                inArray(billingSubscriptions.status, [...LIVE_STATUSES]),
+                inArray(billingSubscriptions.status, [...LIVE_STATUSES, ...LAPSED_STATUSES]),
             ),
         );
     return rows.map((row) => row.userId);
@@ -1105,6 +1178,228 @@ export async function ensurePlanEnding(input: {
         })
         .returning();
     return row!;
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/* A refund row noted (a payment delivery) and never asked for: no run has worked it. */
+const unworkedRefund = (subscriptionId: string) =>
+    and(
+        eq(personalPlanRefunds.subscriptionId, subscriptionId),
+        eq(personalPlanRefunds.status, 'requested'),
+        isNull(personalPlanRefunds.firstAttemptedAt),
+    );
+
+/*
+ * Settles a plan's unworked refund rows as `none` (nothing owed on them); `kept`: they are
+ * its owner's, their rewards still to grant (`rewards_pending`). Returns their orders.
+ */
+async function clearUnworkedRefunds(tx: Tx, subscriptionId: string, kept = false) {
+    const rows = await tx
+        .update(personalPlanRefunds)
+        .set({ status: 'none', rewardsPending: kept, updatedAt: new Date() })
+        .where(unworkedRefund(subscriptionId))
+        .returning({ orderId: personalPlanRefunds.orderId });
+    return rows.map((row) => row.orderId);
+}
+
+/*
+ * The ending of a lapsed personal plan (unpaid, incomplete, paused) HushOS is about to
+ * revoke itself, before a checkout or because its owner was pooled: one with no family,
+ * written before Polar is asked, so a revoke whose answer is lost and a payment that lands
+ * meanwhile still find it. Settled, since nothing of it is in force: a payment Polar takes
+ * for it afterwards opens it again (notePaidOnLapsed), and the plan-ending job refunds that
+ * order whole. `revoked_at` is set once Polar's answer says when (recordPlanRevoked).
+ * Taken over: one its owner's leaving dropped, and an earlier lapsed one whose revoke never
+ * landed (no family, not revoked, settled); their unworked refund rows are settled `none`
+ * first, so nothing from before is refunded under the new one. Any other ending the plan
+ * has is left as it is. Returns the plan's ending as it stands.
+ */
+export async function beginLapsedRevoke(input: {
+    subscriptionId: string;
+    userId: string;
+    at: Date;
+}) {
+    return db.transaction(async (tx) => {
+        const [existing] = await tx
+            .select()
+            .from(personalPlanEndings)
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .for('update');
+        const fresh = {
+            groupId: null,
+            admittedAt: input.at,
+            pooledAt: input.at,
+            revokedAt: null,
+            periodStart: null,
+            periodEnd: null,
+            outcome: 'settled',
+            unrefundableAmount: null,
+            unrefundableCurrency: null,
+        };
+        if (!existing) {
+            const [row] = await tx
+                .insert(personalPlanEndings)
+                .values({ subscriptionId: input.subscriptionId, userId: input.userId, ...fresh })
+                .returning();
+            return row!;
+        }
+        const takeOver =
+            existing.outcome === 'dropped' ||
+            (existing.groupId === null && !existing.revokedAt && existing.outcome === 'settled');
+        if (!takeOver) return existing;
+        await clearUnworkedRefunds(tx, input.subscriptionId);
+        const [row] = await tx
+            .update(personalPlanEndings)
+            .set({ ...fresh, updatedAt: new Date() })
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .returning();
+        return row!;
+    });
+}
+
+/*
+ * An ending HushOS gives up on: the plan stays its owner's (they left the family before
+ * it was revoked, or a lapsed plan's revoke never landed). Its unworked refund rows are
+ * settled `none` in the same transaction, never refunded by a later lapsed ending of the
+ * plan, and marked `rewards_pending`: their commission and referral reward, which the
+ * payment delivery held back, are still owed (grantKeptRewards), so a failure granting
+ * them loses nothing, and a family ending that later refunds part of the order (moving
+ * its status on) doesn't erase them. Returns those rows' orders.
+ */
+export async function dropPlanEnding(subscriptionId: string) {
+    return db.transaction(async (tx) => {
+        await tx
+            .update(personalPlanEndings)
+            .set({ outcome: 'dropped', updatedAt: new Date() })
+            .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+        return clearUnworkedRefunds(tx, subscriptionId, true);
+    });
+}
+
+/* Payments kept by their owner whose rewards are still to grant, this person's. */
+export async function listKeptPayments(userId: string) {
+    return db
+        .select({
+            orderId: personalPlanRefunds.orderId,
+            subscriptionId: personalPlanRefunds.subscriptionId,
+        })
+        .from(personalPlanRefunds)
+        .innerJoin(
+            personalPlanEndings,
+            eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
+        )
+        .where(
+            and(
+                eq(personalPlanEndings.userId, userId),
+                eq(personalPlanRefunds.rewardsPending, true),
+            ),
+        );
+}
+
+/* People with a kept payment whose rewards are still to grant: the daily reconcile's. */
+export async function listUsersWithKeptPayments() {
+    const rows = await db
+        .selectDistinct({ userId: personalPlanEndings.userId })
+        .from(personalPlanRefunds)
+        .innerJoin(
+            personalPlanEndings,
+            eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
+        )
+        .where(eq(personalPlanRefunds.rewardsPending, true));
+    return rows.map((row) => row.userId);
+}
+
+/* A kept payment's rewards are granted: nothing more to do on it. */
+export async function settleKeptPayment(orderId: string) {
+    await db
+        .update(personalPlanRefunds)
+        .set({ rewardsPending: false, updatedAt: new Date() })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
+/*
+ * Gives a plan's refund rows that were never asked for the keys of the ending now working
+ * it (a family's, taking over one a lapsed revoke dropped), so its refunds carry, and are
+ * matched by, that ending's key.
+ */
+export async function rekeyUnattemptedRefunds(rows: { orderId: string; refundKey: string }[]) {
+    for (const row of rows)
+        await db
+            .update(personalPlanRefunds)
+            .set({ refundKey: row.refundKey, updatedAt: new Date() })
+            .where(
+                and(
+                    eq(personalPlanRefunds.orderId, row.orderId),
+                    isNull(personalPlanRefunds.firstAttemptedAt),
+                ),
+            );
+}
+
+/*
+ * The orders of a lapsed plan already paid when HushOS revokes it, noted `none`: never
+ * refunded, even when an `order.paid` for one arrives late. One noted earlier and never
+ * worked (a payment delivery before the takeover) is settled `none` too.
+ */
+export async function notePaidBeforeRevoke(
+    rows: { orderId: string; subscriptionId: string; refundKey: string; currency: string }[],
+) {
+    for (const row of rows)
+        await db
+            .insert(personalPlanRefunds)
+            .values({ ...row, amount: 0, status: 'none' })
+            .onConflictDoUpdate({
+                target: personalPlanRefunds.orderId,
+                set: { status: 'none', updatedAt: new Date() },
+                where: and(
+                    eq(personalPlanRefunds.subscriptionId, row.subscriptionId),
+                    eq(personalPlanRefunds.status, 'requested'),
+                    isNull(personalPlanRefunds.firstAttemptedAt),
+                ),
+            });
+}
+
+/*
+ * An `order.paid` for a plan with a lapsed ending (no family), in one transaction: the
+ * order noted for a refund and the ending opened again. `noted`: noted now, or noted
+ * before and never worked (a redelivery after the first try failed midway), either way
+ * open now. `worked`: refunded or being refunded already. `paid-before`: it was paid when
+ * HushOS revoked the plan. `none`: no lapsed ending (or a dropped one) to note it on.
+ */
+export async function notePaidOnLapsed(input: {
+    orderId: string;
+    subscriptionId: string;
+    refundKey: string;
+    currency: string;
+}): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
+    return db.transaction(async (tx) => {
+        const [ending] = await tx
+            .select()
+            .from(personalPlanEndings)
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .for('update');
+        if (!ending || ending.groupId !== null || ending.outcome === 'dropped') return 'none';
+        const [row] = await tx
+            .select()
+            .from(personalPlanRefunds)
+            .where(eq(personalPlanRefunds.orderId, input.orderId));
+        if (row?.status === 'none') return 'paid-before';
+        if (row && (row.status !== 'requested' || row.firstAttemptedAt)) return 'worked';
+        if (!row)
+            await tx
+                .insert(personalPlanRefunds)
+                .values({ ...input, amount: 0, status: 'requested' });
+        await tx
+            .update(personalPlanEndings)
+            .set({ outcome: null, updatedAt: new Date() })
+            .where(
+                and(
+                    eq(personalPlanEndings.subscriptionId, input.subscriptionId),
+                    eq(personalPlanEndings.outcome, 'settled'),
+                ),
+            );
+        return 'noted';
+    });
 }
 
 /* Endings with work left for this person, oldest first. */
@@ -1149,14 +1444,26 @@ export async function recordPlanRevoked(
     return row!;
 }
 
-export async function closePlanEnding(
-    subscriptionId: string,
-    outcome: 'settled' | 'dropped' | 'ended',
-) {
-    await db
+/*
+ * Closes an ending. `settled` only while no refund of it is still unworked (noted,
+ * `requested`, never asked for): an order a payment delivery noted while the run that
+ * settles it was already past reading the orders keeps the ending open, for that run's
+ * retry. Returns whether it closed.
+ */
+export async function closePlanEnding(subscriptionId: string, outcome: 'settled' | 'ended') {
+    const rows = await db
         .update(personalPlanEndings)
         .set({ outcome, updatedAt: new Date() })
-        .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                outcome === 'settled'
+                    ? sql`not exists (select 1 from ${personalPlanRefunds} where ${unworkedRefund(subscriptionId)})`
+                    : undefined,
+            ),
+        )
+        .returning({ subscriptionId: personalPlanEndings.subscriptionId });
+    return rows.length > 0;
 }
 
 export async function getPlanRefund(orderId: string) {

@@ -345,9 +345,10 @@ function AdminPage() {
                             </OperatorTable>
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
                                 The unused part of a personal plan that ended when its owner’s files
-                                joined a family. HushOS keeps trying; to settle one now, refund the
-                                order in Polar’s dashboard for the amount shown (Polar adds the
-                                tax), and the row goes at the next try.
+                                joined a family, or a payment Polar took for a lapsed plan HushOS
+                                had already revoked (refunded whole). HushOS keeps trying; to settle
+                                one now, refund the order in Polar’s dashboard for the amount shown
+                                (Polar adds the tax), and the row goes at the next try.
                             </p>
                         </>
                     )}

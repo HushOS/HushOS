@@ -85,6 +85,13 @@ export function statusOf(error: unknown) {
     return error instanceof PolarClientError ? error.statusCode : null;
 }
 
+/* Polar's error name on a refused call (`AlreadyCanceledSubscription`, `InactiveSubscription`). */
+export function polarErrorName(error: unknown) {
+    return error instanceof PolarClientError
+        ? ((error.error as { error?: string } | undefined)?.error ?? null)
+        : null;
+}
+
 /* ------------------------------------------------------------------------- */
 /* The catalogue                                                              */
 /* ------------------------------------------------------------------------- */

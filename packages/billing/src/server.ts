@@ -7,7 +7,13 @@ import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms } from './api';
-import { noteRefundUpdated, queuePlanEnding } from './endings';
+import {
+    LapsedRevokeError,
+    notePaidAfterRevoke,
+    noteRefundUpdated,
+    queuePlanEnding,
+    revokeLapsed,
+} from './endings';
 import { groupIdOf, reconcileGroup } from './groups';
 import {
     BillingError,
@@ -17,12 +23,13 @@ import {
     getFamilyCatalogue,
     offeredFamilies,
     polar,
+    polarErrorName,
     statusOf,
     unavailable,
     type BillingUser,
     type CatalogueProduct,
 } from './provider';
-import { GROUP_CUSTOMER_PREFIX, type CancellationReason } from './protocol';
+import { GROUP_CUSTOMER_PREFIX, lapsedPlan, livePlan, type CancellationReason } from './protocol';
 
 export {
     BillingError,
@@ -70,6 +77,8 @@ export {
 export { quoteTierChange } from './protocol';
 
 const WEBHOOK_MAX_BYTES = 256 * 1024;
+/* Polar's statuses after which a subscription has ended (with or without `ended_at`). */
+const ENDED_STATUSES = new Set<string>(billingRepository.ENDED_SUBSCRIPTION_STATUSES);
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export async function listCatalogue(): Promise<Catalogue> {
@@ -107,11 +116,14 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
         listCatalogue().then((catalogue) => catalogue.plans),
         billingRepository.getPooledFamily(user.id),
     ]);
-    const live = summary.subscription && !summary.subscription.endedAt;
-    // A pooled person is offered no personal plan, so none is carried to checkout either.
+    const live = livePlan(summary.subscription);
+    // A pooled person is offered no personal plan, so none is carried to checkout either; nor
+    // is one to someone whose plan lapsed, since a checkout ends that plan first and the
+    // billing page asks before it does.
     const intendedPlan =
         !pooled &&
         !live &&
+        !lapsedPlan(summary.subscription) &&
         intent?.planProductId &&
         plans.some((plan) => plan.id === intent.planProductId)
             ? intent.planProductId
@@ -142,9 +154,66 @@ async function refuseWhilePooled(user: BillingUser) {
         );
 }
 
+/* The live plan a switch, a cancel or a resume acts on; an unpaid, incomplete or paused one isn't. */
 async function currentSubscription(user: BillingUser) {
-    const summary = await billingRepository.getBillingSummary(user.id);
-    return summary.subscription && !summary.subscription.endedAt ? summary.subscription : null;
+    return livePlan((await billingRepository.getBillingSummary(user.id)).subscription);
+}
+
+/* "Pro" for a plan named "Pro (monthly)" in the catalogue; "personal" when it isn't there. */
+async function planNameOf(productId: string) {
+    const product = (await getCatalogue()).find((candidate) => candidate.id === productId);
+    return product?.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '') ?? 'personal';
+}
+
+/*
+ * Before a checkout: every personal plan of theirs that Polar still holds but that gives
+ * nothing (`unpaid`, `incomplete`, `paused`) is revoked at Polar, so a payment taken
+ * later (a card added in the portal can retry what is owed) or a scheduled resume can't
+ * run it beside the plan being bought. Such a plan gives no storage, and a resume would
+ * start a new period, so nothing in force is taken away; a payment Polar takes for it
+ * after the revoke is refunded whole (notePaidAfterRevoke). Each is read first; one Polar
+ * has made live again meanwhile (paid in the portal a moment ago) is left alone and
+ * becomes the current plan, which the checkout then switches in place. Gone (404) or
+ * already ended (403 `AlreadyCanceledSubscription`, a second click) is nothing to do. A
+ * revoke that fails otherwise stops the checkout, so two plans never run.
+ */
+async function revokeLapsedPlans(userId: string) {
+    const ids = await billingRepository.listLapsedPlanIds(userId);
+    if (!ids.length) return;
+    for (const id of ids) {
+        let productId: string | null = null;
+        try {
+            const subscription = await polar().subscriptions.get(id);
+            productId = subscription.product_id;
+            if (subscription.ended_at || livePlan({ status: subscription.status, endedAt: null }))
+                continue;
+            await revokeLapsed(userId, id);
+        } catch (error) {
+            if (statusOf(error) === 404) continue;
+            // The plan whose revoke failed, by its own product.
+            const name = productId ? await planNameOf(productId) : 'personal';
+            if (statusOf(error) === 409 && polarErrorName(error) === 'SubscriptionLocked')
+                throw new BillingError(
+                    `Polar is still working on a change to your ${name} plan, so it can’t be ended yet. Try again later, or contact support.`,
+                    409,
+                    { cause: error },
+                );
+            if (error instanceof LapsedRevokeError && error.reason === 'paid')
+                throw new BillingError(
+                    `Polar shows a payment for your ${name} plan that hasn’t taken effect yet, so it can’t be ended. Try again in a few minutes, or contact support.`,
+                    409,
+                    { cause: error },
+                );
+            if (error instanceof LapsedRevokeError)
+                throw new BillingError(
+                    `Your ${name} plan is still being ended. Try again in a few minutes.`,
+                    409,
+                    { cause: error },
+                );
+            throw unavailable(error);
+        }
+    }
+    await reconcileCustomer(userId);
 }
 
 /*
@@ -164,6 +233,7 @@ export async function startCheckout(
     // from the address, which can differ from what they were shown.
     if (currency !== undefined && !(currency in plan.prices))
         throw new BillingError('That plan is not priced in that currency.', 400);
+    await revokeLapsedPlans(user.id);
     const current = await currentSubscription(user);
     if (current) {
         if (current.productId === productId && !current.cancelAtPeriodEnd)
@@ -417,6 +487,19 @@ export async function deleteProviderDiscount(id: string) {
     discountCache.clear();
 }
 
+/*
+ * What a paid order earns: its affiliate's commission and, for its owner, their inviter's
+ * reward. For a payment on a lapsed plan HushOS set out to revoke, the plan-ending job
+ * grants these once it knows the plan stays its owner's (the revoke never landed).
+ */
+export async function grantOrderRewards(
+    userId: string,
+    order: Parameters<typeof recordAffiliateEarning>[0],
+) {
+    await recordAffiliateEarning({ ...order, customer: { external_id: userId } });
+    await rewardPaidReferral(userId);
+}
+
 /* The inviter's storage when someone they invited pays for a plan; once per invitee, under a cap. */
 async function rewardPaidReferral(userId: string) {
     const bonus = appEnv.REFERRAL_PAID_BONUS_BYTES;
@@ -573,8 +656,9 @@ function snapshot(
 
 /*
  * Webhooks only say that something changed; the provider's customer state says
- * what is true now. Subscriptions that left the state (past due, ended) are read
- * individually so a retry window is honoured and an ending is recorded as such.
+ * what is true now. Subscriptions that left the state (past due, unpaid, incomplete,
+ * paused, ended) are read individually so a retry window is honoured, a lapsed plan
+ * is kept with its status, and an ending is recorded as such.
  */
 export async function reconcileCustomer(userId: string) {
     if (!billingEnabled() || !USER_ID_PATTERN.test(userId)) return;
@@ -592,7 +676,7 @@ export async function reconcileCustomer(userId: string) {
         if (entry) subscriptions.push(entry);
     }
     const seen = new Set(subscriptions.map((subscription) => subscription.id));
-    for (const id of await billingRepository.listLiveSubscriptionIds(userId)) {
+    for (const id of await billingRepository.listUnendedSubscriptionIds(userId)) {
         if (seen.has(id)) continue;
         try {
             const entry = snapshot(await polar().subscriptions.get(id), products);
@@ -609,7 +693,8 @@ export async function reconcileCustomer(userId: string) {
         graceMs: billingEnv.BILLING_GRACE_DAYS * 24 * 60 * 60 * 1000,
     });
     // A live personal plan of someone whose files draw from a family's pool is ended (5.1).
-    if (subscriptions.some((subscription) => !subscription.endedAt)) await queuePlanEnding(userId);
+    if (subscriptions.some((subscription) => livePlan(subscription) || lapsedPlan(subscription)))
+        await queuePlanEnding(userId);
 }
 
 /*
@@ -633,11 +718,31 @@ export async function revokeForDeletion(userId: string) {
         } catch (error) {
             if (statusOf(error) !== 404) throw error;
         }
-        for (const subscription of state?.active_subscriptions ?? []) {
+        // Every plan that can still charge: the customer's state lists only active and trialing
+        // ones, so Polar's own list of their subscriptions and the mirror are read too, for one
+        // past due (in dunning), unpaid, incomplete or paused (which resumes on its date).
+        const ids = new Set((state?.active_subscriptions ?? []).map((s) => s.id));
+        if (state) {
+            const page = await polar().subscriptions.list({
+                external_customer_id: userId,
+                limit: 100,
+            });
+            for (const subscription of page.items)
+                if (!subscription.ended_at && !ENDED_STATUSES.has(subscription.status))
+                    ids.add(subscription.id);
+        }
+        for (const id of await billingRepository.listUnendedSubscriptionIds(userId)) ids.add(id);
+        for (const id of ids) {
             try {
-                await polar().subscriptions.revoke(subscription.id);
+                await polar().subscriptions.revoke(id);
             } catch (error) {
-                if (statusOf(error) !== 404 && statusOf(error) !== 403) throw error;
+                if (statusOf(error) === 404) continue;
+                if (
+                    statusOf(error) === 403 &&
+                    polarErrorName(error) === 'AlreadyCanceledSubscription'
+                )
+                    continue;
+                throw error;
             }
         }
         if (state) await polar().customers.deleteExternal(userId);
@@ -707,10 +812,18 @@ export async function handleWebhook(request: Request): Promise<Response> {
         if (event.type === 'refund.updated')
             await noteRefundUpdated(event.data as Parameters<typeof noteRefundUpdated>[0]);
         if (event.type === 'order.paid') {
-            await recordAffiliateEarning(
-                event.data as Parameters<typeof recordAffiliateEarning>[0],
+            // A payment for a lapsed plan HushOS revoked is refunded whole, so it earns no
+            // commission and no referral reward. (A pooled member's renewal refunded by the
+            // plan-ending job below still does: an existing gap.)
+            const refunded = await notePaidAfterRevoke(
+                event.data as Parameters<typeof notePaidAfterRevoke>[0],
             );
-            if (userId) await rewardPaidReferral(userId);
+            if (!refunded) {
+                await recordAffiliateEarning(
+                    event.data as Parameters<typeof recordAffiliateEarning>[0],
+                );
+                if (userId) await rewardPaidReferral(userId);
+            }
             // A personal order paid while its owner's files draw from a family's pool (a
             // renewal that slipped past the revoke, a checkout that raced the admission):
             // the plan is ended and the order refunded by the same job (5.1).

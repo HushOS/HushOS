@@ -34,8 +34,8 @@ import { cue } from '@/lib/sounds';
  * then goes straight to Polar's checkout for that tier
  * (docs/families-shared-pool.md 7.4). A checkout that can't start leaves the
  * family made, on its page, where Choose a plan offers the tiers again.
- * `personalPlan` is the name of a personal plan the person pays for: it ends
- * when the family's plan starts, and that is said before they go on (3.3).
+ * `personalPlan` says what happens to a personal plan of theirs (personalPlanEnding): it
+ * ends when the family's plan starts, and that is said before they go on (3.3).
  */
 export function CreateFamilyDialog({
     userId,
@@ -146,9 +146,7 @@ export function CreateFamilyDialog({
                     </DialogDescription>
                     {!refusal && plan && personalPlan && (
                         <p className="text-sm" data-personal-plan-ends>
-                            Your {personalPlan} plan ends when the family’s plan starts, and the
-                            unused days are refunded. From then on your files use the family’s
-                            storage.
+                            {personalPlan} From then on your files use the family’s storage.
                         </p>
                     )}
                 </DialogHeader>

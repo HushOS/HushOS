@@ -1,7 +1,13 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
-import { HistoryIcon, SparklesIcon, Trash2Icon, type LucideIcon } from 'lucide-react';
+import {
+    CreditCardIcon,
+    HistoryIcon,
+    SparklesIcon,
+    Trash2Icon,
+    type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,6 +19,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
+import { lapsedPlan, livePlan, planStanding } from '@hushos/billing/protocol';
 import { billingQueryOptions, catalogueQueryOptions } from '@/lib/billing';
 import { driveClient, driveError, formatBytes, invalidateFolders } from '@/lib/drive';
 import { formatQuota, storageQueryOptions, useBillingEnabled } from '@/lib/queries';
@@ -76,10 +83,9 @@ export function StorageFullDialog() {
     const billing = useBillingEnabled();
     const catalogue = useQuery({ ...catalogueQueryOptions, enabled: open && billing });
     const summary = useQuery({ ...billingQueryOptions, enabled: open && billing });
-    const current =
-        summary.data?.subscription && !summary.data.subscription.endedAt
-            ? summary.data.subscription
-            : null;
+    const current = livePlan(summary.data?.subscription);
+    // A plan whose payment failed (or that is paused) gives nothing until it is fixed: said first.
+    const lapsed = storage.data?.pool ? null : lapsedPlan(summary.data?.subscription);
     // The smallest plan with more room than this one: what "Get more room" leads to. None while
     // the person's files draw from a family's pool: a plan of their own wouldn't add to it.
     const bigger =
@@ -180,7 +186,20 @@ export function StorageFullDialog() {
                     </DialogDescription>
                 </DialogHeader>
                 <div className="flex flex-col gap-2">
-                    {bigger && (
+                    {lapsed && (
+                        <Way
+                            icon={CreditCardIcon}
+                            label="Open your plan"
+                            detail={planStanding(lapsed) === 'paused' ? 'Paused' : 'Payment failed'}
+                            primary
+                            disabled={working !== null}
+                            onClick={() => {
+                                setOpen(false);
+                                void navigate({ to: '/app/billing' });
+                            }}
+                        />
+                    )}
+                    {bigger && !lapsed && (
                         <Way
                             icon={SparklesIcon}
                             label="Get more room"
