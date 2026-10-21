@@ -1331,6 +1331,8 @@ export async function recordOrphanedSubscription(
         .values({ id, groupId, provider: 'polar', ...values, endedAt })
         .onConflictDoUpdate({
             target: groupBillingSubscriptions.id,
+            // Only this family's row: a subscription id another family's row holds is never moved.
+            setWhere: eq(groupBillingSubscriptions.groupId, groupId),
             set: {
                 status: values.status,
                 currentPeriodStart: values.currentPeriodStart,
