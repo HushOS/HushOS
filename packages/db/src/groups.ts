@@ -44,6 +44,7 @@ import {
     groupMemberships,
     groupBillingCustomers,
     groupBillingSubscriptions,
+    groupCheckouts,
     groupRosters,
     groupStorage,
     groups,
@@ -3551,6 +3552,8 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
                 .where(and(eq(groups.id, id), purgeable));
             if (!still) return;
             await tx.delete(groups).where(eq(groups.id, id));
+            // Its open checkout claim, if any (no foreign key: a billing record's table).
+            await tx.delete(groupCheckouts).where(eq(groupCheckouts.groupId, id));
             counts.families++;
         });
     return counts;

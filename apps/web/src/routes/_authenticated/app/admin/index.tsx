@@ -218,7 +218,7 @@ function AdminPage() {
                                 anchor: '#lapsed-not-ended',
                             },
                             {
-                                label: 'Deleted families billed',
+                                label: 'Plans revoked to refund',
                                 value: count(data.orphanedPlans.length),
                                 tone: data.orphanedPlans.length > 0 ? 'danger' : undefined,
                                 anchor: '#orphaned-plans',
@@ -482,13 +482,14 @@ function AdminPage() {
                                 id="orphaned-plans"
                                 className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
                             >
-                                Deleted families billed
+                                Plans revoked to refund
                             </h2>
                             <OperatorTable>
                                 <thead>
                                     <tr>
                                         <th className={th}>Family</th>
                                         <th className={th}>Polar subscription</th>
+                                        <th className={th}>Why</th>
                                         <th className={th}>Plan</th>
                                         <th className={cn(th, 'text-right')}>Refunded</th>
                                         <th className={cn(th, 'text-right')}>Payments to refund</th>
@@ -500,6 +501,11 @@ function AdminPage() {
                                         <tr key={row.subscriptionId} className="hover:bg-muted">
                                             <td className={td}>{row.groupId}</td>
                                             <td className={td}>{row.subscriptionId}</td>
+                                            <td className={cn(td, 'font-sans')}>
+                                                {row.why === 'second-plan'
+                                                    ? 'Second plan'
+                                                    : 'Family deleted'}
+                                            </td>
                                             <td
                                                 className={cn(
                                                     td,
@@ -525,13 +531,14 @@ function AdminPage() {
                                 </tbody>
                             </OperatorTable>
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
-                                Polar billed a plan of a family HushOS had already deleted
-                                (reinstated or resumed after it ended). Nothing it charges for
-                                exists, so HushOS revokes it and refunds whole every charge made
-                                after that plan’s own end; a refund that keeps failing is also under
-                                Refunds owed. A plan still marked not revoked is tried again at
-                                every delivery and the daily reconcile: revoke it in Polar’s
-                                dashboard if it stays.
+                                Family plans nothing can be given for: one Polar billed after its
+                                family was deleted (reinstated or resumed after it ended), or a
+                                family’s second plan (two checkouts both paid). HushOS revokes it
+                                and refunds whole every charge made after that plan’s own end, or
+                                what a second plan took while the family had its plan; a refund that
+                                keeps failing is also under Refunds owed. A plan still marked not
+                                revoked is tried again at every delivery and the daily reconcile:
+                                revoke it in Polar’s dashboard if it stays.
                             </p>
                         </>
                     )}

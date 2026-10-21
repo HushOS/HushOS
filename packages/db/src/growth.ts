@@ -470,6 +470,28 @@ export async function recordEarning(input: {
     return row ?? null;
 }
 
+/*
+ * An order HushOS refunds whole (a payment on a plan nothing could be given for): its affiliate's
+ * commission is taken back while it is unpaid. `paid`: it had already been paid out, so it stays,
+ * marked (`order_refunded_at`) for an operator to settle with the affiliate; said once, the first
+ * time, and `none` on every later call.
+ */
+export async function withdrawEarning(orderId: string) {
+    const removed = await db
+        .delete(affiliateEarnings)
+        .where(and(eq(affiliateEarnings.orderId, orderId), isNull(affiliateEarnings.paidAt)))
+        .returning({ id: affiliateEarnings.id });
+    if (removed.length) return 'withdrawn' as const;
+    const marked = await db
+        .update(affiliateEarnings)
+        .set({ orderRefundedAt: new Date() })
+        .where(
+            and(eq(affiliateEarnings.orderId, orderId), isNull(affiliateEarnings.orderRefundedAt)),
+        )
+        .returning({ id: affiliateEarnings.id });
+    return marked.length ? ('paid' as const) : ('none' as const);
+}
+
 export async function listEarnings(affiliateId: string, limit = 100) {
     return db
         .select()
