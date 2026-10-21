@@ -102,7 +102,8 @@ public struct LapsedPlan: Sendable, Equatable {
     public let paused: Bool
 
     init(_ subscription: BillingSubscription, paused: Bool) {
-        name = subscription.productName.replacingOccurrences(of: #"\s*\((monthly|yearly|annual)\)\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let short = subscription.productName.replacingOccurrences(of: #"\s*\((monthly|yearly|annual)\)\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+        name = short.isEmpty ? "Your plan" : short
         self.paused = paused
     }
 

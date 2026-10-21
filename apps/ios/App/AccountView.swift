@@ -453,11 +453,10 @@ struct StorageFullSheet: View {
             .navigationTitle("Not enough room")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Not now") { dismiss() } } }
-            .task {
-                allowance = try? await Auth.storage()
-                billing = try? await Auth.billing()
-                breakdown = try? await store.vault.storageBreakdown()
-            }
+            // Separate tasks, so a slow billing answer never holds back the ways to free room.
+            .task { allowance = try? await Auth.storage() }
+            .task { billing = try? await Auth.billing() }
+            .task { breakdown = try? await store.vault.storageBreakdown() }
         }
         .presentationDetents([.medium, .large])
     }
