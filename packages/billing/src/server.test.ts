@@ -1881,6 +1881,16 @@ describe('a personal plan whose payment failed, or that is paused', () => {
         expect((await billingRepository.getPlanEnding('sub_lapsed'))?.outcome).toBe('dropped');
     });
 
+    test('an unpaid plan whose period’s order was refunded whole is revoked as usual', async () => {
+        const { userId, subscription } = await lapsedSubscriber('unpaid');
+        addPaidOrder(subscription, 'order_refunded', subscription.current_period_start);
+        polar.orders.at(-1)!.refunded_amount = 999;
+        expect(await billing.startCheckout(userOfId(userId), MAX)).toEqual({
+            url: 'https://polar.test/checkout',
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_lapsed']);
+    });
+
     test('the job closes an ending only while it holds it', async () => {
         const { userId, subscription } = await lapsedSubscriber('unpaid');
         await billing.startCheckout(userOfId(userId), MAX);
@@ -2195,6 +2205,69 @@ describe('affiliates', () => {
         expect(refundsMade()).toEqual([]);
     });
 
+    /* A kept payment noted on a lapsed ending, then its owner joins a family (the review's probe). */
+    async function keptThenFamily() {
+        await creator();
+        const { userId } = await createTestAccount();
+        await growth.attributeNewAccount(userId, 'creator25');
+        const subscription = subscribe(userId, { id: 'sub_lapsed' });
+        await billing.reconcileCustomer(userId);
+        subscription.status = 'unpaid';
+        await billing.reconcileCustomer(userId);
+        polar.revokeTimesOut = true;
+        await billing
+            .startCheckout({ id: userId, name: 'Fan', email: 'x@hushos.test' }, MAX)
+            .catch(() => {});
+        // Paid in the portal; the delivery arrives and is noted on the lapsed ending.
+        subscription.status = 'active';
+        addPaidOrder(subscription, 'order_a', subscription.current_period_start);
+        await deliverPaid(userId, subscription, 'order_a');
+        // Joins a family before the queued job runs.
+        const { groupId } = await familyOnPlan();
+        await setTestMember({ groupId, userId, state: 'active' });
+        await billing.reconcileCustomer(userId);
+        endingJobs.length = 0;
+        expect(await billing.queuePlanEnding(userId)).toBe(true);
+        return { userId, groupId };
+    }
+
+    test('a kept payment the family ending then partly refunds still earns its commission, under the family’s key', async () => {
+        const { groupId } = await keptThenFamily();
+        await runQueued(0);
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_lapsed']);
+        expect(refundsMade()).toEqual([['order_a', 966]]);
+        expect(polar.refunds[0]?.metadata).toEqual({
+            hushos_refund: expect.stringContaining(`:${groupId}:`),
+        });
+        expect(await billingRepository.getPlanRefund('order_a')).toMatchObject({
+            status: 'succeeded',
+            rewardsPending: false,
+        });
+        expect((await growth.listAffiliates())[0]!.stats.orders).toBe(1);
+    });
+
+    test('rewards that can’t be granted never hold back the refresh of a plan just ended for a family', async () => {
+        const { userId } = await keptThenFamily();
+        // Polar's orders become unreadable once the family's refund is made.
+        polar.afterRefundCreate = async () => {
+            polar.ordersFail = true;
+        };
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        try {
+            await expect(billing.endPersonalPlans(endingJobs[0]!)).rejects.toThrow(
+                'A kept payment’s rewards have not been granted yet.',
+            );
+        } finally {
+            warn.mockRestore();
+        }
+        // The plan's end is in the mirror already: no second allowance meanwhile.
+        expect(await billingRepository.listUnendedSubscriptionIds(userId)).toEqual([]);
+        expect((await billingRepository.getPlanRefund('order_a'))?.rewardsPending).toBe(true);
+        polar.ordersFail = false;
+        await billing.endPersonalPlans(endingJobs[0]!);
+        expect((await growth.listAffiliates())[0]!.stats.orders).toBe(1);
+    });
+
     test('a late delivery of an order paid before HushOS revoked its plan still earns its commission', async () => {
         await creator();
         const { userId } = await createTestAccount();
@@ -2231,14 +2304,14 @@ describe('affiliates', () => {
         await expect(billing.endPersonalPlans(job!)).rejects.toBeTruthy();
         polar.ordersFail = false;
         expect((await growth.listAffiliates())[0]!.stats.orders).toBe(0);
-        expect((await billingRepository.getPlanRefund('order_a'))?.status).toBe('kept');
+        expect((await billingRepository.getPlanRefund('order_a'))?.rewardsPending).toBe(true);
         // The daily reconcile finds it and a later run grants it, once.
         const before = endingJobs.length;
         await billing.reconcilePlanEndings();
         await runQueued(before);
         await runQueued(before);
         expect((await growth.listAffiliates())[0]!.stats.orders).toBe(1);
-        expect((await billingRepository.getPlanRefund('order_a'))?.status).toBe('none');
+        expect((await billingRepository.getPlanRefund('order_a'))?.rewardsPending).toBe(false);
         expect(refundsMade()).toEqual([]);
     });
 

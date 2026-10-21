@@ -337,9 +337,7 @@ export const personalPlanRefunds = pgTable(
          * `requested` (written, Polar not yet known to hold it), `pending` and
          * `succeeded` (Polar's refund, matched by key), `failed` (Polar's refund
          * failed or the call was refused; tried again), `none` (nothing to refund),
-         * `disputed` (the charge is disputed: its share is dropped, never moved),
-         * `kept` (a payment on a lapsed plan whose revoke never landed: its owner's,
-         * its commission and referral reward still to be granted, then `none`).
+         * `disputed` (the charge is disputed: its share is dropped, never moved).
          */
         status: text().notNull(),
         providerRefundId: text('provider_refund_id'),
@@ -358,6 +356,12 @@ export const personalPlanRefunds = pgTable(
          */
         unsureUntil: timestamp('unsure_until', { withTimezone: true }),
         failures: integer().notNull().default(0),
+        /*
+         * A payment on a lapsed plan whose revoke never landed, kept by its owner: its
+         * commission and referral reward, held back by the delivery, are still to be granted
+         * (grantKeptRewards). Apart from `status`, which a later ending's refund may change.
+         */
+        rewardsPending: boolean('rewards_pending').notNull().default(false),
         owedSince: timestamp('owed_since', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
@@ -371,7 +375,7 @@ export const personalPlanRefunds = pgTable(
         }).onDelete('cascade'),
         check(
             'personal_plan_refunds_valid',
-            sql`${table.status} in ('requested', 'pending', 'succeeded', 'failed', 'none', 'disputed', 'kept') and ${table.amount} >= 0 and ${table.failures} >= 0`,
+            sql`${table.status} in ('requested', 'pending', 'succeeded', 'failed', 'none', 'disputed') and ${table.amount} >= 0 and ${table.failures} >= 0`,
         ),
     ],
 );

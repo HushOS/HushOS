@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "d90db9ea-2571-47a0-b875-653560f3e029",
+    "id": "bb9fc702-d677-442b-bfd8-17564d2f505b",
     "prevIds": ["24deb6fc-9d8b-4338-bc4d-a05b02779157"],
     "ddl": [
         {
@@ -8001,6 +8001,19 @@
             "table": "personal_plan_refunds"
         },
         {
+            "type": "boolean",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "false",
+            "generated": null,
+            "identity": null,
+            "name": "rewards_pending",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_refunds"
+        },
+        {
             "type": "timestamp with time zone",
             "typeSchema": null,
             "notNull": false,
@@ -13402,7 +13415,7 @@
             "table": "personal_plan_endings"
         },
         {
-            "value": "\"status\" in ('requested', 'pending', 'succeeded', 'failed', 'none', 'disputed', 'kept') and \"amount\" >= 0 and \"failures\" >= 0",
+            "value": "\"status\" in ('requested', 'pending', 'succeeded', 'failed', 'none', 'disputed') and \"amount\" >= 0 and \"failures\" >= 0",
             "name": "personal_plan_refunds_valid",
             "entityType": "checks",
             "schema": "public",

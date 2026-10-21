@@ -378,7 +378,7 @@ async function periodOrders(ending: billingRepository.PlanEnding) {
     if (isLapsedEnding(ending)) {
         const noted = new Set(
             (await billingRepository.listPlanRefunds(ending.subscriptionId))
-                .filter((row) => row.status !== 'none' && row.status !== 'kept')
+                .filter((row) => row.status !== 'none')
                 .map((row) => row.orderId),
         );
         return page.items.filter((order) => noted.has(order.id));
@@ -1032,13 +1032,22 @@ export async function endPersonalPlans(
                     await billingRepository.releasePlanEndingLease(subscriptionId, owner);
                 }
             }
-            await billingRepository.ensurePlanEnding({
+            const ending = await billingRepository.ensurePlanEnding({
                 subscriptionId,
                 userId,
                 groupId: family.groupId,
                 admittedAt: family.admittedAt,
                 pooledAt,
             });
+            // Rows noted under an ending this one took over, never asked for, take its keys.
+            await billingRepository.rekeyUnattemptedRefunds(
+                (await billingRepository.listPlanRefunds(subscriptionId))
+                    .filter((row) => !row.firstAttemptedAt)
+                    .map((row) => ({
+                        orderId: row.orderId,
+                        refundKey: refundKey(ending, row.orderId),
+                    })),
+            );
         }
         // A lapsed plan is revoked with nothing refunded: no part of what was paid for it is in
         // force (Polar pauses only at a period's end and a resume starts a new period; an unpaid
@@ -1177,12 +1186,23 @@ export async function endPersonalPlans(
             await billingRepository.releasePlanEndingLease(subscriptionId, owner);
         }
     }
-    // Payments on lapsed plans their owner kept: their commission and referral reward.
-    await grantKeptRewards(userId);
     // The plan has ended: its entitlement goes now, not at the next delivery.
     if (revokedAny || refresh) {
         const { reconcileCustomer } = await import('./server');
         await reconcileCustomer(userId);
+    }
+    // Payments on lapsed plans their owner kept: their commission and referral reward. After
+    // the refresh, so a failure here (Polar's orders unreadable) never holds the plans back;
+    // the rewards stay pending, and this job's retry or the daily reconcile grants them.
+    let rewardsFailed = false;
+    try {
+        await grantKeptRewards(userId);
+    } catch (error) {
+        log.warn({
+            message: 'Rewards for a kept payment could not be granted; tried again',
+            billing: { user: userId, status: statusOf(error) },
+        });
+        rewardsFailed = true;
     }
     // Another run holds an ending: this one is retried rather than work it alongside.
     if (busy)
@@ -1192,6 +1212,7 @@ export async function endPersonalPlans(
     // A failure is retried by pg-boss with backoff; a refund owed waits for the daily reconcile.
     if (failed) throw new Error('A personal plan’s refund has not been made yet.');
     if (lapsedFailed) throw new Error('A lapsed personal plan has not been revoked yet.');
+    if (rewardsFailed) throw new Error('A kept payment’s rewards have not been granted yet.');
     return { settled, pending, owed };
 }
 
@@ -1313,6 +1334,8 @@ async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEn
     try {
         const orders = await polar().orders.list({ subscription_id: subscriptionId, limit: 100 });
         const paid = orders.items.filter((order) => order.paid);
+        // Paid and not refunded whole: still paying for something.
+        const holding = paid.filter((order) => order.refunded_amount < order.net_amount);
         await billingRepository.notePaidBeforeRevoke(
             paid.map((order) => ({
                 orderId: order.id,
@@ -1331,12 +1354,13 @@ async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEn
             await drop();
             return false;
         }
-        // An unpaid or incomplete plan with an order of its current period paid: Polar took
-        // the payment but hasn't said so yet. Never revoked as if nothing were paid.
+        // An unpaid or incomplete plan with an order of its current period paid (and not
+        // refunded whole): Polar took the payment but hasn't said so yet. Never revoked as if
+        // nothing were paid. Assumes a failed renewal starts a new period at Polar (unverified).
         const periodStart = Date.parse(now.current_period_start) - PERIOD_SLACK_MS;
         if (
             now.status !== 'paused' &&
-            paid.some((order) => Date.parse(order.created_at) >= periodStart)
+            holding.some((order) => Date.parse(order.created_at) >= periodStart)
         ) {
             log.warn({
                 message: 'A lapsed personal plan has a payment for its period; not revoked',

@@ -1191,17 +1191,13 @@ const unworkedRefund = (subscriptionId: string) =>
     );
 
 /*
- * Settles a plan's unworked refund rows as `none` (nothing owed on them), or `kept` (its
- * owner's, rewards still to grant); returns their orders.
+ * Settles a plan's unworked refund rows as `none` (nothing owed on them); `kept`: they are
+ * its owner's, their rewards still to grant (`rewards_pending`). Returns their orders.
  */
-async function clearUnworkedRefunds(
-    tx: Tx,
-    subscriptionId: string,
-    status: 'none' | 'kept' = 'none',
-) {
+async function clearUnworkedRefunds(tx: Tx, subscriptionId: string, kept = false) {
     const rows = await tx
         .update(personalPlanRefunds)
-        .set({ status, updatedAt: new Date() })
+        .set({ status: 'none', rewardsPending: kept, updatedAt: new Date() })
         .where(unworkedRefund(subscriptionId))
         .returning({ orderId: personalPlanRefunds.orderId });
     return rows.map((row) => row.orderId);
@@ -1265,10 +1261,11 @@ export async function beginLapsedRevoke(input: {
 /*
  * An ending HushOS gives up on: the plan stays its owner's (they left the family before
  * it was revoked, or a lapsed plan's revoke never landed). Its unworked refund rows are
- * marked `kept` in the same transaction: never refunded by a later ending of the plan,
- * and their commission and referral reward, which the payment delivery held back, are
- * still owed (grantKeptRewards, then `none`), so a failure granting them loses nothing.
- * Returns those rows' orders.
+ * settled `none` in the same transaction, never refunded by a later lapsed ending of the
+ * plan, and marked `rewards_pending`: their commission and referral reward, which the
+ * payment delivery held back, are still owed (grantKeptRewards), so a failure granting
+ * them loses nothing, and a family ending that later refunds part of the order (moving
+ * its status on) doesn't erase them. Returns those rows' orders.
  */
 export async function dropPlanEnding(subscriptionId: string) {
     return db.transaction(async (tx) => {
@@ -1276,7 +1273,7 @@ export async function dropPlanEnding(subscriptionId: string) {
             .update(personalPlanEndings)
             .set({ outcome: 'dropped', updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
-        return clearUnworkedRefunds(tx, subscriptionId, 'kept');
+        return clearUnworkedRefunds(tx, subscriptionId, true);
     });
 }
 
@@ -1292,7 +1289,12 @@ export async function listKeptPayments(userId: string) {
             personalPlanEndings,
             eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
         )
-        .where(and(eq(personalPlanEndings.userId, userId), eq(personalPlanRefunds.status, 'kept')));
+        .where(
+            and(
+                eq(personalPlanEndings.userId, userId),
+                eq(personalPlanRefunds.rewardsPending, true),
+            ),
+        );
 }
 
 /* People with a kept payment whose rewards are still to grant: the daily reconcile's. */
@@ -1304,7 +1306,7 @@ export async function listUsersWithKeptPayments() {
             personalPlanEndings,
             eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
         )
-        .where(eq(personalPlanRefunds.status, 'kept'));
+        .where(eq(personalPlanRefunds.rewardsPending, true));
     return rows.map((row) => row.userId);
 }
 
@@ -1312,10 +1314,26 @@ export async function listUsersWithKeptPayments() {
 export async function settleKeptPayment(orderId: string) {
     await db
         .update(personalPlanRefunds)
-        .set({ status: 'none', updatedAt: new Date() })
-        .where(
-            and(eq(personalPlanRefunds.orderId, orderId), eq(personalPlanRefunds.status, 'kept')),
-        );
+        .set({ rewardsPending: false, updatedAt: new Date() })
+        .where(eq(personalPlanRefunds.orderId, orderId));
+}
+
+/*
+ * Gives a plan's refund rows that were never asked for the keys of the ending now working
+ * it (a family's, taking over one a lapsed revoke dropped), so its refunds carry, and are
+ * matched by, that ending's key.
+ */
+export async function rekeyUnattemptedRefunds(rows: { orderId: string; refundKey: string }[]) {
+    for (const row of rows)
+        await db
+            .update(personalPlanRefunds)
+            .set({ refundKey: row.refundKey, updatedAt: new Date() })
+            .where(
+                and(
+                    eq(personalPlanRefunds.orderId, row.orderId),
+                    isNull(personalPlanRefunds.firstAttemptedAt),
+                ),
+            );
 }
 
 /*
