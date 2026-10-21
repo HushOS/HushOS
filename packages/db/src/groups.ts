@@ -1886,7 +1886,9 @@ export async function storeGrants(input: {
 
 export type LeaveResult =
     | { status: 'left' | 'dissolved' }
-    | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' };
+    | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' }
+    /* `mustDissolve`, and the leave would not dissolve the family: nothing was written. */
+    | { status: 'not-last' };
 
 /*
  * Whether the family has a plan someone is still paying for: live, and not set
@@ -2037,7 +2039,15 @@ export async function deletionBlockers(userId: string) {
  * areas they could open due for rotation, and a departure every other roster
  * waits on until one marks them left.
  */
-export async function leaveGroup(groupId: string, userId: string): Promise<LeaveResult> {
+export async function leaveGroup(
+    groupId: string,
+    userId: string,
+    /*
+     * Only a leave that dissolves the family (its last member's): the caller let a plan run on
+     * that condition (the dissolved family's job ends it). Any other is rolled back, `not-last`.
+     */
+    options: { mustDissolve?: boolean } = {},
+): Promise<LeaveResult> {
     return answering<LeaveResult>(
         () =>
             db.transaction(async (tx): Promise<LeaveResult> => {
@@ -2046,7 +2056,10 @@ export async function leaveGroup(groupId: string, userId: string): Promise<Leave
                 await lockAreas(tx, groupId);
                 // Leaving takes the member's own files out of the family's pool (3.6).
                 if (group.kind === 'family') await lockPool(tx, groupId);
-                return depart(tx, groupId, userId);
+                const result = await depart(tx, groupId, userId);
+                if (options.mustDissolve && result.status === 'left')
+                    return refuse({ status: 'not-last' });
+                return result;
             }),
         async () => ({ status: 'unavailable' }),
     );

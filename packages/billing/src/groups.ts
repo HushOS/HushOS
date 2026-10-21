@@ -692,10 +692,15 @@ async function setDissolvedToEnd(
                         if (error instanceof LapsedRevokeError && error.reason === 'held')
                             return 'busy' as const;
                         const status = statusOf(error);
+                        // Too many requests, or a plan Polar is working on: a retry fixes it, so
+                        // pg-boss retries; only a refusal that needs the plan to change is recorded.
+                        const transient =
+                            status === 429 ||
+                            (status === 409 && polarErrorName(error) === 'SubscriptionLocked');
                         const refusal =
                             error instanceof LapsedRevokeError
                                 ? `paid-period:${current.status}`
-                                : status !== null && status < 500
+                                : !transient && status !== null && status < 500
                                   ? (polarErrorName(error) ?? `status:${status}`)
                                   : null;
                         if (refusal === null) throw unavailable(error);
@@ -1431,20 +1436,33 @@ export async function endLapsedPlansPaidBy(groupId: string, userId: string) {
 /*
  * endLapsedFamilyPlans before a payer goes (a leave, a removal, a deletion). A plan that came back
  * to life between the lookup and its revoke (paid or resumed in the portal at that moment) isn't
- * revoked (revokeLapsed lets it go, as the family's plan); endLapsedFamilyPlans then read the
- * family again, so the mirror says so, and the departure is refused (`live`) rather than leave a
- * running plan on the card of someone gone. The last member leaving (`dissolving`) may go: the
- * dissolved family's job sets it to end.
+ * revoked (revokeLapsed lets it go, as the family's plan). Each plan is read again at Polar, never
+ * from the mirror (which never holds a plan of an unreadable product as live), and one live and
+ * not set to end refuses the departure (`live`) rather than leave it running on the card of
+ * someone gone. The last member leaving (`dissolving`) may go, since the dissolved family's job
+ * sets it to end: the answer is then `live: true`, and the caller's write must dissolve the
+ * family, or the leave is refused after all (leaveGroup's `mustDissolve`).
  */
 export async function endLapsedPlansForDeparture(
     groupId: string,
-    payerId: string,
+    _payerId: string,
     plans: LapsedFamilyPlan[],
     options: { dissolving?: boolean } = {},
 ) {
     await endLapsedFamilyPlans(groupId, plans);
-    if (plans.length && !options.dissolving && (await paysForGroup(groupId, payerId)))
-        throw new LapsedFamilyPlanError('live', plans[0]!.name);
+    let live = false;
+    for (const plan of plans) {
+        let now: models.Subscription;
+        try {
+            now = await polar().subscriptions.get(plan.id);
+        } catch (error) {
+            if (statusOf(error) === 404) continue;
+            throw refusedRead(groupId, error);
+        }
+        if (!now.ended_at && LIVE.has(now.status) && !now.cancel_at_period_end) live = true;
+    }
+    if (live && !options.dissolving) throw new LapsedFamilyPlanError('live', plans[0]!.name);
+    return { live };
 }
 
 /*
