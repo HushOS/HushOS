@@ -1261,11 +1261,19 @@ export type LapsedFamilyPlan = { id: string; name: string; status: string; creat
  * plan-ending job is working its ending), `waiting` (an `incomplete` plan younger than
  * INCOMPLETE_WAIT_MS: a checkout still waiting on the bank), `refused` (any other 4xx; the
  * plan stays the family's), `unavailable` (a 5xx or no answer; the ending is kept, since the
- * revoke may have landed). Each caller says it in its own words.
+ * revoke may have landed), `live` (Polar shows the family's plan running again: paid in the
+ * portal just now, before its delivery reached HushOS). Each caller says it in its own words.
  */
 export class LapsedFamilyPlanError extends Error {
     constructor(
-        readonly reason: 'locked' | 'paid' | 'held' | 'waiting' | 'refused' | 'unavailable',
+        readonly reason:
+            | 'locked'
+            | 'paid'
+            | 'held'
+            | 'waiting'
+            | 'refused'
+            | 'unavailable'
+            | 'live',
         readonly plan: string,
         options?: { cause?: unknown },
     ) {
@@ -1284,8 +1292,24 @@ export class LapsedFamilyPlanError extends Error {
  * pays for (a leave, a removal, a deletion); without it, any. `liveAgain`: one of them is
  * live at Polar again (paid in the portal), which the mirror may not know yet.
  */
+/*
+ * Polar refusing to list or read a family's plans for the lapsed-plan lookup: unavailable to
+ * the caller (a checkout, a leave, a removal, a deletion answers 503), and a 4xx other than 404
+ * (a token without the scope, a request Polar rejects) logged at error level each time, since
+ * one that lasts would refuse every such change for every family until an operator fixes it.
+ */
+function refusedRead(groupId: string, error: unknown) {
+    const status = statusOf(error);
+    if (status !== null && status >= 400 && status < 500)
+        log.error({
+            message: 'Polar refused to read a family’s plans; checkouts, leaves and removals wait',
+            billing: { group: groupId, status, error: polarErrorName(error) },
+        });
+    return unavailable(error);
+}
+
 export async function findLapsedFamilyPlans(groupId: string, options: { payer?: string } = {}) {
-    const none = { plans: [] as LapsedFamilyPlan[], liveAgain: false };
+    const none = { plans: [] as LapsedFamilyPlan[], liveAgain: false, charging: false };
     if (!billingEnabled() || !UUID.test(groupId)) return none;
     const customer = await billingRepository.getGroupCustomer(groupId);
     if (options.payer !== undefined && customer?.payerUserId !== options.payer) return none;
@@ -1300,7 +1324,7 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
                 })
             ).items;
         } catch (error) {
-            if (statusOf(error) !== 404) throw unavailable(error);
+            if (statusOf(error) !== 404) throw refusedRead(groupId, error);
         }
         // Every plan listed that can charge: a lapsed one to end, and a live one the mirror
         // missed (past due, which Polar's customer state doesn't list), which is the family's plan.
@@ -1313,13 +1337,15 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
     }
     const found: LapsedFamilyPlan[] = [];
     let liveAgain = false;
+    // Live and not set to end: it charges again (a leave, a removal or a deletion would leave it so).
+    let charging = false;
     for (const id of ids) {
         let subscription: models.Subscription;
         try {
             subscription = await polar().subscriptions.get(id);
         } catch (error) {
             if (statusOf(error) === 404) continue;
-            throw unavailable(error);
+            throw refusedRead(groupId, error);
         }
         const plan = await planOf(subscription.product_id);
         const held = await billingRepository.getGroupSubscription(id);
@@ -1332,6 +1358,7 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
         if (subscription.ended_at || !LAPSED.has(subscription.status)) {
             if (!subscription.ended_at && LIVE.has(subscription.status)) {
                 liveAgain = true;
+                if (!subscription.cancel_at_period_end) charging = true;
                 if (!held && plan) await applyChanged(groupId, subscription, false);
             }
             continue;
@@ -1345,7 +1372,7 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
             createdAt: Date.parse(subscription.created_at),
         });
     }
-    return { plans: found, liveAgain };
+    return { plans: found, liveAgain, charging };
 }
 
 /*
@@ -1406,8 +1433,21 @@ export async function endLapsedPlansPaidBy(groupId: string, userId: string) {
  * removal to have confirmed before endLapsedFamilyPlans ends them. One still waiting on the bank
  * is refused here (`waiting`), before anyone is asked to confirm ending it.
  */
-export async function lapsedPlansPaidBy(groupId: string, userId: string) {
-    const { plans } = await findLapsedFamilyPlans(groupId, { payer: userId });
+export async function lapsedPlansPaidBy(
+    groupId: string,
+    userId: string,
+    /* The last member leaving: the dissolved family's job sets a live plan to end, as for any. */
+    options: { dissolving?: boolean } = {},
+) {
+    const { plans, charging } = await findLapsedFamilyPlans(groupId, { payer: userId });
+    // Paid again at Polar a moment ago (its delivery not in yet): a live plan on their card, not
+    // set to end, which a leave, a removal or a deletion would leave charging. Refused, and the
+    // family read again so its page shows the plan. (One set to end charges no more: as for any
+    // cancelled plan, its payer may go.)
+    if (charging && !options.dissolving) {
+        await reconcileGroup(groupId);
+        throw new LapsedFamilyPlanError('live', plans[0]?.name ?? 'family');
+    }
     for (const plan of plans)
         if (plan.status === 'incomplete' && Date.now() - plan.createdAt < INCOMPLETE_WAIT_MS)
             throw new LapsedFamilyPlanError('waiting', plan.name);
@@ -1452,6 +1492,9 @@ function checkoutRefusal(error: LapsedFamilyPlanError) {
             return new BillingError('Billing is temporarily unavailable. Please try again.', 503, {
                 cause: error,
             });
+        // A checkout refuses a live plan before it ends anything; never from this path.
+        case 'live':
+            return new BillingError('This family already has a plan.', 409, { cause: error });
     }
 }
 
@@ -1484,6 +1527,10 @@ export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError, who: 'payer
             return self
                 ? `The family’s ${name} plan couldn’t be ended just now, and it is still on your card. Try again in a few minutes.`
                 : `The family’s ${name} plan couldn’t be ended just now, and it is still on their card. Try again in a few minutes.`;
+        case 'live':
+            return self
+                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it in Billing on the family’s page first; it may take a minute to show there.'
+                : 'They pay for the family’s plan, which was just paid for again. They can cancel it in Billing on the family’s page; then you can remove them.';
     }
 }
 
@@ -2405,12 +2452,19 @@ async function usageFor(groupId: string, userId: string): Promise<FamilyUsage> {
     };
 }
 
+/*
+ * What the page calls a family plan whose product the catalogue can't read (archived, edited):
+ * a neutral name, never Polar's raw product id (recordUnreadGroupSubscription stores that, as
+ * its mark).
+ */
+export const UNREAD_PLAN_NAME = 'Family plan';
+
 /* The family's plan Polar still holds that gives nothing, as the page names it (FamilyLapsedPlan). */
 async function lapsedOf(groupId: string): Promise<FamilyLapsedPlan | null> {
     const row = await billingRepository.getLapsedGroupSubscription(groupId);
     if (!row) return null;
     return {
-        productName: row.productName,
+        productName: row.productName === row.productId ? UNREAD_PLAN_NAME : row.productName,
         standing: row.status === 'paused' ? 'paused' : 'payment-failed',
         ids: await billingRepository.listLapsedGroupSubscriptionIds(groupId),
     };
@@ -2421,10 +2475,12 @@ async function lapsedGlanceOf(groupId: string, userId: string): Promise<FamilyLa
     const lapsed = await lapsedOf(groupId);
     if (!lapsed) return null;
     const customer = await billingRepository.getGroupCustomer(groupId);
+    const youPay = customer?.payerUserId === userId;
     return {
         productName: lapsed.productName,
         standing: lapsed.standing,
-        youPay: customer?.payerUserId === userId,
+        youPay,
+        ...(youPay ? { ids: lapsed.ids } : {}),
     };
 }
 

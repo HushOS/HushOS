@@ -23,3 +23,21 @@ export function leaveBlocker(
     if (me.roles.includes('members') && !holds('members')) return MANAGER_FIRST;
     return null;
 }
+
+/*
+ * Why this person can't be removed, by the write's own rule (packages/db `applyRoster`'s
+ * `no-billing`): the family's only `billing` holder, whom the member list then doesn't offer to
+ * remove. The server stays the judge, and refuses it before anything ends (a lapsed plan they
+ * pay for included).
+ */
+export function removeBlocker(
+    targetId: string,
+    who: string,
+    members: readonly { userId: string; state: string; roles: readonly string[] }[],
+): string | null {
+    const active = members.filter((member) => member.state === 'active');
+    const target = active.find((member) => member.userId === targetId);
+    if (!target?.roles.includes('billing')) return null;
+    if (active.some((member) => member !== target && member.roles.includes('billing'))) return null;
+    return `${who} is the only one who manages the family’s plan. Make someone else the organizer first.`;
+}

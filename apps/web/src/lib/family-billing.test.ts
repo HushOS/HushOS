@@ -11,7 +11,7 @@ import {
     nextCharge,
     placesOf,
     lapsedPlanEndsLine,
-    removedPlanEndsLine,
+    lapsedEndsWords,
     planState,
     quoteAdd,
     removeRange,
@@ -667,8 +667,26 @@ describe('lapsedPlanEndsLine', () => {
     });
 
     test('the removal’s words for a plan the server named', () => {
-        expect(removedPlanEndsLine('F', 'Maya', 'Family Pro (monthly)', 'payment-failed')).toBe(
+        expect(
+            lapsedEndsWords('F', [{ name: 'Family Pro (monthly)', standing: 'payment-failed' }], {
+                you: false,
+                name: 'Maya',
+            }),
+        ).toBe(
             'Maya pays for F’s Family Pro plan, whose payment didn’t go through. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Every plan named, and the neutral name of one HushOS can't read said as a plan once.
+        expect(
+            lapsedEndsWords(
+                'F',
+                [
+                    { name: 'Family Pro (monthly)', standing: 'paused' },
+                    { name: 'Family plan', standing: 'payment-failed' },
+                ],
+                { you: true },
+            ),
+        ).toBe(
+            'F’s Family Pro and Family plans, which you pay for and which give nothing now, end at once when you leave. Nothing of them is refunded: no part of them is in use.',
         );
     });
 });

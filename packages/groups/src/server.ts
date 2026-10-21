@@ -28,7 +28,6 @@ import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
 import {
     billingEnabled,
     endLapsedFamilyPlans,
-    endLapsedPlansPaidBy,
     ensureGroupSeat,
     familyHasPlan,
     LapsedFamilyPlanError,
@@ -906,10 +905,16 @@ async function writeChain(
         admitIdentity?: string;
         /*
          * Runs once every check has passed and before anything is written: an
-         * admission's paid place, a removal's lapsed plan. Given the checked roster and
-         * the stored one before it. It throws to stop the write.
+         * admission's paid place, a removal's lapsed plan. It throws to stop the write.
          */
-        beforeAppend?: (rosters: { next: Roster; last: Roster }) => Promise<void>;
+        beforeAppend?: () => Promise<void>;
+        /*
+         * The write's own rules run first in a rolled-back transaction (appendChain's
+         * `preview`), and beforeAppend only once they pass: a removal never ends a plan the
+         * write then refuses (the last `billing` holder, a member list a departure overtook).
+         * Only a race between the preview and the write remains.
+         */
+        previewFirst?: boolean;
         /* The delete route's area: its tombstone, at the version after the chain's latest. */
         retireArea?: string;
     } = {},
@@ -1017,8 +1022,7 @@ async function writeChain(
         route.kind === 'admit' ? route.userId : null,
         options.retireArea ?? null,
     );
-    await options.beforeAppend?.({ next: checked.roster, last: chain.roster });
-    const result = await groupsRepository.appendChain({
+    const write = {
         groupId,
         uploaderUserId: uploader,
         expectedRevision: call.expectedRevision,
@@ -1029,7 +1033,13 @@ async function writeChain(
         grants,
         rotations,
         cache: storedRecord(after),
-    });
+    };
+    if (options.previewFirst) {
+        const would = await groupsRepository.appendChain({ ...write, preview: true });
+        if (would.status !== 'ok') return chainAnswer(would);
+    }
+    await options.beforeAppend?.();
+    const result = await groupsRepository.appendChain(write);
     if (result.status === 'ok') await budget.charge();
     return chainAnswer(result);
 }
@@ -2054,8 +2064,11 @@ export async function removeMember(
     groupId: string,
     targetId: string,
     call: RosterCall & {
-        /* The remover confirmed that the plan the person pays for, which gives nothing, ends. */
-        endsLapsed?: boolean;
+        /*
+         * The plans the person pays for that give nothing (their subscription ids, as route 19's
+         * `ends-lapsed` or the removal preview named them) that the remover confirmed end.
+         */
+        endsLapsed?: string[];
     },
 ) {
     // The payer of a live plan stays until they cancel it: their card would go on being charged.
@@ -2066,9 +2079,11 @@ export async function removeMember(
             409,
         );
     // One that gives nothing (unpaid, incomplete, paused) is ended once the removal is certain:
-    // after every check (the remover holds `members`, the roster is current and valid), right
-    // before it is written, and only once the remover has confirmed it. A refused or stale
-    // removal ends nothing.
+    // after every check of the call and every rule of the write (run first and rolled back), right
+    // before it is written, and only once the remover has confirmed every such plan. A removal
+    // the write refuses (the family's only `billing` holder, a member list a departure overtook)
+    // ends nothing. A race between that preview and the write can still refuse it after the
+    // revoke; the client's retry then removes them.
     const { endsLapsed, ...roster } = call;
     return writeChain(
         groupId,
@@ -2076,50 +2091,38 @@ export async function removeMember(
         roster,
         { kind: 'remove', userId: targetId },
         {
-            beforeAppend: async ({ next, last }) => {
-                // Only a removal the write will take: the person marked left on the new roster and
-                // active on the last, and every departure already recorded marked left (the write's
-                // own remove-entry and left-due checks). Any other is refused by the write with
-                // nothing ended. A race inside the write's lock (someone leaving meanwhile) can
-                // still refuse it after the revoke; the client's retry then removes them.
-                if (
-                    rosterEntry(next, targetId)?.status !== 'left' ||
-                    !activeWith(rosterEntry(last, targetId))
-                )
-                    return;
-                const departures = await groupsRepository.listDepartures(groupId);
-                if (departures.some((row) => rosterEntry(next, row.userId)?.status !== 'left'))
-                    return;
-                await endRemovedPayersLapsedPlan(groupId, targetId, endsLapsed === true);
-            },
+            previewFirst: true,
+            beforeAppend: () => endPayersLapsedPlan(groupId, targetId, 'They', endsLapsed),
         },
     );
 }
 
 /*
- * A removal's half of endPayersLapsedPlan: the plan is named and nothing ended until the remover
- * has confirmed it (`ends-lapsed`, with the plan's name and standing for the dialog's words).
+ * Route 19's question before a removal starts (before a demotion, a hold or a walk): the plans
+ * the person pays for that give nothing, which removing them ends, for the dialog to confirm
+ * first. Refused, with words, when they can't be ended (a checkout waiting on the bank, a plan
+ * paid again just now); empty when there is none. For someone who holds `members`.
  */
-async function endRemovedPayersLapsedPlan(groupId: string, payerId: string, confirmed: boolean) {
+export async function removalPreview(userId: string, groupId: string, targetId: string) {
+    await membershipOf(groupId, userId, 'members');
+    if (await paysForGroup(groupId, targetId)) return { plans: [] };
     try {
-        const plans = await lapsedPlansPaidBy(groupId, payerId);
-        if (plans.length && !confirmed)
-            throw new GroupError(
-                'ends-lapsed',
-                `They pay for the family’s ${plans.map((plan) => plan.name).join(' and ')} plan, which gives nothing now. It ends at once when they’re removed.`,
-                409,
-                {
-                    plan: plans[0]!.name,
-                    standing: plans.some((plan) => plan.status === 'paused')
-                        ? 'paused'
-                        : 'payment-failed',
-                },
-            );
-        await endLapsedFamilyPlans(groupId, plans);
+        return lapsedAnswer(await lapsedPlansPaidBy(groupId, targetId));
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError('payer', lapsedPlanStaysRefusal(error, 'remover'), 409);
     }
+}
+
+/* The lapsed plans someone pays for, as an `ends-lapsed` answer names them for the dialog. */
+function lapsedAnswer(plans: { id: string; name: string; status: string }[]) {
+    return {
+        plans: plans.map((plan) => ({
+            id: plan.id,
+            name: plan.name,
+            standing: plan.status === 'paused' ? ('paused' as const) : ('payment-failed' as const),
+        })),
+    };
 }
 
 /*
@@ -2128,9 +2131,30 @@ async function endRemovedPayersLapsedPlan(groupId: string, payerId: string, conf
  * first, a payment taken afterwards refunded whole), so it can't resume or be paid on the
  * card of someone no longer in the family. One that can't be ended stops the change.
  */
-async function endPayersLapsedPlan(groupId: string, payerId: string, who: 'You' | 'They') {
+async function endPayersLapsedPlan(
+    groupId: string,
+    payerId: string,
+    who: 'You' | 'They',
+    confirmed: string[] | undefined,
+    options: { dissolving?: boolean } = {},
+) {
     try {
-        await endLapsedPlansPaidBy(groupId, payerId);
+        const plans = await lapsedPlansPaidBy(groupId, payerId, options);
+        // Every one must be among those the person confirmed (by id): nothing ends unseen, and
+        // one found since the dialog was shown is asked about again.
+        const seen = new Set(confirmed ?? []);
+        if (plans.some((plan) => !seen.has(plan.id))) {
+            const names = plans.map((plan) => plan.name).join(' and ');
+            throw new GroupError(
+                'ends-lapsed',
+                who === 'You'
+                    ? `You pay for the family’s ${names} plan, which gives nothing now. It ends at once when you leave.`
+                    : `They pay for the family’s ${names} plan, which gives nothing now. It ends at once when they’re removed.`,
+                409,
+                lapsedAnswer(plans),
+            );
+        }
+        await endLapsedFamilyPlans(groupId, plans);
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError(
@@ -2154,13 +2178,20 @@ const youPay = () =>
  * would dissolve it: their card would go on being charged for a family they
  * are not in. They hand billing over or cancel the plan first.
  */
-export async function leave(userId: string, groupId: string) {
+export async function leave(
+    userId: string,
+    groupId: string,
+    /* The lapsed plans they pay for that they confirmed end (ids, as `ends-lapsed` names them). */
+    body: { endsLapsed?: string[] } = {},
+) {
     if (await paysForGroup(groupId, userId)) throw youPay();
-    // The leave's own rule first (its refusals end nothing), then the payer's lapsed plan, then
-    // the leave.
+    // The leave's own rule first (its refusals end nothing), then the payer's lapsed plan, once
+    // confirmed, then the leave.
     const preview = await groupsRepository.previewLeave(groupId, userId);
     if (preview.status !== 'left' && preview.status !== 'dissolved') return leaveAnswer(preview);
-    await endPayersLapsedPlan(groupId, userId, 'You');
+    await endPayersLapsedPlan(groupId, userId, 'You', body.endsLapsed, {
+        dissolving: preview.status === 'dissolved',
+    });
     return leaveAnswer(await groupsRepository.leaveGroup(groupId, userId), groupId);
 }
 

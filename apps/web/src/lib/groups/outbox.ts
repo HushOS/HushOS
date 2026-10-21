@@ -55,8 +55,8 @@ export type ChainRoute =
     | { kind: 'rosters' }
     | { kind: 'admit'; userId: string }
     | { kind: 'member'; userId: string }
-    /* `endsLapsed`: sent with the call (route 19's confirmation of a lapsed plan ending). */
-    | { kind: 'remove'; userId: string; endsLapsed?: true }
+    /* `endsLapsed`: sent with the call (route 19's confirmation, by id, of the lapsed plans it ends). */
+    | { kind: 'remove'; userId: string; endsLapsed?: string[] }
     | { kind: 'areas' }
     | { kind: 'rotation'; workspaceId: string }
     /* Deleting a family folder (groups design 2.10). */
@@ -226,7 +226,7 @@ function send(ctx: GroupContext, entry: OutboxEntry): Promise<ChainHead | null> 
             return ctx.api.removeMember(
                 groupId,
                 route.userId,
-                route.endsLapsed ? { ...call, endsLapsed: true } : call,
+                route.endsLapsed ? { ...call, endsLapsed: route.endsLapsed } : call,
             );
         case 'areas':
             return ctx.api.createArea(groupId, call);
@@ -702,8 +702,10 @@ export async function flushOutbox(ctx: GroupContext, groupId: string) {
 const ROUTES: Record<GroupStageOp['kind'], (op: GroupStageOp) => ChainRoute> = {
     admit: (op) => ({ kind: 'admit', userId: (op as { userId: string }).userId }),
     remove: (op) => {
-        const { userId, endsLapsed } = op as { userId: string; endsLapsed?: true };
-        return endsLapsed ? { kind: 'remove', userId, endsLapsed } : { kind: 'remove', userId };
+        const { userId, endsLapsed } = op as { userId: string; endsLapsed?: string[] };
+        return endsLapsed?.length
+            ? { kind: 'remove', userId, endsLapsed }
+            : { kind: 'remove', userId };
     },
     roles: (op) => ({ kind: 'member', userId: (op as { userId: string }).userId }),
     markLeft: () => ({ kind: 'rosters' }),

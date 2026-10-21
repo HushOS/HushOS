@@ -52,6 +52,7 @@ import { cue } from '@/lib/sounds';
 import { LetInDialog } from './let-in-dialog';
 import { RemoveDialog } from './remove-dialog';
 import { WordList } from './word-list';
+import { removeBlocker } from '@/lib/family-leave';
 
 /*
  * The family page's three lists: who waits to join (for managers, each with
@@ -254,6 +255,11 @@ export function MemberList({
         .sort((a, b) => organizer(a) - organizer(b));
     const me = active.find((member) => member.userId === userId);
     const iAmOrganizer = me ? rolesOf(me).includes('billing') : false;
+    // The family's only `billing` holder can't be removed (the server refuses it): someone else
+    // must manage the plan first, so the menu says that instead of offering the removal.
+    const withRoles = active.map((member) => ({ ...member, roles: rolesOf(member) }));
+    const removeBlocked = (member: FamilyMember) =>
+        removeBlocker(member.userId, firstName(member.name), withRoles);
 
     async function apply(change: RoleChange) {
         const ctx = familyContext(userId);
@@ -393,12 +399,25 @@ export function MemberList({
                                             </DropdownMenuGroup>
                                             <DropdownMenuSeparator />
                                             <DropdownMenuGroup>
-                                                <DropdownMenuItem
-                                                    variant="destructive"
-                                                    onClick={() => setRemoving(member)}
-                                                >
-                                                    Remove from family
-                                                </DropdownMenuItem>
+                                                {removeBlocked(member) ? (
+                                                    <DropdownMenuItem
+                                                        disabled
+                                                        data-remove-blocked="last-billing"
+                                                        className="flex-col items-start gap-0.5"
+                                                    >
+                                                        <span>Remove from family</span>
+                                                        <span className="text-xs text-muted-foreground">
+                                                            {removeBlocked(member)}
+                                                        </span>
+                                                    </DropdownMenuItem>
+                                                ) : (
+                                                    <DropdownMenuItem
+                                                        variant="destructive"
+                                                        onClick={() => setRemoving(member)}
+                                                    >
+                                                        Remove from family
+                                                    </DropdownMenuItem>
+                                                )}
                                             </DropdownMenuGroup>
                                         </DropdownMenuContent>
                                     </DropdownMenu>

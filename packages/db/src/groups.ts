@@ -1402,6 +1402,11 @@ export async function appendChain(input: {
     rotations?: RotationInput[];
     /* The chain cache as of the new head, from the caller's checks. */
     cache: unknown;
+    /*
+     * Every rule run under the lock, then rolled back: what the write would answer now, with
+     * nothing written (a removal asks it before it ends a plan the write might then refuse).
+     */
+    preview?: boolean;
 }): Promise<ChainResult> {
     const { groupId, uploaderUserId: uploader, route, roster, succession } = input;
     if (route.kind === 'succession' ? roster || !succession : !roster)
@@ -1625,6 +1630,8 @@ export async function appendChain(input: {
                     })
                     .where(eq(groups.id, groupId));
                 await writeCache(tx, groupId, head.revision, input.cache);
+                // A preview's answer, with everything it wrote rolled back.
+                if (input.preview) return refuse({ status: 'ok', ...head });
                 return { status: 'ok' as const, ...head };
             }),
         () => staleResult(db, groupId, roster, succession),

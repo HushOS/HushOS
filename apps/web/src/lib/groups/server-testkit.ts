@@ -81,6 +81,8 @@ export async function familyServer() {
     const members = new Map<string, Member>();
     const departures: string[] = [];
     const holds: { userId: string; heldBy: string }[] = [];
+    /* The plans the removal preview names (route 19, asked first), as a test sets them. */
+    const lapsedPlans: { id: string; name: string; standing: 'payment-failed' | 'paused' }[] = [];
     const scripted = new Map<string, GroupApiError[]>();
     const log: { route: string; body?: unknown }[] = [];
     /* Who is asking: the account a test drives. */
@@ -312,6 +314,11 @@ export async function familyServer() {
             apply('member', call),
         removeMember: (_groupId: string, _userId: string, call: RosterCallBody) =>
             apply('remove', call),
+        removalPreview: async (_groupId: string, userId: string) => {
+            log.push({ route: 'remove-preview', body: { userId } });
+            refuseFirst('remove-preview');
+            return { plans: lapsedPlans.slice() };
+        },
         postRoster: (_groupId: string, call: RosterCallBody) => apply('rosters', call),
         rotateArea: (_groupId: string, _workspaceId: string, call: RosterCallBody) =>
             apply('rotation', call),
@@ -494,6 +501,7 @@ export async function familyServer() {
         members,
         departures,
         holds,
+        lapsedPlans,
         log,
         walked,
         rotations,

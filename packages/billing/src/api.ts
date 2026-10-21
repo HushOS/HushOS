@@ -75,6 +75,8 @@ export type FamilyLapsedGlance = {
     standing: 'payment-failed' | 'paused';
     /* This person pays for it: it ends at once when they leave. */
     youPay: boolean;
+    /* Only for the person who pays: every such plan's id, to confirm the leave by. */
+    ids?: string[];
 };
 
 /*

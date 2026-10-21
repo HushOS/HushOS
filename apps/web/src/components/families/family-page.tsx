@@ -38,14 +38,15 @@ import {
     pendingQueryOptions,
     useFamilySync,
 } from '@/lib/families';
-import { groupsApi } from '@/lib/groups/api';
+import { GroupApiError, groupsApi, lapsedPlansIn } from '@/lib/groups/api';
 import { familySynced } from '@/lib/families-keys';
 import type { GroupNotice } from '@/lib/groups/context';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
 import {
     familyBillingQueryOptions,
-    lapsedPlanEndsLine,
+    lapsedEndsWords,
+    lapsedPlanShown,
     paymentNeedsYou,
     placesOf,
 } from '@/lib/family-billing';
@@ -461,7 +462,11 @@ function LeaveDialog({
     const own = storage.data?.pool?.groupId === groupId ? storage.data.own : null;
     const over = own !== null && BigInt(own.usedBytes) > BigInt(own.allowanceBytes);
     const billing = useQuery(familyBillingQueryOptions(userId, groupId));
-    const planLine = lapsedPlanEndsLine(billing.data, family, { userId, you: true });
+    const planShown = lapsedPlanShown(billing.data, { userId, you: true });
+    // The plans the server named when the leave asked (`ends-lapsed`): said, and confirmed by id.
+    const [asked, setAsked] = useState<{ line: string; ids: string[] } | null>(null);
+    const planLine =
+        asked?.line ?? (planShown ? lapsedEndsWords(family, [planShown], { you: true }) : null);
     const ownLine = !own
         ? null
         : over
@@ -472,7 +477,7 @@ function LeaveDialog({
         setBusy(true);
         setError('');
         try {
-            await groupsApi.leave(groupId);
+            await groupsApi.leave(groupId, { endsLapsed: asked?.ids ?? planShown?.ids ?? [] });
             // This device forgets the family (chain, keys, records, outbox, folder mirrors); the
             // settings pin stays as a mark (D7). Its folders' clients go with it.
             const ctx = familyContext(userId);
@@ -503,6 +508,15 @@ function LeaveDialog({
             await afterMembershipChange(queryClient, userId);
             await navigate({ to: '/app/drive', replace: true });
         } catch (cause) {
+            // A plan the page didn't show (or one since): said now, and the next press ends it.
+            if (cause instanceof GroupApiError && cause.code === 'ends-lapsed') {
+                const plans = lapsedPlansIn(cause.data);
+                setAsked({
+                    line: lapsedEndsWords(family, plans, { you: true }),
+                    ids: plans.map((plan) => plan.id),
+                });
+                return;
+            }
             cue('error');
             setError(errorCopy(cause, { family }));
         } finally {
