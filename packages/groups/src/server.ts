@@ -2109,7 +2109,7 @@ export async function removalPreview(userId: string, groupId: string, targetId: 
     // A live plan stops the removal before anything starts (a demotion, a hold, a walk).
     if (await paysForGroup(groupId, targetId)) throw paysForPlan();
     try {
-        return lapsedAnswer(await lapsedPlansPaidBy(groupId, targetId));
+        return lapsedAnswer((await lapsedPlansPaidBy(groupId, targetId)).plans);
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError('payer', lapsedPlanStaysRefusal(error, 'remover'), 409);
@@ -2162,7 +2162,7 @@ async function endPayersLapsedPlan(
                 LAPSED_READ.count,
                 LAPSED_READ.windowMs,
             );
-        const plans = await lapsedPlansPaidBy(groupId, payerId, options);
+        const { plans, charging } = await lapsedPlansPaidBy(groupId, payerId, options);
         // Every one must be among those the person confirmed (by id): nothing ends unseen, and
         // one found since the dialog was shown is asked about again.
         const seen = new Set(confirmed ?? []);
@@ -2177,7 +2177,10 @@ async function endPayersLapsedPlan(
                 lapsedAnswer(plans),
             );
         }
-        return await endLapsedPlansForDeparture(groupId, payerId, plans, options);
+        const ended = await endLapsedPlansForDeparture(groupId, payerId, plans, options);
+        // A plan already running before the lookup (not among those to end) counts as one that
+        // came back: only a leave that dissolves the family may leave it running.
+        return { live: ended.live || charging };
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError(

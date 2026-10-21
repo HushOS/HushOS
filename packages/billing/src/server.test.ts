@@ -7592,6 +7592,40 @@ describe('a dissolved family’s plan', () => {
         expect(callsTo('subscriptions.revoke')).toEqual([]);
     });
 
+    test('one plan Polar won’t take now never keeps the others from being set to end, nor the payer’s mail; it is retried', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        // Plan A, unpaid and locked at Polar, comes first by id; B, the live plan, after it.
+        const locked = familySubscription(groupId, {
+            id: 'sub_00locked',
+            product_id: PRO_FAMILY,
+            cancel_at_period_end: true,
+        });
+        // Seen live (set to end), then unpaid: Polar's state no longer lists it.
+        await billing.reconcileGroup(groupId);
+        locked.status = 'unpaid';
+        locked.cancel_at_period_end = false;
+        await billing.reconcileGroup(groupId);
+        polar.revokeRefusals.set(locked.id, { status: 409, error: 'SubscriptionLocked' });
+        planEndingMail.length = 0;
+        await quietly(async () => {
+            await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeInstanceOf(
+                billing.BillingError,
+            );
+        });
+        // B was set to end anyway, and its payer told.
+        expect(setToEnd()).toEqual([
+            `subscriptions.update:${subscription.id}:{"cancel_at_period_end":true}`,
+        ]);
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(planEndingMail).toHaveLength(1);
+        // A is retried once Polar takes it.
+        polar.revokeRefusals.delete(locked.id);
+        expect(await quietly(() => billing.cancelDissolvedPlan(groupId))).toMatchObject({
+            revoked: 1,
+        });
+        expect(locked.ended_at).toBeTruthy();
+    });
+
     test('a dissolved family’s lapsed plan whose revoke Polar can’t take just now (429, locked) is retried, never recorded as refused', async () => {
         const { groupId, subscription } = await dissolvedResumed();
         subscription.status = 'unpaid';
