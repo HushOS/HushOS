@@ -224,6 +224,12 @@ function AdminPage() {
                                 anchor: '#plans-not-listed',
                             },
                             {
+                                label: 'Deleted families billed',
+                                value: count(data.orphanedPlans.length),
+                                tone: data.orphanedPlans.length > 0 ? 'danger' : undefined,
+                                anchor: '#orphaned-plans',
+                            },
+                            {
                                 label: 'More than one plan',
                                 value: count(data.doubleCharges.length),
                                 tone: data.doubleCharges.length > 0 ? 'danger' : undefined,
@@ -507,6 +513,65 @@ function AdminPage() {
                                 revokes a lapsed one first, so a row here is a double charge or one
                                 waiting to happen. Check the subscriptions in Polar’s dashboard,
                                 revoke the one that shouldn’t run, and refund what it took.
+                            </p>
+                        </>
+                    )}
+                    {data.orphanedPlans.length > 0 && (
+                        <>
+                            <h2
+                                id="orphaned-plans"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Deleted families billed
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Plan</th>
+                                        <th className={cn(th, 'text-right')}>Refunded</th>
+                                        <th className={cn(th, 'text-right')}>Payments to refund</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.orphanedPlans.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={td}>{row.subscriptionId}</td>
+                                            <td
+                                                className={cn(
+                                                    td,
+                                                    !row.revoked &&
+                                                        'font-semibold text-destructive',
+                                                )}
+                                            >
+                                                {row.revoked
+                                                    ? 'revoked'
+                                                    : `${row.status}, not revoked`}
+                                            </td>
+                                            <td className={cn(td, 'text-right tabular-nums')}>
+                                                {formatMoney(row.refunded, row.currency)}
+                                            </td>
+                                            <td className={cn(td, 'text-right tabular-nums')}>
+                                                {count(row.toRefund)}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {formatWhen(row.since)}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                Polar billed a plan of a family HushOS had already deleted
+                                (reinstated or resumed after it ended). Nothing it charges for
+                                exists, so HushOS revokes it and refunds whole what it took after
+                                the family’s plans had ended; a refund that keeps failing is also
+                                under Refunds owed. A plan still marked not revoked is tried again
+                                at every delivery and the daily reconcile: revoke it in Polar’s
+                                dashboard if it stays.
                             </p>
                         </>
                     )}
