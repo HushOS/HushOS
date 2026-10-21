@@ -1,0 +1,41 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/TrashBatches.kt
+  s_566b8e0c4467a4::t_8643cfc63eabb4 23-26,62-70,76,81-91,94-95,97-100,109,116,121,124,127,136,139-148,175-176,214
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_76e7e5f420f765 1157-1162,1165,1180-1185
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_931b88294da7c1 1438
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TrashBatch.kt
+  s_566b8e0c4467a4::t_d618f58de3d64b 16-17,19,30,67,87,95,150-157
+apps/android/app/src/test/kotlin/com/hushos/app/data/TrashBatchesTest.kt
+  s_566b8e0c4467a4::t_aa3b65e67c0c31 4,70,80-82,84-108,199-218
+apps/android/app/src/test/kotlin/com/hushos/app/ui/TrashBatchTest.kt
+  s_566b8e0c4467a4::t_8d6da39343e016 205-209,230-236
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_c1b66ade6c9fcb 778-779,1246
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TrashBatch.swift
+  s_566b8e0c4467a4::t_e780e67082ea03 53-54,56,71,100,119,131,220,222-225,249-251,340-349,355,360-377,380-384,390,399,402,411,417,420-431,457-458,494
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_7b668a8677ceb4 234-239,261-262,266,268,271
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_2271483bf21a71 592-600
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchRoutesTests.swift
+  s_566b8e0c4467a4::t_edaf89a48c1445 87,97-99,101-132,217-241
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchTests.swift
+  s_566b8e0c4467a4::t_4977b76bd4232b 247-251,271-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6e0bb16f6e24daeb21e5b7818193ad3dcb03fe09",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
