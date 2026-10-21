@@ -1,0 +1,37 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_fbb7457e02eab0 731-732,743
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_f8d039db270217 183,288-289,672-673,691,1109,4806,4818-4977
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_73169418989821 3521-3527
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_e8aeb54f98af87 1490,1492-1506,1601-1602,1609,1688,1693-1708
+packages/db/src/groups.purge-none.test.ts
+  s_566b8e0c4467a4::t_45d89086b40447 11-16,19,33-35,37-39,41-50,52-63,66-68
+packages/db/src/billing.groups.test.ts
+  s_566b8e0c4467a4::t_100e2f0a50bf49 717-722
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_38fb842a815cd1 396,405-411,562-563,574-578,591-596,598,619-622
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_c4aae4d1f0bfad 530-533
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_2bebdc5f06c77c 1334-1335
+packages/db/drizzle/20261021123752_family_orphan_paid_after/snapshot.json
+  s_566b8e0c4467a4::t_8b3feaf1c75253 2-13601,13603-13605
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6323243aa975222d36c442ff981d761ab192cd42",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
