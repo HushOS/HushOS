@@ -1475,7 +1475,22 @@ export async function endLapsedPlansForDeparture(
     options: { dissolving?: boolean } = {},
 ) {
     await endLapsedFamilyPlans(groupId, plans);
-    let live = false;
+    const live = await runningAtPolar(groupId, plans, { chargingOnly: true });
+    if (live && !options.dissolving) throw new LapsedFamilyPlanError('live', plans[0]!.name);
+    return { live };
+}
+
+/*
+ * Whether any of these plans runs at Polar after endLapsedFamilyPlans let it go (resumed or paid
+ * as its revoke read it): read at Polar itself, never from the mirror, which never holds a plan
+ * of an unreadable product as live. `chargingOnly`: one set to end doesn't count (it charges no
+ * more), as for a departure; a checkout counts any live plan, which is the family's.
+ */
+async function runningAtPolar(
+    groupId: string,
+    plans: LapsedFamilyPlan[],
+    options: { chargingOnly?: boolean } = {},
+) {
     for (const plan of plans) {
         let now: models.Subscription;
         try {
@@ -1484,10 +1499,10 @@ export async function endLapsedPlansForDeparture(
             if (statusOf(error) === 404) continue;
             throw refusedRead(groupId, error);
         }
-        if (!now.ended_at && LIVE.has(now.status) && !now.cancel_at_period_end) live = true;
+        if (now.ended_at || !LIVE.has(now.status)) continue;
+        if (!options.chargingOnly || !now.cancel_at_period_end) return true;
     }
-    if (live && !options.dissolving) throw new LapsedFamilyPlanError('live', plans[0]!.name);
-    return { live };
+    return false;
 }
 
 /*
@@ -1686,6 +1701,12 @@ export async function startGroupCheckout(
     } catch (error) {
         if (error instanceof LapsedFamilyPlanError) throw checkoutRefusal(error);
         throw error;
+    }
+    // One that went live as its revoke read it (past due, paid in the portal) is the family's
+    // plan, whatever its product: read again at Polar before the takeover changes anything.
+    if (await runningAtPolar(groupId, lapsed)) {
+        await reconcileGroup(groupId);
+        throw new BillingError('This family already has a plan.', 409);
     }
     const customerId = await ensureTeamCustomer(groupId, user);
     // Live again meanwhile (paid in the portal: past due, which Polar's customer state doesn't

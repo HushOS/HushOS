@@ -4102,6 +4102,79 @@ describe('a family plan whose payment failed, or that is paused', () => {
         );
     });
 
+    test('a lapsed plan on a product HushOS can’t read that goes past due as its revoke reads it: no second checkout, no new payer', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('unpaid');
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        // An archived product, unpaid, found by the lookup (Polar's list), written to the mirror.
+        const unread = familySubscription(groupId, {
+            id: 'sub_unread_pd',
+            status: 'unpaid',
+            product_id: 'prod_archived',
+        });
+        await expect(checkout(payer, groupId)).rejects.toMatchObject({ code: 'ends-lapsed' });
+        const heir = await createTestAccount();
+        await setTestMember({ groupId, userId: heir.userId, state: 'active', roles: ['billing'] });
+        polar.calls = [];
+        // Paid into past due just as its revoke lists its orders (Polar's state omits past due).
+        const original = fakeClient.orders.list.bind(fakeClient.orders);
+        const spy = vi
+            .spyOn(fakeClient.orders, 'list')
+            .mockImplementationOnce(async (query: Parameters<typeof original>[0]) => {
+                unread.status = 'past_due';
+                return original(query);
+            });
+        try {
+            await expect(checkout(userOf(heir), groupId)).rejects.toMatchObject({
+                status: 409,
+                message: 'This family already has a plan.',
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(unread.ended_at).toBeNull();
+        // Nobody took the family over, and no checkout was opened.
+        expect(callsTo('members.')).toEqual([]);
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(payer.id);
+        expect(callsTo('checkouts.create')).toEqual([]);
+    });
+
+    test('a commission held back by an order.paid that raced the paid-orders snapshot is granted, once, when the order is kept', async () => {
+        await growth.createAffiliate({
+            name: 'Creator',
+            slug: 'creator',
+            code: 'creator25',
+            percentOff: 25,
+            duration: 'forever',
+            commissionBps: 2000,
+        });
+        const { payer, groupId, subscription } = await lapsedFamily('paused');
+        // An order from the family's own time, paid with the creator's code; its delivery late.
+        addPaidOrder(subscription, 'order_earlier', new Date(Date.now() - 20 * DAY).toISOString());
+        polar.orders.at(-1)!.discount_id = 'disc_creator25';
+        // It lands after the ending is written and before the snapshot of paid orders.
+        const original = fakeClient.orders.list.bind(fakeClient.orders);
+        const spy = vi
+            .spyOn(fakeClient.orders, 'list')
+            .mockImplementationOnce(async (query: Parameters<typeof original>[0]) => {
+                await deliverFamilyPaid(groupId, subscription.id, 'order_earlier');
+                return original(query);
+            });
+        try {
+            await checkout(payer, groupId);
+        } finally {
+            spy.mockRestore();
+        }
+        // Kept (paid before the revoke), and its commission granted, once, however often run.
+        expect((await billingRepository.getPlanRefund('order_earlier'))?.status).toBe('none');
+        await runQueued(0);
+        await runQueued(0);
+        expect((await growth.listAffiliates())[0]!.stats.orders).toBe(1);
+        expect(refundsMade()).toEqual([]);
+    });
+
     test('an incomplete plan less than a day old is a checkout still waiting on the bank: never ended, and said so', async () => {
         const { payer, groupId, subscription } = await lapsedFamily('incomplete');
         subscription.created_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
@@ -7562,17 +7635,15 @@ describe('a dissolved family’s plan', () => {
     });
 
     test('one plan Polar won’t take now never keeps the others from being set to end, nor the payer’s mail; it is retried', async () => {
-        const { groupId, subscription } = await dissolvedResumed();
-        // Plan A, unpaid and locked at Polar, comes first by id; B, the live plan, after it.
-        const locked = familySubscription(groupId, {
-            id: 'sub_00locked',
-            product_id: PRO_FAMILY,
-            cancel_at_period_end: true,
-        });
-        // Seen live (set to end), then unpaid: Polar's state no longer lists it.
-        await billing.reconcileGroup(groupId);
+        const { groupId, subscription: locked } = await dissolvedResumed();
+        // Plan A, the family's own, went unpaid and is locked at Polar; it comes first by id.
         locked.status = 'unpaid';
-        locked.cancel_at_period_end = false;
+        await billing.reconcileGroup(groupId);
+        // B, live, comes after it (only ever one live plan, so nothing else ends either).
+        const subscription = familySubscription(groupId, {
+            id: 'sub_zz_live',
+            product_id: PRO_FAMILY,
+        });
         await billing.reconcileGroup(groupId);
         polar.revokeRefusals.set(locked.id, { status: 409, error: 'SubscriptionLocked' });
         planEndingMail.length = 0;
