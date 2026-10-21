@@ -3518,12 +3518,16 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
         isNotNull(groups.dissolvedAt),
         sql`${groups.dissolvedAt} < now() - make_interval(days => ${days})`,
         sql`not exists (select 1 from ${workspaces} w where w.group_id = ${groups.id})`,
-        billingEnv.BILLING_PROVIDER === 'none'
-            ? undefined
-            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in (${sql.join(
-                  ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
-                  sql`, `,
-              )}))`,
+        // A plan the mirror holds as able to charge keeps the family, billing on or off: with billing
+        // off nothing reads Polar, so the mirror's word stands until billing comes back (and a
+        // family whose plans all ended long ago is purged as usual). One set to end whose period is
+        // over has ended by the mirror's own word: a family dissolved with billing on, whose plan
+        // ran out after billing was turned off, is purged. (With billing on, one Polar bills again
+        // after all is a deleted family's plan, revoked and refunded.)
+        sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in (${sql.join(
+            ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
+            sql`, `,
+        )}) and not (s.cancel_at_period_end and s.current_period_end < now()))`,
     );
     const due = await db
         .select({ id: groups.id })

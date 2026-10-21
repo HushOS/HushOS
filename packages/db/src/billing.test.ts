@@ -380,6 +380,31 @@ describe('a personal plan Polar holds but that gives nothing', () => {
         expect((await billing.getPlanRefund('order_worked'))?.status).toBe('requested');
     });
 
+    test('a deleted family’s ending noting its orders as used never downgrades a refund an earlier ending owes', async () => {
+        const { userId } = await createTestAccount();
+        const at = new Date('2026-10-21T10:00:00Z');
+        await begin({ subscriptionId: 'sub_1', userId, at });
+        // Noted for a refund (paid after an earlier revoke), never asked for yet.
+        await billing.notePlanRefund({
+            orderId: 'order_owed',
+            subscriptionId: 'sub_1',
+            refundKey: 'key_owed',
+            amount: 0,
+            currency: 'usd',
+        });
+        await billing.notePaidBeforeRevoke(
+            [{ orderId: 'order_owed', subscriptionId: 'sub_1', refundKey: 'k', currency: 'usd' }],
+            { keepOwed: true },
+        );
+        expect((await billing.getPlanRefund('order_owed'))?.status).toBe('requested');
+        // An order not noted before is noted as used.
+        await billing.notePaidBeforeRevoke(
+            [{ orderId: 'order_used', subscriptionId: 'sub_1', refundKey: 'k3', currency: 'usd' }],
+            { keepOwed: true },
+        );
+        expect((await billing.getPlanRefund('order_used'))?.status).toBe('none');
+    });
+
     test('an ending isn’t settled while a refund noted on it was never asked for', async () => {
         const { userId } = await createTestAccount();
         const at = new Date('2026-10-21T10:00:00Z');
