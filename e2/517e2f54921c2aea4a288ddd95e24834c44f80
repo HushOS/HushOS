@@ -1,0 +1,25 @@
+apps/web/src/lib/trash-batch.test.ts
+  s_566b8e0c4467a4::t_f7fe2a6ed17915 502,505,512,516-525
+apps/web/src/lib/trash-batch.ts
+  s_566b8e0c4467a4::t_b766eeb589b741 36,249-253,273-274
+docs/drive-design.md
+  s_566b8e0c4467a4::t_b2e632fb32d51c 444
+packages/db/src/drive.purge-batch.test.ts
+  s_566b8e0c4467a4::t_7974d915577d6e 201-203,210,214,221-223,420,428-431
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e2517e2f54921c2aea4a288ddd95e24834c44f80",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
