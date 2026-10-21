@@ -56,7 +56,7 @@ export function KeyChangeNotice({
                 <Alert key={walk.workspaceId} variant="warning" data-key-change="stopped">
                     <AlertTitle>Replacing keys in {nameOf(walk.workspaceId)} stopped</AlertTitle>
                     <AlertDescription>
-                        {walk.error} HushOS tries again the next time it checks {family}.
+                        {walk.error} {retryWords(walk.retry, family)}
                     </AlertDescription>
                 </Alert>
             ))}
@@ -70,6 +70,17 @@ export function KeyChangeNotice({
             )}
         </>
     );
+}
+
+/* When a stopped walk is tried again, as this tab has it lined up (lib/spaces.ts FamilyWalk). */
+function retryWords(retry: number | 'online' | null, family: string) {
+    if (retry === 'online') return 'HushOS tries again once this device is back online.';
+    if (retry === null) return `HushOS tries again the next time it checks ${family}.`;
+    const at = new Date(retry).toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+    });
+    return `HushOS tries again by itself at ${at}, while it’s open here.`;
 }
 
 /* Technical details: each family folder's key version, and Replace keys for managers. */

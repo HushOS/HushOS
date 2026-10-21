@@ -50,8 +50,8 @@ export function useFamilyWork(groupId: string): FamilyWork {
 
 /*
  * After a sync of the family: what is due, then the walks. `onChanged` runs
- * when either moved something (a roster landed, a walk ended), so the pages
- * sync again and show it.
+ * when what was due moved something (a roster landed), so the pages sync again
+ * and show it; a walk that ends says so itself (walks.ts familyWalkEndings).
  */
 export function startFamilyWork(
     userId: string,
@@ -81,7 +81,7 @@ export function startFamilyWork(
         }
         // Everyone walks what is running (the server lets any member): a walk resumes from the
         // server's state at every sync, one tab per folder.
-        walkPending(userId, groupId, result.areas, options.onChanged);
+        walkPending(userId, groupId, result.areas);
     })().finally(() => {
         passes.delete(groupId);
         set(groupId, { running: false });

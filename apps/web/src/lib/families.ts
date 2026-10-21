@@ -1,6 +1,6 @@
 import type { GroupRole } from '@hushos/crypto';
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAuthView } from '@/lib/auth-view';
 import { familiesSyncAllKey, familySynced } from '@/lib/families-keys';
 import { familyKeys } from '@/lib/families-shell';
@@ -9,6 +9,7 @@ import { groupContext } from '@/lib/groups/client';
 import type { GroupContext, GroupNotice } from '@/lib/groups/context';
 import { dropHeldBack, resumeOutbox } from '@/lib/groups/outbox';
 import { syncAll, syncGroup, type SyncResult } from '@/lib/groups/sync';
+import { familyWalkEndings, walkPollDelay } from '@/lib/groups/walks';
 
 /*
  * The families pages' side of the groups data layer: the queries they read
@@ -179,7 +180,20 @@ export function useFamilySync(
 ) {
     const unlocked = useUnlocked(userId);
     const queryClient = useQueryClient();
-    const walkPolls = useRef(0);
+    // When this page first found a key change running in the family, as its sync saw it, and how
+    // long to wait before checking again, worked out once where each sync lands (walkPollDelay).
+    // Never where TanStack asks for the interval: it asks on every render and restarts its timer
+    // whenever the answer changes, so an answer that moved with the clock let a render just past
+    // a doubling point push the next check out by a whole period.
+    const walkingSince = useRef<number | null>(null);
+    const nextCheck = useRef<number | false>(false);
+    // A walk of one of the family's folders ended (whoever started it): the page syncs again, so
+    // it stops showing the key change.
+    useEffect(
+        () =>
+            familyWalkEndings.subscribe(groupId, () => void afterFamilyChange(queryClient, userId)),
+        [groupId, queryClient, userId],
+    );
     const signature = summary ? `${summary.state}:${summary.rosterVersion}` : null;
     return useQuery({
         queryKey: familyKeys.familySync(userId, groupId, signature ?? ''),
@@ -189,6 +203,15 @@ export function useFamilySync(
             const resumed = await resumeOutbox(ctx);
             const result = await syncGroup(ctx, groupId, { state: summary?.state });
             familySynced(groupId, result);
+            const walking =
+                result.status === 'accepted' &&
+                result.areas.some((area) => area.view.rotation !== null);
+            const now = Date.now();
+            walkingSince.current = walking ? (walkingSince.current ?? now) : null;
+            nextCheck.current =
+                walkingSince.current !== null && options.pollWhileWalking
+                    ? walkPollDelay(walkingSince.current, now, options.pollWhileWalking)
+                    : false;
             // What is due, and the walks, in the background (lib/family-work.ts, family pages only).
             if (result.status === 'accepted' && summary?.state === 'active')
                 void import('@/lib/family-work').then(({ startFamilyWork }) =>
@@ -220,19 +243,9 @@ export function useFamilySync(
                 : undefined,
         staleTime: 0,
         refetchOnWindowFocus: true,
-        refetchInterval: (query) => {
-            const result = query.state.data?.result;
-            const walking =
-                result?.status === 'accepted' &&
-                result.areas.some((area) => area.view.rotation !== null);
-            if (!walking || !options.pollWhileWalking) {
-                walkPolls.current = 0;
-                return false;
-            }
-            // From `pollWhileWalking`, twice as long each poll that still finds it, up to 10 min.
-            walkPolls.current++;
-            return Math.min(10 * 60_000, options.pollWhileWalking * 2 ** (walkPolls.current - 1));
-        },
+        // From `pollWhileWalking`, twice as long for each doubling of the time the walk has run,
+        // up to 10 min, as the last sync worked it out: the same answer at every render.
+        refetchInterval: () => nextCheck.current,
         retry: false,
     });
 }

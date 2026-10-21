@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { contactPins, openIdentity, trustedSigners } from '@/lib/contacts';
-import { driveKeys, forgetSpace, pruneSpaces, registerSpace } from '@/lib/drive';
+import { driveKeys, forgetSpace, onSpacesClosed, pruneSpaces, registerSpace } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { familyContext, type FamilyDetail } from '@/lib/families';
 import { familySynced, onFamilySynced } from '@/lib/families-keys';
@@ -14,6 +14,7 @@ import { countFinishedRotation } from '@/lib/rotation';
 import { restoreTransfers } from '@/lib/transfers';
 import { groupsApi } from '@/lib/groups/api';
 import { provideRotations } from '@/lib/groups/client';
+import { errorCopy } from '@/lib/groups/copy';
 import { stageChange } from '@/lib/groups/outbox';
 import { createRotationSource } from '@/lib/groups/rotations';
 import { AREA_MIRROR_PREFIX } from '@/lib/groups/store';
@@ -24,7 +25,7 @@ import {
     writeRefusal,
     type AreaState,
 } from '@/lib/groups/sync';
-import { backoffDelay, ownReasonToWalk, stillRunning, walkToEnd } from '@/lib/groups/walks';
+import { familyWalks, stillRunning, walkToEnd, type WalkTarget } from '@/lib/groups/walks';
 import { groupWriters } from '@/lib/groups/writers';
 
 /*
@@ -203,10 +204,14 @@ export type FamilyWalk = {
     workspaceId: string;
     /* Items re-keyed so far by this tab. */
     done: number;
-    /* Why the last attempt stopped; it is tried again at the next sync. */
+    /* Why the last attempt stopped, worded for the person (errorCopy). */
     error: string | null;
+    /*
+     * When it is tried again, once it stopped: a time (ms since the epoch), once this device is
+     * back online, or null when this tab has no try of its own lined up (the next sync walks it).
+     */
+    retry: number | 'online' | null;
 };
-const walking = new Map<string, Promise<void>>();
 const walkState = new Map<string, FamilyWalk>();
 let walkSnapshot: FamilyWalk[] = [];
 const walkListeners = new Set<() => void>();
@@ -237,27 +242,35 @@ function areaWalkLock<T>(workspaceId: string, work: () => Promise<T>): Promise<T
 }
 
 /*
- * Walks the key change running in one family folder to its end, with the
- * family's trust. A walk this tab already runs there is joined, not started
- * twice; one that ended meanwhile (another tab, another device) answers 404
- * and is done. The folder's client comes from the family's latest sync, or
- * from a sync now (the caller holds the family's write lock when it is the
- * outbox finishing a walk a member list change met).
+ * Walks the key change running in one family folder to its end, with the family's trust; one
+ * that ended meanwhile (another tab, another device) answers 404 and is done. The folder's
+ * client comes from the family's latest sync, or from a sync now (the caller holds the family's
+ * write lock when it is the outbox finishing a walk a member list change met). Joining a walk
+ * this tab runs already, the retries and telling the pages it ended are walks.ts familyWalks'.
  */
-export function walkArea(
+// The walk of each folder whose progress the pages show: one cut loose by a lock or a sign-out
+// (familyWalks clear) may still settle after a newer one started, and must not write over it.
+const walkAttempts = new Map<string, object>();
+function walkFolder(
     userId: string,
     groupId: string,
-    rotation: {
-        workspaceId: string;
-        rotationId: string | null;
-        nodeId: string;
-        targetEpoch: number;
-    },
+    rotation: WalkTarget,
+    progress: (done: number) => void,
 ): Promise<void> {
     const workspaceId = rotation.workspaceId;
-    const held = walking.get(workspaceId);
-    if (held) return held;
+    const attempt = {};
+    const mine = () => walkAttempts.get(workspaceId) === attempt;
+    const show = (walk: FamilyWalk | null) => {
+        if (!mine()) return;
+        if (walk) walkState.set(workspaceId, walk);
+        else walkState.delete(workspaceId);
+        publishWalks();
+    };
     const run = areaWalkLock(workspaceId, async () => {
+        // This walk's own count from its first step: one that fails before it re-keys anything
+        // (the folder not open, a sync refused) shows and reports nothing re-keyed.
+        walkAttempts.set(workspaceId, attempt);
+        show({ groupId, workspaceId, done: 0, error: null, retry: null });
         let area = areas.get(workspaceId);
         if (!area || area.groupId !== groupId) {
             await syncLocked(familyContext(userId), groupId, { flush: false });
@@ -265,8 +278,6 @@ export function walkArea(
         }
         if (!area || area.groupId !== groupId)
             throw new Error('Open the family’s folders first, then try again.');
-        walkState.set(workspaceId, { groupId, workspaceId, done: 0, error: null });
-        publishWalks();
         await area.client.open(userId);
         const client = area.client;
         const outcome = await walkToEnd({
@@ -274,8 +285,8 @@ export function walkArea(
                 client.walkRotation(
                     { nodeId: rotation.nodeId, targetEpoch: rotation.targetEpoch },
                     (done) => {
-                        walkState.set(workspaceId, { groupId, workspaceId, done, error: null });
-                        publishWalks();
+                        progress(done);
+                        show({ groupId, workspaceId, done, error: null, retry: null });
                     },
                 ),
             running: async () => stillRunning((await groupsApi.spaces()).spaces, groupId, rotation),
@@ -283,97 +294,80 @@ export function walkArea(
         // Counted only when this tab walked it to its end, never when another finished it.
         if (outcome === 'walked') countFinishedRotation();
     });
-    const tracked = run.then(
+    return run.then(
         () => {
-            walkState.delete(workspaceId);
+            show(null);
+            if (mine()) walkAttempts.delete(workspaceId);
         },
         (error: unknown) => {
-            walkState.set(workspaceId, {
+            show({
                 groupId,
                 workspaceId,
                 done: walkState.get(workspaceId)?.done ?? 0,
-                error: error instanceof Error ? error.message : 'Please try again.',
+                error: errorCopy(error),
+                retry: null,
             });
             throw error;
         },
     );
-    const settled = tracked.finally(() => {
-        walking.delete(workspaceId);
-        publishWalks();
-    });
-    walking.set(workspaceId, settled);
-    return settled;
 }
 
 /*
- * Every key change a sync found walking the family's folders, started in the
- * background, by anyone in the family (the server lets any member walk, so a
- * waiting upload does not depend on a manager's device). `onSettled` runs
- * once each finishes, so the family is synced again and the folders see it.
+ * Every key change a sync found walking the family's folders, started in the background, by
+ * anyone in the family (the server lets any member walk, so a waiting upload does not depend on
+ * a manager's device), each when due: the next walk of the same run waits longer each time, so
+ * a run that comes back right after a walk said it finished, or that keeps failing, does not
+ * spin walk, sync, walk; one that failed is walked again when its wait is over, on its own
+ * timer, whatever the pages render or sync meanwhile; and the family's pages hear each walk end
+ * (familyWalkEndings), whoever started it.
  */
-/*
- * Runs walked (or tried) in this tab, by folder and run: the next walk of the
- * same run waits longer each time (walks.ts backoffDelay), so a run that comes
- * back right after a walk said it finished, or that keeps failing, does not
- * spin walk, sync, walk.
- */
-const walkBackoff = new Map<string, { attempts: number; until: number }>();
-export function walkPending(
-    userId: string,
-    groupId: string,
-    states: readonly AreaState[],
-    onSettled: () => void,
-) {
-    for (const state of states) {
-        const rotation = state.view.rotation;
-        // Only a roster rotation this device saw for itself (walks.ts): never a run on the
-        // server's word alone, since a walk closes every share and link its own ledger lacks.
-        if (!rotation || !ownReasonToWalk(state)) continue;
-        const key = `${state.workspaceId}:${rotation.id}`;
-        const backoff = walkBackoff.get(key);
-        if (backoff && Date.now() < backoff.until) continue;
-        const ended = () => {
-            const attempts = (walkBackoff.get(key)?.attempts ?? 0) + 1;
-            walkBackoff.set(key, { attempts, until: Date.now() + backoffDelay(attempts) });
-        };
-        void walkArea(userId, groupId, {
-            workspaceId: state.workspaceId,
-            rotationId: rotation.id,
-            nodeId: rotation.nodeId,
-            targetEpoch: rotation.targetEpoch,
-            // A walk that stopped is tried again at a later sync, never straight away, and the same
-            // run back again waits longer each time: one that always fails must not spin.
-        }).then(() => {
-            ended();
-            onSettled();
-        }, ended);
-    }
-}
-
-/*
- * For an upload waiting out a key change in one of the family's folders, or
- * one the server refused for it (409 rotating) before this device heard of
- * the change: the family synced again, so the folders' clients know of the
- * run (what may be written, and when it is over), and this device walks it
- * too when it has its own reason to (walkPending, the same rule and backoff
- * as after any sync). The uploads look their folders up again afterwards
- * (packages/drive transfers). One sync per family at a time, and none within
- * a few seconds of the last, however many uploads wait.
- */
-const REFRESH_GAP_MS = 4_000;
-const refreshes = new Map<string, { at: number; pending: Promise<void> | null }>();
-function refreshFamily(userId: string, groupId: string): Promise<void> {
-    const held = refreshes.get(groupId);
-    if (held?.pending) return held.pending;
-    if (held && Date.now() - held.at < REFRESH_GAP_MS) return Promise.resolve();
-    const pending = (async () => {
+const walks = familyWalks({
+    walkFolder,
+    sync: async (userId, groupId) => {
         const result = await syncGroup(familyContext(userId), groupId);
         familySynced(groupId, result);
-        if (result.status === 'accepted') walkPending(userId, groupId, result.areas, () => {});
-    })().finally(() => refreshes.set(groupId, { at: Date.now(), pending: null }));
-    refreshes.set(groupId, { at: held?.at ?? 0, pending });
-    return pending;
+        return result.status === 'accepted' ? result.areas : null;
+    },
+    unlockedUser: () => authClient.store.getState().unlockedUserId,
+    online: () => typeof navigator === 'undefined' || navigator.onLine !== false,
+    scheduled: (workspaceId, next) => {
+        const walk = walkState.get(workspaceId);
+        if (!walk?.error) return;
+        walkState.set(workspaceId, {
+            ...walk,
+            retry: typeof next === 'number' ? Date.now() + next : next,
+        });
+        publishWalks();
+    },
+});
+export function walkArea(userId: string, groupId: string, rotation: WalkTarget): Promise<void> {
+    return walks.walk(userId, groupId, rotation);
 }
+export function walkPending(userId: string, groupId: string, states: readonly AreaState[]) {
+    walks.pending(userId, groupId, states);
+}
+/*
+ * For an upload waiting out a key change in one of the family's folders, or one the server
+ * refused for it (409 rotating) before this device heard of the change: the family synced
+ * again, so the folders' clients know of the run (what may be written, and when it is over),
+ * and this device walks it too when it has its own reason to (the same rule and backoff as
+ * after any sync). The uploads look their folders up again afterwards (packages/drive
+ * transfers). One sync per family at a time, and none within a few seconds of the last,
+ * however many uploads wait.
+ */
+function refreshFamily(userId: string, groupId: string): Promise<void> {
+    return walks.refresh(userId, groupId);
+}
+// Locked or signed out (lib/drive closeSpaces): no retry fires for an account whose keys are
+// gone (a sync then would reopen the device storage signing out deleted), nothing settling
+// later counts, and no stopped walk claims a try this tab no longer has lined up.
+onSpacesClosed(() => {
+    walks.clear();
+    for (const [workspaceId, walk] of walkState)
+        if (walk.error) walkState.set(workspaceId, { ...walk, retry: null });
+    publishWalks();
+});
+if (typeof window !== 'undefined') window.addEventListener('online', () => walks.online());
 
 function unlockedUser() {
     const userId = authClient.store.getState().unlockedUserId;
