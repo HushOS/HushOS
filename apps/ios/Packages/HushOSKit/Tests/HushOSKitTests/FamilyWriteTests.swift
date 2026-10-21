@@ -46,6 +46,32 @@ extension OnFakeDrive {
         }
 
         /*
+         * A selection to the trash and its Undo in a writable family folder go through the batch
+         * routes to the family's own workspace, gated by the ledger like every write: the file is
+         * trashed and back. Fails if either is sent elsewhere, or not sent.
+         */
+        @Test func aBatchTrashAndItsUndoLandInTheFamilysWorkspace() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            _ = try await vault.children(of: family.rootId)
+            let row = try #require(await vault.item(family.fileId))
+
+            let trashed = await vault.trashMany([family.fileId])
+            #expect((try? trashed.first?.get()) == .trashed)
+            #expect(server.count("/api/drive/workspaces/\(family.workspaceId)/trash-batch", method: "POST") == 1)
+            #expect(server.node(family.fileId)?.trashedAt != nil)
+
+            let back = await vault.restoreMany([row])
+            #expect(back.count == 1 && (try? back[0].get()) != nil)
+            #expect(server.count("/api/drive/workspaces/\(family.workspaceId)/restore-batch", method: "POST") == 1)
+            #expect(server.node(family.fileId)?.trashedAt == nil)
+        }
+
+        /*
          * The family folder's key was replaced (roster 3: the folder at key version 2, its top folder
          * re-keyed, its previous key kept under option A's label). "Trips" is still wrapped under the
          * top folder's previous key: the walk hasn't reached it. An upload into it waits (the row says
@@ -104,6 +130,7 @@ extension OnFakeDrive {
             guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
             let vault = phone.vault
             _ = try await vault.children(of: family.rootId)
+            let row = try #require(await vault.item(family.fileId))
 
             let planted = try FamilyFixture.node(id: family.rootId, in: family.workspaceId, parent: nil, parentKey: family.areaKey, key: try randomBytes(length: 32),
                                                  kind: .folder, name: "Photos", writer: family.creator, keyEpoch: 9)
@@ -125,6 +152,11 @@ extension OnFakeDrive {
             await #expect(throws: (any Error).self) { _ = try await vault.upload(fileURL: source, name: "note.txt", mime: "text/plain", in: family.docs.id, replacing: nil) }
             await #expect(throws: (any Error).self) { _ = try await vault.relocate(family.fileId, to: family.docs.id) }
             await #expect(throws: (any Error).self) { try await vault.trash(family.fileId) }
+            // A selection to the trash and its Undo (the batch routes) are stopped by the same gate.
+            let trashed = await vault.trashMany([family.fileId])
+            #expect(trashed.allSatisfy { if case .failure = $0 { true } else { false } })
+            let back = await vault.restoreMany([row])
+            #expect(back.allSatisfy { if case .failure = $0 { true } else { false } })
             #expect(server.writes.isEmpty)
         }
 

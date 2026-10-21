@@ -870,6 +870,22 @@ final class FamilyServer: @unchecked Sendable {
                 tree[changed.id] = changed
                 return (200, ["node": json(changed)])
             }
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "workspaces" && (rest[2] == "trash-batch" || rest[2] == "restore-batch"):
+            // A selection to the trash, or back in place: per-item answers, as the server's batch routes give them.
+            return lock.withLock {
+                let trashing = rest[2] == "trash-batch"
+                let at: String? = trashing ? "2026-10-19T10:00:00.000Z" : nil
+                let results: [[String: Any]] = (sent["nodeIds"] as? [String] ?? []).map { id in
+                    guard let node = tree[id], node.workspaceId.lowercased() == rest[1].lowercased() else {
+                        return ["id": id, "status": "refused", "reason": "not-found", "message": "This item no longer exists."]
+                    }
+                    let changed = node.with(trashedAt: .some(at))
+                    tree[id] = changed
+                    let seq = changed.changeSeq ?? 0
+                    return trashing ? ["id": id, "status": "trashed", "trashedAt": at ?? "", "changeSeq": seq] : ["id": id, "status": "restored", "changeSeq": seq]
+                }
+                return (200, ["results": results])
+            }
         case ("POST", ["uploads"]):
             return lock.withLock {
                 if rotatingBegins > 0 {
