@@ -129,7 +129,39 @@ export async function walk(tx: Tx, nodeId: string): Promise<Walk | null> {
         )
         select * from chain order by depth
     `);
-    const rows = result.rows;
+    return chainWalk(result.rows);
+}
+
+/*
+ * walk for many nodes in one recursive query, seeded with all of them: one
+ * statement however many there are, where a walk each would cost a round trip
+ * each. Every id comes back, null where walk would give null.
+ */
+async function walkAll(tx: Tx, nodeIds: string[]): Promise<Map<string, Walk | null>> {
+    const result = await tx.execute<ChainRow & { origin: string }>(sql`
+        with recursive chain as (
+            select id as origin, id, parent_id, workspace_id, kind, key_epoch, trashed_at,
+                   purged_at, removed_at, height_bound, 1 as depth
+            from drive_nodes where id = any(string_to_array(${nodeIds.join(',')}, ',')::uuid[])
+            union all
+            select c.origin, n.id, n.parent_id, n.workspace_id, n.kind, n.key_epoch,
+                   n.trashed_at, n.purged_at, n.removed_at, n.height_bound, c.depth + 1
+            from drive_nodes n join chain c on n.id = c.parent_id
+            where c.depth < ${WALK_CAP}
+        )
+        select * from chain order by origin, depth
+    `);
+    const chains = new Map<string, ChainRow[]>();
+    for (const { origin, ...row } of result.rows) {
+        const chain = chains.get(origin);
+        if (chain) chain.push(row);
+        else chains.set(origin, [row]);
+    }
+    return new Map(nodeIds.map((id) => [id, chainWalk(chains.get(id.toLowerCase()) ?? [])]));
+}
+
+/* A walk from its chain's rows, the node first and the root last. */
+function chainWalk(rows: ChainRow[]): Walk | null {
     const node = rows[0];
     const top = rows.at(-1);
     if (!node || !top || top.parent_id !== null) return null;
@@ -3063,7 +3095,14 @@ async function purgeVersion(tx: Tx, workspaceId: string, version: PurgedVersion)
  * next change sequence. Descendants are left to the fan-out; until it reaches
  * them they are unreachable through this node.
  */
-async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: number) {
+async function purgeOne(
+    tx: Tx,
+    workspaceId: string,
+    nodeId: string,
+    changeSeq: number,
+    /* Its ancestors' ids, root first, when the caller walked it under this lock already. */
+    ancestorIds?: string[],
+) {
     const [node] = await tx
         .select({ id: driveNodes.id, purgedAt: driveNodes.purgedAt })
         .from(driveNodes)
@@ -3083,13 +3122,14 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
     for (const version of versions) await purgeVersion(tx, workspaceId, version);
     // Where it was when it went, for the share feeds: tombstones keep their parent, so
     // the walk reaches the root through any ancestor purged before it.
-    const chain = await walk(tx, nodeId);
+    const purgedAncestorIds =
+        ancestorIds ?? (await walk(tx, nodeId))?.ancestors.map((ancestor) => ancestor.id) ?? [];
     const now = new Date();
     await tx
         .update(driveNodes)
         .set({
             purgedAt: now,
-            purgedAncestorIds: chain ? chain.ancestors.map((ancestor) => ancestor.id) : [],
+            purgedAncestorIds,
             keyEnvelope: null,
             metadataEnvelope: null,
             metadataSignerId: null,
@@ -3185,14 +3225,14 @@ export async function purgeNodes(input: {
     return inBatch(async (tx, holding) => {
         const firstSeq = await nextChangeSeq(tx, workspaceId, writer);
         const inTime = holding();
-        // The budget counts from the lock, so the walks below spend it too.
+        // The budget counts from the lock; the walks are one statement, so they spend little of it.
         const since = performance.now();
-        const checked: { id: string; chain: Walk | null; refusal: PurgeRefusal | null }[] = [];
-        for (const id of nodeIds) {
-            const chain = await walk(tx, id);
-            checked.push({ id, chain, refusal: purgeRefusal(chain, workspaceId) });
-            inTime();
-        }
+        const walks = await walkAll(tx, nodeIds);
+        inTime();
+        const checked = nodeIds.map((id) => {
+            const chain = walks.get(id)!;
+            return { id, chain, refusal: purgeRefusal(chain, workspaceId) };
+        });
         const passed = new Set(checked.filter((entry) => !entry.refusal).map((entry) => entry.id));
         const outcomes = new Map<string, PurgeOutcome>();
         const going: string[] = [];
@@ -3206,17 +3246,23 @@ export async function purgeNodes(input: {
             }
         }
         const left = new Set<string>();
-        for (const [index, id] of going.entries()) {
+        let purged = 0;
+        for (const id of going) {
             // Past the budget, with at least one done: the rest wait for the next request.
-            if (index > 0 && performance.now() - since > budgetMs) {
+            if (purged > 0 && performance.now() - since > budgetMs) {
                 left.add(id);
                 continue;
             }
-            const changeSeq = index === 0 ? firstSeq : await moreChangeSeqs(tx, workspaceId, 1);
-            await purgeOne(tx, workspaceId, id, changeSeq);
+            // Each tombstone its own number, in order, from the lock's: the lock keeps them ours.
+            const changeSeq = firstSeq + purged;
+            const ancestorIds = walks.get(id)!.ancestors.map((ancestor) => ancestor.id);
+            await purgeOne(tx, workspaceId, id, changeSeq, ancestorIds);
             outcomes.set(id, { id, status: 'purged', changeSeq });
+            purged++;
             inTime();
         }
+        // The counter catches up once, past the last number a tombstone took.
+        if (purged > 1) await moreChangeSeqs(tx, workspaceId, purged - 1);
         for (const [id, outcome] of outcomes)
             if (outcome.status === 'covered' && left.has(outcome.by)) left.add(id);
         for (const id of left) outcomes.set(id, { id, status: 'refused', reason: 'busy' });

@@ -343,7 +343,7 @@ drive_rotations                   a subtree key rotation in progress; at most on
 
 ### Two counters on the workspace
 
-`workspaces` gains `change_seq bigint`, incremented by every change to any node in it; the changed node takes the new value. No two nodes of a workspace share one (the index above is unique): a write that changes several nodes takes a number for each, as a batch of folders or a trash batch does, because a feed page may end after any row and the next page asks for what follows it. It also gains `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from, so that a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
+`workspaces` gains `change_seq bigint`, incremented by every change to any node in it; the changed node takes the new value. No two nodes of a workspace share one (the index above is unique): a write that changes several nodes takes a number for each, as a batch of folders, a trash batch or a purge batch does, because a feed page may end after any row and the next page asks for what follows it. It also gains `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from, so that a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
 
 Every write to the tree begins by locking the workspace row to take the next value, which serialises writes within a workspace. That is deliberate: it is what makes the cycle check below sound, and each write touches a handful of rows, so the lock is held for milliseconds. A listing can be cached against it, and the change feed below is a range query on it.
 

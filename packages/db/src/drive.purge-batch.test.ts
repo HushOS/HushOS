@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import pg from 'pg';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
     closeDatabase,
@@ -145,6 +146,7 @@ async function rows(ids: string[]) {
             trashedAt: driveNodes.trashedAt,
             keyEnvelope: driveNodes.keyEnvelope,
             changeSeq: driveNodes.changeSeq,
+            purgedAncestorIds: driveNodes.purgedAncestorIds,
         })
         .from(driveNodes)
         .where(inArray(driveNodes.id, ids));
@@ -193,6 +195,29 @@ async function holdingLock(workspaceId = owner.workspaceId) {
         release();
         await done;
     };
+}
+/*
+ * `work` against a database `ms` slower to answer every statement, as one across
+ * a network is: each statement the driver sends waits that long first.
+ */
+async function slowDatabase<T>(ms: number, work: () => Promise<T>) {
+    const proto = pg.Client.prototype;
+    const query = Object.getOwnPropertyDescriptor(proto, 'query')!;
+    const original = query.value as (this: pg.Client, ...args: unknown[]) => unknown;
+    const late = setTimeout as (resolve: () => void, ms: number) => unknown;
+    Object.defineProperty(proto, 'query', {
+        ...query,
+        value: function (this: pg.Client, ...args: unknown[]) {
+            const send = () => original.apply(this, args);
+            if (typeof args.at(-1) === 'function') return void late(() => void send(), ms);
+            return new Promise<void>((resolve) => late(resolve, ms)).then(send);
+        },
+    });
+    try {
+        return await work();
+    } finally {
+        Object.defineProperty(proto, 'query', query);
+    }
 }
 const within = <T>(pending: Promise<T>, ms: number) =>
     Promise.race([
@@ -250,6 +275,7 @@ describe('deleting a selection forever', () => {
         const inside = await file(folder!);
         // Each in the Trash on its own: two rows of the Trash.
         await trashEach([inside.id, folder!.id]);
+        const before = await used();
         const outcomes = await purgeAll([inside.id, folder!.id]);
         expect(summary(outcomes)).toEqual({
             [inside.id]: `covered by ${folder!.id}`,
@@ -259,9 +285,14 @@ describe('deleting a selection forever', () => {
         // after a single purge of the folder.
         expect((await rows([inside.id])).get(inside.id)!.purgedAt).toBeNull();
         expect(await inOutbox([inside.objectId])).toEqual(new Set());
+        expect(await used()).toBe(before);
         expect(await drive.purgeDescendants()).toBe(1);
         expect((await rows([inside.id])).get(inside.id)!.purgedAt).not.toBeNull();
         expect(await inOutbox([inside.objectId])).toEqual(new Set([inside.objectId]));
+        // Its bytes are freed once, when the fan-out reaches it, and never again.
+        expect(await used()).toBe(before - inside.ciphertext);
+        expect(await drive.purgeDescendants()).toBe(0);
+        expect(await used()).toBe(before - inside.ciphertext);
     });
 
     test('an id from another workspace is not found, and its node is left alone', async () => {
@@ -278,6 +309,21 @@ describe('deleting a selection forever', () => {
         });
         expect((await rows([theirs.id])).get(theirs.id)!.purgedAt).toBeNull();
         expect(await inOutbox([theirs.objectId])).toEqual(new Set());
+    });
+
+    test('a tombstone keeps the folders it was in, root first, for the share feeds', async () => {
+        const [outer] = await folders(root, 1);
+        const [inner] = await folders(outer!, 1);
+        const deep = await file(inner!);
+        const loose = await file(root);
+        await trashEach([deep.id, loose.id]);
+        expect(summary(await purgeAll([deep.id, loose.id]))).toEqual({
+            [deep.id]: 'purged',
+            [loose.id]: 'purged',
+        });
+        const after = await rows([deep.id, loose.id]);
+        expect(after.get(deep.id)!.purgedAncestorIds).toEqual([root.id, outer!.id, inner!.id]);
+        expect(after.get(loose.id)!.purgedAncestorIds).toEqual([root.id]);
     });
 
     test('change numbers: one each, in the order sent', async () => {
@@ -355,6 +401,28 @@ describe('deleting a selection forever', () => {
         // The budget keeps each request inside the lock's limit, so none rolls back.
         for (const ms of took) expect(ms).toBeLessThan(drive.BATCH_HOLD_MS);
     }, 120_000);
+
+    test('on a slow database the walks cost one statement, not one a node, so a request still purges more than the first', async () => {
+        const made = await folders(root, 60);
+        const ids = made.map((node) => node.id);
+        await drive.trashNodes({
+            workspaceId: owner.workspaceId,
+            nodeIds: ids,
+            writer: owner.userId,
+        });
+        // 10 ms a statement: a walk a node alone would spend 600 ms, past this budget.
+        const outcomes = await slowDatabase(10, () =>
+            drive.purgeNodes({
+                workspaceId: owner.workspaceId,
+                nodeIds: ids,
+                writer: owner.userId,
+                budgetMs: 500,
+            }),
+        );
+        const purged = outcomes.filter((outcome) => outcome.status === 'purged').length;
+        expect(purged).toBeGreaterThan(1);
+        expect(await purgedCount()).toBe(purged);
+    }, 30_000);
 
     test('out of time, it keeps what it purged and answers the rest busy, with what they cover', async () => {
         const [first, second] = await folders(root, 2);
