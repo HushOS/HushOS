@@ -4,7 +4,9 @@ import com.hushos.app.data.ApiError
 import com.hushos.app.data.NodeView
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
+import com.hushos.app.data.BatchRefused
 import com.hushos.app.data.TrashItem
+import com.hushos.app.data.TrashMove
 import com.hushos.app.data.Unreachable
 import com.hushos.app.data.oneAfterAnother
 import com.hushos.core.NodeMetadata
@@ -33,15 +35,27 @@ class TrashBatchTest {
         val events = ArrayList<String>()
         val batches = ArrayList<List<String>>()
         val dropped = ArrayList<String>()
+        /* What each call to `drop` took off the lists: one call is one update of the lists. */
+        val drops = ArrayList<List<String>>()
         /* Each notice's text, and what tapping its Undo restores (null: the notice has no Undo). */
         val notices = ArrayList<Pair<String, List<String>?>>()
         val settled = ArrayList<Set<String>>()
         private var restored: List<String>? = null
 
-        /* `send` answers for one item, as the server would; the batch goes through the data layer's sequencing. */
-        fun steps(send: (Opened) -> Unit) = TrashSteps(
-            send = { batch, moved -> batches.add(batch.map { it.id }); oneAfterAnother(batch) { send(it); events.add("sent ${it.id}"); moved(it) } },
-            drop = { item -> events.add("drop ${item.id}"); dropped.add(item.id) },
+        /*
+         * `send` answers for one item, as the server would; the batch goes through the data layer's
+         * sequencing. Items in `withFolder` went with a folder (`covered`), the rest on their own.
+         */
+        fun steps(send: (Opened) -> Unit) = steps(emptySet(), send)
+        fun steps(withFolder: Set<String>, send: (Opened) -> Unit) = TrashSteps(
+            send = { batch, moved ->
+                batches.add(batch.map { it.id })
+                oneAfterAnother(batch) {
+                    send(it); events.add("sent ${it.id}"); moved(listOf(it))
+                    if (it.id in withFolder) TrashMove.WITH_FOLDER else TrashMove.TRASHED
+                }
+            },
+            drop = { items -> drops.add(items.map { it.id }); items.forEach { item -> events.add("drop ${item.id}"); dropped.add(item.id) } },
             announce = { text, undo ->
                 events.add("announce")
                 // Tap Undo at once: what reaches `restore` is what the person gets back.
@@ -52,6 +66,14 @@ class TrashBatchTest {
             restore = { moved -> restored = moved.map { it.id } },
             settle = { folders -> events.add("settle"); settled.add(folders) },
         )
+
+        /* As the batch route answers: every item moved, a request of `size` at a time, each request's landing told at once. */
+        fun requests(size: Int) = steps { }.let { base ->
+            TrashSteps(
+                send = { batch, moved -> batch.chunked(size).forEach { moved(it) }; batch.map { Result.success(TrashMove.TRASHED) } },
+                drop = base.drop, announce = base.announce, restore = base.restore, settle = base.settle,
+            )
+        }
     }
 
     private val failing = setOf("f3", "f8")
@@ -83,6 +105,15 @@ class TrashBatchTest {
         // Each row goes right after its own answer; the notice and one follow-up come after the last.
         val expected = thirteen.flatMap { listOf("sent ${it.id}", "drop ${it.id}") } + listOf("announce", "settle")
         assertEquals(expected, recorder.events)
+    }
+
+    @Test
+    fun aRequestsRowsLeaveTheListsInOneUpdate() = runBlocking {
+        // 251 rows dropped one at a time redraw the list 251 times; a request's worth goes in one.
+        val many = (1..251).map { item("m$it") }
+        val recorder = Recorder()
+        trashMany(many, recorder.requests(200))
+        assertEquals(listOf(many.take(200).map { it.id }, many.drop(200).map { it.id }), recorder.drops)
     }
 
     @Test
@@ -171,5 +202,60 @@ class TrashBatchTest {
         assertNull(undoProblem(0, 1))
         assertEquals("11 of 13 are back. The rest are still in Trash.", undoProblem(11, 13))
         assertEquals("Couldn’t bring them back. They’re still in Trash.", undoProblem(0, 13))
+        // A whole Undo request turned away says why, as the web does.
+        assertEquals("Couldn’t bring them back. Too many changes are being made here at once. Please try again. The rest are still in Trash.",
+            undoProblem(0, 13, listOf(BatchRefused(BatchRefused.Kind.BUSY))))
+        assertEquals("200 of 251 are back. Too many requests. Please try again shortly. The rest are still in Trash.",
+            undoProblem(200, 251, listOf(BatchRefused(BatchRefused.Kind.TOO_MANY))))
+    }
+
+    @Test
+    fun anItemThatWentWithItsFolderCountsAsMovedButUndoLeavesItToTheFolder() = runBlocking {
+        val recorder = Recorder()
+        val result = trashMany(thirteen, recorder.steps(withFolder = setOf("f2", "f5")) { })
+        assertEquals("Moved 13 items to Trash", recorder.notices.single().first)
+        assertEquals(thirteen.map { it.id }, recorder.dropped)
+        // Undo puts back what went on its own; f2 and f5 come back with their folder.
+        assertEquals(thirteen.map { it.id } - setOf("f2", "f5"), recorder.notices.single().second)
+        assertEquals(13, result.moved.size)
+    }
+
+    @Test
+    fun nothingOfItsOwnToPutBackMeansNoUndo() = runBlocking {
+        val recorder = Recorder()
+        trashMany(thirteen.take(2), recorder.steps(withFolder = setOf("f1", "f2")) { })
+        assertEquals("Moved 2 items to Trash" to null, recorder.notices.single())
+    }
+
+    @Test
+    fun anItemAlreadyInTheTrashIsNotSaidToHaveStayed() = runBlocking {
+        val recorder = Recorder()
+        val result = trashMany(thirteen, recorder.steps { if (it.id == "f13") throw ApiError(409, "This item is in the trash.", "trashed") })
+        assertEquals(12, result.moved.size)
+        assertEquals("12 of 13 moved to Trash. The rest were in Trash already.", result.notice())
+        // It is in the trash (trashed elsewhere): its row leaves the lists too, and its folder is read again.
+        assertEquals(thirteen.map { it.id }.toSet(), recorder.dropped.toSet())
+        assertEquals(listOf(setOf("work", "photos")), recorder.settled)
+    }
+
+    @Test
+    fun aSelectionAnotherDeviceTrashedLeavesTheListsAndIsReadAgain() = runBlocking {
+        val recorder = Recorder()
+        val result = trashMany(thirteen, recorder.steps { throw ApiError(409, "This item is in the trash.", "trashed") })
+        assertEquals("Couldn’t move to Trash. They’re in Trash already.", result.notice())
+        assertEquals(thirteen.map { it.id }.toSet(), recorder.dropped.toSet())
+        assertEquals(listOf(setOf("work", "photos")), recorder.settled)
+        // Nothing of its own to put back.
+        assertEquals(null, recorder.notices.single().second)
+    }
+
+    @Test
+    fun aBusyOrRateLimitedRequestSaysSoInTheWebsWords() = runBlocking {
+        val busy = trashMany(thirteen, Recorder().steps { if (it.id == "f13") throw BatchRefused(BatchRefused.Kind.BUSY) })
+        assertEquals("12 of 13 moved to Trash. Too many changes are being made here at once. Please try again.", busy.notice())
+        val none = trashMany(thirteen.take(3), Recorder().steps { throw BatchRefused(BatchRefused.Kind.TOO_MANY) })
+        assertEquals("Couldn’t move to Trash. Too many requests. Please try again shortly.", none.notice())
+        val large = trashMany(thirteen.take(3), Recorder().steps { throw BatchRefused(BatchRefused.Kind.TOO_LARGE) })
+        assertEquals(TrashFailure.TOO_LARGE, large.failure)
     }
 }

@@ -231,20 +231,102 @@ extension Vault {
     }
 
     public func trash(_ nodeId: String) async throws {
+        try await sendTrash(nodeId)
+        forget(nodeId)
+    }
+
+    /* The single route's trash, without forgetting the row: the caller forgets it once the lists let go. */
+    private func sendTrash(_ nodeId: String) async throws {
         let item = try await resolve(nodeId)
         // Nothing is sealed, but a family folder takes it only while this device may write there.
         _ = try familyTarget(item.node.workspaceId)
         _ = try await api.trash(nodeId: nodeId, workspaceId: item.node.workspaceId)
-        forget(nodeId)
     }
 
     /*
-     * Move to Trash for many, one outcome per id in order, `moved` told of each id as the server
-     * confirms it: the one place a batch reaches the server. One request each, one after another,
-     * until the server takes a batch in one request.
+     * Move to Trash for many, one outcome per id in order, `moved` told of each id as its request's
+     * answer lands: the one place a selection reaches the server. The batch route, 200 ids a
+     * request and a request per workspace (TrashBatch.trashInBatches); one request an item on a
+     * server without it. A family folder takes it only while this device may write there.
      */
-    public func trashMany(_ ids: [String], moved: @escaping @Sendable (String) async -> Void = { _ in }) async -> [Result<Void, Error>] {
-        await TrashBatch.trashEach(ids, trash: { id in try await self.trash(id) }, moved: moved)
+    public func trashMany(_ ids: [String], moved: @escaping @Sendable ([String]) async -> Void = { _ in }) async -> [Result<TrashBatch.Move, Error>] {
+        var items: [(id: String, workspace: String)] = []
+        for id in ids {
+            let workspace: String
+            if let known = opened[id] { workspace = known.node.workspaceId }
+            else if let found = try? await resolve(id) { workspace = found.node.workspaceId }
+            else { workspace = (try? await loadWorkspace().workspaceId) ?? "" }
+            items.append((id, workspace))
+        }
+        // The folders each sits in, as far as this device knows, read before anything is forgotten.
+        let chains = Dictionary(ids.map { id in (id, opened[id].map { ancestorIds(of: $0) } ?? []) }, uniquingKeysWith: { a, _ in a })
+        return await TrashBatch.trashInBatches(
+            items,
+            send: { workspace, chunk in try await self.sendTrashBatch(workspace, chunk) },
+            // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
+            sequential: { chunk in
+                await TrashBatch.trashEach(chunk, trash: { id in try await self.sendTrash(id) }, moved: { id in await moved([id]); await self.forget([id]) })
+                    .map { $0.map { TrashBatch.Move.trashed } }
+            },
+            ancestors: { chains[$0] ?? [] },
+            // Called after `moved`: the row leaves the lists first, then this device forgets it.
+            forget: { ids in await self.forget(ids) },
+            moved: { landed in await moved(landed.map(\.id)) }
+        )
+    }
+
+    private func sendTrashBatch(_ workspace: String, _ ids: [String]) async throws -> [TrashBatch.Answer] {
+        _ = try familyTarget(workspace)
+        return try await api.trashBatch(workspaceId: workspace, ids: ids)
+    }
+
+    /* Forgets each of these rows: what a batch moved, once the lists let go of them. */
+    func forget(_ ids: [String]) { for id in ids { forget(id) } }
+
+    /*
+     * Undo for trashMany: the items back in place through the batch route (folders before what is
+     * in them, `parent-trashed` tried again once the rest landed), or one request an item on a
+     * server without it. One outcome per item in order, the restored row on success.
+     */
+    public func restoreMany(_ items: [Opened]) async -> [Result<Opened, Error>] {
+        let given = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let depths = Dictionary(items.map { item in (item.id, ancestorIds(of: item).filter { given[$0] != nil }.count) }, uniquingKeysWith: { a, _ in a })
+        let outcomes = await TrashBatch.restoreInBatches(
+            items.map { ($0.id, $0.node.workspaceId) },
+            depth: { depths[$0] ?? 0 },
+            send: { workspace, chunk in try await self.sendRestoreBatch(workspace, chunk, given: given) },
+            sequential: { chunk in
+                var results: [Result<Void, Error>] = []
+                for id in chunk {
+                    do { _ = try await self.restore(given[id]!, parentTrashed: false); results.append(.success(())) } catch { results.append(.failure(error)) }
+                }
+                return results
+            }
+        )
+        return zip(items, outcomes).map { item, outcome in
+            outcome.map { opened[item.id] ?? item }
+        }
+    }
+
+    private func sendRestoreBatch(_ workspace: String, _ ids: [String], given: [String: Opened]) async throws -> [TrashBatch.Answer] {
+        if isFamilyWorkspace(workspace) { _ = try familyTarget(workspace) }
+        let answers = try await api.restoreBatch(workspaceId: workspace, ids: ids)
+        for case .restored(let id, let changeSeq) in answers {
+            guard let item = given[id], let key = nodeKey(of: item) else { continue }
+            _ = try? adopt(item.node.restored(changeSeq: changeSeq), nodeKey: key, metadata: item.metadata, in: workspace)
+        }
+        return answers
+    }
+
+    /* The folders above an item, nearest first, as far as this device knows them. */
+    func ancestorIds(of item: Opened) -> [String] {
+        var chain: [String] = []
+        var cursor = item.node.parentId
+        while let current = cursor, chain.count < 256 {
+            chain.append(current)
+            cursor = opened[current]?.node.parentId ?? parents[current]
+        }
+        return chain
     }
 
     /* Back where it was, or under the root when its old folder is in the trash too. */

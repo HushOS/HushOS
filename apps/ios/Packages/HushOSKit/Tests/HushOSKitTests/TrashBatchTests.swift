@@ -25,23 +25,32 @@ import Testing
         var events: [String] = []
         var batches: [[String]] = []
         var dropped: [String] = []
+        /* What each call to `drop` took off the lists: one call is one update of the lists. */
+        var drops: [[String]] = []
         /* Each notice's text, and what tapping its Undo restores (nil: the notice has no Undo). */
         var notices: [(text: String, undo: [String]?)] = []
         var settled: [Set<String>] = []
         private var restored: [String]?
 
-        /* `send` answers for one item, as the server would; the batch goes through the kit's sequencing. */
-        func steps(_ send: @escaping @Sendable (Opened) async throws -> Void) -> TrashBatch.Steps {
+        /*
+         * `send` answers for one item, as the server would; the batch goes through the kit's
+         * sequencing. Items in `withFolder` went with a folder (`covered`), the rest on their own.
+         */
+        func steps(withFolder: Set<String> = [], _ send: @escaping @Sendable (Opened) async throws -> Void) -> TrashBatch.Steps {
             TrashBatch.Steps(
                 send: { batch, moved in
                     await MainActor.run { self.batches.append(batch.map(\.id)) }
                     return await TrashBatch.oneAfterAnother(batch) { item in
                         try await send(item)
                         await MainActor.run { self.events.append("sent \(item.id)") }
-                        await moved(item)
+                        await moved([item])
+                        return withFolder.contains(item.id) ? TrashBatch.Move.withFolder : .trashed
                     }
                 },
-                drop: { item in self.events.append("drop \(item.id)"); self.dropped.append(item.id) },
+                drop: { items in
+                    self.drops.append(items.map(\.id))
+                    for item in items { self.events.append("drop \(item.id)"); self.dropped.append(item.id) }
+                },
                 announce: { text, undo in
                     self.events.append("announce")
                     // Tap Undo at once: what reaches `restore` is what the person gets back.
@@ -53,6 +62,16 @@ import Testing
                 settle: { folders in self.events.append("settle"); self.settled.append(folders) }
             )
         }
+
+        /* As the batch route answers: every item moved, a request of `size` at a time, each request's landing told at once. */
+        func requests(_ size: Int) -> TrashBatch.Steps {
+            var steps = self.steps { _ in }
+            steps.send = { batch, moved in
+                for start in stride(from: 0, to: batch.count, by: size) { await moved(Array(batch[start ..< min(start + size, batch.count)])) }
+                return batch.map { _ in .success(.trashed) }
+            }
+            return steps
+        }
     }
 
     nonisolated static let failing: Set<String> = ["f3", "f8"]
@@ -60,6 +79,14 @@ import Testing
         if TrashBatchTests.failing.contains(item.id) { throw DriveAPIError.server(500, "Server said something internal") }
     }
     var movedIds: [String] { thirteen.map(\.id).filter { !Self.failing.contains($0) } }
+
+    @Test func aRequestsRowsLeaveTheListsInOneUpdate() async {
+        // 251 rows dropped one at a time redraw the list 251 times; a request's worth goes in one.
+        let many = (1...251).map { item("m\($0)") }
+        let recorder = Recorder()
+        _ = await TrashBatch.trash(many, recorder.requests(200))
+        #expect(recorder.drops == [many.prefix(200).map(\.id), many.dropFirst(200).map(\.id)])
+    }
 
     @Test func aFailedItemIsNotCountedAsMoved() async {
         let recorder = Recorder()
@@ -217,5 +244,60 @@ import Testing
         #expect(TrashBatch.undoProblem(back: 0, tried: 1) == nil)
         #expect(TrashBatch.undoProblem(back: 11, tried: 13) == "11 of 13 are back. The rest are still in Trash.")
         #expect(TrashBatch.undoProblem(back: 0, tried: 13) == "Couldn’t bring them back. They’re still in Trash.")
+        // A whole Undo request turned away says why, as the web does.
+        #expect(TrashBatch.undoProblem(back: 0, tried: 13, errors: [TrashBatch.RequestRefusal.busy])
+            == "Couldn’t bring them back. Too many changes are being made here at once. Please try again. The rest are still in Trash.")
+        #expect(TrashBatch.undoProblem(back: 200, tried: 251, errors: [TrashBatch.RequestRefusal.tooMany])
+            == "200 of 251 are back. Too many requests. Please try again shortly. The rest are still in Trash.")
+    }
+
+    @Test func anItemThatWentWithItsFolderCountsAsMovedButUndoLeavesItToTheFolder() async {
+        let recorder = Recorder()
+        let result = await TrashBatch.trash(thirteen, recorder.steps(withFolder: ["f2", "f5"]) { _ in })
+        #expect(recorder.notices.map(\.text) == ["Moved 13 items to Trash"])
+        #expect(recorder.dropped == thirteen.map(\.id))
+        // Undo puts back what went on its own; f2 and f5 come back with their folder.
+        #expect(recorder.notices.map(\.undo) == [thirteen.map(\.id).filter { $0 != "f2" && $0 != "f5" }])
+        #expect(result.moved.count == 13)
+    }
+
+    @Test func nothingOfItsOwnToPutBackMeansNoUndo() async {
+        let recorder = Recorder()
+        _ = await TrashBatch.trash(Array(thirteen.prefix(2)), recorder.steps(withFolder: ["f1", "f2"]) { _ in })
+        #expect(recorder.notices.map(\.text) == ["Moved 2 items to Trash"])
+        #expect(recorder.notices.map(\.undo) == [nil])
+    }
+
+    @Test func anItemAlreadyInTheTrashIsNotSaidToHaveStayed() async {
+        let recorder = Recorder()
+        let result = await TrashBatch.trash(thirteen, recorder.steps { item in
+            if item.id == "f13" { throw DriveAPIError.trashed("This item is in the trash.") }
+        })
+        #expect(result.moved.count == 12)
+        #expect(result.notice == "12 of 13 moved to Trash. The rest were in Trash already.")
+        // It is in the trash (trashed elsewhere): its row leaves the lists too, and its folder is read again.
+        #expect(Set(recorder.dropped) == Set(thirteen.map(\.id)))
+        #expect(recorder.settled == [["work", "photos"]])
+    }
+
+    @Test func aSelectionAnotherDeviceTrashedLeavesTheListsAndIsReadAgain() async {
+        let recorder = Recorder()
+        let result = await TrashBatch.trash(thirteen, recorder.steps { _ in throw DriveAPIError.trashed("This item is in the trash.") })
+        #expect(result.notice == "Couldn’t move to Trash. They’re in Trash already.")
+        #expect(Set(recorder.dropped) == Set(thirteen.map(\.id)))
+        #expect(recorder.settled == [["work", "photos"]])
+        // Nothing of its own to put back.
+        #expect(recorder.notices.map(\.undo) == [nil])
+    }
+
+    @Test func aBusyOrRateLimitedRequestSaysSoInTheWebsWords() async {
+        let busy = await TrashBatch.trash(thirteen, Recorder().steps { item in
+            if item.id == "f13" { throw TrashBatch.RequestRefusal.busy }
+        })
+        #expect(busy.notice == "12 of 13 moved to Trash. Too many changes are being made here at once. Please try again.")
+        let none = await TrashBatch.trash(Array(thirteen.prefix(3)), Recorder().steps { _ in throw TrashBatch.RequestRefusal.tooMany })
+        #expect(none.notice == "Couldn’t move to Trash. Too many requests. Please try again shortly.")
+        let large = await TrashBatch.trash(Array(thirteen.prefix(3)), Recorder().steps { _ in throw TrashBatch.RequestRefusal.tooLarge })
+        #expect(large.failure == .tooLarge)
     }
 }

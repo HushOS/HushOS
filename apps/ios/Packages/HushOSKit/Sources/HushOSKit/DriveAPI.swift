@@ -250,6 +250,17 @@ public final class DriveAPI: Sendable {
         return try await perform(try mutation("/nodes/\(sourceNodeId)/copy", body: full), as: NodeResponse.self).node
     }
 
+    /* One request of a selection to the trash, or back in place (Undo): up to TrashBatch.maxBatch ids of one workspace. */
+    public func trashBatch(workspaceId: String, ids: [String]) async throws -> [TrashBatch.Answer] {
+        let (status, data) = try await send(try mutation("/workspaces/\(workspaceId)/trash-batch", body: ["nodeIds": ids]))
+        return try TrashBatch.answers(status: status, data: data)
+    }
+
+    public func restoreBatch(workspaceId: String, ids: [String]) async throws -> [TrashBatch.Answer] {
+        let (status, data) = try await send(try mutation("/workspaces/\(workspaceId)/restore-batch", body: ["nodeIds": ids]))
+        return try TrashBatch.answers(status: status, data: data)
+    }
+
     public func trash(nodeId: String, workspaceId: String) async throws -> NodeView {
         try await perform(try mutation("/nodes/\(nodeId)/trash", body: ["workspaceId": workspaceId]), as: NodeResponse.self).node
     }
