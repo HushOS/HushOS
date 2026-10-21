@@ -6188,6 +6188,55 @@ describe('a family’s first plan', () => {
             await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PLUS }),
         ).toMatchObject({ url: 'https://polar.test/checkout' });
     });
+
+    test('past the biggest tier on offer it says only what to free: products not offered aren’t a bigger plan', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({
+            organizerId: organizer.userId,
+            pooled: true,
+        });
+        await setTestUsedBytes(organizer.workspaceId, MAX_POOL + 512n * GIB);
+        // The catalogue also has Family Mega (8 TB, a tier key HushOS doesn't offer).
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: MAX_FAMILY }),
+        ).rejects.toMatchObject({
+            status: 409,
+            message: 'Your files take 4.5 TB, more than Family Max’s 4 TB. Free at least 512 GB.',
+        });
+        // With every bigger tier archived (other tests add some), Plus is the biggest on offer.
+        // The untiered family products (2 TB) stay on sale at Polar, but no page offers them
+        // beside the tiers, so none is "a bigger plan".
+        const archived = polar.products.filter((candidate) => {
+            const metadata = (candidate.metadata ?? {}) as Record<string, string | undefined>;
+            return (
+                !candidate.is_archived &&
+                metadata.hushos_tier !== undefined &&
+                BigInt(metadata.quota_bytes ?? '0') > PLUS_POOL
+            );
+        });
+        const clock = vi.spyOn(Date, 'now');
+        // Past every clock an earlier test read the catalogue at (fake timers reach 29 h ahead),
+        // so it is read again.
+        catalogueClock = Math.max(catalogueClock + 10 * 60_000, 48 * 60 * 60_000);
+        try {
+            for (const product of archived) product.is_archived = true;
+            clock.mockReturnValue(new Date().getTime() + catalogueClock);
+            await setTestUsedBytes(organizer.workspaceId, 950n * GIB);
+            await expect(
+                billing.startGroupCheckout(userOf(organizer), groupId, { productId: PLUS }),
+            ).rejects.toMatchObject({
+                status: 409,
+                message:
+                    'Your files take 950 GB, more than Family Plus’s 800 GB. Free at least 150 GB.',
+            });
+        } finally {
+            for (const product of archived) product.is_archived = false;
+            clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+            await billing.listCatalogue();
+            clock.mockRestore();
+        }
+        expect(callsTo('checkouts.create')).toEqual([]);
+    });
 });
 
 /*

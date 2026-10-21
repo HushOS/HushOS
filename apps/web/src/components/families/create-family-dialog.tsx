@@ -1,7 +1,7 @@
 import type { FamilyPlan } from '@hushos/billing/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -16,8 +16,15 @@ import { groupBillingApi } from '@/lib/billing-api';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { familyTierName } from '@/lib/plans';
-import { formatQuota, useBillingEnabled } from '@/lib/queries';
+import { tierTooSmall } from '@/lib/family-billing';
+import {
+    catalogueQueryOptions,
+    formatQuota,
+    storageQueryOptions,
+    useBillingEnabled,
+} from '@/lib/queries';
 import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families';
+import { checkoutNotOpening, checkoutOpening, leftForCheckout } from '@/lib/family-checkout';
 import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { createFamily } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
@@ -61,23 +68,53 @@ export function CreateFamilyDialog({
     const yours = useQuery(familiesQueryOptions(userId)).data?.find(
         (at) => at.kind === 'family' && at.state === 'active',
     );
+    // A tier smaller than their own files can't be the new family's first plan (the server
+    // refuses it at checkout): said, and nothing is made, before the family exists.
+    // Read again as the dialog opens (they're kept 30 s), and nothing is made until they answer.
+    const storage = useQuery({ ...storageQueryOptions, enabled: Boolean(plan) });
+    const { refetch } = storage;
+    useEffect(() => {
+        if (open && plan) void refetch();
+    }, [open, plan, refetch]);
+    const checking = Boolean(plan) && storage.isFetching;
+    const tiers = useQuery({ ...catalogueQueryOptions, enabled: Boolean(plan) }).data?.families;
+    const tooSmall = plan ? tierTooSmall(storage.data, plan.plan, tiers ?? [plan.plan]) : null;
     // Once submitted, the family being made is about to be "yours": it refuses nothing then.
-    const refusal = yours && !pending ? createInFamilyCopy(yours.name) : '';
-    // Back from Polar's checkout (the browser's back button restores this page as it was).
+    const refusal = yours && !pending ? createInFamilyCopy(yours.name) : tooSmall || '';
+    // Back from Polar's checkout restored from the browser's cache: busy no longer. Where it
+    // goes on (the family's page) is the page's to say (useBackFromCheckout).
     usePageRestored(() => setPending(false));
+    // A submit still running when the dialog has gone (the person went Back meanwhile) or the
+    // address has moved on never sends the browser anywhere.
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+        };
+    }, []);
 
     async function submit(event: FormEvent) {
         event.preventDefault();
         const trimmed = name.trim();
-        if (!trimmed || refusal) return;
+        if (!trimmed || refusal || checking) return;
         setPending(true);
         setError('');
+        // Where the dialog is: the page and the tier chosen by address (Account → Family's
+        // `create`). Other parameters may go meanwhile (Plans drops a personal checkout's
+        // `checkout_id`) without the person having gone anywhere.
+        const place = () =>
+            `${window.location.pathname}?create=${new URLSearchParams(window.location.search).get('create') ?? ''}`;
+        const from = place();
+        const stillHere = () => mounted.current && place() === from;
+        // From here until the browser leaves for the checkout, the page under this dialog stays
+        // as it is whatever reads the families again (lib/family-checkout.ts).
+        if (plan) checkoutOpening(userId);
+        let left = false;
         try {
             const { groupId, outcome } = await createFamily(familyContext(userId), trimmed);
-            // On to the checkout, the families aren't read again first: the page offering the
-            // tiers would take them away (one family per account) while the checkout opens.
-            if (!(plan && outcome.status === 'landed')) void afterFamilyChange(queryClient, userId);
             if (outcome.status === 'landed') {
+                void afterFamilyChange(queryClient, userId);
                 if (plan) {
                     try {
                         const { url } = await groupBillingApi.checkout(
@@ -85,6 +122,23 @@ export function CreateFamilyDialog({
                             plan.plan.id,
                             plan.currency,
                         );
+                        if (!stillHere()) {
+                            // They went elsewhere meanwhile: the family is made, and its plan is
+                            // chosen on its page. Their page isn't changed under them.
+                            toast.add({
+                                type: 'info',
+                                title: `${trimmed} created`,
+                                description: 'Choose its plan on its page, under Account → Family.',
+                            });
+                            if (mounted.current) {
+                                setPending(false);
+                                onOpenChange(false);
+                            }
+                            return;
+                        }
+                        // Back from it goes on to the family's page (useBackFromCheckout).
+                        leftForCheckout(userId);
+                        left = true;
                         window.location.assign(url);
                         // Busy until the browser has left for the checkout.
                         return;
@@ -95,9 +149,17 @@ export function CreateFamilyDialog({
                             title: `${trimmed} created, but the checkout didn’t open`,
                             description: `${authError(cause)} Choose a plan on its page.`,
                         });
+                        if (!stillHere()) {
+                            if (mounted.current) {
+                                setPending(false);
+                                onOpenChange(false);
+                            }
+                            return;
+                        }
                         onOpenChange(false);
                         setName('');
                         setPending(false);
+                        checkoutNotOpening();
                         await afterFamilyChange(queryClient, userId);
                         await navigate({ to: '/app/family' });
                         return;
@@ -111,6 +173,7 @@ export function CreateFamilyDialog({
                 await navigate({ to: '/app/family' });
                 return;
             }
+            void afterFamilyChange(queryClient, userId);
             if (outcome.status === 'pending') {
                 toast.add({
                     type: 'info',
@@ -127,6 +190,8 @@ export function CreateFamilyDialog({
         } catch (cause) {
             cue('error');
             setError(errorCopy(cause, { family: trimmed }));
+        } finally {
+            if (!left) checkoutNotOpening();
         }
         setPending(false);
     }
@@ -189,7 +254,7 @@ export function CreateFamilyDialog({
                         </Button>
                         <Button
                             type="submit"
-                            disabled={pending || !name.trim() || Boolean(refusal)}
+                            disabled={pending || checking || !name.trim() || Boolean(refusal)}
                         >
                             {pending ? 'Creating…' : plan ? 'Create and pay' : 'Create family'}
                         </Button>

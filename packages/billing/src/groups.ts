@@ -26,6 +26,8 @@ import {
     MAX_MEMBERS_PER_RAISE,
     STALE_RAISE_DAYS,
     UNPAID_GROUP_SEATS,
+    firstPlanTooSmall,
+    planTierName,
     quoteUnitsChange,
     spaceOf,
 } from './protocol';
@@ -1180,9 +1182,8 @@ export async function startGroupCheckout(
 ) {
     requireFamilyBilling();
     await familyOf(groupId, user.id, 'billing');
-    const plan = (await getFamilyCatalogue()).find(
-        (candidate) => candidate.id === input.productId && !candidate.archived,
-    );
+    const tiers = await getFamilyCatalogue();
+    const plan = tiers.find((candidate) => candidate.id === input.productId && !candidate.archived);
     if (!plan) throw new BillingError('That plan is not available.', 404);
     if (input.currency !== undefined && !(input.currency in plan.prices))
         throw new BillingError('That plan is not priced in that currency.', 400);
@@ -1191,14 +1192,16 @@ export async function startGroupCheckout(
     const seats = await groupsRepository.seatsUsed(groupId);
     // Everyone's own files draw from the pool once the plan is live, so a first plan (or one
     // bought again) smaller than what they store is refused, as a downgrade is (3.2, 5.2).
-    // Checked exactly, said in whole GiB rounded up, as the downgrade guard says it.
+    // Compared with what the pool counts (each part rounded up to a whole GiB), as Plans does.
     const { used } = await billingRepository.getPoolUsage(groupId);
-    const room = BigInt(plan.quotaBytes);
-    if (used > room)
-        throw new BillingError(
-            `${seats > 1 ? 'Your family stores' : 'Your files take'} ${spaceOf(billingRepository.wholeGibUp(used))}, more than ${tierName(plan)}’s ${spaceOf(room)}. Choose a bigger plan or free at least ${spaceOf(billingRepository.wholeGibUp(used - room))}.`,
-            409,
-        );
+    const tooSmall = firstPlanTooSmall({
+        countedBytes: used,
+        plan,
+        // "A bigger plan" only among those on offer (never one archived or not sold as a tier).
+        tiers: offeredFamilies(tiers),
+        family: seats > 1,
+    });
+    if (tooSmall) throw new BillingError(tooSmall, 409);
     const floor = Math.max(plan.includedMembers, seats);
     const units = input.units ?? floor;
     if (units < floor)
@@ -1619,8 +1622,7 @@ async function withPlanChange<T>(subscriptionId: string, busy: () => T, work: ()
 /* Tiers                                                                      */
 /* ------------------------------------------------------------------------- */
 
-const tierName = (plan: { name: string }) =>
-    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+const tierName = planTierName;
 
 export type PlanChange = {
     billing: GroupBillingSummary;

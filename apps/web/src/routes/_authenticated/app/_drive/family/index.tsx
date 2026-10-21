@@ -7,6 +7,7 @@ import { FamilyPage } from '@/components/families/family-page';
 import { NoFamily } from '@/components/families/no-family';
 import { Button } from '@/components/ui/button';
 import { activeFamily, familiesQueryOptions, familiesSyncQueryOptions } from '@/lib/families';
+import { useBackFromCheckout, useCheckoutOpening } from '@/lib/family-checkout';
 import { errorCopy } from '@/lib/groups/copy';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/family/')({
@@ -36,8 +37,14 @@ function FamilyRoute() {
     const families = useQuery(familiesQueryOptions(userId));
     // Read here, never started: the Drive runtime runs it.
     const pass = useQuery({ ...familiesSyncQueryOptions(userId), enabled: false });
+    // Back from a family's checkout, it goes on here, to the family (lib/family-checkout.ts); a
+    // family being made for its checkout leaves this page as it was until the browser leaves.
+    useBackFromCheckout(userId, { stay: !create });
+    const opening = useCheckoutOpening(userId);
     if (families.isPending) return <SkeletonRows rows={3} />;
-    if (families.isError)
+    // While a family is made for its checkout, this page stays "no family" (the dialog is on it),
+    // whatever reading the families again answers, an error included.
+    if (families.isError && !opening)
         return (
             <EmptyState title="Your family couldn’t be opened" body={errorCopy(families.error)}>
                 <Button variant="outline" onClick={() => void families.refetch()}>
@@ -47,7 +54,8 @@ function FamilyRoute() {
             </EmptyState>
         );
     const notices = pass.data?.notices ?? [];
-    const yours = activeFamily(families.data);
+    const list = families.data ?? [];
+    const yours = opening ? undefined : activeFamily(list);
     if (yours)
         return (
             <FamilyPage
@@ -60,9 +68,9 @@ function FamilyRoute() {
     return (
         <NoFamily
             userId={userId}
-            families={families.data}
+            families={list}
             notices={notices}
-            nameOf={(id) => families.data.find((at) => at.id === id)?.name}
+            nameOf={(id) => list.find((at) => at.id === id)?.name}
             create={create ? { planId: create, currency } : undefined}
         />
     );

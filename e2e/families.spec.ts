@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { planTierName } from '@hushos/billing/protocol';
 import { readFileSync } from 'node:fs';
 import {
     expect,
@@ -2185,7 +2186,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
         const plus =
             plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus') ??
             plans.find((plan) => plan.interval === 'month')!;
-        const tier = plus.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+        const tier = planTierName({ name: plus.name });
         await rosa.page.goto('/app/billing');
         const section = rosa.page.locator('[data-family-plans]');
         await expect(section.locator('[data-plan]')).toHaveCount(
@@ -2342,6 +2343,428 @@ test.describe.serial('one view for a family member, with one pool', () => {
             theo.page.getByRole('heading', { level: 2, name: 'Family folders' }),
         ).toBeVisible();
         await expect(theo.page.locator('[data-family-trash]')).toBeVisible({ timeout: 90_000 });
+    });
+});
+
+/*
+ * Creating a family from Plans, where it can stop: a tier smaller than the person's own files
+ * is refused before any family is made (the server would refuse its checkout and leave a
+ * family with no plan); a locked device goes to Account → Family, which unlocks first, with the
+ * tier it chose (a family's keys are made on the device); and a checkout that doesn't open
+ * leaves the family made, on its page, where Choose a plan offers the tiers again. Polar is never
+ * asked: the person's own figures and the checkout's refusal are answered on the wire. Runs only
+ * against a server that sells family plans (verify-hushos `launch --groups --billing polar`).
+ */
+test.describe.serial('creating a family from Plans: where it stops', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    const GIB = 1024 ** 3;
+    let nora: Person;
+    let plans: CatalogueFamily[] = [];
+    const monthly = (tier: string) =>
+        plans.find((plan) => plan.interval === 'month' && plan.tier === tier)!;
+    const tierOf = (plan: CatalogueFamily) => planTierName({ name: plan.name });
+
+    test.beforeAll(async ({ browser, request }) => {
+        test.setTimeout(300_000);
+        plans = await familyCatalogue(request);
+        test.skip(
+            !plans.some((plan) => plan.tier === 'plus' && plan.interval === 'month') ||
+                !plans.some((plan) => plan.tier === 'pro' && plan.interval === 'month'),
+            'This server sells no Family Plus and Pro plans.',
+        );
+        nora = await person(browser, 'Nora Berg');
+    });
+    test.afterAll(async () => {
+        await nora?.page.context().close();
+    });
+
+    test('a tier smaller than their own files can’t be chosen, and nothing is made', async () => {
+        const plus = monthly('plus');
+        const pro = monthly('pro');
+        const room = BigInt(plus.quotaBytes);
+        // Her own files, as the server answers them while she's in no family: 1 GB past Plus.
+        const storage = async (route: Route) =>
+            route.fulfill({
+                json: {
+                    storage: {
+                        workspaceId: randomUUID(),
+                        quotaBytes: String(4096n * BigInt(GIB)),
+                        usedBytes: String(room + 1n),
+                        reservedBytes: '0',
+                        availableBytes: String(4096n * BigInt(GIB) - room - 1n),
+                        pool: null,
+                        own: null,
+                    },
+                },
+            });
+        await nora.page.route('**/api/auth/storage', storage);
+        const created: string[] = [];
+        nora.page.on('request', (request) => {
+            if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/groups')
+                created.push(request.url());
+        });
+        await nora.page.goto('/app/billing');
+        const section = nora.page.locator('[data-family-plans]');
+        const card = section.locator(`[data-plan="${tierOf(plus)}"]`);
+        const why = `Your files take ${Number(room) / GIB + 1} GB, more than ${tierOf(plus)}’s ${Number(room) / GIB} GB. Choose a bigger plan or free at least 1 GB.`;
+        await expect(card.locator('[data-tier-too-small]')).toHaveText(why, { timeout: 60_000 });
+        await expect(
+            card.getByRole('button', { name: `Create a family with ${tierOf(plus)}` }),
+        ).toBeDisabled();
+        // A tier that holds them is offered as before.
+        await expect(
+            section.getByRole('button', { name: `Create a family with ${tierOf(pro)}` }),
+        ).toBeEnabled();
+        await expect(
+            section.locator(`[data-plan="${tierOf(pro)}"] [data-tier-too-small]`),
+        ).toHaveCount(0);
+        // Asked for by address too (a locked device's way in): the dialog says why and makes nothing.
+        await nora.page.goto(`/app/family?create=${plus.id}&currency=usd`);
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(why, { timeout: 60_000 });
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeDisabled();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        expect(created).toEqual([]);
+        await nora.page.unroute('**/api/auth/storage', storage);
+    });
+
+    test('the dialog reads her figures again as it opens: files added since Plans loaded count', async () => {
+        const plus = monthly('plus');
+        const room = BigInt(plus.quotaBytes);
+        // Her own files as the server answers them: none when Plans loads, then 1 GB past Plus
+        // (added from another device), within the 30 s the figures are kept.
+        let used = 0n;
+        const storage = async (route: Route) =>
+            route.fulfill({
+                json: {
+                    storage: {
+                        workspaceId: randomUUID(),
+                        quotaBytes: String(4096n * BigInt(GIB)),
+                        usedBytes: String(used),
+                        reservedBytes: '0',
+                        availableBytes: String(4096n * BigInt(GIB) - used),
+                        pool: null,
+                        own: null,
+                    },
+                },
+            });
+        await nora.page.route('**/api/auth/storage', storage);
+        await nora.page.goto('/app/billing');
+        const button = nora.page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tierOf(plus)}` });
+        await expect(button).toBeEnabled({ timeout: 60_000 });
+        used = room + 1n;
+        await button.click();
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(
+            `Your files take ${Number(room) / GIB + 1} GB, more than ${tierOf(plus)}’s`,
+            { timeout: 30_000 },
+        );
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeDisabled();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await nora.page.unroute('**/api/auth/storage', storage);
+    });
+
+    test('on a locked device, Create a family unlocks first and carries the tier', async () => {
+        const plus = monthly('plus');
+        await nora.page.goto('/app/account', { waitUntil: 'networkidle' });
+        await nora.page
+            .getByRole('button', { name: 'Lock on this browser' })
+            .click({ timeout: 60_000 });
+        await nora.page
+            .getByRole('alertdialog')
+            .getByRole('button', { name: 'Lock', exact: true })
+            .click();
+        await expect(nora.page.getByRole('button', { name: 'Unlock on this browser' })).toBeVisible(
+            { timeout: 60_000 },
+        );
+        // Plans is outside the drive and opens locked; a family's keys can't be made there now.
+        await nora.page.goto('/app/billing');
+        await nora.page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tierOf(plus)}` })
+            .click({ timeout: 60_000 });
+        await expect(nora.page).toHaveURL(
+            new RegExp(`/app/family\\?create=${plus.id}&currency=[a-z]{3}$`),
+        );
+        await expect(
+            nora.page.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
+        ).toBeVisible({ timeout: 60_000 });
+        await nora.page.locator('input[autocomplete=current-password]').fill(PASSWORD);
+        await nora.page.locator('input[autocomplete=current-password]').press('Enter');
+        // Unlocked, the dialog opens with the tier chosen on Plans.
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(`Then you pay for ${tierOf(plus)},`, {
+            timeout: 60_000,
+        });
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(nora.page.locator('[data-no-family]')).toBeVisible();
+    });
+
+    test('a checkout that doesn’t open leaves the family made, on its page, with Choose a plan', async () => {
+        const plus = monthly('plus');
+        const family = 'Berg family';
+        const checkout = /\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/;
+        await nora.page.route(checkout, (route: Route) =>
+            route.fulfill({ status: 503, json: { error: 'Payments are unavailable just now.' } }),
+        );
+        await nora.page.goto('/app/billing');
+        await nora.page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tierOf(plus)}` })
+            .click({ timeout: 60_000 });
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(family);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await expect(
+            nora.page.getByText(`${family} created, but the checkout didn’t open`),
+        ).toBeVisible({ timeout: 90_000 });
+        await expect(nora.page).toHaveURL(/\/app\/family$/);
+        await expect(nora.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(nora.page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+        await nora.page.unroute(checkout);
+        // And Plans no longer offers a second family to someone who has one.
+        await nora.page.goto('/app/billing');
+        await expect(nora.page.locator('[data-plan="Free"]')).toBeVisible({ timeout: 60_000 });
+        await expect(nora.page.locator('[data-family-plans]')).toHaveCount(0);
+    });
+});
+
+/*
+ * While Polar's checkout opens, after the family was made: the page under the dialog stays as it
+ * was (Plans keeps its tiers, Account → Family stays "no family" with the dialog over it) even
+ * when the families are read again (a focus), the dialog stays on "Creating…" until the browser
+ * has left, and the address isn't touched before then. Back from Polar goes on to the family's
+ * page, where Choose a plan is, both ways a browser goes back:
+ * - restored from the back-forward cache: Playwright's browsers don't keep one, so the checkout's
+ *   address changes only the fragment (the page never leaves) and the restore is the `pageshow`
+ *   event (persisted) dispatched here;
+ * - loaded again: the checkout's address is another document (about:blank), and Back is the
+ *   browser's own.
+ * Polar is never asked: the checkout is answered on the wire. Runs only against a server that
+ * sells family plans.
+ */
+test.describe.serial('creating a family from Plans: while the checkout opens, and back', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let plans: CatalogueFamily[] = [];
+    const people: Person[] = [];
+    const checkoutPath = /\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/;
+
+    test.beforeAll(async ({ request }) => {
+        plans = await familyCatalogue(request);
+        test.skip(
+            !plans.some((plan) => plan.interval === 'month' && plan.tier === 'plus'),
+            'This server sells no Family Plus plan.',
+        );
+    });
+    test.afterAll(async () => {
+        for (const who of people) await who.page.context().close();
+    });
+
+    /* Holds the checkout until `answer` is called with where it sends the browser. */
+    async function holdCheckout(page: Page) {
+        let answer!: (url: string) => void;
+        const url = new Promise<string>((resolve) => (answer = resolve));
+        await page.route(checkoutPath, async (route) =>
+            route.fulfill({ json: { url: await url } }),
+        );
+        return answer;
+    }
+
+    /* What the browser does when Back restores the page from its back-forward cache. */
+    const restored = (page: Page) =>
+        page.evaluate(() =>
+            window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
+        );
+
+    /* Someone new names a family with Family Plus from `from` and presses Create and pay. */
+    async function createAndPay(
+        browser: Browser,
+        from: 'Plans' | 'Account → Family',
+        who: { name: string; family: string },
+    ) {
+        const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+        const tier = planTierName({ name: plus.name });
+        const person_ = await person(browser, who.name);
+        people.push(person_);
+        const { page } = person_;
+        const answer = await holdCheckout(page);
+        const path =
+            from === 'Plans' ? '/app/billing' : `/app/family?create=${plus.id}&currency=usd`;
+        await page.goto(path);
+        if (from === 'Plans')
+            await page
+                .locator('[data-family-plans]')
+                .getByRole('button', { name: `Create a family with ${tier}` })
+                .click({ timeout: 60_000 });
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(who.family, { timeout: 60_000 });
+        const made = page.waitForResponse(
+            (response) =>
+                response.request().method() === 'POST' &&
+                new URL(response.url()).pathname === '/api/groups' &&
+                response.ok(),
+        );
+        const asked = page.waitForRequest(checkoutPath);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await made;
+        await asked;
+        return { page, dialog, answer, path };
+    }
+
+    /* The page under the dialog, as it was before the family existed. */
+    const under = (page: Page, from: 'Plans' | 'Account → Family') =>
+        page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]');
+
+    for (const from of ['Plans', 'Account → Family'] as const) {
+        test(`from ${from}: the page stays while the checkout opens, even read again, and Back from the cache goes to the family`, async ({
+            browser,
+        }) => {
+            test.setTimeout(240_000);
+            const family = from === 'Plans' ? 'Lund family' : 'Moen family';
+            const { page, dialog, answer, path } = await createAndPay(browser, from, {
+                name: from === 'Plans' ? 'Pia Lund' : 'Olga Moen',
+                family,
+            });
+            // The families are read again while the checkout opens (the tab regains focus), and
+            // they now list the new family: the page under the dialog doesn't move for it.
+            const listed = page.waitForResponse(
+                async (response) =>
+                    response.request().method() === 'GET' &&
+                    new URL(response.url()).pathname === '/api/groups' &&
+                    (await response.text()).includes(family),
+            );
+            await page.evaluate(() =>
+                document.dispatchEvent(new Event('visibilitychange', { bubbles: true })),
+            );
+            await listed;
+            await page.waitForTimeout(1_000);
+            await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeVisible();
+            await expect(under(page, from)).toBeVisible();
+            await expect(page).toHaveURL(new URL(path, page.url()).href);
+            // The checkout answers; its address changes only the fragment, so the page stays,
+            // and the dialog with it, still busy, until the browser has left.
+            answer(`${path}#checkout`);
+            await expect(page).toHaveURL(/#checkout$/);
+            await page.waitForTimeout(1_000);
+            await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeVisible();
+            await expect(under(page, from)).toBeVisible();
+            // Back from Polar, restored as it was: it goes on to the family's page.
+            await restored(page);
+            await expect(page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });
+            await expect(dialog).toHaveCount(0);
+            await expect(page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+                timeout: 60_000,
+            });
+            await expect(page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+        });
+
+        test(`from ${from}: Back that loads the page again goes to the family`, async ({
+            browser,
+        }) => {
+            test.setTimeout(240_000);
+            const family = from === 'Plans' ? 'Ek family' : 'Dahl family';
+            const { page, answer } = await createAndPay(browser, from, {
+                name: from === 'Plans' ? 'Ivo Ek' : 'Ada Dahl',
+                family,
+            });
+            answer('about:blank');
+            await page.waitForURL('about:blank', { timeout: 60_000 });
+            await page.goBack();
+            await expect(page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });
+            await expect(page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+                timeout: 60_000,
+            });
+            await expect(page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+            await expect(page.getByRole('dialog')).toHaveCount(0);
+        });
+    }
+
+    test('Back while it is still creating: the family is made, and nothing moves the page after', async ({
+        browser,
+    }) => {
+        test.setTimeout(240_000);
+        const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+        const tier = planTierName({ name: plus.name });
+        const family = 'Holm family';
+        const who = await person(browser, 'Tove Holm');
+        people.push(who);
+        const { page } = who;
+        const answer = await holdCheckout(page);
+        // Into Plans within the app, so Back stays in it.
+        await page.goto('/app/account');
+        await page.getByRole('link', { name: 'Plan and storage' }).first().click();
+        await expect(page).toHaveURL(/\/app\/billing$/);
+        await page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tier}` })
+            .click({ timeout: 60_000 });
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(family, { timeout: 60_000 });
+        const asked = page.waitForRequest(checkoutPath);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await asked;
+        await page.goBack();
+        await expect(page).toHaveURL(/\/app\/account$/);
+        // The checkout answers after they've gone: no checkout opens, their page stays.
+        answer('/app/billing#checkout');
+        await expect(page.getByText(`${family} created`)).toBeVisible({ timeout: 30_000 });
+        await page.waitForTimeout(2_000);
+        await expect(page).toHaveURL(/\/app\/account$/);
+        // Nothing is left to send Plans to the family's page later.
+        await page.getByRole('link', { name: 'Plan and storage' }).first().click();
+        await expect(page).toHaveURL(/\/app\/billing$/);
+        await page.waitForTimeout(2_000);
+        await expect(page).toHaveURL(/\/app\/billing$/);
+    });
+
+    test('Back while it is still creating, from Account → Family: nothing moves the page after', async ({
+        browser,
+    }) => {
+        test.setTimeout(240_000);
+        const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+        const tier = planTierName({ name: plus.name });
+        const family = 'Lind family';
+        const who = await person(browser, 'Saga Lind');
+        people.push(who);
+        const { page } = who;
+        const answer = await holdCheckout(page);
+        // Locked, Plans sends Create a family to Account → Family (?create=), within the app.
+        await page.goto('/app/account', { waitUntil: 'networkidle' });
+        await page.getByRole('button', { name: 'Lock on this browser' }).click({ timeout: 60_000 });
+        await page
+            .getByRole('alertdialog')
+            .getByRole('button', { name: 'Lock', exact: true })
+            .click();
+        await expect(page.getByRole('button', { name: 'Unlock on this browser' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await page.goto('/app/billing');
+        await page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tier}` })
+            .click({ timeout: 60_000 });
+        await expect(page).toHaveURL(new RegExp(`/app/family\\?create=${plus.id}&`));
+        await page.locator('input[autocomplete=current-password]').fill(PASSWORD, {
+            timeout: 60_000,
+        });
+        await page.locator('input[autocomplete=current-password]').press('Enter');
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(family, { timeout: 60_000 });
+        const asked = page.waitForRequest(checkoutPath);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await asked;
+        await page.goBack();
+        await expect(page).toHaveURL(/\/app\/billing$/);
+        // The checkout answers after they've gone: no checkout opens, their page stays.
+        answer('/app/family#checkout');
+        await expect(page.getByText(`${family} created`)).toBeVisible({ timeout: 30_000 });
+        await page.waitForTimeout(2_000);
+        await expect(page).toHaveURL(/\/app\/billing$/);
     });
 });
 

@@ -1,4 +1,5 @@
 import type { SignupIntent } from '@hushos/auth/protocol';
+import { planTierName } from '@hushos/billing/protocol';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
@@ -309,7 +310,7 @@ function ChosenPlan({ id }: { id: string }) {
         fallback: currencies[0] ?? plan.currency,
     });
     const price = priceOf(plan, currency);
-    const name = plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+    const name = planTierName({ name: plan.name });
     return (
         <div className="flex items-start justify-between gap-4 rounded-md bg-accent px-4 py-3 text-accent-foreground">
             <span className="flex flex-col gap-0.5">

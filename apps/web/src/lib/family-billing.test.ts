@@ -13,6 +13,7 @@ import {
     quoteAdd,
     removeRange,
     seatNoteFor,
+    tierTooSmall,
     type FamilyBillingFull,
     type FamilyGlance,
 } from './family-billing';
@@ -531,5 +532,59 @@ describe('tierMoves', () => {
         expect(
             familyActions(onTier('pro-month', { units: 6, paidUnits: 5 }), organizer).changePlan,
         ).toBe(false);
+    });
+});
+
+describe('tierTooSmall', () => {
+    const GIB = 1024n ** 3n;
+    const tier = (name: string, quota: bigint) => ({
+        name: `Family ${name} (monthly)`,
+        quotaBytes: String(quota),
+    });
+    const plus = tier('Plus', 800n * GIB);
+    const pro = tier('Pro', 2048n * GIB);
+    const max = tier('Max', 4096n * GIB);
+    const tiers = [plus, pro, max];
+    const own = (bytes: bigint) => ({ usedBytes: String(bytes), pool: null });
+
+    test('a tier exactly as big as their files is offered; one byte more than it holds is not', () => {
+        expect(tierTooSmall(own(800n * GIB), plus, tiers)).toBeNull();
+        // The pool counts their files rounded up to a whole GiB, and says it in whole GB.
+        expect(tierTooSmall(own(800n * GIB + 1n), plus, tiers)).toBe(
+            'Your files take 801 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 1 GB.',
+        );
+    });
+
+    test('says it in the server’s words, rounded up', () => {
+        expect(tierTooSmall(own(950n * GIB - 5n), plus, tiers)).toBe(
+            'Your files take 950 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 150 GB.',
+        );
+    });
+
+    test('a quota that isn’t whole GiB is compared with what the pool counts, not the exact bytes', () => {
+        // The provider takes any quota_bytes. 800.5 GiB holds 800 GiB, counted as 800 GiB...
+        const odd = tier('Odd', 800n * GIB + GIB / 2n);
+        expect(tierTooSmall(own(800n * GIB), odd, [odd, pro])).toBeNull();
+        // ...but not one byte more: exactly, that would fit; the pool counts it as 801 GiB.
+        expect(tierTooSmall(own(800n * GIB + 1n), odd, [odd, pro])).toBe(
+            'Your files take 801 GB, more than Family Odd’s 800.5 GB. Choose a bigger plan or free at least 1 GB.',
+        );
+    });
+
+    test('with no bigger tier on offer, it says only what to free', () => {
+        expect(tierTooSmall(own(4096n * GIB + 512n * GIB), max, tiers)).toBe(
+            'Your files take 4.5 TB, more than Family Max’s 4 TB. Free at least 512 GB.',
+        );
+    });
+
+    test('pooled figures are the family’s, not theirs: nothing is refused from them', () => {
+        expect(
+            tierTooSmall(
+                { usedBytes: String(900n * GIB), pool: { groupId: 'g', name: 'F' } },
+                plus,
+                tiers,
+            ),
+        ).toBeNull();
+        expect(tierTooSmall(undefined, plus, tiers)).toBeNull();
     });
 });

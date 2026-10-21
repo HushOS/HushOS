@@ -475,7 +475,7 @@ export function TrashView({
               : {
                     title: section ? `Empty ${section}’ Trash?` : 'Empty the Trash?',
                     text: `All ${rows.length} ${rows.length === 1 ? 'item is' : 'items are'} deleted for good. This can’t be undone.${section ? ' The family folders’ Trash isn’t touched.' : ''}`,
-                    action: 'Empty Trash',
+                    action: section ? `Empty ${section}’ Trash` : 'Empty Trash',
                 };
 
     return (
@@ -504,7 +504,10 @@ export function TrashView({
                         {emptying ? <Spinner /> : <Trash2Icon />}
                         {emptying
                             ? `Emptying… ${emptying.gone} of ${emptying.total}`
-                            : 'Empty Trash'}
+                            : // Above both sections, it says which Trash it empties.
+                              section
+                              ? `Empty ${section}’ Trash`
+                              : 'Empty Trash'}
                     </Button>
                 )}
             </PageHeader>

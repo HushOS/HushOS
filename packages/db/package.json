@@ -12,6 +12,10 @@
         "./schema": {
             "types": "./src/schema/index.ts",
             "default": "./src/schema/index.ts"
+        },
+        "./pool-count": {
+            "types": "./src/pool-count.ts",
+            "default": "./src/pool-count.ts"
         }
     },
     "scripts": {

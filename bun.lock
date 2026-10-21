@@ -5,6 +5,7 @@
     "": {
       "name": "hushos",
       "devDependencies": {
+        "@hushos/billing": "workspace:*",
         "@hushos/config": "workspace:*",
         "@playwright/test": "1.63.0",
         "@types/bun": "1.4.2",

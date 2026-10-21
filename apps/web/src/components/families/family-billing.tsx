@@ -1,5 +1,5 @@
 import type { FamilyPlan } from '@hushos/billing/api';
-import { FAMILY_MAX_MEMBERS, spaceOf } from '@hushos/billing/protocol';
+import { FAMILY_MAX_MEMBERS, spaceOf, planTierName } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
@@ -322,7 +322,7 @@ function GlanceSection({
         <Section title="Plan">
             <div data-family-plan="glance" className="flex flex-col gap-2 text-sm">
                 <span className="text-base font-bold">
-                    {summary.planName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '')}
+                    {planTierName({ name: summary.planName })}
                     {summary.storage && summary.storage.quotaBytes !== '0'
                         ? ` · ${formatQuota(summary.storage.quotaBytes)}`
                         : ''}

@@ -9,6 +9,8 @@ import {
     FAMILY_MAX_MEMBERS,
     MAX_MEMBERS_PER_RAISE,
     quoteTierChange,
+    countedPool,
+    firstPlanTooSmall,
     quoteUnitsChange,
 } from '@hushos/billing/protocol';
 import { queryOptions } from '@tanstack/react-query';
@@ -443,3 +445,26 @@ export function familyCurrencies(plans: readonly FamilyPlan[]) {
 
 /* In lib/plans, shared with the pricing page, which must not load this module's API clients. */
 export { familyPrice } from '@/lib/plans';
+
+/*
+ * Whether a family tier can be someone's new family's first plan: once it is live, their own
+ * files draw from it, so the server refuses a tier smaller than what the pool would count
+ * (startGroupCheckout): their own files as one part, rounded up to a whole GiB (countedPool, the
+ * server's own count), said in the server's words (firstPlanTooSmall), so nobody is left with a
+ * family and no plan. `storage` is the account's own figures (/api/auth/storage while not
+ * pooled); unknown, or pooled already (someone in a family can't make another), nothing is
+ * refused here. `tiers` is the family plans on offer.
+ */
+export function tierTooSmall(
+    storage: { usedBytes: string; pool: unknown } | null | undefined,
+    plan: Pick<FamilyPlan, 'name' | 'quotaBytes'>,
+    tiers: readonly Pick<FamilyPlan, 'quotaBytes'>[],
+) {
+    if (!storage || storage.pool) return null;
+    return firstPlanTooSmall({
+        countedBytes: countedPool([BigInt(storage.usedBytes)]),
+        plan,
+        tiers,
+        family: false,
+    });
+}

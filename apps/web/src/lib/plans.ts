@@ -1,5 +1,5 @@
 import type { BillingSubscription, Catalogue, FamilyPlan, Plan } from '@hushos/billing/api';
-import { DEFAULT_CURRENCY, planStanding } from '@hushos/billing/protocol';
+import { DEFAULT_CURRENCY, planStanding, planTierName } from '@hushos/billing/protocol';
 import { formatMoney, formatQuota } from '@/lib/format';
 
 export type Tier = {
@@ -42,7 +42,7 @@ export function tiersOf(plans: Plan[]) {
     for (const plan of plans) {
         const tier = tiers.get(plan.quotaBytes) ?? {
             key: plan.quotaBytes,
-            name: plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, ''),
+            name: planTierName(plan),
             description: plan.description,
             quotaBytes: plan.quotaBytes,
             recommended: false,
@@ -173,8 +173,7 @@ export function personalPlanEnding(
 }
 
 /* A family plan's name without its billing period: "Family Pro (monthly)" → "Family Pro". */
-export const familyTierName = (plan: Pick<FamilyPlan, 'name'>) =>
-    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+export const familyTierName = (plan: Pick<FamilyPlan, 'name'>) => planTierName(plan);
 
 export type FamilyOffer = {
     plan: FamilyPlan;
