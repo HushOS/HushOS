@@ -42,6 +42,8 @@ type FakeSubscription = {
     current_period_end: string;
     cancel_at_period_end: boolean;
     ended_at?: string | null;
+    /* When Polar made it: an `incomplete` one younger than a day is a checkout still waiting. */
+    created_at?: string;
     units?: number | null;
     pending_update?: {
         units: number | null;
@@ -2566,6 +2568,7 @@ function familySubscription(
         ended_at: null,
         units: 6,
         pending_update: null,
+        created_at: new Date(Date.now() - 60 * DAY).toISOString(),
         ...subscription,
     };
     customer.subscriptions = customer.subscriptions.filter((s) => s.id !== full.id).concat(full);
@@ -3555,17 +3558,20 @@ describe('a new payer', () => {
                 endedAt: null,
             });
             polar.calls = [];
-            await billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY });
+            await billing.startGroupCheckout(userOf(heir), groupId, {
+                productId: FAMILY,
+                endLapsed: true,
+            });
             expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(
                 heir.userId,
             );
             expect(polar.customers.get(`group:${groupId}`)!.members).toEqual([heir.userId]);
             expect(callsTo('checkouts.create')).toHaveLength(1);
-            // Revoked before the payer changed at Polar, and before the checkout.
+            // Revoked once the payer had changed at Polar (a takeover that fails leaves it be),
+            // and before the checkout.
             const revoked = polar.calls.indexOf(`subscriptions.revoke:${subscription.id}`);
-            expect(revoked).toBeGreaterThanOrEqual(0);
-            expect(revoked).toBeLessThan(
-                polar.calls.findIndex((call) => call.startsWith('members.createExternal')),
+            expect(revoked).toBeGreaterThan(
+                polar.calls.findIndex((call) => call.startsWith('members.updateExternal')),
             );
             expect(revoked).toBeLessThan(polar.calls.indexOf('checkouts.create'));
             expect(subscription.ended_at).toBeTruthy();
@@ -3633,8 +3639,9 @@ describe('a family plan whose payment failed, or that is paused', () => {
         endingJobs.length = 0;
         return family;
     }
+    /* A checkout the person has confirmed ends the family's lapsed plan (the page's dialog). */
     const checkout = (payer: { id: string; name: string; email: string }, groupId: string) =>
-        billing.startGroupCheckout(payer, groupId, { productId: PRO_FAMILY });
+        billing.startGroupCheckout(payer, groupId, { productId: PRO_FAMILY, endLapsed: true });
     /* Polar's `order.paid` for a family order `addPaidOrder` made. */
     async function deliverFamilyPaid(groupId: string, subscriptionId: string, orderId: string) {
         const order = [...polar.orders, ...polar.checkoutOrders].find(
@@ -3716,6 +3723,115 @@ describe('a family plan whose payment failed, or that is paused', () => {
         },
     );
 
+    test('without the person’s confirmation nothing is ended: the checkout is refused with the words to confirm', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('paused');
+        await expect(
+            billing.startGroupCheckout(payer, groupId, { productId: PRO_FAMILY }),
+        ).rejects.toMatchObject({
+            status: 409,
+            code: 'ends-lapsed',
+            message:
+                'Choosing a plan ends the family’s Family Pro plan now, even if you don’t finish the checkout.',
+        });
+        // Read only: nothing written at Polar, nothing ended.
+        expect(
+            polar.calls.filter(
+                (call) =>
+                    !call.startsWith('subscriptions.get') &&
+                    !call.startsWith('subscriptions.list') &&
+                    !call.startsWith('products.'),
+            ),
+        ).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(await billingRepository.getPlanEnding(subscription.id)).toBeNull();
+    });
+
+    test('a takeover Polar refuses leaves the old plan as it was: nothing is ended without the checkout’s payer in place', async () => {
+        const { groupId, subscription } = await lapsedFamily('unpaid');
+        const heir = await createTestAccount();
+        await setTestMember({ groupId, userId: heir.userId, state: 'active', roles: ['billing'] });
+        const spy = vi
+            .spyOn(fakeClient.customers.members, 'createExternal')
+            .mockRejectedValueOnce(new PolarClientError(503, { error: 'ServiceUnavailable' }));
+        try {
+            await expect(checkout(userOf(heir), groupId)).rejects.toMatchObject({ status: 503 });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(await billingRepository.getPlanEnding(subscription.id)).toBeNull();
+        expect(callsTo('checkouts.create')).toEqual([]);
+    });
+
+    test('a plan paid into past due while the checkout ends it is the family’s plan: no second checkout', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('unpaid');
+        // Paid in the portal just after HushOS read it: past due (Polar retrying a renewal),
+        // which the customer state doesn't list.
+        polar.afterGet = () => {
+            subscription.status = 'past_due';
+        };
+        await expect(checkout(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: 'This family already has a plan.',
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(callsTo('checkouts.create')).toEqual([]);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.status).toBe(
+            'past_due',
+        );
+    });
+
+    test('an incomplete plan less than a day old is a checkout still waiting on the bank: never ended, and said so', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('incomplete');
+        subscription.created_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        await expect(checkout(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'A checkout for the family’s Family Pro plan is still waiting for the bank to confirm the payment. Finish it, or try again tomorrow if it was abandoned.',
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(callsTo('members.')).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        // A day on, abandoned: ended as any other.
+        subscription.created_at = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+        await checkout(payer, groupId);
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            `subscriptions.revoke:${subscription.id}`,
+        ]);
+    });
+
+    test.each(['paused', 'unpaid'])(
+        'deleting the payer’s account revokes the family’s %s plan first, so it can’t charge their card once they’re gone',
+        async (status) => {
+            const { payer, groupId, subscription } = await lapsedFamily(status);
+            await billing.revokeForDeletion(payer.id);
+            expect(callsTo('subscriptions.revoke')).toEqual([
+                `subscriptions.revoke:${subscription.id}`,
+            ]);
+            expect(await billingRepository.getPlanEnding(subscription.id)).toMatchObject({
+                userId: groupId,
+                revokedAt: expect.any(Date),
+            });
+        },
+    );
+
+    test('a family plan Polar won’t revoke stops the payer’s deletion, with words', async () => {
+        const { payer, subscription } = await lapsedFamily('paused');
+        polar.revokeRefusals.set(subscription.id, { status: 409, error: 'SubscriptionLocked' });
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
+                status: 409,
+                message:
+                    'Polar is still working on a change to the family’s Family Pro plan, so it can’t be ended yet. Try again later, or contact support. Your account was not deleted.',
+            });
+        } finally {
+            error.mockRestore();
+        }
+        expect(subscription.ended_at).toBeNull();
+    });
+
     test('a plan Polar holds that HushOS never heard of is found in Polar’s list and revoked', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
         subscription.status = 'canceled';
@@ -3731,6 +3847,8 @@ describe('a family plan whose payment failed, or that is paused', () => {
         await checkout(payer, groupId);
         expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_ghost']);
         expect(ghost.ended_at).toBeTruthy();
+        // Written to the mirror, so the refund job and the operator pages know it as the family's.
+        expect(await billingRepository.familyPlanOf('sub_ghost')).toEqual({ groupId });
         expect(callsTo('checkouts.create')).toHaveLength(1);
     });
 
@@ -3786,7 +3904,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
             await expect(checkout(payer, groupId)).rejects.toMatchObject({
                 status: 409,
                 message:
-                    'Polar shows a payment for the family’s Family Pro plan that hasn’t taken effect yet, so it’s kept and can’t be ended. Try again in a few minutes, or contact support.',
+                    'Polar shows a payment for the family’s Family Pro plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in the billing portal; or contact support.',
             });
             expect(warn).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -6675,7 +6793,7 @@ describe('a dissolved family’s plan', () => {
     test('dissolving with a plan that can still charge sets it to end at its period’s end, once, and tells the payer when', async () => {
         const { payer, groupId, subscription } = await dissolvedResumed();
         expect(cancelJobs).toEqual([groupId]);
-        expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0, revoked: 0 }]);
         expect(setToEnd()).toEqual([
             `subscriptions.update:${subscription.id}:{"cancel_at_period_end":true}`,
         ]);
@@ -6693,7 +6811,7 @@ describe('a dissolved family’s plan', () => {
         // Queued again (a webhook, the daily reconcile): nothing more is set or sent.
         await billing.queueDissolvedCancel(groupId);
         polar.calls = [];
-        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0, revoked: 0 }]);
         expect(setToEnd()).toEqual([]);
         expect(planEndingMail).toHaveLength(1);
     });
@@ -6705,7 +6823,7 @@ describe('a dissolved family’s plan', () => {
             subscription.cancel_at_period_end = false;
             expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
             expect(cancelJobs).toEqual([groupId]);
-            expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0 }]);
+            expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0, revoked: 0 }]);
             expect(subscription.cancel_at_period_end).toBe(true);
             expect((await row(subscription.id)).dissolveCancels).toBe(resumed);
         }
@@ -6718,7 +6836,7 @@ describe('a dissolved family’s plan', () => {
         renew(subscription, subscription.product_id);
         subscription.cancel_at_period_end = false;
         await billing.handleWebhook(await resumedWebhook(groupId));
-        expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0, revoked: 0 }]);
         expect(planEndingMail).toEqual([
             { to: payer.email, endsOn: expect.any(String) },
             { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
@@ -6731,7 +6849,7 @@ describe('a dissolved family’s plan', () => {
         const error = vi.spyOn(log, 'error');
         try {
             // Not thrown, so pg-boss doesn't retry it for ever.
-            expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 1 }]);
+            expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 1, revoked: 0 }]);
             expect(error).toHaveBeenCalledWith(
                 expect.objectContaining({
                     message: 'Polar refused to end a dissolved family’s plan: cancel it in Polar',
@@ -6754,14 +6872,14 @@ describe('a dissolved family’s plan', () => {
         await billing.reconcileGroup(groupId);
         expect(cancelJobs).toEqual([]);
         await billing.queueDissolvedCancel(groupId);
-        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0, revoked: 0 }]);
         expect(setToEnd()).toEqual([]);
         // Its state changes (it renewed, and Polar no longer refuses): asked again, and set.
         polar.cancelRefusal = null;
         renew(subscription, subscription.product_id);
         await billing.handleWebhook(await resumedWebhook(groupId));
         expect(cancelJobs).toEqual([groupId]);
-        expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0, revoked: 0 }]);
         expect(subscription.cancel_at_period_end).toBe(true);
         expect(await billingRepository.listGivenUpReissues()).toEqual([]);
     });
@@ -6792,7 +6910,11 @@ describe('a dissolved family’s plan', () => {
         }
         // The renewal went through and the lock cleared: the retry sets it to end.
         polar.cancelRefusal = null;
-        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 1, refused: 0 });
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 1,
+            refused: 0,
+            revoked: 0,
+        });
         expect(subscription.cancel_at_period_end).toBe(true);
         expect(planEndingMail).toEqual([
             { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
@@ -6890,7 +7012,7 @@ describe('a dissolved family’s plan', () => {
         polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
         const error = vi.spyOn(log, 'error').mockImplementation(() => {});
         try {
-            expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 1 }]);
+            expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 1, revoked: 0 }]);
         } finally {
             error.mockRestore();
         }
@@ -6907,7 +7029,7 @@ describe('a dissolved family’s plan', () => {
         expect((await row(subscription.id)).dissolveRefusedAt).not.toBeNull();
         expect(await billingRepository.listGivenUpReissues()).toEqual([]);
         // HushOS asked this period, so the payer is told the date.
-        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0, revoked: 0 }]);
         expect(planEndingMail).toEqual([
             { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
         ]);
@@ -6930,7 +7052,7 @@ describe('a dissolved family’s plan', () => {
         mailer.failures = 1;
         const warn = vi.spyOn(log, 'warn');
         try {
-            expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0 }]);
+            expect(await runCancelJobs()).toEqual([{ cancelled: 1, refused: 0, revoked: 0 }]);
             expect(warn).toHaveBeenCalledWith(
                 expect.objectContaining({ message: 'Plan ending email not sent' }),
             );
@@ -6943,7 +7065,7 @@ describe('a dissolved family’s plan', () => {
         await billing.reconcileGroup(groupId);
         expect(cancelJobs).toEqual([groupId]);
         polar.calls = [];
-        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0, revoked: 0 }]);
         expect(setToEnd()).toEqual([]);
         expect(planEndingMail).toEqual([
             { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
@@ -6964,7 +7086,11 @@ describe('a dissolved family’s plan', () => {
         expect(subscription.cancel_at_period_end).toBe(true);
         expect(planEndingMail).toEqual([]);
         // pg-boss's retry: it reads the plan ending, sets nothing, and tells the payer.
-        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 0, refused: 0 });
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 0,
+            refused: 0,
+            revoked: 0,
+        });
         expect(setToEnd()).toHaveLength(1);
         expect(planEndingMail).toEqual([
             { to: payer.email, endsOn: endsOn(subscription.current_period_end) },
@@ -6982,7 +7108,7 @@ describe('a dissolved family’s plan', () => {
         expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
         expect(cancelJobs).toEqual([]);
         await billing.queueDissolvedCancel(groupId);
-        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0 }]);
+        expect(await runCancelJobs()).toEqual([{ cancelled: 0, refused: 0, revoked: 0 }]);
         expect(planEndingMail).toHaveLength(1);
     });
 
@@ -6992,29 +7118,14 @@ describe('a dissolved family’s plan', () => {
         polar.afterGet = () => {
             subscription.cancel_at_period_end = true;
         };
-        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 0, refused: 0 });
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 0,
+            refused: 0,
+            revoked: 0,
+        });
         expect(setToEnd()).toEqual([]);
         expect((await row(subscription.id)).dissolveCancels).toBe(0);
         expect(planEndingMail).toEqual([]);
-    });
-
-    test('a paused plan of a dissolved family still counts: kept by the reconcile, and the purge waits', async () => {
-        const { groupId, subscription } = await dissolvedResumed();
-        // Paused in the portal (customer pause enabled): it may be resumed and charge again.
-        subscription.status = 'paused';
-        polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
-        await billing.reconcileGroup(groupId);
-        expect(await row(subscription.id)).toMatchObject({ status: 'paused', endedAt: null });
-        await runCancelJobs();
-        await rawSql(
-            `update groups set dissolved_at = now() - interval '31 days' where id = '${groupId}'`,
-        );
-        await rawSql(
-            `update workspaces set deleted_at = now() - interval '31 days' where group_id = '${groupId}'`,
-        );
-        expect(await groupsRepository.purgeDeletedAreas(30)).toBe(1);
-        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 0 });
-        expect(await groupsRepository.getGroupRow(groupId)).not.toBeNull();
     });
 
     const listedAs = async () =>
@@ -7040,77 +7151,76 @@ describe('a dissolved family’s plan', () => {
         }
     };
 
-    test.each(['unpaid', 'incomplete'])(
-        'a plan Polar answers as %s still counts: kept, refused on its status without asking Polar, listed until it ends, and the purge waits',
+    test.each(['paused', 'unpaid', 'incomplete'])(
+        'a %s plan of a dissolved family is revoked by the job, its ending first, and the purge goes ahead once it has ended',
         async (status) => {
             const { groupId, subscription } = await dissolvedResumed();
-            // Polar's retries ran out (`unpaid`), or a payment never went through
-            // (`incomplete`): Polar hasn't ended it, and a payment can still bring it back.
+            // Paused in the portal, Polar's retries ran out, or a payment never went through:
+            // left alone it resumes, or is paid, for a family that is gone.
             subscription.status = status;
             await billing.reconcileGroup(groupId);
             expect(await row(subscription.id)).toMatchObject({ status, endedAt: null });
-            // The daily reconcile reads it again and still keeps it, without reading its orders.
-            polar.calls = [];
-            await billing.reconcileGroup(groupId);
-            expect(await row(subscription.id)).toMatchObject({ status, endedAt: null });
-            expect(polar.calls.filter((call) => call.startsWith('orders.'))).toEqual([]);
-            // The leave's job and each reconcile's: refused once, on its status alone. Polar
-            // would have kept the end (the fake refuses nothing), so it was never asked.
-            expect(await quietly(runCancelJobs)).toEqual([
-                { cancelled: 0, refused: 1 },
-                { cancelled: 0, refused: 0 },
-                { cancelled: 0, refused: 0 },
-            ]);
+            const outcomes = await quietly(runCancelJobs);
+            expect(outcomes.reduce((sum, outcome) => sum + outcome.revoked, 0)).toBe(1);
+            // Never asked to set it to end (Polar sets only an active plan to end): revoked.
             expect(setToEnd()).toEqual([]);
-            expect(subscription.cancel_at_period_end).toBe(false);
-            expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
-            // Not queued again by the reconciles that follow.
-            await billing.reconcileGroup(groupId);
-            expect(cancelJobs).toEqual([]);
-            // An operator sets it to end instead of revoking it: it hasn't ended, so it stays
-            // listed, and the purge still waits.
-            subscription.cancel_at_period_end = true;
-            expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
-            expect(await row(subscription.id)).toMatchObject({ cancelAtPeriodEnd: true });
-            expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
-            await purgeDue(groupId);
-            expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({
-                families: 0,
+            expect(callsTo('subscriptions.revoke')).toEqual([
+                `subscriptions.revoke:${subscription.id}`,
+            ]);
+            expect(subscription.ended_at).toBeTruthy();
+            // The family's ending, so a payment Polar takes afterwards is refunded whole.
+            expect(await billingRepository.getPlanEnding(subscription.id)).toMatchObject({
+                userId: groupId,
+                groupId: null,
+                revokedAt: expect.any(Date),
             });
-            expect(await groupsRepository.getGroupRow(groupId)).not.toBeNull();
-            // Revoked in Polar, and the delivery reconciled: off the list, and the records go.
-            subscription.status = 'canceled';
-            subscription.ended_at = new Date().toISOString();
-            expect((await billing.handleWebhook(await resumedWebhook(groupId))).status).toBe(200);
+            expect((await row(subscription.id)).endedAt).not.toBeNull();
             expect(await listedAs()).toEqual([]);
+            await purgeDue(groupId);
             expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({
                 families: 1,
             });
         },
     );
 
-    test('a plan refused while past due that turns unpaid is asked about again, then left alone', async () => {
+    test('a dissolved family’s lapsed plan Polar won’t revoke is listed for operators, and not asked again until it changes', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        subscription.status = 'unpaid';
+        polar.revokeRefusals.set(subscription.id, { status: 409, error: 'SubscriptionLocked' });
+        await billing.reconcileGroup(groupId);
+        const outcomes = await quietly(runCancelJobs);
+        expect(outcomes.reduce((sum, outcome) => sum + outcome.refused, 0)).toBe(1);
+        expect(subscription.ended_at).toBeNull();
+        expect(await row(subscription.id)).toMatchObject({ dissolveRefusal: 'SubscriptionLocked' });
+        expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
+        // The purge waits while it can still charge.
+        await purgeDue(groupId);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 0 });
+        polar.calls = [];
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([]);
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+    });
+
+    test('a plan refused while past due that turns unpaid is asked about again, and revoked', async () => {
         const { groupId, subscription } = await dissolvedResumed();
         subscription.status = 'past_due';
         polar.cancelRefusal = { status: 403, error: 'InactiveSubscription' };
         await billing.reconcileGroup(groupId);
         cancelJobs.splice(0);
         await billing.queueDissolvedCancel(groupId);
-        expect(await quietly(runCancelJobs)).toEqual([{ cancelled: 0, refused: 1 }]);
+        expect(await quietly(runCancelJobs)).toEqual([{ cancelled: 0, refused: 1, revoked: 0 }]);
         expect(setToEnd()).toHaveLength(1);
         expect(await listedAs()).toEqual([[subscription.id, 'dissolved-refused']]);
         // Polar's retries run out: a new state, so the next reconcile queues the job again.
         subscription.status = 'unpaid';
         await billing.reconcileGroup(groupId);
         expect(cancelJobs).toEqual([groupId]);
-        expect(await quietly(runCancelJobs)).toEqual([{ cancelled: 0, refused: 1 }]);
-        // Refused on its status this time, without asking Polar.
+        expect(await quietly(runCancelJobs)).toEqual([{ cancelled: 0, refused: 0, revoked: 1 }]);
+        // Revoked this time, without asking Polar to set it to end.
         expect(setToEnd()).toHaveLength(1);
-        expect(await row(subscription.id)).toMatchObject({
-            dissolveRefusal: 'status:unpaid',
-            dissolveRefusedState: expect.stringMatching(/^unpaid\|/),
-        });
-        expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
+        expect(subscription.ended_at).toBeTruthy();
+        expect(await listedAs()).toEqual([]);
         await billing.reconcileGroup(groupId);
         expect(cancelJobs).toEqual([]);
     });
@@ -7147,7 +7257,11 @@ describe('a dissolved family’s plan', () => {
         expect((await row(subscription.id)).dissolveCancels).toBe(0);
         expect(planEndingMail).toEqual([]);
         // pg-boss's retry: the claim was let go, and this time Polar keeps it.
-        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 1, refused: 0 });
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 1,
+            refused: 0,
+            revoked: 0,
+        });
         expect(subscription.cancel_at_period_end).toBe(true);
         expect(setToEnd()).toHaveLength(2);
         expect((await row(subscription.id)).dissolveCancels).toBe(1);
@@ -7164,13 +7278,21 @@ describe('a dissolved family’s plan', () => {
             second = billing.cancelDissolvedPlan(groupId);
             await second.catch(() => {});
         };
-        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 1, refused: 0 });
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 1,
+            refused: 0,
+            revoked: 0,
+        });
         await expect(second).rejects.toBeInstanceOf(billing.DissolveCancelBusyError);
         expect(setToEnd()).toHaveLength(1);
         expect((await row(subscription.id)).dissolveCancels).toBe(1);
         expect(planEndingMail).toHaveLength(1);
         // Its retry finds it set.
-        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({ cancelled: 0, refused: 0 });
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 0,
+            refused: 0,
+            revoked: 0,
+        });
         expect(setToEnd()).toHaveLength(1);
     });
 
@@ -7194,8 +7316,8 @@ describe('a dissolved family’s plan', () => {
         for (const groupId of [never.groupId, ended.groupId])
             await billing.queueDissolvedCancel(groupId);
         expect(await runCancelJobs()).toEqual([
-            { cancelled: 0, refused: 0 },
-            { cancelled: 0, refused: 0 },
+            { cancelled: 0, refused: 0, revoked: 0 },
+            { cancelled: 0, refused: 0, revoked: 0 },
         ]);
         expect(polar.calls).toEqual([]);
         expect(planEndingMail).toEqual([]);

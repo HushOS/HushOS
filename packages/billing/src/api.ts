@@ -298,7 +298,16 @@ export interface GrowthApi {
 export interface GroupBillingApi {
     summary(groupId: string): Promise<GroupBillingSummary>;
     /* Polar's hosted checkout; whoever starts it becomes the family's payer. */
-    checkout(groupId: string, productId: string, currency?: string): Promise<{ url: string }>;
+    /*
+     * `endLapsed`: the person confirmed that the family's lapsed plan ends now. Without it, a
+     * family with one is refused with code `ends-lapsed`, and nothing is ended.
+     */
+    checkout(
+        groupId: string,
+        productId: string,
+        currency?: string,
+        endLapsed?: boolean,
+    ): Promise<{ url: string }>;
     /*
      * More places are charged at once; fewer are scheduled for the period's
      * end. `url` is the portal when the bank wants the payer to confirm.

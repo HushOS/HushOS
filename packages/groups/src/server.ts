@@ -27,8 +27,11 @@ import { verifyHybrid } from '@hushos/crypto/signatures';
 import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
 import {
     billingEnabled,
+    endLapsedPlansPaidBy,
     ensureGroupSeat,
     familyHasPlan,
+    LapsedFamilyPlanError,
+    lapsedPlanStaysRefusal,
     paysForGroup,
     queueDissolvedCancel,
     queuePlanEnding,
@@ -2056,7 +2059,30 @@ export async function removeMember(
             'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
             409,
         );
+    // One that gives nothing (unpaid, incomplete, paused) is ended first: it would otherwise
+    // resume, or take a retried payment, on the card of someone no longer in the family.
+    await endPayersLapsedPlan(groupId, targetId, 'They');
     return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
+}
+
+/*
+ * A family plan this person pays for that gives nothing (unpaid, incomplete, paused) is
+ * revoked before they leave or are removed (billing's endLapsedPlansPaidBy: its ending
+ * first, a payment taken afterwards refunded whole), so it can't resume or be paid on the
+ * card of someone no longer in the family. One that can't be ended stops the change.
+ */
+async function endPayersLapsedPlan(groupId: string, payerId: string, who: 'You' | 'They') {
+    try {
+        await endLapsedPlansPaidBy(groupId, payerId);
+    } catch (error) {
+        if (!(error instanceof LapsedFamilyPlanError)) throw error;
+        const words = lapsedPlanStaysRefusal(error);
+        throw new GroupError(
+            'payer',
+            who === 'You' ? words : words.replace('your card', 'their card'),
+            409,
+        );
+    }
 }
 
 const youPay = () =>
@@ -2074,6 +2100,7 @@ const youPay = () =>
  */
 export async function leave(userId: string, groupId: string) {
     if (await paysForGroup(groupId, userId)) throw youPay();
+    await endPayersLapsedPlan(groupId, userId, 'You');
     const result = await groupsRepository.leaveGroup(groupId, userId);
     switch (result.status) {
         case 'left':

@@ -40,6 +40,9 @@ const polar = {
     subscriptions: new Map<string, Subscription>(),
     refusal: null as { error: string; detail: string } | null,
     updates: [] as Record<string, unknown>[],
+    /* A revoke Polar refuses (status, error name) while set. */
+    revokeRefusal: null as { status: number; error: string } | null,
+    revokes: [] as string[],
 };
 
 /* A family plan with one member included, so a family of two already needs a paid place. */
@@ -99,6 +102,28 @@ const fakeClient = {
             if (!subscription) throw notFound();
             return structuredClone(subscription);
         },
+        // A team customer's subscriptions, ended ones included.
+        async list(query: { external_customer_id?: string }) {
+            const team = query.external_customer_id
+                ? polar.teams.get(query.external_customer_id)
+                : undefined;
+            return { items: (team?.subscriptions ?? []).map((s) => structuredClone(s)) };
+        },
+        // Ends it now; one already ended is refused as Polar refuses it.
+        async revoke(id: string) {
+            polar.revokes.push(id);
+            const subscription = polar.subscriptions.get(id);
+            if (!subscription) throw notFound();
+            if (polar.revokeRefusal)
+                throw new PolarClientError(polar.revokeRefusal.status, {
+                    error: polar.revokeRefusal.error,
+                });
+            if (subscription.ended_at)
+                throw new PolarClientError(403, { error: 'AlreadyCanceledSubscription' });
+            subscription.status = 'canceled';
+            subscription.ended_at = new Date().toISOString();
+            return structuredClone(subscription);
+        },
         // A raise is charged at once; a refused charge (402) changes nothing (spike E8).
         async update(
             id: string,
@@ -141,6 +166,7 @@ const fakeClient = {
                         refunded_amount: 0,
                         billing_reason: 'subscription_create',
                         product_id: subscription.product_id,
+                        currency: 'usd',
                         created_at: new Date(Date.now() - 60 * DAY).toISOString(),
                     },
                 ],
@@ -177,6 +203,8 @@ beforeEach(async () => {
     polar.subscriptions.clear();
     polar.refusal = null;
     polar.updates = [];
+    polar.revokeRefusal = null;
+    polar.revokes = [];
 });
 afterAll(closeDatabase);
 
@@ -590,11 +618,92 @@ describe('admission with billing on', () => {
             expect(await billing.cancelDissolvedPlan(fam.groupId)).toEqual({
                 cancelled: 1,
                 refused: 0,
+                revoked: 0,
             });
             expect(subscription).toMatchObject({ cancel_at_period_end: true, ended_at: null });
         } finally {
             billing.setDissolveCancelQueue(undefined);
         }
+    });
+
+    test.each(['paused', 'unpaid'])(
+        'the payer of a %s plan has it revoked before they leave, so it can’t resume or be paid on their card',
+        async (status) => {
+            const fam = await kit.family();
+            const subscription = await onPlan(fam, 1);
+            subscription.status = status;
+            await billing.reconcileGroup(fam.groupId);
+            // Nothing live: they may leave, and as its last member, dissolve it.
+            expect(await groups.leave(fam.organizer.userId, fam.groupId)).toEqual({
+                state: 'left',
+                dissolved: true,
+            });
+            expect(polar.revokes).toEqual([subscription.id]);
+            expect(subscription).toMatchObject({
+                status: 'canceled',
+                ended_at: expect.any(String),
+            });
+            // The family's ending, written before the revoke: a payment taken later is refunded.
+            expect(await billingRepository.getPlanEnding(subscription.id)).toMatchObject({
+                userId: fam.groupId,
+                groupId: null,
+                revokedAt: expect.any(Date),
+            });
+        },
+    );
+
+    test('a payer whose lapsed plan Polar won’t revoke stays, and is told why', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 1);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        polar.revokeRefusal = { status: 409, error: 'SubscriptionLocked' };
+        const refused = groups.leave(fam.organizer.userId, fam.groupId);
+        await expect(refused).rejects.toMatchObject({
+            code: 'payer',
+            status: 409,
+            message:
+                'Polar is still working on a change to the family’s Family plan, so it can’t be ended yet. Try again later, or contact support.',
+        });
+        expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();
+        expect(subscription.ended_at).toBeNull();
+    });
+
+    test('a member removed while they pay for a paused plan has it revoked first', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        // Billing passed to them earlier (their card on the plan), and the plan paused since.
+        expect(
+            await billingRepository.setGroupPayer(fam.groupId, fam.organizer.userId, plain.userId),
+        ).toBe(true);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        const before = kit.entries(fam.h).find((entry) => entry.userId === plain.userId)!;
+        const { at, call } = await kit.nextRoster(
+            fam,
+            fam.organizer,
+            kit.withEntry(fam.h, { ...before, status: 'left' }),
+        );
+        await groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+            ...call,
+            rotations: [await kit.rotationWire(fam.areaId, fam.organizer.who, 1)],
+            grants: [
+                await kit.grantWire(
+                    fam.groupId,
+                    fam.areaId,
+                    2,
+                    fam.organizer.who,
+                    fam.organizer.who,
+                    at,
+                ),
+            ],
+        });
+        expect(await state(fam.groupId, plain.userId)).toBe('removed');
+        expect(polar.revokes).toEqual([subscription.id]);
+        expect(subscription.ended_at).toBeTruthy();
     });
 
     test('a payer who cancelled can leave; the family keeps the plan until it ends', async () => {

@@ -576,13 +576,27 @@ describe('lapsed family plans and double charges', () => {
         expect(await billing.getLapsedGroupSubscription(groupId)).toBeNull();
     });
 
-    test('a family’s plan is told from a person’s, and a purged family’s from a living one’s', async () => {
+    test('a family’s plan and its ending’s owner are told from a person’s by one rule, a purged family’s too', async () => {
         const { userId } = await createTestAccount();
         const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
         await apply(groupId, [plan()]);
-        expect(await billing.familyPlanOf('sub_family')).toEqual({ groupId, exists: true });
+        expect(await billing.familyPlanOf('sub_family')).toEqual({ groupId });
         expect(await billing.familyPlanOf('sub_personal')).toBeNull();
-        // Billing rows outlive the family's own (no foreign key): a purged family's reads as gone.
+        expect(await billing.isFamilyOwner(groupId)).toBe(true);
+        expect(await billing.isFamilyOwner(userId)).toBe(false);
+        // Operators' lists name the family behind a family's own ending.
+        await billing.beginLapsedRevoke({
+            subscriptionId: 'sub_family',
+            userId: groupId,
+            at: new Date(),
+            owner: 'run',
+            leaseMs: 60_000,
+        });
+        await billing.setPlanUnrefundable('sub_family', 300, 'usd');
+        expect(await billing.listUnrefundable()).toEqual([
+            expect.objectContaining({ subscriptionId: 'sub_family', planOfGroupId: groupId }),
+        ]);
+        // Billing rows outlive the family's own (no foreign key): still a family's.
         const purged = randomUUID();
         await db.insert(groupBillingSubscriptions).values({
             id: 'sub_purged',
@@ -599,10 +613,8 @@ describe('lapsed family plans and double charges', () => {
             currentPeriodEnd: new Date(Date.now() + DAY),
             endedAt: new Date(),
         });
-        expect(await billing.familyPlanOf('sub_purged')).toEqual({
-            groupId: purged,
-            exists: false,
-        });
+        expect(await billing.familyPlanOf('sub_purged')).toEqual({ groupId: purged });
+        expect(await billing.isFamilyOwner(purged)).toBe(true);
     });
 
     test('a family or a person with two plans that can still charge is listed for operators; one, or an ended second, is not', async () => {
@@ -645,6 +657,12 @@ describe('lapsed family plans and double charges', () => {
                 ],
             },
         ]);
+        // The live one set to end at its period's end charges no more: off the list.
+        await apply(groupId, [
+            plan({ id: 'sub_a', cancelAtPeriodEnd: true }),
+            plan({ id: 'sub_b', status: 'unpaid' }),
+        ]);
+        expect((await listed()).map((row) => row.kind)).toEqual(['person']);
         // Revoked, or ended at Polar: no longer able to charge, so off the list.
         await apply(groupId, [
             plan({ id: 'sub_a' }),

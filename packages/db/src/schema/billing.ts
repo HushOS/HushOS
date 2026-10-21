@@ -262,13 +262,20 @@ export const personalPlanEndings = pgTable(
     'personal_plan_endings',
     {
         subscriptionId: text('subscription_id').primaryKey(),
+        /*
+         * Whose plan it is, and whom the plan-ending job runs for: a person's user id, or, for a
+         * family's own plan ended because it lapsed (a family checkout, leave, removal, deletion
+         * or dissolve revoking it), the family's id. Which it is: whether the subscription has a
+         * row in group_billing_subscriptions (billingRepository.familyPlanOf).
+         */
         userId: uuid('user_id').notNull(),
         /*
          * The membership that pooled them: the family and when they were let in. Null for a
-         * lapsed plan (unpaid, incomplete, paused) HushOS revoked itself, before a checkout or
-         * because its owner was pooled: nothing is refunded then unless Polar takes a payment
-         * for it afterwards, which is refunded whole (`admitted_at` and `pooled_at` are then
-         * when HushOS set out to revoke it, `revoked_at` when Polar says it ended).
+         * lapsed plan (unpaid, incomplete, paused) HushOS revoked itself, a person's or a
+         * family's own: nothing is refunded then unless Polar takes a payment for it
+         * afterwards, which is refunded whole (`admitted_at` and `pooled_at` are then when
+         * HushOS set out to revoke it, `revoked_at` when Polar says it ended). It never holds
+         * the id of the family whose own plan this is; `user_id` does.
          */
         groupId: uuid('group_id'),
         admittedAt: timestamp('admitted_at', { withTimezone: true }).notNull(),

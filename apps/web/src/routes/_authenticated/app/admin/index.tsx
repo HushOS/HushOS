@@ -95,7 +95,7 @@ const stuckReasons: Record<string, string> = {
     'dissolved-refused':
         'Its family was dissolved, and Polar refused to cancel the plan at the end of its period. Cancel it in Polar.',
     'dissolved-inactive':
-        'Its family was dissolved, and the plan isn’t active (unpaid, incomplete or paused), so it can’t be set to end and may still be paid. Revoke it in Polar.',
+        'Its family was dissolved, and the plan isn’t active (unpaid, incomplete or paused), so it can’t be set to end, and Polar refused HushOS’s revoke. It may still be paid or resume. Revoke it in Polar.',
     'dissolved-failing':
         'Its family was dissolved, and HushOS has failed for over a day, or close to its renewal, to cancel the plan at the end of its period. The worker’s log has Polar’s answer; check the access token. Cancel it in Polar.',
     'revert-unavailable':
@@ -417,7 +417,7 @@ function AdminPage() {
                                 <thead>
                                     <tr>
                                         <th className={th}>Polar subscription</th>
-                                        <th className={th}>Account</th>
+                                        <th className={th}>Account or family</th>
                                         <th className={cn(th, 'text-right')}>Before tax</th>
                                         <th className={th}>Seen</th>
                                     </tr>
@@ -426,7 +426,9 @@ function AdminPage() {
                                     {data.unrefundable.map((row) => (
                                         <tr key={row.subscriptionId} className="hover:bg-muted">
                                             <td className={td}>{row.subscriptionId}</td>
-                                            <td className={td}>{row.userId}</td>
+                                            <td className={td}>
+                                                {row.groupId ? `family ${row.groupId}` : row.userId}
+                                            </td>
                                             <td className={cn(td, 'text-right tabular-nums')}>
                                                 {formatMoney(row.amount, row.currency)}
                                             </td>
