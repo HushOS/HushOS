@@ -190,11 +190,11 @@ export function StorageFullDialog() {
                     {lapsed && (
                         <Way
                             icon={CreditCardIcon}
-                            label="Open Plan and storage"
+                            label="Your plan"
                             detail={
                                 planStanding(lapsed) === 'paused'
                                     ? `${familyTierName({ name: lapsed.productName })} is paused`
-                                    : `${familyTierName({ name: lapsed.productName })}’s payment didn’t go through`
+                                    : `${familyTierName({ name: lapsed.productName })}’s payment failed`
                             }
                             primary
                             disabled={working !== null}
