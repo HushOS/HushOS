@@ -7,7 +7,13 @@ import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms } from './api';
-import { notePaidAfterRevoke, noteRefundUpdated, queuePlanEnding, revokeLapsed } from './endings';
+import {
+    LapsedRevokeError,
+    notePaidAfterRevoke,
+    noteRefundUpdated,
+    queuePlanEnding,
+    revokeLapsed,
+} from './endings';
 import { groupIdOf, reconcileGroup } from './groups';
 import {
     BillingError,
@@ -165,6 +171,14 @@ async function currentSubscription(user: BillingUser) {
  * already ended (403 `AlreadyCanceledSubscription`, a second click) is nothing to do. A
  * revoke that fails otherwise stops the checkout, so two plans never run.
  */
+/* "Pro" for a summary's plan named "Pro (monthly)"; "current" when there is none. */
+function productNameOf(summary: { subscription: { productName: string } | null }) {
+    return (
+        summary.subscription?.productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '') ??
+        'current'
+    );
+}
+
 async function revokeLapsedPlans(userId: string) {
     const ids = await billingRepository.listLapsedPlanIds(userId);
     if (!ids.length) return;
@@ -176,6 +190,19 @@ async function revokeLapsedPlans(userId: string) {
             await revokeLapsed(userId, id);
         } catch (error) {
             if (statusOf(error) === 404) continue;
+            const name = productNameOf(await billingRepository.getBillingSummary(userId));
+            if (statusOf(error) === 409 && polarErrorName(error) === 'SubscriptionLocked')
+                throw new BillingError(
+                    `Polar can’t end your ${name} plan right now: it has a change waiting on it. Cancel that change in the billing portal, or contact support, then choose a plan again.`,
+                    409,
+                    { cause: error },
+                );
+            if (error instanceof LapsedRevokeError)
+                throw new BillingError(
+                    `Your ${name} plan is still being ended. Please try again in a few minutes.`,
+                    409,
+                    { cause: error },
+                );
             throw unavailable(error);
         }
     }
@@ -451,6 +478,19 @@ export async function deleteProviderDiscount(id: string) {
         throw unavailable(error);
     }
     discountCache.clear();
+}
+
+/*
+ * What a paid order earns: its affiliate's commission and, for its owner, their inviter's
+ * reward. For a payment on a lapsed plan HushOS set out to revoke, the plan-ending job
+ * grants these once it knows the plan stays its owner's (the revoke never landed).
+ */
+export async function grantOrderRewards(
+    userId: string,
+    order: Parameters<typeof recordAffiliateEarning>[0],
+) {
+    await recordAffiliateEarning({ ...order, customer: { external_id: userId } });
+    await rewardPaidReferral(userId);
 }
 
 /* The inviter's storage when someone they invited pays for a plan; once per invitee, under a cap. */

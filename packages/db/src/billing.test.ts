@@ -267,13 +267,22 @@ describe('a personal plan Polar holds but that gives nothing', () => {
         expect(
             await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at }),
         ).toMatchObject({ groupId: null, pooledAt: at, revokedAt: null, outcome: 'settled' });
-        // Asked again (a retry): the first stands.
+        // Asked again before any revoke landed (one that timed out unlanded): taken over.
+        const later = new Date('2026-10-22T00:00:00Z');
+        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at: later });
+        expect((await billing.getPlanEnding('sub_1'))?.pooledAt).toEqual(later);
+        // Once Polar says it ended, it stands.
+        await billing.recordPlanRevoked('sub_1', {
+            revokedAt: later,
+            periodStart: at,
+            periodEnd: later,
+        });
         await billing.beginLapsedRevoke({
             subscriptionId: 'sub_1',
             userId,
-            at: new Date('2026-10-22T00:00:00Z'),
+            at: new Date('2026-10-23T00:00:00Z'),
         });
-        expect((await billing.getPlanEnding('sub_1'))?.pooledAt).toEqual(at);
+        expect((await billing.getPlanEnding('sub_1'))?.pooledAt).toEqual(later);
         expect(await billing.listOpenPlanEndings(userId)).toEqual([]);
         // A pooled ending its owner left before the revoke (dropped) is taken over; one still
         // being worked is left to its own job.
@@ -286,13 +295,48 @@ describe('a personal plan Polar holds but that gives nothing', () => {
                 admittedAt: at,
                 pooledAt: at,
             });
-        await billing.closePlanEnding('sub_dropped', 'dropped');
+        await billing.dropPlanEnding('sub_dropped');
         expect(
             await billing.beginLapsedRevoke({ subscriptionId: 'sub_dropped', userId, at }),
         ).toMatchObject({ groupId: null, outcome: 'settled' });
         expect(
             await billing.beginLapsedRevoke({ subscriptionId: 'sub_open', userId, at }),
         ).toMatchObject({ groupId, outcome: null });
+    });
+
+    test('nothing noted under an earlier ending survives a takeover or the paid-orders snapshot', async () => {
+        const { userId } = await createTestAccount();
+        const at = new Date('2026-10-21T10:00:00Z');
+        const note = (orderId: string) =>
+            billing.notePlanRefund({
+                orderId,
+                subscriptionId: 'sub_1',
+                refundKey: `key_${orderId}`,
+                amount: 0,
+                currency: 'usd',
+            });
+        // An ending dropped by a version that left a noted row unworked.
+        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at });
+        await note('order_old');
+        await billing.closePlanEnding('sub_1', 'ended');
+        await db.execute(
+            "update personal_plan_endings set outcome = 'dropped' where subscription_id = 'sub_1'",
+        );
+        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at });
+        expect((await billing.getPlanRefund('order_old'))?.status).toBe('none');
+        // A noted, unworked row the snapshot finds paid already: never refunded.
+        await note('order_paid');
+        await billing.notePaidBeforeRevoke([
+            { orderId: 'order_paid', subscriptionId: 'sub_1', refundKey: 'k', currency: 'usd' },
+        ]);
+        expect((await billing.getPlanRefund('order_paid'))?.status).toBe('none');
+        // One already worked is left as it is.
+        await note('order_worked');
+        await billing.markPlanRefundAttempt('order_worked');
+        await billing.notePaidBeforeRevoke([
+            { orderId: 'order_worked', subscriptionId: 'sub_1', refundKey: 'k2', currency: 'usd' },
+        ]);
+        expect((await billing.getPlanRefund('order_worked'))?.status).toBe('requested');
     });
 
     test('an ending isn’t settled while a refund noted on it was never asked for', async () => {

@@ -999,6 +999,7 @@ export async function endPersonalPlans(
     // The mirror is read again at the end when it is out of date (a plan Polar ended unheard).
     let refresh = false;
     let revokedAny = false;
+    let lapsedFailed = 0;
     if (family) {
         // Seen pooled at `seenAt` through this membership; a newer one is seen pooled now.
         const same =
@@ -1020,11 +1021,30 @@ export async function endPersonalPlans(
         // or incomplete plan's period wasn't paid), and a paused one would otherwise resume on
         // its date and charge, only to be refunded with Polar keeping its fee. One with an
         // ending being worked is that ending's; one its owner's leaving dropped is taken over.
+        // A failure on one (Polar locked it, an outage) is logged and retried; it doesn't
+        // hold back the endings below.
         for (const subscriptionId of live.lapsed) {
             stop();
             const existing = await billingRepository.getPlanEnding(subscriptionId);
-            if (existing && existing.outcome !== 'dropped') continue;
-            if (await revokeLapsed(userId, subscriptionId)) revokedAny = true;
+            const takeable =
+                !existing ||
+                existing.outcome === 'dropped' ||
+                (isLapsedEnding(existing) && !existing.revokedAt && existing.outcome === 'settled');
+            if (!takeable) continue;
+            try {
+                if (await revokeLapsed(userId, subscriptionId)) revokedAny = true;
+            } catch (error) {
+                if (error instanceof PlanEndingBusyError) throw error;
+                log.warn({
+                    message: 'A pooled member’s lapsed plan could not be revoked; tried again',
+                    billing: {
+                        user: userId,
+                        subscription: subscriptionId,
+                        status: statusOf(error),
+                    },
+                });
+                lapsedFailed += 1;
+            }
         }
     }
     let settled = 0;
@@ -1067,7 +1087,15 @@ export async function endPersonalPlans(
                 // revoked, and the payment restored the plan its owner kept: theirs, untouched.
                 const ended = await endedSince(subscriptionId, new Date(0));
                 if (!ended) {
-                    await billingRepository.closePlanEnding(subscriptionId, 'dropped');
+                    // Its payments are its owner's: their commission and referral reward are
+                    // granted now, as the delivery would have. Orders are read first, so a
+                    // failure leaves the ending open for the retry.
+                    const orders = await polar().orders.list({
+                        subscription_id: subscriptionId,
+                        limit: 100,
+                    });
+                    const kept = await billingRepository.dropPlanEnding(subscriptionId);
+                    await grantRewards(userId, orders.items, kept);
                     revokedAny = true;
                     continue;
                 }
@@ -1081,7 +1109,7 @@ export async function endPersonalPlans(
                     ? await revoke(subscriptionId)
                     : await endedSince(subscriptionId, ending.pooledAt);
                 if (!stillPooled && !revoked) {
-                    await billingRepository.closePlanEnding(subscriptionId, 'dropped');
+                    await billingRepository.dropPlanEnding(subscriptionId);
                     continue;
                 }
                 if (
@@ -1118,7 +1146,9 @@ export async function endPersonalPlans(
                 outcome = 'failed';
             }
             if (outcome === 'settled') {
-                // A payment noted meanwhile (after this run read the orders) keeps it open: retried.
+                // Only while this run still holds the ending; a payment noted meanwhile (after
+                // this run read the orders) keeps it open: retried.
+                await hold.check();
                 if (await billingRepository.closePlanEnding(subscriptionId, 'settled'))
                     settled += 1;
                 else failed += 1;
@@ -1141,6 +1171,7 @@ export async function endPersonalPlans(
         );
     // A failure is retried by pg-boss with backoff; a refund owed waits for the daily reconcile.
     if (failed) throw new Error('A personal plan’s refund has not been made yet.');
+    if (lapsedFailed) throw new Error('A lapsed personal plan has not been revoked yet.');
     return { settled, pending, owed };
 }
 
@@ -1195,32 +1226,72 @@ const LAPSED = new Set(['unpaid', 'incomplete', 'paused']);
  * Revokes a lapsed personal plan at Polar, refunding nothing: no part of what was paid
  * for it is in force (Polar pauses a plan only at its period's end, and a resume starts
  * and charges a new period; an unpaid or incomplete plan's period was never paid).
- * First its ending (beginLapsedRevoke) and the orders already paid are written, so a
- * payment Polar takes afterwards (notePaidAfterRevoke) is refunded whole even when the
- * revoke's answer is lost, and a late delivery of an order its owner used is not.
- * Returns whether it revoked. Gone at Polar (404) or already ended (403
- * `AlreadyCanceledSubscription`, its `ended_at` then recorded): false. A refusal or
- * an error Polar answered leaves the ending dropped (the plan stays theirs) and throws;
- * no answer at all (a timeout) keeps it, since the revoke may have landed. Used before
- * a new checkout and by the plan-ending job of someone pooled.
+ *
+ * First its ending (beginLapsedRevoke) and the orders already paid (notePaidBeforeRevoke)
+ * are written, so a payment Polar takes afterwards is refunded whole (notePaidAfterRevoke)
+ * even when the revoke's answer is lost, and a late delivery of an order its owner used is
+ * not. Then the plan is read again: one paid between the caller's read and the list of
+ * paid orders is live now and kept (its ending dropped), never revoked with that payment
+ * counted as used. A family ending its owner left before it was revoked (not pooled now)
+ * is dropped first and taken over; one still being worked for a family is left to it.
+ *
+ * Returns whether it revoked. Gone at Polar (404), or ended already: false, the end
+ * recorded. Live again: false, kept. A refusal or another error Polar answered (403
+ * without an end, 409 `SubscriptionLocked`, a 5xx) drops the ending, so the plan stays
+ * theirs, and throws; no answer at all (a timeout) keeps the ending, since the revoke may
+ * have landed, and throws. Used before a new checkout and by the plan-ending job of
+ * someone pooled.
  */
 export async function revokeLapsed(userId: string, subscriptionId: string) {
+    const existing = await billingRepository.getPlanEnding(subscriptionId);
+    if (
+        existing &&
+        !isLapsedEnding(existing) &&
+        !existing.revokedAt &&
+        existing.outcome === null &&
+        !(await billingRepository.getPooledFamily(userId))
+    )
+        await billingRepository.dropPlanEnding(subscriptionId);
     const ending = await billingRepository.beginLapsedRevoke({
         subscriptionId,
         userId,
         at: new Date(),
     });
-    if (!isLapsedEnding(ending)) return false;
-    const orders = await polar().orders.list({ subscription_id: subscriptionId, limit: 100 });
-    for (const order of orders.items.filter((candidate) => candidate.paid))
-        await billingRepository.notePlanRefund({
-            orderId: order.id,
-            subscriptionId,
-            refundKey: refundKey(ending, order.id),
-            amount: 0,
-            currency: order.currency,
-            status: 'none',
-        });
+    if (!isLapsedEnding(ending))
+        throw new LapsedRevokeError('held', 'The plan’s ending is still being worked.');
+    const answered = async (error: unknown): Promise<never> => {
+        if (statusOf(error) !== null) await billingRepository.dropPlanEnding(subscriptionId);
+        throw error;
+    };
+    try {
+        const orders = await polar().orders.list({ subscription_id: subscriptionId, limit: 100 });
+        await billingRepository.notePaidBeforeRevoke(
+            orders.items
+                .filter((order) => order.paid)
+                .map((order) => ({
+                    orderId: order.id,
+                    subscriptionId,
+                    refundKey: refundKey(ending, order.id),
+                    currency: order.currency,
+                })),
+        );
+        const now = await polar().subscriptions.get(subscriptionId);
+        if (now.ended_at) {
+            const { already: _already, ...instant } = revokedFrom(now, now.ended_at, true);
+            await billingRepository.recordPlanRevoked(subscriptionId, instant);
+            return false;
+        }
+        if (!LAPSED.has(now.status)) {
+            await billingRepository.dropPlanEnding(subscriptionId);
+            return false;
+        }
+    } catch (error) {
+        if (statusOf(error) === 404) {
+            await billingRepository.dropPlanEnding(subscriptionId);
+            return false;
+        }
+        return answered(error);
+    }
     let revoked: models.Subscription;
     try {
         revoked = await polar().subscriptions.revoke(subscriptionId);
@@ -1231,12 +1302,15 @@ export async function revokeLapsed(userId: string, subscriptionId: string) {
             if (ended) {
                 const { already: _already, ...instant } = ended;
                 await billingRepository.recordPlanRevoked(subscriptionId, instant);
+                return false;
             }
-            return false;
         }
-        if (statusOf(error) !== null)
-            await billingRepository.closePlanEnding(subscriptionId, 'dropped');
-        throw error;
+        if (statusOf(error) === 409 && polarErrorName(error) === 'SubscriptionLocked')
+            log.error({
+                message: 'A lapsed personal plan could not be revoked: Polar says it is locked',
+                billing: { user: userId, subscription: subscriptionId },
+            });
+        return answered(error);
     }
     await billingRepository.recordPlanRevoked(subscriptionId, {
         revokedAt: new Date(revoked.ended_at ?? Date.now()),
@@ -1251,14 +1325,40 @@ export async function revokeLapsed(userId: string, subscriptionId: string) {
 }
 
 /*
- * An `order.paid` for a lapsed plan HushOS revoked (a card added in Polar's portal, or a
- * dunning email answered, after the revoke): Polar took a payment for a plan that no
- * longer runs. The order is noted on the plan's ending, the ending opened again, and
- * the plan-ending job refunds it whole, with the usual retries; after five failures in
- * a row it is logged at error level and listed under Refunds owed. An order already
- * paid when HushOS revoked the plan (noted `none` then: a late delivery of a period its
- * owner used) is left alone, and so is one already noted (a redelivery). Returns
- * whether the order was taken up, so its commission and referral reward are not given.
+ * Payments on a lapsed plan whose revoke never landed are its owner's after all: each
+ * order's affiliate commission and its owner's referral reward, which the `order.paid`
+ * delivery held back, are granted (both are once per order or per person anyway).
+ */
+async function grantRewards(userId: string, orders: models.Order[], orderIds: string[]) {
+    if (!orderIds.length) return;
+    const { grantOrderRewards } = await import('./server');
+    for (const order of orders.filter((candidate) => orderIds.includes(candidate.id)))
+        await grantOrderRewards(userId, order);
+}
+
+/* A lapsed plan HushOS can't revoke now: its ending is a family's still being worked. */
+export class LapsedRevokeError extends Error {
+    constructor(
+        readonly reason: 'held',
+        message: string,
+    ) {
+        super(message);
+        this.name = 'LapsedRevokeError';
+    }
+}
+
+/*
+ * An `order.paid` for a lapsed plan HushOS revoked, or set out to (a card added in Polar's
+ * portal, or a dunning email answered, after the revoke): Polar took a payment for a plan
+ * that may no longer run. The order is noted on the plan's ending and the ending opened
+ * again in one transaction (notePaidOnLapsed), and the plan-ending job decides: refunded
+ * whole if Polar shows the plan ended, with the usual retries (after five failures in a
+ * row it is logged at error level and listed under Refunds owed); given back to its owner
+ * if the revoke never landed, with its commission and referral reward granted then. A
+ * redelivery of one noted and never worked (the first try failed midway) is queued
+ * again. An order already paid when HushOS revoked the plan (a late delivery of a period
+ * its owner used) is left alone. Returns whether the job owns the order, so the delivery
+ * gives no commission or referral reward of its own.
  */
 export async function notePaidAfterRevoke(order: {
     id?: string;
@@ -1267,20 +1367,19 @@ export async function notePaidAfterRevoke(order: {
 }) {
     if (!billingEnabled() || !order.id || !order.subscription_id) return false;
     const ending = await billingRepository.getPlanEnding(order.subscription_id);
-    if (!ending || !isLapsedEnding(ending) || ending.outcome === 'dropped') return false;
-    if (await billingRepository.getPlanRefund(order.id)) return false;
+    if (!ending || !isLapsedEnding(ending)) return false;
+    const result = await billingRepository.notePaidOnLapsed({
+        orderId: order.id,
+        subscriptionId: ending.subscriptionId,
+        refundKey: refundKey(ending, order.id),
+        currency: order.currency ?? 'usd',
+    });
+    if (result === 'none' || result === 'paid-before') return false;
+    if (result === 'worked') return true;
     log.warn({
         message: 'Polar took a payment for a lapsed plan HushOS revoked; it is refunded',
         billing: { user: ending.userId, subscription: ending.subscriptionId, order: order.id },
     });
-    await billingRepository.notePlanRefund({
-        orderId: order.id,
-        subscriptionId: ending.subscriptionId,
-        refundKey: refundKey(ending, order.id),
-        amount: 0,
-        currency: order.currency ?? 'usd',
-    });
-    await billingRepository.reopenPlanEnding(ending.subscriptionId);
     await send({
         userId: ending.userId,
         groupId: ending.groupId,

@@ -1180,52 +1180,161 @@ export async function ensurePlanEnding(input: {
     return row!;
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/* A refund row noted (a payment delivery) and never asked for: no run has worked it. */
+const unworkedRefund = (subscriptionId: string) =>
+    and(
+        eq(personalPlanRefunds.subscriptionId, subscriptionId),
+        eq(personalPlanRefunds.status, 'requested'),
+        isNull(personalPlanRefunds.firstAttemptedAt),
+    );
+
+/* Settles a plan's unworked refund rows as `none` (nothing owed on them); returns their orders. */
+async function clearUnworkedRefunds(tx: Tx, subscriptionId: string) {
+    const rows = await tx
+        .update(personalPlanRefunds)
+        .set({ status: 'none', updatedAt: new Date() })
+        .where(unworkedRefund(subscriptionId))
+        .returning({ orderId: personalPlanRefunds.orderId });
+    return rows.map((row) => row.orderId);
+}
+
 /*
  * The ending of a lapsed personal plan (unpaid, incomplete, paused) HushOS is about to
  * revoke itself, before a checkout or because its owner was pooled: one with no family,
  * written before Polar is asked, so a revoke whose answer is lost and a payment that lands
  * meanwhile still find it. Settled, since nothing of it is in force: a payment Polar takes
- * for it afterwards opens it again (notePaidAfterRevoke), and the plan-ending job refunds
- * that order whole. `revoked_at` is set once Polar's answer says when (recordPlanRevoked).
- * One its owner's leaving had dropped (`dropped`, never revoked) is taken over; any other
- * ending the plan has is left as it is. Returns the plan's ending as it stands.
+ * for it afterwards opens it again (notePaidOnLapsed), and the plan-ending job refunds that
+ * order whole. `revoked_at` is set once Polar's answer says when (recordPlanRevoked).
+ * Taken over: one its owner's leaving dropped, and an earlier lapsed one whose revoke never
+ * landed (no family, not revoked, settled); their unworked refund rows are settled `none`
+ * first, so nothing from before is refunded under the new one. Any other ending the plan
+ * has is left as it is. Returns the plan's ending as it stands.
  */
 export async function beginLapsedRevoke(input: {
     subscriptionId: string;
     userId: string;
     at: Date;
 }) {
-    await db
-        .insert(personalPlanEndings)
-        .values({
-            subscriptionId: input.subscriptionId,
-            userId: input.userId,
+    return db.transaction(async (tx) => {
+        const [existing] = await tx
+            .select()
+            .from(personalPlanEndings)
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .for('update');
+        const fresh = {
             groupId: null,
             admittedAt: input.at,
             pooledAt: input.at,
+            revokedAt: null,
+            periodStart: null,
+            periodEnd: null,
             outcome: 'settled',
-        })
-        .onConflictDoUpdate({
-            target: personalPlanEndings.subscriptionId,
-            set: {
-                groupId: null,
-                admittedAt: input.at,
-                pooledAt: input.at,
-                revokedAt: null,
-                periodStart: null,
-                periodEnd: null,
-                outcome: 'settled',
-                unrefundableAmount: null,
-                unrefundableCurrency: null,
-                updatedAt: new Date(),
-            },
-            where: eq(personalPlanEndings.outcome, 'dropped'),
-        });
-    const [row] = await db
-        .select()
-        .from(personalPlanEndings)
-        .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId));
-    return row!;
+            unrefundableAmount: null,
+            unrefundableCurrency: null,
+        };
+        if (!existing) {
+            const [row] = await tx
+                .insert(personalPlanEndings)
+                .values({ subscriptionId: input.subscriptionId, userId: input.userId, ...fresh })
+                .returning();
+            return row!;
+        }
+        const takeOver =
+            existing.outcome === 'dropped' ||
+            (existing.groupId === null && !existing.revokedAt && existing.outcome === 'settled');
+        if (!takeOver) return existing;
+        await clearUnworkedRefunds(tx, input.subscriptionId);
+        const [row] = await tx
+            .update(personalPlanEndings)
+            .set({ ...fresh, updatedAt: new Date() })
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .returning();
+        return row!;
+    });
+}
+
+/*
+ * An ending HushOS gives up on: the plan stays its owner's (they left the family before
+ * it was revoked, or a lapsed plan's revoke never landed). Its unworked refund rows are
+ * settled `none` in the same transaction, so a later ending of the plan never refunds
+ * them. Returns those rows' orders: payments its owner keeps.
+ */
+export async function dropPlanEnding(subscriptionId: string) {
+    return db.transaction(async (tx) => {
+        await tx
+            .update(personalPlanEndings)
+            .set({ outcome: 'dropped', updatedAt: new Date() })
+            .where(eq(personalPlanEndings.subscriptionId, subscriptionId));
+        return clearUnworkedRefunds(tx, subscriptionId);
+    });
+}
+
+/*
+ * The orders of a lapsed plan already paid when HushOS revokes it, noted `none`: never
+ * refunded, even when an `order.paid` for one arrives late. One noted earlier and never
+ * worked (a payment delivery before the takeover) is settled `none` too.
+ */
+export async function notePaidBeforeRevoke(
+    rows: { orderId: string; subscriptionId: string; refundKey: string; currency: string }[],
+) {
+    for (const row of rows)
+        await db
+            .insert(personalPlanRefunds)
+            .values({ ...row, amount: 0, status: 'none' })
+            .onConflictDoUpdate({
+                target: personalPlanRefunds.orderId,
+                set: { status: 'none', updatedAt: new Date() },
+                where: and(
+                    eq(personalPlanRefunds.subscriptionId, row.subscriptionId),
+                    eq(personalPlanRefunds.status, 'requested'),
+                    isNull(personalPlanRefunds.firstAttemptedAt),
+                ),
+            });
+}
+
+/*
+ * An `order.paid` for a plan with a lapsed ending (no family), in one transaction: the
+ * order noted for a refund and the ending opened again. `noted`: noted now, or noted
+ * before and never worked (a redelivery after the first try failed midway), either way
+ * open now. `worked`: refunded or being refunded already. `paid-before`: it was paid when
+ * HushOS revoked the plan. `none`: no lapsed ending (or a dropped one) to note it on.
+ */
+export async function notePaidOnLapsed(input: {
+    orderId: string;
+    subscriptionId: string;
+    refundKey: string;
+    currency: string;
+}): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
+    return db.transaction(async (tx) => {
+        const [ending] = await tx
+            .select()
+            .from(personalPlanEndings)
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .for('update');
+        if (!ending || ending.groupId !== null || ending.outcome === 'dropped') return 'none';
+        const [row] = await tx
+            .select()
+            .from(personalPlanRefunds)
+            .where(eq(personalPlanRefunds.orderId, input.orderId));
+        if (row?.status === 'none') return 'paid-before';
+        if (row && (row.status !== 'requested' || row.firstAttemptedAt)) return 'worked';
+        if (!row)
+            await tx
+                .insert(personalPlanRefunds)
+                .values({ ...input, amount: 0, status: 'requested' });
+        await tx
+            .update(personalPlanEndings)
+            .set({ outcome: null, updatedAt: new Date() })
+            .where(
+                and(
+                    eq(personalPlanEndings.subscriptionId, input.subscriptionId),
+                    eq(personalPlanEndings.outcome, 'settled'),
+                ),
+            );
+        return 'noted';
+    });
 }
 
 /* Endings with work left for this person, oldest first. */
@@ -1276,10 +1385,7 @@ export async function recordPlanRevoked(
  * settles it was already past reading the orders keeps the ending open, for that run's
  * retry. Returns whether it closed.
  */
-export async function closePlanEnding(
-    subscriptionId: string,
-    outcome: 'settled' | 'dropped' | 'ended',
-) {
+export async function closePlanEnding(subscriptionId: string, outcome: 'settled' | 'ended') {
     const rows = await db
         .update(personalPlanEndings)
         .set({ outcome, updatedAt: new Date() })
@@ -1287,7 +1393,7 @@ export async function closePlanEnding(
             and(
                 eq(personalPlanEndings.subscriptionId, subscriptionId),
                 outcome === 'settled'
-                    ? sql`not exists (select 1 from ${personalPlanRefunds} where ${personalPlanRefunds.subscriptionId} = ${subscriptionId} and ${personalPlanRefunds.status} = 'requested' and ${personalPlanRefunds.firstAttemptedAt} is null)`
+                    ? sql`not exists (select 1 from ${personalPlanRefunds} where ${unworkedRefund(subscriptionId)})`
                     : undefined,
             ),
         )
