@@ -1,0 +1,35 @@
+apps/web/src/components/drive/trash-view.tsx
+  s_c56e31c87cddde::t_bc3429fb6acbad 447,476-479
+packages/db/src/drive.pool.test.ts
+  s_c56e31c87cddde::t_d84c6005cfdc61 4,7-21,749-765
+apps/web/src/components/families/let-in-dialog.tsx
+  s_c56e31c87cddde::t_1139c61aa2157b 30,239
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_c56e31c87cddde::t_b8e5fdb51da0a3 31,394-395,673,681,689-691,783,792-793,821-825
+apps/web/src/components/families/create-family-dialog.tsx
+  s_c56e31c87cddde::t_21c706d4526391 4,19-26,70-73,75-88,98-100,109
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_0756c5648beefa 956-963,1137,2354-2504
+apps/web/src/lib/family-billing.ts
+  s_c56e31c87cddde::t_08bb1a4469c472 13,447-469
+apps/web/src/lib/family-billing.test.ts
+  s_c56e31c87cddde::t_b68f90da142f48 16,537-566
+apps/web/src/components/families/remove-dialog.tsx
+  s_c56e31c87cddde::t_928557257475ab 24,94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "48754f0aa60a17fef652abdef653203ceae9865d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

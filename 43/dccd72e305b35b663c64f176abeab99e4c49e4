@@ -1,0 +1,21 @@
+bun.lock
+  s_566b8e0c4467a4::t_10f38a2eb56c25 8
+package.json
+  s_566b8e0c4467a4::t_5fc22a207acfc9 66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "43dccd72e305b35b663c64f176abeab99e4c49e4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
