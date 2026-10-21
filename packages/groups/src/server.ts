@@ -2089,7 +2089,9 @@ export async function removeMember(
         {
             // Only where a plan could be ended: the write's own answer is enough otherwise.
             previewFirst: billingEnabled() && (await isFamilyPayer(groupId, targetId)),
-            beforeAppend: () => endPayersLapsedPlan(groupId, targetId, 'They', endsLapsed),
+            beforeAppend: async () => {
+                await endPayersLapsedPlan(groupId, targetId, 'They', endsLapsed);
+            },
         },
     );
 }
@@ -2175,7 +2177,7 @@ async function endPayersLapsedPlan(
                 lapsedAnswer(plans),
             );
         }
-        await endLapsedPlansForDeparture(groupId, payerId, plans, options);
+        return await endLapsedPlansForDeparture(groupId, payerId, plans, options);
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError(
@@ -2210,10 +2212,15 @@ export async function leave(
     // confirmed, then the leave.
     const preview = await groupsRepository.previewLeave(groupId, userId);
     if (preview.status !== 'left' && preview.status !== 'dissolved') return leaveAnswer(preview);
-    await endPayersLapsedPlan(groupId, userId, 'You', body.endsLapsed, {
+    const ended = await endPayersLapsedPlan(groupId, userId, 'You', body.endsLapsed, {
         dissolving: preview.status === 'dissolved',
     });
-    return leaveAnswer(await groupsRepository.leaveGroup(groupId, userId), groupId);
+    // A plan let run only because this leave dissolves the family: the write must dissolve it
+    // (someone admitted meanwhile makes it an ordinary leave), or nothing is left.
+    return leaveAnswer(
+        await groupsRepository.leaveGroup(groupId, userId, { mustDissolve: ended?.live === true }),
+        groupId,
+    );
 }
 
 async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: string) {
@@ -2239,6 +2246,12 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
             throw new GroupError(
                 'last-holder',
                 'Let another member manage the group before you leave.',
+                409,
+            );
+        case 'not-last':
+            throw new GroupError(
+                'payer',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
                 409,
             );
         case 'unavailable':

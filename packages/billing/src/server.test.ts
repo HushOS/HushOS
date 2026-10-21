@@ -7543,12 +7543,14 @@ describe('a dissolved family’s plan', () => {
     test('a dissolved family’s lapsed plan Polar won’t revoke is listed for operators, and not asked again until it changes', async () => {
         const { groupId, subscription } = await dissolvedResumed();
         subscription.status = 'unpaid';
-        polar.revokeRefusals.set(subscription.id, { status: 409, error: 'SubscriptionLocked' });
+        polar.revokeRefusals.set(subscription.id, { status: 422, error: 'HTTPValidationError' });
         await billing.reconcileGroup(groupId);
         const outcomes = await quietly(runCancelJobs);
         expect(outcomes.reduce((sum, outcome) => sum + outcome.refused, 0)).toBe(1);
         expect(subscription.ended_at).toBeNull();
-        expect(await row(subscription.id)).toMatchObject({ dissolveRefusal: 'SubscriptionLocked' });
+        expect(await row(subscription.id)).toMatchObject({
+            dissolveRefusal: 'HTTPValidationError',
+        });
         expect(await listedAs()).toEqual([[subscription.id, 'dissolved-inactive']]);
         // The purge waits while it can still charge.
         await purgeDue(groupId);
@@ -7557,6 +7559,31 @@ describe('a dissolved family’s plan', () => {
         await billing.reconcileGroup(groupId);
         expect(cancelJobs).toEqual([]);
         expect(callsTo('subscriptions.revoke')).toEqual([]);
+    });
+
+    test('a dissolved family’s lapsed plan whose revoke Polar can’t take just now (429, locked) is retried, never recorded as refused', async () => {
+        const { groupId, subscription } = await dissolvedResumed();
+        subscription.status = 'unpaid';
+        await billing.reconcileGroup(groupId);
+        for (const refusal of [
+            { status: 429, error: 'TooManyRequests' },
+            { status: 409, error: 'SubscriptionLocked' },
+        ]) {
+            polar.revokeRefusals.set(subscription.id, refusal);
+            await quietly(async () => {
+                await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeInstanceOf(
+                    billing.BillingError,
+                );
+            });
+            expect(await row(subscription.id)).toMatchObject({ dissolveRefusedAt: null });
+            expect(await listedAs()).toEqual([]);
+        }
+        // The retry, once Polar takes it: revoked.
+        polar.revokeRefusals.delete(subscription.id);
+        expect(await quietly(() => billing.cancelDissolvedPlan(groupId))).toMatchObject({
+            revoked: 1,
+        });
+        expect(subscription.ended_at).toBeTruthy();
     });
 
     test('a plan refused while past due that turns unpaid is asked about again, and revoked', async () => {

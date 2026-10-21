@@ -44,7 +44,7 @@ const polar = {
     revokeRefusal: null as { status: number; error: string } | null,
     revokes: [] as string[],
     /* Runs once as Polar lists a plan's orders: the revoke's own read, a payment landing then. */
-    beforeOrders: null as (() => void) | null,
+    beforeOrders: null as (() => void | Promise<void>) | null,
 };
 
 /* A family plan with one member included, so a family of two already needs a paid place. */
@@ -155,7 +155,7 @@ const fakeClient = {
         async list(query: { subscription_id?: string; status?: string }) {
             const hook = polar.beforeOrders;
             polar.beforeOrders = null;
-            hook?.();
+            await hook?.();
             const subscription = query.subscription_id
                 ? polar.subscriptions.get(query.subscription_id)
                 : undefined;
@@ -196,11 +196,18 @@ const { groupsRepository, billingRepository, driveRepository, scopedId } =
     await import('@hushos/db');
 const { areaKeyCommitment } = await import('../../crypto/src/area-keys');
 const { tombstoneAt } = await import('../../crypto/src/group-testkit');
-const { closeDatabase, createTestAccount, createTestFamily, resetDatabase, setTestUsedBytes } =
-    await import('../../db/test/helpers');
+const {
+    closeDatabase,
+    createTestAccount,
+    createTestFamily,
+    resetDatabase,
+    setTestMember,
+    setTestUsedBytes,
+} = await import('../../db/test/helpers');
 const kit = await import('../test/kit');
 const { db } = await import('../../db/src/client');
-const { sql } = await import('drizzle-orm');
+const { eq, sql } = await import('drizzle-orm');
+const { groupKeySeals } = await import('../../db/src/schema');
 const groups = await import('./server');
 const billing = await import('@hushos/billing/server');
 
@@ -913,6 +920,58 @@ describe('admission with billing on', () => {
             expect(await state(fam.groupId, plain.userId)).toBe('active');
             polar.revokes = [];
         }
+    });
+
+    test('a plan on a product HushOS can’t read, resumed while the leave ends it, keeps its payer: read at Polar, not the mirror', async () => {
+        const { fam, subscription, plain } = await pausedPayer();
+        // An archived product: the mirror never holds such a plan as live.
+        subscription.product_id = 'prod_archived';
+        polar.beforeOrders = () => {
+            subscription.status = 'active';
+        };
+        await expect(
+            groups.leave(plain.userId, fam.groupId, { endsLapsed: [subscription.id] }),
+        ).rejects.toMatchObject({
+            code: 'payer',
+            message:
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+        });
+        expect(polar.revokes).toEqual([]);
+        expect(await state(fam.groupId, plain.userId)).toBe('active');
+    });
+
+    test('the last member’s leave lets a resumed plan run only if it really dissolves the family: someone admitted meanwhile makes it refused', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 1);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        const newcomer = await createTestAccount();
+        // Resumed during the revoke, and someone let in at the same moment.
+        polar.beforeOrders = async () => {
+            subscription.status = 'active';
+            await setTestMember({
+                groupId: fam.groupId,
+                userId: newcomer.userId,
+                state: 'active',
+                roles: ['billing', 'members'],
+            });
+            // With a seal of the current key, as an admission gives: a holder the leave counts.
+            const [seal] = await db
+                .select()
+                .from(groupKeySeals)
+                .where(eq(groupKeySeals.holderUserId, fam.organizer.userId));
+            await db.insert(groupKeySeals).values({ ...seal!, holderUserId: newcomer.userId });
+        };
+        await expect(
+            groups.leave(fam.organizer.userId, fam.groupId, { endsLapsed: [subscription.id] }),
+        ).rejects.toMatchObject({
+            code: 'payer',
+            status: 409,
+            message:
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+        });
+        expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();
     });
 
     test('a payer’s removal the write refuses after its member-list rules (a folder key overtaken) ends nothing', async () => {
