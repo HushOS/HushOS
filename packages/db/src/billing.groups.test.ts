@@ -760,6 +760,12 @@ describe('a deleted family’s plans', () => {
             status: 'active',
             endedAt: ended,
         });
+        // Another family's id on the same subscription (a stray answer) never moves the row.
+        await billing.recordOrphanedSubscription(randomUUID(), orphan({ status: 'unpaid' }));
+        expect(await billing.getGroupSubscription('sub_orphan')).toMatchObject({
+            groupId: gone,
+            status: 'active',
+        });
         // Gone at Polar: an end it never had is now.
         await billing.recordOrphanedSubscription(gone, orphan({ id: 'sub_other' }));
         await billing.recordOrphanedSubscription(gone, { id: 'sub_other', ended: true });

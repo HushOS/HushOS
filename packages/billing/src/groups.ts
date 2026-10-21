@@ -397,7 +397,7 @@ export async function reconcileGroup(
             staleTier.push(subscription.id);
         subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false, tier));
     }
-    await billingRepository.applyGroupState({
+    const applied = await billingRepository.applyGroupState({
         groupId,
         provider: PROVIDER,
         customerId: state?.id ?? null,
@@ -406,6 +406,13 @@ export async function reconcileGroup(
         complete: true,
         keepIds: unresolved,
     });
+    // The family was purged between the read above and the write (applyGroupState found no row):
+    // its plans are a deleted family's, ended as any other's would be.
+    if (!applied && !(await groupsRepository.getGroupRow(groupId)))
+        return revokeOrphanedPlans(groupId, state, {
+            subscriptionId: options.subscriptionId,
+            listPolar: options.fromDelivery,
+        });
     // Everyone whose files now draw from a live pool with a personal plan still live has that
     // plan ended (docs/families-shared-pool.md 5.1): the organizer's first purchase, a family's
     // lapsed plan bought again, a checkout that raced an admission.
@@ -556,6 +563,8 @@ async function revokeOrphanedPlans(
     // (past due, unpaid): asked about again until Polar shows it ended.
     for (const id of await billingRepository.listUnrevokedLapsedEndings(groupId)) ids.add(id);
     const customer = await billingRepository.getGroupCustomer(groupId);
+    // Best effort, one page of 100 (a family has a handful of plans): a listing Polar refuses or
+    // can't answer (404, 429, a 5xx) is logged, and the plans already named are still read.
     if (customer && options.listPolar) {
         try {
             const listed = await polar().subscriptions.list({
@@ -566,7 +575,11 @@ async function revokeOrphanedPlans(
                 if (!subscription.ended_at && !ENDED.has(subscription.status))
                     ids.add(subscription.id);
         } catch (error) {
-            if (statusOf(error) !== 404) throw unavailable(error);
+            log.warn({
+                message:
+                    'A deleted family’s plans could not be listed at Polar; the named ones are read',
+                billing: { group: groupId, status: statusOf(error) },
+            });
         }
     }
     if (!ids.size) return;
@@ -579,10 +592,14 @@ async function revokeOrphanedPlans(
     }
     for (const id of ids) {
         // That plan's own first recorded end, read before this run writes its row: what was paid
-        // from then on bought nothing. A plan the mirror never held: everything it took, since
-        // HushOS gave nothing for it. Stored on the ending the first time; never recomputed.
+        // from then on bought nothing. A row with no end (a family a worker with billing off purged
+        // while its plan ran, before #189; a row left `canceled` with no end): the end of the last
+        // period the mirror knew of, so what paid for that period, the family's time, is kept, as a
+        // dissolved family's payer keeps what they paid for. A plan the mirror never held:
+        // everything it took, since HushOS gave nothing for it. Stored on the ending the first time;
+        // never recomputed.
         const row = await billingRepository.getGroupSubscription(id);
-        const paidAfter = row?.endedAt ?? new Date(0);
+        const paidAfter = row ? (row.endedAt ?? row.currentPeriodEnd) : new Date(0);
         let subscription: models.Subscription;
         try {
             subscription = await polar().subscriptions.get(id);
@@ -603,7 +620,10 @@ async function revokeOrphanedPlans(
             await orphanSnapshot(subscription),
         );
         if (subscription.ended_at || ENDED.has(subscription.status)) {
-            await recordOrphanEnded(id, subscription.ended_at ?? null);
+            // Ended again before HushOS saw it bill (reinstated, charged, ended between reads): its
+            // charges since the cutoff are still refunded, through an ending written now.
+            if (!(await recordOrphanEnded(id, subscription.ended_at ?? null)))
+                await endOrphanedFamilyPlan(groupId, id, paidAfter, { onlyIfPaidSince: true });
             continue;
         }
         log.error({

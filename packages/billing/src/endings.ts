@@ -1487,7 +1487,23 @@ export async function endOrphanedFamilyPlan(
     groupId: string,
     subscriptionId: string,
     paidAfter: Date,
+    options: { onlyIfPaidSince?: boolean } = {},
 ) {
+    // A plan already ended at Polar (reinstated, charged and ended between two reads): an ending
+    // is written only if it took a payment since its cutoff, which the job then refunds.
+    if (options.onlyIfPaidSince) {
+        const orders = await polar().orders.list({
+            subscription_id: subscriptionId,
+            sorting: ['-created_at'],
+            limit: 100,
+        });
+        if (
+            !orders.items.some(
+                (order) => order.paid && Date.parse(order.created_at) >= paidAfter.getTime(),
+            )
+        )
+            return false;
+    }
     const owner = randomUUID();
     const begun = await billingRepository.beginLapsedRevoke({
         subscriptionId,
@@ -1582,13 +1598,15 @@ export async function endOrphanedFamilyPlan(
  */
 export async function recordOrphanEnded(subscriptionId: string, endedAt: string | null) {
     const ending = await billingRepository.getPlanEnding(subscriptionId);
-    if (!ending || !isLapsedEnding(ending) || ending.revokedAt) return;
+    if (!ending || !isLapsedEnding(ending)) return false;
+    if (ending.revokedAt) return true;
     const at = endedAt ? new Date(endedAt) : new Date();
     await billingRepository.recordPlanRevoked(subscriptionId, {
         revokedAt: at,
         periodStart: at,
         periodEnd: at,
     });
+    return true;
 }
 
 /*
@@ -1667,10 +1685,27 @@ export async function notePaidAfterRevoke(order: {
     id?: string;
     subscription_id?: string | null;
     currency?: string;
+    created_at?: string;
 }) {
     if (!billingEnabled() || !order.id || !order.subscription_id) return false;
     const ending = await billingRepository.getPlanEnding(order.subscription_id);
     if (!ending || !isLapsedEnding(ending)) return false;
+    // A deleted family's plan (or a second plan): an order made before its cutoff paid for time
+    // the family had, however late it is paid; it is noted as used, never refunded.
+    if (ending.paidAfter !== null) {
+        const made = Date.parse(order.created_at ?? '');
+        if (!Number.isNaN(made) && made < ending.paidAfter.getTime()) {
+            await billingRepository.notePaidBeforeRevoke([
+                {
+                    orderId: order.id,
+                    subscriptionId: ending.subscriptionId,
+                    refundKey: refundKey(ending, order.id),
+                    currency: order.currency ?? 'usd',
+                },
+            ]);
+            return false;
+        }
+    }
     const result = await billingRepository.notePaidOnLapsed({
         orderId: order.id,
         subscriptionId: ending.subscriptionId,

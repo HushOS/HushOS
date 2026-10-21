@@ -567,10 +567,10 @@ function AdminPage() {
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
                                 Polar billed a plan of a family HushOS had already deleted
                                 (reinstated or resumed after it ended). Nothing it charges for
-                                exists, so HushOS revokes it and refunds whole what it took after
-                                the family’s plans had ended; a refund that keeps failing is also
-                                under Refunds owed. A plan still marked not revoked is tried again
-                                at every delivery and the daily reconcile: revoke it in Polar’s
+                                exists, so HushOS revokes it and refunds whole every charge made
+                                after that plan’s own end; a refund that keeps failing is also under
+                                Refunds owed. A plan still marked not revoked is tried again at
+                                every delivery and the daily reconcile: revoke it in Polar’s
                                 dashboard if it stays.
                             </p>
                         </>

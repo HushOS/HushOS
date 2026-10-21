@@ -8,9 +8,15 @@ const { closeDatabase, createTestAccount, createTestFamily, resetDatabase } =
     await import('../test/helpers');
 const { db } = await import('./client');
 const groups = await import('./groups');
-const { groupBillingCustomers, groups: groupsTable, workspaces } = await import('./schema');
+const {
+    groupBillingCustomers,
+    groupBillingSubscriptions,
+    groups: groupsTable,
+    workspaces,
+} = await import('./schema');
 
 beforeEach(resetDatabase);
+const DAY = 24 * 60 * 60 * 1000;
 afterAll(closeDatabase);
 
 /* A family dissolved past the retention, its folders already purged. */
@@ -24,17 +30,41 @@ async function dissolvedLongAgo() {
     return groupId;
 }
 
-test('with billing off, a dissolved family that ever had a billing customer waits; one that never did goes', async () => {
-    const billed = await dissolvedLongAgo();
+test('with billing off, a dissolved family whose mirror still holds a plan able to charge waits; one whose plans ended goes', async () => {
+    const running = await dissolvedLongAgo();
+    const ended = await dissolvedLongAgo();
     const never = await dissolvedLongAgo();
-    await db.insert(groupBillingCustomers).values({
-        groupId: billed,
+    const row = (groupId: string, id: string, endedAt: Date | null, status: string) => ({
+        id,
+        groupId,
         provider: 'polar',
-        providerCustomerId: 'cus_billed',
+        productId: 'prod_family',
+        productName: 'Family (monthly)',
+        status,
+        recurringInterval: 'month',
+        units: 4,
+        includedMembers: 4,
+        quotaBytes: 0n,
+        currentPeriodStart: new Date(Date.now() - 2 * DAY),
+        currentPeriodEnd: new Date(Date.now() + 28 * DAY),
+        endedAt,
     });
+    for (const groupId of [running, ended])
+        await db.insert(groupBillingCustomers).values({
+            groupId,
+            provider: 'polar',
+            providerCustomerId: `cus_${groupId.slice(0, 8)}`,
+        });
+    await db
+        .insert(groupBillingSubscriptions)
+        .values([
+            row(running, 'sub_running', null, 'active'),
+            row(ended, 'sub_ended', new Date(Date.now() - 60 * DAY), 'canceled'),
+        ]);
     expect(
         await groups.purgeDissolvedFamilies(groups.DISSOLVED_FAMILY_RETENTION_DAYS),
-    ).toMatchObject({ families: 1 });
+    ).toMatchObject({ families: 2 });
+    expect(await groups.getGroupRow(running)).not.toBeNull();
+    expect(await groups.getGroupRow(ended)).toBeNull();
     expect(await groups.getGroupRow(never)).toBeNull();
-    expect(await groups.getGroupRow(billed)).not.toBeNull();
 });

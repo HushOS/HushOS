@@ -3518,15 +3518,13 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
         isNotNull(groups.dissolvedAt),
         sql`${groups.dissolvedAt} < now() - make_interval(days => ${days})`,
         sql`not exists (select 1 from ${workspaces} w where w.group_id = ${groups.id})`,
-        // With billing off nothing here can tell whether a plan still runs, so a family that ever
-        // had a billing customer waits for a worker with billing on (which revokes, or refunds,
-        // a plan of a family purged too early). One that never had one is purged as usual.
-        billingEnv.BILLING_PROVIDER === 'none'
-            ? sql`not exists (select 1 from ${groupBillingCustomers} c where c.group_id = ${groups.id})`
-            : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in (${sql.join(
-                  ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
-                  sql`, `,
-              )}))`,
+        // A plan the mirror holds as able to charge keeps the family, billing on or off: with billing
+        // off nothing reads Polar, so the mirror's word stands until billing comes back (and a
+        // family whose plans all ended long ago is purged as usual).
+        sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in (${sql.join(
+            ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
+            sql`, `,
+        )}))`,
         // A family whose list of plans at Polar is still owed (a read failed): one the mirror
         // never held may be charging, so it is kept until the list is read.
         billingEnv.BILLING_PROVIDER === 'none'
