@@ -2573,9 +2573,14 @@ test.describe.serial('creating a family from Plans: while the checkout opens, an
             await expect(
                 who.page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]'),
             ).toBeVisible();
-            // The checkout answers; its address only changes the fragment, so the page stays.
-            answer(`${path}#checkout`);
-            await expect(who.page).toHaveURL(/#checkout$/);
+            // The checkout answers. Leaving, the entry it leaves from becomes the family's page
+            // (where a Back without the cache reloads), and the address only changes its
+            // fragment, so the page stays.
+            answer('/app/family#checkout');
+            await expect(who.page).toHaveURL(/\/app\/family#checkout$/);
+            await expect(
+                who.page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]'),
+            ).toBeVisible();
             // Back from Polar: the page is restored as it was, and goes on to the family's page.
             await restored(who.page);
             await expect(who.page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });

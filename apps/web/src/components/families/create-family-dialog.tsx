@@ -74,8 +74,8 @@ export function CreateFamilyDialog({
     const tooSmall = plan ? tierTooSmall(storage.data, plan.plan) : null;
     // Once submitted, the family being made is about to be "yours": it refuses nothing then.
     const refusal = yours && !pending ? createInFamilyCopy(yours.name) : tooSmall || '';
-    // Back from Polar's checkout (the browser's back button restores this page as it was, from
-    // before the family existed): the family is made and has no plan yet, so its page, where
+    // Back from Polar's checkout (the browser's back-forward cache restores this page as it was,
+    // from before the family existed): the family is made and has no plan yet, so its page, where
     // Choose a plan offers the tiers again, is where this goes on, never a second Create.
     const leftFor = useRef<string | null>(null);
     usePageRestored(() => {
@@ -85,7 +85,7 @@ export function CreateFamilyDialog({
         onOpenChange(false);
         setName('');
         void afterMembershipChange(queryClient, userId);
-        void navigate({ to: '/app/family' });
+        void navigate({ to: '/app/family', replace: true });
     });
 
     async function submit(event: FormEvent) {
@@ -113,6 +113,11 @@ export function CreateFamilyDialog({
                             plan.currency,
                         );
                         leftFor.current = groupId;
+                        // Back from it without that cache loads this entry again: made the
+                        // family's page first, so it opens on Choose a plan, not on Plans (whose
+                        // family offers are gone once they have one). Not through the router:
+                        // that would change the page under the dialog while the checkout opens.
+                        window.history.replaceState(window.history.state, '', '/app/family');
                         window.location.assign(url);
                         // Busy until the browser has left for the checkout.
                         return;
