@@ -1,0 +1,39 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PlanStandingTests.swift
+  s_566b8e0c4467a4::t_42497bd155c4c0 1-73
+apps/android/app/src/test/kotlin/com/hushos/app/data/PlanStandingTest.kt
+  s_566b8e0c4467a4::t_35f590c5f07ade 1-74
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_90617d30cfba50 472
+  s_566b8e0c4467a4::t_bedec00c7d9188 162,169,272-279,355,361,367-369,422,458,471,473
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_b7dfb89967195e 188-192,194,197-198
+  s_566b8e0c4467a4::t_1ce96f26801c7f 65-114
+  s_566b8e0c4467a4::t_b3b6cec164ab25 159-160,169,171-172
+  s_566b8e0c4467a4::t_022e300701e470 184,193,195-196,199-202
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_5e36633f162928 24
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_78382d797a174c 140-142,144-145,152-153,159-200,220-221,230,233-236,246-252
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_077572d98c8dfe 293,300,302-314,356,358-362
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_1380c403b9cd80 19,522-524
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_79ebe7d739aa07 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "47bc07968aa79c72282777f345497c11bdf1db5b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
