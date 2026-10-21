@@ -3518,8 +3518,11 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
         isNotNull(groups.dissolvedAt),
         sql`${groups.dissolvedAt} < now() - make_interval(days => ${days})`,
         sql`not exists (select 1 from ${workspaces} w where w.group_id = ${groups.id})`,
+        // With billing off nothing here can tell whether a plan still runs, so a family that ever
+        // had a billing customer waits for a worker with billing on (which revokes, or refunds,
+        // a plan of a family purged too early). One that never had one is purged as usual.
         billingEnv.BILLING_PROVIDER === 'none'
-            ? undefined
+            ? sql`not exists (select 1 from ${groupBillingCustomers} c where c.group_id = ${groups.id})`
             : sql`not exists (select 1 from ${groupBillingSubscriptions} s where s.group_id = ${groups.id} and s.ended_at is null and s.status not in (${sql.join(
                   ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
                   sql`, `,

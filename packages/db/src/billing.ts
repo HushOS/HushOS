@@ -1354,19 +1354,6 @@ export async function listLapsedRevokeRefusals() {
 }
 
 /*
- * When the family's plans last ended at Polar (the latest `ended_at` the mirror holds for
- * it), or null when none has: for a deleted family's plan billing again, a payment on it
- * made after this paid for nothing the family had (endOrphanedFamilyPlan).
- */
-export async function lastGroupPlanEnd(groupId: string) {
-    const [row] = await db
-        .select({ at: sql<Date | null>`max(${groupBillingSubscriptions.endedAt})` })
-        .from(groupBillingSubscriptions)
-        .where(eq(groupBillingSubscriptions.groupId, groupId));
-    return row?.at ? new Date(row.at) : null;
-}
-
-/*
  * A subscription of a deleted family (its `groups` row purged; its billing rows kept, with
  * no foreign key) as Polar answers for it, written to the mirror without the group's lock
  * or any pool or seat projection: there is no family left to give them to. Its status is
@@ -1428,9 +1415,9 @@ export async function recordOrphanedSubscription(
                 cancelAtPeriodEnd: values.cancelAtPeriodEnd,
                 units: values.units,
                 amount: values.amount,
-                // Never cleared: the first end recorded is when the family's plans ended, from
-                // which a payment paid for nothing (lastGroupPlanEnd), however often Polar
-                // brings the plan back.
+                // Never cleared: the first end recorded is when this plan ended, from which a
+                // payment on it paid for nothing (endOrphanedFamilyPlan's `paidAfter`), however
+                // often Polar brings the plan back.
                 endedAt: sql`coalesce(${groupBillingSubscriptions.endedAt}, ${endedAt})`,
                 updatedAt: now,
             },
@@ -1509,23 +1496,6 @@ export async function listUnrevokedLapsedEndings(ownerId: string) {
             ),
         );
     return rows.map((row) => row.id);
-}
-
-/*
- * A lapsed-shaped ending revoked once whose plan Polar bills again (a deleted family's plan
- * reinstated a second time): back to not revoked, so it is revoked again and a payment
- * since is refunded. Its refund rows stay, matched by key, so nothing is refunded twice.
- */
-export async function restartLapsedEnding(subscriptionId: string) {
-    await db
-        .update(personalPlanEndings)
-        .set({ revokedAt: null, periodStart: null, periodEnd: null, updatedAt: new Date() })
-        .where(
-            and(
-                eq(personalPlanEndings.subscriptionId, subscriptionId),
-                isNull(personalPlanEndings.groupId),
-            ),
-        );
 }
 
 /*
@@ -1696,6 +1666,16 @@ export async function beginLapsedRevoke(input: {
     /* The run setting out to revoke it: the ending's lease is taken for it in the same write. */
     owner: string;
     leaseMs: number;
+    /*
+     * A deleted family's plan billing again (endOrphanedFamilyPlan): an ending revoked before,
+     * or one still open with no revoke landed, is taken (and a revoked one made unrevoked)
+     * rather than left; its refund rows stay as they are. Keyed by order id (the rows' primary
+     * key) and matched at Polar by each row's own refund key, a refund made under it is never
+     * made twice, though a takeover resets `admitted_at`, which new rows' keys are made from.
+     */
+    restart?: boolean;
+    /* Its `paid_after`, written once: the first value given is kept (endOrphanedFamilyPlan). */
+    paidAfter?: Date;
 }) {
     return db.transaction(async (tx) => {
         const [existing] = await tx
@@ -1721,6 +1701,7 @@ export async function beginLapsedRevoke(input: {
             unrefundableAmount: null,
             unrefundableCurrency: null,
         };
+        const paidAfter = existing?.row.paidAfter ?? input.paidAfter ?? null;
         if (!existing) {
             const [row] = await tx
                 .insert(personalPlanEndings)
@@ -1729,12 +1710,35 @@ export async function beginLapsedRevoke(input: {
                     userId: input.userId,
                     ...fresh,
                     ...lease,
+                    paidAfter,
                 })
                 .returning();
             return { ending: row!, leased: true };
         }
         // Another run holds it: nothing is written, not even a takeover's times.
         if (existing.leasedByOther) return { ending: existing.row, leased: false };
+        // A deleted family's plan billing again: its ending, revoked or still open, is this run's
+        // to revoke (again), its noted payments kept for the job to refund.
+        if (
+            input.restart &&
+            existing.row.groupId === null &&
+            existing.row.outcome !== 'dropped' &&
+            (existing.row.revokedAt !== null || existing.row.outcome === null)
+        ) {
+            const [row] = await tx
+                .update(personalPlanEndings)
+                .set({
+                    revokedAt: null,
+                    periodStart: null,
+                    periodEnd: null,
+                    paidAfter,
+                    ...lease,
+                    updatedAt: new Date(),
+                })
+                .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+                .returning();
+            return { ending: row!, leased: true };
+        }
         const takeOver =
             existing.row.outcome === 'dropped' ||
             (existing.row.groupId === null &&
@@ -1744,7 +1748,7 @@ export async function beginLapsedRevoke(input: {
         await clearUnworkedRefunds(tx, input.subscriptionId);
         const [row] = await tx
             .update(personalPlanEndings)
-            .set({ ...fresh, ...lease, updatedAt: new Date() })
+            .set({ ...fresh, ...lease, paidAfter, updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
             .returning();
         return { ending: row!, leased: true };
