@@ -645,117 +645,140 @@ async function setDissolvedToEnd(
 ) {
     await reconcileGroup(groupId, { fromDissolveCancel: true });
     let asked = false;
+    // One plan's failure (Polar busy with it, a 429, a locked plan, an outage) never keeps the
+    // others from being set to end, nor the payer's owed mail: the first is thrown last, for
+    // pg-boss to retry the job.
+    let failed: unknown = null;
     for (const row of await billingRepository.listDissolvedChargeable(groupId)) {
         if (row.ending || row.refusedState === row.state) continue;
-        const result = await withPlanChange(
-            row.id,
-            () => 'busy' as const,
-            async () => {
-                const read = async () => {
-                    try {
-                        return await polar().subscriptions.get(row.id);
-                    } catch (error) {
-                        if (statusOf(error) === 404) return null;
-                        throw unavailable(error);
+        let result: 'busy' | 'cancelled' | 'refused' | 'revoked' | 'already' | 'waiting' | 'gone';
+        try {
+            result = await withPlanChange(
+                row.id,
+                () => 'busy' as const,
+                async () => {
+                    const read = async () => {
+                        try {
+                            return await polar().subscriptions.get(row.id);
+                        } catch (error) {
+                            if (statusOf(error) === 404) return null;
+                            throw unavailable(error);
+                        }
+                    };
+                    const current = await read();
+                    if (!current) return 'gone' as const;
+                    if (endingOrEnded(current)) return 'already' as const;
+                    const state = billingRepository.dissolveStateOf({
+                        status: current.status,
+                        currentPeriodEnd: current.current_period_end,
+                        cancelAtPeriodEnd: current.cancel_at_period_end,
+                    });
+                    // Unpaid, incomplete or paused: Polar sets only an active plan to end, and left alone
+                    // such a plan resumes (on its date, or when its payer pays in the portal) for a
+                    // family that is gone. Nothing paid for it is in force, so it is revoked now, as a
+                    // checkout revokes a lapsed plan (endLapsedFamilyPlans): its ending first, and a
+                    // payment taken afterwards refunded whole. A refusal is recorded and listed for
+                    // operators; an outage, or the plan-ending job holding it, is retried.
+                    if (LAPSED.has(current.status)) {
+                        // A first checkout still waiting on the bank is left to finish or expire, as a
+                        // family checkout leaves it (INCOMPLETE_WAIT_MS); the next reconcile queues this
+                        // job again. Ending it now would refund a payment that lands, Polar keeping its
+                        // fee; if it is paid, it is an active plan, set to end at its period's end.
+                        if (
+                            current.status === 'incomplete' &&
+                            Date.now() - Date.parse(current.created_at) < INCOMPLETE_WAIT_MS
+                        )
+                            return 'waiting' as const;
+                        try {
+                            // False: Polar had ended it, no longer has it, or it is live again.
+                            return (await revokeLapsed(groupId, row.id, 'family'))
+                                ? ('revoked' as const)
+                                : ('already' as const);
+                        } catch (error) {
+                            if (error instanceof LapsedRevokeError && error.reason === 'held')
+                                return 'busy' as const;
+                            const status = statusOf(error);
+                            // Too many requests, or a plan Polar is working on: a retry fixes it, so
+                            // pg-boss retries; only a refusal that needs the plan to change is recorded.
+                            const transient =
+                                status === 429 ||
+                                (status === 409 && polarErrorName(error) === 'SubscriptionLocked');
+                            const refusal =
+                                error instanceof LapsedRevokeError
+                                    ? `paid-period:${current.status}`
+                                    : !transient && status !== null && status < 500
+                                      ? (polarErrorName(error) ?? `status:${status}`)
+                                      : null;
+                            if (refusal === null) throw unavailable(error);
+                            await billingRepository.recordDissolveRefusal(row.id, state, refusal);
+                            log.error({
+                                message:
+                                    'Dissolved family’s lapsed plan couldn’t be revoked: revoke it in Polar',
+                                billing: { group: groupId, subscription: row.id, refusal },
+                            });
+                            return 'refused' as const;
+                        }
                     }
-                };
-                const current = await read();
-                if (!current) return 'gone' as const;
-                if (endingOrEnded(current)) return 'already' as const;
-                const state = billingRepository.dissolveStateOf({
-                    status: current.status,
-                    currentPeriodEnd: current.current_period_end,
-                    cancelAtPeriodEnd: current.cancel_at_period_end,
-                });
-                // Unpaid, incomplete or paused: Polar sets only an active plan to end, and left alone
-                // such a plan resumes (on its date, or when its payer pays in the portal) for a
-                // family that is gone. Nothing paid for it is in force, so it is revoked now, as a
-                // checkout revokes a lapsed plan (endLapsedFamilyPlans): its ending first, and a
-                // payment taken afterwards refunded whole. A refusal is recorded and listed for
-                // operators; an outage, or the plan-ending job holding it, is retried.
-                if (LAPSED.has(current.status)) {
-                    // A first checkout still waiting on the bank is left to finish or expire, as a
-                    // family checkout leaves it (INCOMPLETE_WAIT_MS); the next reconcile queues this
-                    // job again. Ending it now would refund a payment that lands, Polar keeping its
-                    // fee; if it is paid, it is an active plan, set to end at its period's end.
-                    if (
-                        current.status === 'incomplete' &&
-                        Date.now() - Date.parse(current.created_at) < INCOMPLETE_WAIT_MS
-                    )
-                        return 'waiting' as const;
-                    try {
-                        // False: Polar had ended it, no longer has it, or it is live again.
-                        return (await revokeLapsed(groupId, row.id, 'family'))
-                            ? ('revoked' as const)
-                            : ('already' as const);
-                    } catch (error) {
-                        if (error instanceof LapsedRevokeError && error.reason === 'held')
-                            return 'busy' as const;
-                        const status = statusOf(error);
-                        // Too many requests, or a plan Polar is working on: a retry fixes it, so
-                        // pg-boss retries; only a refusal that needs the plan to change is recorded.
-                        const transient =
-                            status === 429 ||
-                            (status === 409 && polarErrorName(error) === 'SubscriptionLocked');
-                        const refusal =
-                            error instanceof LapsedRevokeError
-                                ? `paid-period:${current.status}`
-                                : !transient && status !== null && status < 500
-                                  ? (polarErrorName(error) ?? `status:${status}`)
-                                  : null;
-                        if (refusal === null) throw unavailable(error);
-                        await billingRepository.recordDissolveRefusal(row.id, state, refusal);
+                    // Any other status Polar may add: not asked about, refused on its status.
+                    if (!LIVE.has(current.status)) {
+                        await billingRepository.recordDissolveRefusal(
+                            row.id,
+                            state,
+                            `status:${current.status}`,
+                        );
                         log.error({
-                            message:
-                                'Dissolved family’s lapsed plan couldn’t be revoked: revoke it in Polar',
-                            billing: { group: groupId, subscription: row.id, refusal },
+                            message: 'Dissolved family’s plan isn’t active: revoke it in Polar',
+                            billing: {
+                                group: groupId,
+                                subscription: row.id,
+                                status: current.status,
+                            },
                         });
                         return 'refused' as const;
                     }
-                }
-                // Any other status Polar may add: not asked about, refused on its status.
-                if (!LIVE.has(current.status)) {
-                    await billingRepository.recordDissolveRefusal(
-                        row.id,
-                        state,
-                        `status:${current.status}`,
-                    );
-                    log.error({
-                        message: 'Dissolved family’s plan isn’t active: revoke it in Polar',
-                        billing: { group: groupId, subscription: row.id, status: current.status },
-                    });
-                    return 'refused' as const;
-                }
-                // Before the call, so an answer lost to a timeout still counts as HushOS's.
-                await billingRepository.markDissolveAsked(row.id);
-                try {
-                    await polar().subscriptions.update(row.id, { cancel_at_period_end: true });
-                } catch (error) {
-                    const status = statusOf(error);
-                    const name = polarErrorName(error);
-                    if (status === 403 && name === 'AlreadyCanceledSubscription') {
-                        const again = await read();
-                        if (!again || endingOrEnded(again)) return 'already' as const;
-                        throw unavailable(error);
+                    // Before the call, so an answer lost to a timeout still counts as HushOS's.
+                    await billingRepository.markDissolveAsked(row.id);
+                    try {
+                        await polar().subscriptions.update(row.id, { cancel_at_period_end: true });
+                    } catch (error) {
+                        const status = statusOf(error);
+                        const name = polarErrorName(error);
+                        if (status === 403 && name === 'AlreadyCanceledSubscription') {
+                            const again = await read();
+                            if (!again || endingOrEnded(again)) return 'already' as const;
+                            throw unavailable(error);
+                        }
+                        if (status !== 403 || name !== 'InactiveSubscription')
+                            throw unavailable(error);
+                        await billingRepository.recordDissolveRefusal(row.id, state, name);
+                        log.error({
+                            message:
+                                'Polar refused to end a dissolved family’s plan: cancel it in Polar',
+                            billing: {
+                                group: groupId,
+                                subscription: row.id,
+                                status,
+                                refusal: name,
+                            },
+                        });
+                        return 'refused' as const;
                     }
-                    if (status !== 403 || name !== 'InactiveSubscription') throw unavailable(error);
-                    await billingRepository.recordDissolveRefusal(row.id, state, name);
-                    log.error({
-                        message:
-                            'Polar refused to end a dissolved family’s plan: cancel it in Polar',
-                        billing: { group: groupId, subscription: row.id, status, refusal: name },
+                    await billingRepository.recordDissolveCancel(row.id);
+                    log.info({
+                        message: 'Dissolved family’s plan set to end at its period’s end',
+                        billing: { group: groupId, subscription: row.id, cancels: row.cancels + 1 },
                     });
-                    return 'refused' as const;
-                }
-                await billingRepository.recordDissolveCancel(row.id);
-                log.info({
-                    message: 'Dissolved family’s plan set to end at its period’s end',
-                    billing: { group: groupId, subscription: row.id, cancels: row.cancels + 1 },
-                });
-                return 'cancelled' as const;
-            },
-        );
-        if (result === 'busy') throw new DissolveCancelBusyError();
+                    return 'cancelled' as const;
+                },
+            );
+        } catch (error) {
+            failed ??= error;
+            continue;
+        }
+        if (result === 'busy') {
+            failed ??= new DissolveCancelBusyError();
+            continue;
+        }
         if (result === 'cancelled') outcome.cancelled++;
         if (result === 'refused') outcome.refused++;
         if (result === 'revoked') outcome.revoked++;
@@ -768,6 +791,7 @@ async function setDissolvedToEnd(
             (await billingRepository.claimDissolveMail(row.id, row.currentPeriodEnd))
         )
             await tellPayer(groupId, row.id, row.currentPeriodEnd);
+    if (failed) throw failed;
     return outcome;
 }
 
@@ -1430,7 +1454,8 @@ export async function endLapsedFamilyPlans(groupId: string, found: LapsedFamilyP
 
 /* Ends the lapsed plans of a family this person pays for, before they leave, are removed or delete their account. */
 export async function endLapsedPlansPaidBy(groupId: string, userId: string) {
-    await endLapsedPlansForDeparture(groupId, userId, await lapsedPlansPaidBy(groupId, userId));
+    const { plans } = await lapsedPlansPaidBy(groupId, userId);
+    await endLapsedPlansForDeparture(groupId, userId, plans);
 }
 
 /*
@@ -1488,7 +1513,9 @@ export async function lapsedPlansPaidBy(
     for (const plan of plans)
         if (plan.status === 'incomplete' && Date.now() - plan.createdAt < INCOMPLETE_WAIT_MS)
             throw new LapsedFamilyPlanError('waiting', plan.name);
-    return plans;
+    // `charging`: a plan running at Polar already (only for a dissolving leave, which may go):
+    // the leave's write must then dissolve the family (leaveGroup's `mustDissolve`).
+    return { plans, charging };
 }
 
 /* What a refused checkout says, by why the lapsed plan couldn't be ended. */

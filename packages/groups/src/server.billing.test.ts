@@ -45,6 +45,8 @@ const polar = {
     revokes: [] as string[],
     /* Runs once as Polar lists a plan's orders: the revoke's own read, a payment landing then. */
     beforeOrders: null as (() => void | Promise<void>) | null,
+    /* Runs once as Polar lists the family's plans: the lapsed-plan lookup's first read. */
+    beforeList: null as (() => void | Promise<void>) | null,
 };
 
 /* A family plan with one member included, so a family of two already needs a paid place. */
@@ -106,6 +108,9 @@ const fakeClient = {
         },
         // A team customer's subscriptions, ended ones included.
         async list(query: { external_customer_id?: string }) {
+            const hook = polar.beforeList;
+            polar.beforeList = null;
+            await hook?.();
             const team = query.external_customer_id
                 ? polar.teams.get(query.external_customer_id)
                 : undefined;
@@ -220,6 +225,7 @@ beforeEach(async () => {
     polar.revokeRefusal = null;
     polar.revokes = [];
     polar.beforeOrders = null;
+    polar.beforeList = null;
 });
 afterAll(closeDatabase);
 
@@ -970,6 +976,35 @@ describe('admission with billing on', () => {
             message:
                 'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
         });
+        expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();
+    });
+
+    test('the last member’s leave with a plan already running before the lookup must dissolve the family: someone admitted meanwhile makes it refused', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 1);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        // Resumed in the portal before the leave: running at Polar, the mirror still paused.
+        subscription.status = 'active';
+        const newcomer = await createTestAccount();
+        // A holder let in between the leave's preview and its write.
+        polar.beforeList = async () => {
+            await setTestMember({
+                groupId: fam.groupId,
+                userId: newcomer.userId,
+                state: 'active',
+                roles: ['billing', 'members'],
+            });
+            const [seal] = await db
+                .select()
+                .from(groupKeySeals)
+                .where(eq(groupKeySeals.holderUserId, fam.organizer.userId));
+            await db.insert(groupKeySeals).values({ ...seal!, holderUserId: newcomer.userId });
+        };
+        await expect(
+            groups.leave(fam.organizer.userId, fam.groupId, { endsLapsed: [subscription.id] }),
+        ).rejects.toMatchObject({ code: 'payer', status: 409 });
         expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
         expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();
     });
