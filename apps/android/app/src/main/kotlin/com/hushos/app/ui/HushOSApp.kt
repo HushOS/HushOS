@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.fillMaxHeight
+import com.hushos.app.data.PlanDisplay
 import com.hushos.tokens.AlpineSpace
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.background
@@ -518,7 +519,9 @@ private fun StorageFullSheet(model: DriveViewModel, state: DriveState, waiting: 
     Sheet(onDismissRequest = dismiss) {
         Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S4)) {
             Text("Not enough room", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-            Text("$what, and $free is free. Trash and earlier versions count until they’re removed.", style = MaterialTheme.typography.bodyMedium,
+            // A plan whose payment failed, or that is paused, is why the room is Free's: said first (never while pooled).
+            val lapsed = state.allowance?.let { PlanDisplay.of(it, state.billing).lapsed }?.let { it.room + " " } ?: ""
+            Text("$lapsed$what, and $free is free. Trash and earlier versions count until they’re removed.", style = MaterialTheme.typography.bodyMedium,
                 color = alpine.inkMuted, modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = AlpineSpace.S3))
             if (trash > 0) RoomOption(Icons.Outlined.Delete, "Empty trash", if (busy == "trash") "Emptying…" else "Frees ${formatSpace(trash)}", enabled = busy == null) {
                 busy = "trash"
