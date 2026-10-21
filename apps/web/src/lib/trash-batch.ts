@@ -33,7 +33,7 @@ export type TrashParts = {
     pause?: (ms: number) => Promise<void>;
 };
 
-/* How long a delete waits before it asks once more after the whole request was turned away. */
+/* How long a delete waits before it asks once more after the workspace was busy (409). */
 export const PURGE_RETRY_MS = 1_000;
 
 type Item = TrashBatchItem | RestoreBatchItem | PurgeBatchItem;
@@ -246,9 +246,11 @@ export async function restoreBatch(
  * request had no time for (`busy`) is sent again while that gets further.
  * A row the server no longer has (`not-found`: deleted from another tab, or
  * by a request whose answer never arrived) is gone too, not a failure. A
- * request turned away whole because the workspace was busy (409) or too many
- * were sent (429) is sent once more after PURGE_RETRY_MS. `error` is the
- * first refusal that stands. `onGone` hears the same ids as each request lands.
+ * request turned away whole because the workspace was busy (409: another
+ * write held its lock) is sent once more after PURGE_RETRY_MS. Too many
+ * requests (429) is not: its window runs a minute from the first, so a
+ * second later would be turned away again. `error` is the first refusal that
+ * stands. `onGone` hears the same ids as each request lands.
  */
 export async function purgeBatch(
     nodes: DriveNode[],
@@ -268,9 +270,8 @@ export async function purgeBatch(
         try {
             return await parts.purge(workspaceId, nodeIds);
         } catch (error) {
-            const turnedAway =
-                error instanceof DriveApiError && (error.status === 409 || error.status === 429);
-            if (!turnedAway) throw error;
+            const busy = error instanceof DriveApiError && error.status === 409;
+            if (!busy) throw error;
             await pause(PURGE_RETRY_MS);
             return parts.purge(workspaceId, nodeIds);
         }

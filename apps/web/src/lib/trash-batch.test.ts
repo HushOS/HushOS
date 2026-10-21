@@ -499,18 +499,28 @@ describe('deleting Trash rows the server no longer has, or turned away whole', (
         expect(['a', 'b'].every(isPurged)).toBe(true);
     });
 
-    test('too many requests (429) twice running: one more try, then it says so and keeps the rows', async () => {
+    test('busy (409) twice running: one more try, then it says so and keeps the rows', async () => {
         const { parts, sent, isPurged, trashEach, paused } = server({
             failRequests: [2, 3],
-            failStatus: 429,
+            failStatus: 409,
         });
         await trashEach(['a', 'b']);
         const result = await purgeBatch([node('a'), node('b')], parts);
         expect(sent.purge).toHaveLength(2);
         expect(paused).toEqual([PURGE_RETRY_MS]);
         expect(result.gone).toEqual([]);
-        expect(result.error).toMatchObject({ status: 429 });
+        expect(result.error).toMatchObject({ status: 409 });
         expect(['a', 'b'].some(isPurged)).toBe(false);
+    });
+
+    test('too many requests (429) is not sent again: its window runs a minute', async () => {
+        const { parts, sent, trashEach, paused } = server({ failRequests: [2], failStatus: 429 });
+        await trashEach(['a', 'b']);
+        const result = await purgeBatch([node('a'), node('b')], parts);
+        expect(sent.purge).toHaveLength(1);
+        expect(paused).toEqual([]);
+        expect(result.gone).toEqual([]);
+        expect(result.error).toMatchObject({ status: 429 });
     });
 
     test('any other failure is not sent again', async () => {

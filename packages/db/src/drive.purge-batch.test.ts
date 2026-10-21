@@ -198,23 +198,29 @@ async function holdingLock(workspaceId = owner.workspaceId) {
 }
 /*
  * `work` against a database `ms` slower to answer every statement, as one across
- * a network is: each statement the driver sends waits that long first.
+ * a network is: each statement the driver sends waits that long first. `delayed`
+ * counts the statements held back, so a driver that stops calling this method
+ * shows up as none rather than as a fast database passing quietly.
  */
 async function slowDatabase<T>(ms: number, work: () => Promise<T>) {
     const proto = pg.Client.prototype;
     const query = Object.getOwnPropertyDescriptor(proto, 'query')!;
     const original = query.value as (this: pg.Client, ...args: unknown[]) => unknown;
     const late = setTimeout as (resolve: () => void, ms: number) => unknown;
+    let delayed = 0;
     Object.defineProperty(proto, 'query', {
         ...query,
         value: function (this: pg.Client, ...args: unknown[]) {
+            delayed++;
             const send = () => original.apply(this, args);
             if (typeof args.at(-1) === 'function') return void late(() => void send(), ms);
             return new Promise<void>((resolve) => late(resolve, ms)).then(send);
         },
     });
     try {
-        return await work();
+        const started = performance.now();
+        const value = await work();
+        return { value, delayed, took: performance.now() - started };
     } finally {
         Object.defineProperty(proto, 'query', query);
     }
@@ -411,7 +417,7 @@ describe('deleting a selection forever', () => {
             writer: owner.userId,
         });
         // 10 ms a statement: a walk a node alone would spend 600 ms, past this budget.
-        const outcomes = await slowDatabase(10, () =>
+        const slow = await slowDatabase(10, () =>
             drive.purgeNodes({
                 workspaceId: owner.workspaceId,
                 nodeIds: ids,
@@ -419,7 +425,10 @@ describe('deleting a selection forever', () => {
                 budgetMs: 500,
             }),
         );
-        const purged = outcomes.filter((outcome) => outcome.status === 'purged').length;
+        // The database really was slow: every statement it sent waited its 10 ms.
+        expect(slow.delayed).toBeGreaterThan(0);
+        expect(slow.took).toBeGreaterThanOrEqual(slow.delayed * 10 - 5);
+        const purged = slow.value.filter((outcome) => outcome.status === 'purged').length;
         expect(purged).toBeGreaterThan(1);
         expect(await purgedCount()).toBe(purged);
     }, 30_000);
