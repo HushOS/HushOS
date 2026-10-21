@@ -707,7 +707,7 @@ export async function listGivenUpReissues() {
             wanted: groupBillingSubscriptions.reissuedState,
             reason: sql<
                 string | null
-            >`case when ${refused} and not ${live} then 'dissolved-inactive' when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            >`case when ${refused} and not ${live} and ${groupBillingSubscriptions.dissolveRefusal} like 'paid-period:%' then 'dissolved-paid-period' when ${refused} and not ${live} and ${groupBillingSubscriptions.dissolveRefusal} like 'status:%' then 'dissolved-unknown-status' when ${refused} and not ${live} then 'dissolved-inactive' when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
             since: since.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
@@ -1181,6 +1181,41 @@ export async function isFamilyOwner(ownerId: string) {
         .where(eq(groupBillingSubscriptions.groupId, ownerId))
         .limit(1);
     return row !== undefined;
+}
+
+/*
+ * A lapsed family plan HushOS couldn't revoke, and why (null once a revoke landed): what the
+ * operators' list of blocked revokes reads.
+ */
+export async function recordLapsedRevokeRefusal(subscriptionId: string, refusal: string | null) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            lapsedRevokeRefusal: refusal,
+            lapsedRevokeRefusedAt: refusal === null ? null : sql`now()`,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Lapsed family plans HushOS couldn't revoke that haven't ended: the operators' list. Ids only. */
+export async function listLapsedRevokeRefusals() {
+    return db
+        .select({
+            groupId: groupBillingSubscriptions.groupId,
+            subscriptionId: groupBillingSubscriptions.id,
+            status: groupBillingSubscriptions.status,
+            refusal: groupBillingSubscriptions.lapsedRevokeRefusal,
+            since: groupBillingSubscriptions.lapsedRevokeRefusedAt,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                isNotNull(groupBillingSubscriptions.lapsedRevokeRefusedAt),
+                isNull(groupBillingSubscriptions.endedAt),
+            ),
+        )
+        .orderBy(desc(groupBillingSubscriptions.lapsedRevokeRefusedAt));
 }
 
 /*

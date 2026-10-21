@@ -96,10 +96,25 @@ const stuckReasons: Record<string, string> = {
         'Its family was dissolved, and Polar refused to cancel the plan at the end of its period. Cancel it in Polar.',
     'dissolved-inactive':
         'Its family was dissolved, and the plan isn’t active (unpaid, incomplete or paused), so it can’t be set to end, and Polar refused HushOS’s revoke. It may still be paid or resume. Revoke it in Polar.',
+    'dissolved-paid-period':
+        'Its family was dissolved, and the plan is marked unpaid, but Polar shows a payment for its current period, so HushOS didn’t revoke it. Don’t revoke it now: that throws away a paid period. Check it in Polar; once Polar shows it active, HushOS sets it to end at its period’s end.',
+    'dissolved-unknown-status':
+        'Its family was dissolved, and Polar gives the plan a status HushOS doesn’t know, so nothing was asked. Look at it in Polar and decide.',
     'dissolved-failing':
         'Its family was dissolved, and HushOS has failed for over a day, or close to its renewal, to cancel the plan at the end of its period. The worker’s log has Polar’s answer; check the access token. Cancel it in Polar.',
     'revert-unavailable':
         'An upgrade unpaid for over a week, and the plan it was paid for is no longer offered, so it can’t be moved back. The family keeps the smaller storage meanwhile.',
+};
+
+/* Why a lapsed family plan wasn't revoked, by the refusal billing records. */
+const lapsedRefusals: Record<string, string> = {
+    'paid-period':
+        'Marked unpaid, but Polar shows a payment for its current period. Don’t revoke it: that throws away a paid period. Check it in Polar; it should turn active.',
+    locked: 'Polar is working on a change to it (a renewal under way). HushOS asks again when next asked; if it stays, look at it in Polar.',
+    refused:
+        'Polar refused the revoke. Check the subscription in Polar and revoke it there if it should end.',
+    unavailable:
+        'Polar couldn’t be reached, or didn’t answer. The revoke may have landed: check it in Polar before doing anything.',
 };
 
 function AdminPage() {
@@ -195,6 +210,12 @@ function AdminPage() {
                                 value: count(data.refundsOwed.length),
                                 tone: data.refundsOwed.length > 0 ? 'danger' : undefined,
                                 anchor: '#refunds-owed',
+                            },
+                            {
+                                label: 'Lapsed plans not ended',
+                                value: count(data.lapsedRevokeRefusals.length),
+                                tone: data.lapsedRevokeRefusals.length > 0 ? 'danger' : undefined,
+                                anchor: '#lapsed-not-ended',
                             },
                             {
                                 label: 'More than one plan',
@@ -358,6 +379,50 @@ function AdminPage() {
                                 HushOS keeps trying; to settle one now, refund the order in Polar’s
                                 dashboard for the amount shown (Polar adds the tax), and the row
                                 goes at the next try.
+                            </p>
+                        </>
+                    )}
+                    {data.lapsedRevokeRefusals.length > 0 && (
+                        <>
+                            <h2
+                                id="lapsed-not-ended"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Lapsed plans not ended
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Why</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.lapsedRevokeRefusals.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={td}>
+                                                {row.subscriptionId} ({row.status})
+                                            </td>
+                                            <td className={cn(td, 'font-sans')}>
+                                                {lapsedRefusals[row.refusal ?? ''] ??
+                                                    row.refusal ??
+                                                    '–'}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                A family plan whose payment failed, or that is paused, which HushOS
+                                set out to revoke (before a new plan, or before its payer left, was
+                                removed or deleted their account) and couldn’t. What asked for it is
+                                refused until the plan ends. The row goes once a revoke lands.
                             </p>
                         </>
                     )}

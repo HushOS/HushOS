@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Spinner } from '@/components/motion';
@@ -20,6 +20,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { familyBillingQueryOptions, lapsedPlanEndsLine } from '@/lib/family-billing';
 import { cue } from '@/lib/sounds';
 import { afterMembershipChange, familyContext, firstName, type FamilyMember } from '@/lib/families';
 import { errorCopy } from '@/lib/groups/copy';
@@ -69,6 +70,12 @@ export function RemoveDialog({
 }) {
     const queryClient = useQueryClient();
     const who = firstName(member.name);
+    const billing = useQuery(familyBillingQueryOptions(userId, groupId));
+    const planLine = lapsedPlanEndsLine(billing.data, family, {
+        userId: member.userId,
+        you: false,
+        name: who,
+    });
     const [phase, setPhase] = useState<Phase>({ kind: 'confirm' });
     const busy = phase.kind === 'running';
 
@@ -108,6 +115,11 @@ export function RemoveDialog({
                             keys, which can take a few minutes.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
+                    {planLine && (
+                        <p className="text-sm" data-remove-plan-ends>
+                            {planLine}
+                        </p>
+                    )}
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <Button variant="destructive" onClick={() => void run(false)}>

@@ -788,7 +788,7 @@ async function endLapsedFamilyPlansFor(userId: string) {
         } catch (error) {
             if (!(error instanceof LapsedFamilyPlanError)) throw error;
             throw new BillingError(
-                `${lapsedPlanStaysRefusal(error)} Your account was not deleted.`,
+                `${lapsedPlanStaysRefusal(error, 'payer')} Your account was not deleted.`,
                 409,
                 { cause: error },
             );

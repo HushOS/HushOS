@@ -62,7 +62,12 @@ export type GroupBillingSummary = FamilyBillingDetail | FamilyPlanGlance;
  * The pool and the extra places are gone meanwhile (docs/groups-design.md 3.5); a new
  * checkout ends it first. Absent from servers before this field.
  */
-export type FamilyLapsedPlan = { productName: string; standing: 'payment-failed' | 'paused' };
+export type FamilyLapsedPlan = {
+    productName: string;
+    standing: 'payment-failed' | 'paused';
+    /* Every such plan of the family (subscription ids): what a confirmed checkout ends. */
+    ids: string[];
+};
 
 /*
  * A member's view: the plan's name, the storage used and the pool's size,
@@ -299,14 +304,15 @@ export interface GroupBillingApi {
     summary(groupId: string): Promise<GroupBillingSummary>;
     /* Polar's hosted checkout; whoever starts it becomes the family's payer. */
     /*
-     * `endLapsed`: the person confirmed that the family's lapsed plan ends now. Without it, a
-     * family with one is refused with code `ends-lapsed`, and nothing is ended.
+     * `endLapsed`: the lapsed plans (subscription ids, `FamilyLapsedPlan.ids`) the person
+     * confirmed end now. Unless they are exactly the family's, it is refused with code
+     * `ends-lapsed` and nothing is ended.
      */
     checkout(
         groupId: string,
         productId: string,
         currency?: string,
-        endLapsed?: boolean,
+        endLapsed?: string[],
     ): Promise<{ url: string }>;
     /*
      * More places are charged at once; fewer are scheduled for the period's

@@ -227,6 +227,15 @@ export const groupBillingSubscriptions = pgTable(
         dissolveRefusal: text('dissolve_refusal'),
         dissolveRefusedState: text('dissolve_refused_state'),
         /*
+         * HushOS set out to revoke this plan because it lapsed (unpaid, incomplete, paused) and
+         * gives nothing (a checkout, a payer leaving, removed or deleting their account) and
+         * couldn't: why (`paid-period`, `locked`, `refused`, `unavailable`) and when last. Listed
+         * for operators while the plan hasn't ended, since what it blocks (a deletion, a leave, a
+         * new plan) waits on it; cleared once a revoke lands.
+         */
+        lapsedRevokeRefusal: text('lapsed_revoke_refusal'),
+        lapsedRevokeRefusedAt: timestamp('lapsed_revoke_refused_at', { withTimezone: true }),
+        /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
          */

@@ -2046,6 +2046,33 @@ export async function leaveGroup(groupId: string, userId: string): Promise<Leave
 }
 
 /*
+ * What leaving would answer now, by the very rule leaveGroup applies (depart, under the same
+ * locks), with nothing kept: the transaction is always rolled back. Asked before anything
+ * outside the database changes for a leave (its payer's lapsed plan revoked at Polar), so a
+ * leave the rule refuses ends nothing. Another change between this and the leave can still
+ * refuse it.
+ */
+export async function previewLeave(groupId: string, userId: string): Promise<LeaveResult> {
+    const preview = Symbol('preview');
+    let answer: LeaveResult = { status: 'unavailable' };
+    try {
+        await db.transaction(async (tx) => {
+            const group = await lockGroup(tx, groupId);
+            if (!group) answer = { status: 'not-member' };
+            else {
+                await lockAreas(tx, groupId);
+                if (group.kind === 'family') await lockPool(tx, groupId);
+                answer = await depart(tx, groupId, userId);
+            }
+            throw preview;
+        });
+    } catch (error) {
+        if (error !== preview) throw error;
+    }
+    return answer;
+}
+
+/*
  * Before an account is deleted (inside deleteAccount's transaction, before it
  * locks the account): every group the person is in, in id order, is departed
  * as leaveGroup would. The first group they may not leave (the only `billing`

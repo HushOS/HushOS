@@ -78,6 +78,28 @@ export function planState(summary: FamilyBillingFull): PlanState {
 }
 
 /*
+ * Said before a leave or a removal: the family's plan that gives nothing (its payment failed,
+ * or it is paused) ends at once when the person who pays for it goes (the server revokes it
+ * first). `payerUserId` is who goes; null when the summary doesn't say that they pay (a
+ * member's glance carries no payer), or nothing lapsed is there to end.
+ */
+export function lapsedPlanEndsLine(
+    summary: FamilyBilling | undefined,
+    family: string,
+    goer: { userId: string; you: true } | { userId: string; you: false; name: string },
+) {
+    if (!summary?.enabled || summary.view !== 'manage') return null;
+    const lapsed = summary.lapsedPlan;
+    if (!lapsed || summary.payer?.userId !== goer.userId) return null;
+    const name = lapsed.productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+    const how =
+        lapsed.standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through';
+    return goer.you
+        ? `${family}’s ${name} plan, which you pay for and ${how}, ends at once when you leave. Nothing of it is refunded: no part of it is in use.`
+        : `${goer.name} pays for ${family}’s ${name} plan, ${how}. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.`;
+}
+
+/*
  * A renewal the bank refused, and this person pays: then Manage payment and invoices is the
  * family page's one blue button, and Invite someone steps back to outline.
  */
