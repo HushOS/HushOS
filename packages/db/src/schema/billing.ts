@@ -227,6 +227,15 @@ export const groupBillingSubscriptions = pgTable(
         dissolveRefusal: text('dissolve_refusal'),
         dissolveRefusedState: text('dissolve_refused_state'),
         /*
+         * HushOS set out to revoke this plan because it lapsed (unpaid, incomplete, paused) and
+         * gives nothing (a checkout, a payer leaving, removed or deleting their account) and
+         * couldn't: why (`paid-period`, `locked`, `refused`, `unavailable`) and when last. Listed
+         * for operators while the plan hasn't ended, since what it blocks (a deletion, a leave, a
+         * new plan) waits on it; cleared once a revoke lands.
+         */
+        lapsedRevokeRefusal: text('lapsed_revoke_refusal'),
+        lapsedRevokeRefusedAt: timestamp('lapsed_revoke_refused_at', { withTimezone: true }),
+        /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
          */
@@ -262,13 +271,20 @@ export const personalPlanEndings = pgTable(
     'personal_plan_endings',
     {
         subscriptionId: text('subscription_id').primaryKey(),
+        /*
+         * Whose plan it is, and whom the plan-ending job runs for: a person's user id, or, for a
+         * family's own plan ended because it lapsed (a family checkout, leave, removal, deletion
+         * or dissolve revoking it), the family's id. Which it is: whether the subscription has a
+         * row in group_billing_subscriptions (billingRepository.familyPlanOf).
+         */
         userId: uuid('user_id').notNull(),
         /*
          * The membership that pooled them: the family and when they were let in. Null for a
-         * lapsed plan (unpaid, incomplete, paused) HushOS revoked itself, before a checkout or
-         * because its owner was pooled: nothing is refunded then unless Polar takes a payment
-         * for it afterwards, which is refunded whole (`admitted_at` and `pooled_at` are then
-         * when HushOS set out to revoke it, `revoked_at` when Polar says it ended).
+         * lapsed plan (unpaid, incomplete, paused) HushOS revoked itself, a person's or a
+         * family's own: nothing is refunded then unless Polar takes a payment for it
+         * afterwards, which is refunded whole (`admitted_at` and `pooled_at` are then when
+         * HushOS set out to revoke it, `revoked_at` when Polar says it ended). It never holds
+         * the id of the family whose own plan this is; `user_id` does.
          */
         groupId: uuid('group_id'),
         admittedAt: timestamp('admitted_at', { withTimezone: true }).notNull(),

@@ -632,6 +632,8 @@ const rosterCallFields = {
     rotations: t.Optional(t.Array(rotationSchema, { maxItems: MAX_ROTATIONS_PER_CALL })),
 };
 const groupParams = t.Object({ id: uuidSchema });
+/* The lapsed plans (subscription ids) a leave or a removal was confirmed to end. */
+const endsLapsedSchema = t.Optional(t.Array(t.String({ maxLength: 100 }), { maxItems: 10 }));
 const memberParams = t.Object({ id: uuidSchema, userId: uuidSchema });
 const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
 
@@ -1237,12 +1239,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 productId: t.String({ minLength: 1, maxLength: 100 }),
                 currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
                 units: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
+                // Confirmed: these lapsed plans of the family end now (refusal code `ends-lapsed`).
+                endLapsed: t.Optional(
+                    t.Array(t.String({ minLength: 1, maxLength: 100 }), { maxItems: 20 }),
+                ),
             }),
         },
         async ({ request, sessionToken, params, body }) =>
             billing.startGroupCheckout(await billingMutation(request, sessionToken), params.id, {
                 productId: body.productId,
                 units: body.units,
+                endLapsed: body.endLapsed,
                 address: requestAddress(request),
                 currency: chargeableCurrency(body.currency, requestCountry(request)) ?? undefined,
             }),
@@ -2615,13 +2622,26 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/members/:userId/remove',
-                { params: memberParams, body: t.Object(rosterCallFields) },
+                {
+                    params: memberParams,
+                    body: t.Object({ ...rosterCallFields, endsLapsed: endsLapsedSchema }),
+                },
                 async ({ request, sessionToken, params, body }) =>
                     groups.removeMember(
                         (await groupUser(request, sessionToken)).id,
                         params.id,
                         params.userId,
                         body,
+                    ),
+            )
+            .post(
+                '/groups/:id/members/:userId/remove-preview',
+                { params: memberParams, body: t.Object({}) },
+                async ({ request, sessionToken, params }) =>
+                    groups.removalPreview(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
                     ),
             )
             .post(
@@ -2646,9 +2666,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/leave',
-                { params: groupParams, body: t.Object({}) },
-                async ({ request, sessionToken, params }) =>
-                    groups.leave((await groupUser(request, sessionToken)).id, params.id),
+                { params: groupParams, body: t.Object({ endsLapsed: endsLapsedSchema }) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.leave((await groupUser(request, sessionToken)).id, params.id, body),
             )
             .post(
                 '/groups/:id/areas',

@@ -27,8 +27,13 @@ import { verifyHybrid } from '@hushos/crypto/signatures';
 import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
 import {
     billingEnabled,
+    endLapsedPlansForDeparture,
     ensureGroupSeat,
     familyHasPlan,
+    isFamilyPayer,
+    LapsedFamilyPlanError,
+    lapsedPlansPaidBy,
+    lapsedPlanStaysRefusal,
     paysForGroup,
     queueDissolvedCancel,
     queuePlanEnding,
@@ -901,9 +906,16 @@ async function writeChain(
         admitIdentity?: string;
         /*
          * Runs once every check has passed and before anything is written: an
-         * admission's paid place. It throws to stop the write.
+         * admission's paid place, a removal's lapsed plan. It throws to stop the write.
          */
         beforeAppend?: () => Promise<void>;
+        /*
+         * The write's own rules run first in a rolled-back transaction (appendChain's
+         * `preview`), and beforeAppend only once they pass: a removal never ends a plan the
+         * write then refuses (the last `billing` holder, a member list a departure overtook).
+         * Only a race between the preview and the write remains.
+         */
+        previewFirst?: boolean;
         /* The delete route's area: its tombstone, at the version after the chain's latest. */
         retireArea?: string;
     } = {},
@@ -1011,8 +1023,7 @@ async function writeChain(
         route.kind === 'admit' ? route.userId : null,
         options.retireArea ?? null,
     );
-    await options.beforeAppend?.();
-    const result = await groupsRepository.appendChain({
+    const write = {
         groupId,
         uploaderUserId: uploader,
         expectedRevision: call.expectedRevision,
@@ -1023,7 +1034,13 @@ async function writeChain(
         grants,
         rotations,
         cache: storedRecord(after),
-    });
+    };
+    if (options.previewFirst) {
+        const would = await groupsRepository.appendChain({ ...write, preview: true });
+        if (would.status !== 'ok') return chainAnswer(would);
+    }
+    await options.beforeAppend?.();
+    const result = await groupsRepository.appendChain(write);
     if (result.status === 'ok') await budget.charge();
     return chainAnswer(result);
 }
@@ -2047,16 +2064,131 @@ export async function removeMember(
     userId: string,
     groupId: string,
     targetId: string,
-    call: RosterCall,
+    call: RosterCall & {
+        /*
+         * The plans the person pays for that give nothing (their subscription ids, as route 19's
+         * `ends-lapsed` or the removal preview named them) that the remover confirmed end.
+         */
+        endsLapsed?: string[];
+    },
 ) {
     // The payer of a live plan stays until they cancel it: their card would go on being charged.
-    if (await paysForGroup(groupId, targetId))
+    if (await paysForGroup(groupId, targetId)) throw paysForPlan();
+    // One that gives nothing (unpaid, incomplete, paused) is ended once the removal is certain:
+    // after every check of the call and every rule of the write (run first and rolled back), right
+    // before it is written, and only once the remover has confirmed every such plan. A removal
+    // the write refuses (the family's only `billing` holder, a member list a departure overtook)
+    // ends nothing. A race between that preview and the write can still refuse it after the
+    // revoke; the client's retry then removes them.
+    const { endsLapsed, ...roster } = call;
+    return writeChain(
+        groupId,
+        userId,
+        roster,
+        { kind: 'remove', userId: targetId },
+        {
+            // Only where a plan could be ended: the write's own answer is enough otherwise.
+            previewFirst: billingEnabled() && (await isFamilyPayer(groupId, targetId)),
+            beforeAppend: async () => {
+                await endPayersLapsedPlan(groupId, targetId, 'They', endsLapsed);
+            },
+        },
+    );
+}
+
+/*
+ * Route 19's question before a removal starts (before a demotion, a hold or a walk): the plans
+ * the person pays for that give nothing, which removing them ends, for the dialog to confirm
+ * first. Refused, with words, when they can't be ended (a checkout waiting on the bank, a plan
+ * paid again just now); empty when there is none. For someone who holds `members`.
+ */
+export async function removalPreview(userId: string, groupId: string, targetId: string) {
+    await membershipOf(groupId, userId, 'members');
+    // Each asks Polar about the person's plans: paced per manager and family.
+    await limit(`groups:lapsed-read:${groupId}:${userId}`, LAPSED_READ.count, LAPSED_READ.windowMs);
+    // A live plan stops the removal before anything starts (a demotion, a hold, a walk).
+    if (await paysForGroup(groupId, targetId)) throw paysForPlan();
+    try {
+        return lapsedAnswer((await lapsedPlansPaidBy(groupId, targetId)).plans);
+    } catch (error) {
+        if (!(error instanceof LapsedFamilyPlanError)) throw error;
+        throw new GroupError('payer', lapsedPlanStaysRefusal(error, 'remover'), 409);
+    }
+}
+
+const paysForPlan = () =>
+    new GroupError(
+        'payer',
+        'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
+        409,
+    );
+
+/*
+ * Reading a person's lapsed plans asks Polar for the family's subscriptions and each of them (the
+ * removal preview, and every leave or removal of a payer that answers `ends-lapsed`): twenty a
+ * person per family every ten minutes.
+ */
+const LAPSED_READ = { count: 20, windowMs: 10 * 60 * 1000 };
+
+/* The lapsed plans someone pays for, as an `ends-lapsed` answer names them for the dialog. */
+function lapsedAnswer(plans: { id: string; name: string; status: string }[]) {
+    return {
+        plans: plans.map((plan) => ({
+            id: plan.id,
+            name: plan.name,
+            standing: plan.status === 'paused' ? ('paused' as const) : ('payment-failed' as const),
+        })),
+    };
+}
+
+/*
+ * A family plan this person pays for that gives nothing (unpaid, incomplete, paused) is
+ * revoked before they leave or are removed (billing's endLapsedPlansPaidBy: its ending
+ * first, a payment taken afterwards refunded whole), so it can't resume or be paid on the
+ * card of someone no longer in the family. One that can't be ended stops the change.
+ */
+async function endPayersLapsedPlan(
+    groupId: string,
+    payerId: string,
+    who: 'You' | 'They',
+    confirmed: string[] | undefined,
+    options: { dissolving?: boolean } = {},
+) {
+    try {
+        // The reader's own pace, whoever asks: the person leaving, or the manager removing.
+        if (await isFamilyPayer(groupId, payerId))
+            await limit(
+                `groups:lapsed-read:${groupId}:${who === 'You' ? payerId : 'removal'}`,
+                LAPSED_READ.count,
+                LAPSED_READ.windowMs,
+            );
+        const { plans, charging } = await lapsedPlansPaidBy(groupId, payerId, options);
+        // Every one must be among those the person confirmed (by id): nothing ends unseen, and
+        // one found since the dialog was shown is asked about again.
+        const seen = new Set(confirmed ?? []);
+        if (plans.some((plan) => !seen.has(plan.id))) {
+            const names = plans.map((plan) => plan.name).join(' and ');
+            throw new GroupError(
+                'ends-lapsed',
+                who === 'You'
+                    ? `You pay for the family’s ${names} plan, which gives nothing now. It ends at once when you leave.`
+                    : `They pay for the family’s ${names} plan, which gives nothing now. It ends at once when they’re removed.`,
+                409,
+                lapsedAnswer(plans),
+            );
+        }
+        const ended = await endLapsedPlansForDeparture(groupId, payerId, plans, options);
+        // A plan already running before the lookup (not among those to end) counts as one that
+        // came back: only a leave that dissolves the family may leave it running.
+        return { live: ended.live || charging };
+    } catch (error) {
+        if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError(
             'payer',
-            'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
+            lapsedPlanStaysRefusal(error, who === 'You' ? 'payer' : 'remover'),
             409,
         );
-    return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
+    }
 }
 
 const youPay = () =>
@@ -2072,15 +2204,35 @@ const youPay = () =>
  * would dissolve it: their card would go on being charged for a family they
  * are not in. They hand billing over or cancel the plan first.
  */
-export async function leave(userId: string, groupId: string) {
+export async function leave(
+    userId: string,
+    groupId: string,
+    /* The lapsed plans they pay for that they confirmed end (ids, as `ends-lapsed` names them). */
+    body: { endsLapsed?: string[] } = {},
+) {
     if (await paysForGroup(groupId, userId)) throw youPay();
-    const result = await groupsRepository.leaveGroup(groupId, userId);
+    // The leave's own rule first (its refusals end nothing), then the payer's lapsed plan, once
+    // confirmed, then the leave.
+    const preview = await groupsRepository.previewLeave(groupId, userId);
+    if (preview.status !== 'left' && preview.status !== 'dissolved') return leaveAnswer(preview);
+    const ended = await endPayersLapsedPlan(groupId, userId, 'You', body.endsLapsed, {
+        dissolving: preview.status === 'dissolved',
+    });
+    // A plan let run only because this leave dissolves the family: the write must dissolve it
+    // (someone admitted meanwhile makes it an ordinary leave), or nothing is left.
+    return leaveAnswer(
+        await groupsRepository.leaveGroup(groupId, userId, { mustDissolve: ended?.live === true }),
+        groupId,
+    );
+}
+
+async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: string) {
     switch (result.status) {
         case 'left':
             return { state: 'left' as const };
         case 'dissolved':
             // A plan that can still charge is set to end at its period's end, by the worker.
-            await queueDissolvedCancel(groupId);
+            if (groupId) await queueDissolvedCancel(groupId);
             return { state: 'left' as const, dissolved: true };
         case 'not-member':
             throw notMember();
@@ -2097,6 +2249,12 @@ export async function leave(userId: string, groupId: string) {
             throw new GroupError(
                 'last-holder',
                 'Let another member manage the group before you leave.',
+                409,
+            );
+        case 'not-last':
+            throw new GroupError(
+                'payer',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
                 409,
             );
         case 'unavailable':

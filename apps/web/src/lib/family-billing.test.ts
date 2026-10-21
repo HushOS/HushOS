@@ -10,6 +10,9 @@ import {
     needsPlan,
     nextCharge,
     placesOf,
+    lapsedPlanEndsLine,
+    lapsedEndsWords,
+    planState,
     quoteAdd,
     removeRange,
     seatNoteFor,
@@ -586,5 +589,104 @@ describe('tierTooSmall', () => {
             ),
         ).toBeNull();
         expect(tierTooSmall(undefined, plus, tiers)).toBeNull();
+    });
+});
+
+describe('a family plan whose payment didn’t go through', () => {
+    const organizer = ['billing', 'members'];
+    const unpaid = {
+        productName: 'Family Pro (monthly)',
+        standing: 'payment-failed' as const,
+        ids: ['sub_unpaid'],
+    };
+    const lapsed = { productName: 'Family (monthly)', endedAt: end.toISOString() };
+
+    test('is the plan the page shows while none is live, ahead of an older one that ended', () => {
+        expect(
+            planState({ ...summary({ live: false, lastPlan: lapsed }), lapsedPlan: unpaid }),
+        ).toEqual({ kind: 'unpaid', ...unpaid });
+        // A live plan beats it, and without it the ended one shows as before.
+        expect(planState({ ...summary(), lapsedPlan: unpaid }).kind).toBe('live');
+        expect(planState(summary({ live: false, lastPlan: lapsed })).kind).toBe('lapsed');
+    });
+
+    test('its payer gets the portal and a new plan; another billing holder only a new plan; nothing moves storage meanwhile', () => {
+        const payer = familyActions({ ...summary({ live: false }), lapsedPlan: unpaid }, organizer);
+        expect(payer).toMatchObject({ choosePlan: true, portal: true, addPlaces: false });
+        const other = familyActions(
+            { ...summary({ live: false, you: false }), lapsedPlan: unpaid },
+            organizer,
+        );
+        expect(other).toMatchObject({ choosePlan: true, portal: false });
+        // Invites and folders wait, as for no plan at all: the pool gives nothing.
+        expect(needsPlan({ ...summary({ live: false }), lapsedPlan: unpaid })).toBe(true);
+        const seen = { productName: unpaid.productName, standing: unpaid.standing, youPay: false };
+        expect(needsPlan({ ...glance(false), lapsedPlan: seen })).toBe(true);
+        expect(
+            Object.values(familyActions({ ...glance(false), lapsedPlan: seen }, organizer)),
+        ).not.toContain(true);
+    });
+});
+
+describe('lapsedPlanEndsLine', () => {
+    const paused = { productName: 'Family Pro (monthly)', standing: 'paused' as const, ids: ['s'] };
+
+    test('says the plan ends at once only when the one who goes pays for it', () => {
+        const mine = { ...summary({ live: false }), lapsedPlan: paused };
+        expect(lapsedPlanEndsLine(mine, 'Lindqvist family', { userId: 'payer', you: true })).toBe(
+            'Lindqvist family’s Family Pro plan, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+        );
+        expect(
+            lapsedPlanEndsLine(mine, 'Lindqvist family', {
+                userId: 'payer',
+                you: false,
+                name: 'Maya',
+            }),
+        ).toBe(
+            'Maya pays for Lindqvist family’s Family Pro plan, which is paused. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Someone who doesn't pay, or no lapsed plan: nothing said.
+        expect(lapsedPlanEndsLine(mine, 'F', { userId: 'someone', you: true })).toBeNull();
+        expect(
+            lapsedPlanEndsLine(summary({ live: false }), 'F', { userId: 'payer', you: true }),
+        ).toBeNull();
+    });
+
+    test('a member’s glance says it to the payer leaving (one whose billing was taken), never about anyone else', () => {
+        const theirs = { productName: 'Family Pro (monthly)', standing: 'paused' as const };
+        const mine = { ...glance(false), lapsedPlan: { ...theirs, youPay: true } };
+        expect(lapsedPlanEndsLine(mine, 'F', { userId: 'me', you: true })).toBe(
+            'F’s Family Pro plan, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Not theirs to pay: nothing; and a glance never says that someone else pays.
+        const other = { ...glance(false), lapsedPlan: { ...theirs, youPay: false } };
+        expect(lapsedPlanEndsLine(other, 'F', { userId: 'me', you: true })).toBeNull();
+        expect(
+            lapsedPlanEndsLine(mine, 'F', { userId: 'payer', you: false, name: 'Maya' }),
+        ).toBeNull();
+    });
+
+    test('the removal’s words for a plan the server named', () => {
+        expect(
+            lapsedEndsWords('F', [{ name: 'Family Pro (monthly)', standing: 'payment-failed' }], {
+                you: false,
+                name: 'Maya',
+            }),
+        ).toBe(
+            'Maya pays for F’s Family Pro plan, whose payment didn’t go through. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Every plan named, and the neutral name of one HushOS can't read said as a plan once.
+        expect(
+            lapsedEndsWords(
+                'F',
+                [
+                    { name: 'Family Pro (monthly)', standing: 'paused' },
+                    { name: 'Family plan', standing: 'payment-failed' },
+                ],
+                { you: true },
+            ),
+        ).toBe(
+            'F’s Family Pro and Family plans, which you pay for and which give nothing now, end at once when you leave. Nothing of them is refunded: no part of them is in use.',
+        );
     });
 });

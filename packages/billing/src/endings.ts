@@ -1186,8 +1186,10 @@ export async function endPersonalPlans(
             await billingRepository.releasePlanEndingLease(subscriptionId, owner);
         }
     }
-    // The plan has ended: its entitlement goes now, not at the next delivery.
-    if (revokedAny || refresh) {
+    // The plan has ended: its entitlement goes now, not at the next delivery. A family's job
+    // (its `userId` is the family's id) has no person's plans to read: the delivery that
+    // opened its ending, or the revoke before a checkout, has reconciled the family already.
+    if ((revokedAny || refresh) && !(await billingRepository.isFamilyOwner(userId))) {
         const { reconcileCustomer } = await import('./server');
         await reconcileCustomer(userId);
     }
@@ -1284,9 +1286,15 @@ const LAPSED = new Set(['unpaid', 'incomplete', 'paused']);
  * and throws; a 5xx or no answer at all keeps the ending, since the revoke may have
  * landed, and throws. Its ending is held under the plan-ending lease meanwhile; one the
  * job holds, or one a payment opened, is the job's: LapsedRevokeError `held`. Used before
- * a new checkout and by the plan-ending job of someone pooled.
+ * a new checkout and by the plan-ending job of someone pooled, and, as `kind` `family` with
+ * the family's id as its owner (`userId`), before a family checkout (groups.ts
+ * endLapsedFamilyPlans): the ending is then the family's, worked by a job run for its id.
  */
-export async function revokeLapsed(userId: string, subscriptionId: string) {
+export async function revokeLapsed(
+    userId: string,
+    subscriptionId: string,
+    kind: 'personal' | 'family' = 'personal',
+) {
     const existing = await billingRepository.getPlanEnding(subscriptionId);
     if (
         existing &&
@@ -1297,28 +1305,38 @@ export async function revokeLapsed(userId: string, subscriptionId: string) {
     )
         await billingRepository.dropPlanEnding(subscriptionId);
     const held = () => new LapsedRevokeError('held', 'The plan’s ending is still being worked.');
+    // Held like the job holds an ending, so neither works it while the other does: the lease is
+    // taken in the same write that begins (or takes over) the ending, and one another run holds
+    // is never written to.
+    const owner = randomUUID();
     const begun = await billingRepository.beginLapsedRevoke({
         subscriptionId,
         userId,
         at: new Date(),
+        owner,
+        leaseMs: PLAN_ENDING_LEASE_MS,
     });
-    // A family's ending still being worked, or a lapsed one a payment opened: the job's.
-    if (!isLapsedEnding(begun) || begun.outcome === null) throw held();
-    // Held like the job holds an ending, so neither works it while the other does.
-    const owner = randomUUID();
-    if (!(await billingRepository.takePlanEndingLease(subscriptionId, owner, PLAN_ENDING_LEASE_MS)))
-        throw held();
+    // Another run's, a family's ending still being worked, or a lapsed one a payment opened.
+    if (!begun.leased) throw held();
     try {
         const ending = (await billingRepository.getPlanEnding(subscriptionId))!;
         if (!isLapsedEnding(ending) || ending.outcome !== 'settled' || ending.revokedAt)
             throw held();
-        return await revokeHeldLapsed(userId, ending);
+        return await revokeHeldLapsed(userId, ending, kind);
     } finally {
         await billingRepository.releasePlanEndingLease(subscriptionId, owner);
     }
 }
 
-async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEnding) {
+/* Who a lapsed plan's logs name: its owner, a person or (by its id) a family. */
+const ownerOf = (id: string, kind: 'personal' | 'family') =>
+    kind === 'family' ? { group: id } : { user: id };
+
+async function revokeHeldLapsed(
+    userId: string,
+    ending: billingRepository.PlanEnding,
+    kind: 'personal' | 'family',
+) {
     const { subscriptionId } = ending;
     // Given up: the plan stays its owner's. A payment noted meanwhile is kept, and the job
     // grants its rewards.
@@ -1363,8 +1381,12 @@ async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEn
             holding.some((order) => Date.parse(order.created_at) >= periodStart)
         ) {
             log.warn({
-                message: 'A lapsed personal plan has a payment for its period; not revoked',
-                billing: { user: userId, subscription: subscriptionId, status: now.status },
+                message: `A lapsed ${kind} plan has a payment for its period; not revoked`,
+                billing: {
+                    ...ownerOf(userId, kind),
+                    subscription: subscriptionId,
+                    status: now.status,
+                },
             });
             await drop();
             throw new LapsedRevokeError('paid', 'Polar shows a payment for this plan’s period.');
@@ -1395,8 +1417,8 @@ async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEn
         }
         if (status === 409 && polarErrorName(error) === 'SubscriptionLocked')
             log.error({
-                message: 'A lapsed personal plan could not be revoked: Polar says it is locked',
-                billing: { user: userId, subscription: subscriptionId },
+                message: `A lapsed ${kind} plan could not be revoked: Polar says it is locked`,
+                billing: { ...ownerOf(userId, kind), subscription: subscriptionId },
             });
         // A refusal (4xx) changed nothing: the plan stays theirs. A 5xx or no answer at all
         // may have landed: the ending stays, and a payment is refunded only once Polar shows
@@ -1410,8 +1432,8 @@ async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEn
         periodEnd: new Date(revoked.current_period_end),
     });
     log.info({
-        message: 'A lapsed personal plan was revoked; nothing of it is refunded',
-        billing: { user: userId, subscription: subscriptionId },
+        message: `A lapsed ${kind} plan was revoked; nothing of it is refunded`,
+        billing: { ...ownerOf(userId, kind), subscription: subscriptionId },
     });
     return true;
 }
@@ -1424,12 +1446,16 @@ async function revokeHeldLapsed(userId: string, ending: billingRepository.PlanEn
 async function grantKeptRewards(userId: string) {
     const kept = await billingRepository.listKeptPayments(userId);
     if (!kept.length) return;
-    const { grantOrderRewards } = await import('./server');
+    const { grantFamilyOrderRewards, grantOrderRewards } = await import('./server');
     for (const subscriptionId of new Set(kept.map((row) => row.subscriptionId))) {
+        // A family's plan earns what its delivery would have given it: an affiliate's commission
+        // by the order's discount, and no referral reward (nobody was invited to pay for it).
+        const family = await billingRepository.familyPlanOf(subscriptionId);
         const page = await polar().orders.list({ subscription_id: subscriptionId, limit: 100 });
         for (const row of kept.filter((candidate) => candidate.subscriptionId === subscriptionId)) {
             const order = page.items.find((candidate) => candidate.id === row.orderId);
-            if (order) await grantOrderRewards(userId, order);
+            if (order && family) await grantFamilyOrderRewards(order);
+            else if (order) await grantOrderRewards(userId, order);
             // Granted, or an order Polar no longer lists (nothing to grant on): done.
             await billingRepository.settleKeptPayment(row.orderId);
         }

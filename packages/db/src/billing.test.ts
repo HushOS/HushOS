@@ -261,15 +261,22 @@ describe('a personal plan Polar holds but that gives nothing', () => {
         expect((await getStorageAllowance(userId))?.quotaBytes).toBe(GIB.toString());
     });
 
+    /* One run setting out to revoke: its lease taken with the ending. */
+    const begin = (input: { subscriptionId: string; userId: string; at: Date }) =>
+        billing.beginLapsedRevoke({ ...input, owner: 'this-run', leaseMs: 60_000 });
+
     test('a lapsed plan about to be revoked gets a settled ending with no family, once; a dropped one is taken over', async () => {
         const { userId } = await createTestAccount();
         const at = new Date('2026-10-21T10:00:00Z');
-        expect(
-            await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at }),
-        ).toMatchObject({ groupId: null, pooledAt: at, revokedAt: null, outcome: 'settled' });
+        expect((await begin({ subscriptionId: 'sub_1', userId, at })).ending).toMatchObject({
+            groupId: null,
+            pooledAt: at,
+            revokedAt: null,
+            outcome: 'settled',
+        });
         // Asked again before any revoke landed (one that timed out unlanded): taken over.
         const later = new Date('2026-10-22T00:00:00Z');
-        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at: later });
+        await begin({ subscriptionId: 'sub_1', userId, at: later });
         expect((await billing.getPlanEnding('sub_1'))?.pooledAt).toEqual(later);
         // Once Polar says it ended, it stands.
         await billing.recordPlanRevoked('sub_1', {
@@ -277,7 +284,7 @@ describe('a personal plan Polar holds but that gives nothing', () => {
             periodStart: at,
             periodEnd: later,
         });
-        await billing.beginLapsedRevoke({
+        await begin({
             subscriptionId: 'sub_1',
             userId,
             at: new Date('2026-10-23T00:00:00Z'),
@@ -296,12 +303,46 @@ describe('a personal plan Polar holds but that gives nothing', () => {
                 pooledAt: at,
             });
         await billing.dropPlanEnding('sub_dropped');
-        expect(
-            await billing.beginLapsedRevoke({ subscriptionId: 'sub_dropped', userId, at }),
-        ).toMatchObject({ groupId: null, outcome: 'settled' });
-        expect(
-            await billing.beginLapsedRevoke({ subscriptionId: 'sub_open', userId, at }),
-        ).toMatchObject({ groupId, outcome: null });
+        expect((await begin({ subscriptionId: 'sub_dropped', userId, at })).ending).toMatchObject({
+            groupId: null,
+            outcome: 'settled',
+        });
+        expect(await begin({ subscriptionId: 'sub_open', userId, at })).toMatchObject({
+            ending: { groupId, outcome: null },
+            leased: false,
+        });
+    });
+
+    test('a run setting out to revoke writes nothing to an ending another run holds', async () => {
+        const { userId } = await createTestAccount();
+        const at = new Date('2026-10-21T10:00:00Z');
+        await begin({ subscriptionId: 'sub_1', userId, at });
+        // Its revoke never landed (settled, not revoked): takeable, but another run holds it now.
+        await billing.releasePlanEndingLease('sub_1', 'this-run');
+        expect(await billing.takePlanEndingLease('sub_1', 'the-job', 60_000)).toBe(true);
+        await billing.notePlanRefund({
+            orderId: 'order_noted',
+            subscriptionId: 'sub_1',
+            refundKey: 'key_noted',
+            amount: 0,
+            currency: 'usd',
+        });
+        const later = new Date('2026-10-22T00:00:00Z');
+        expect(await begin({ subscriptionId: 'sub_1', userId, at: later })).toMatchObject({
+            leased: false,
+        });
+        expect(await billing.getPlanEnding('sub_1')).toMatchObject({
+            pooledAt: at,
+            admittedAt: at,
+            leaseOwner: 'the-job',
+        });
+        expect((await billing.getPlanRefund('order_noted'))?.status).toBe('requested');
+        // Once the job lets go, the takeover goes ahead, holding the lease itself.
+        await billing.releasePlanEndingLease('sub_1', 'the-job');
+        expect(await begin({ subscriptionId: 'sub_1', userId, at: later })).toMatchObject({
+            leased: true,
+            ending: { pooledAt: later, leaseOwner: 'this-run' },
+        });
     });
 
     test('nothing noted under an earlier ending survives a takeover or the paid-orders snapshot', async () => {
@@ -316,13 +357,13 @@ describe('a personal plan Polar holds but that gives nothing', () => {
                 currency: 'usd',
             });
         // An ending dropped by a version that left a noted row unworked.
-        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at });
+        await begin({ subscriptionId: 'sub_1', userId, at });
         await note('order_old');
         await billing.closePlanEnding('sub_1', 'ended');
         await db.execute(
             "update personal_plan_endings set outcome = 'dropped' where subscription_id = 'sub_1'",
         );
-        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at });
+        await begin({ subscriptionId: 'sub_1', userId, at });
         expect((await billing.getPlanRefund('order_old'))?.status).toBe('none');
         // A noted, unworked row the snapshot finds paid already: never refunded.
         await note('order_paid');
@@ -342,7 +383,7 @@ describe('a personal plan Polar holds but that gives nothing', () => {
     test('an ending isn’t settled while a refund noted on it was never asked for', async () => {
         const { userId } = await createTestAccount();
         const at = new Date('2026-10-21T10:00:00Z');
-        await billing.beginLapsedRevoke({ subscriptionId: 'sub_1', userId, at });
+        await begin({ subscriptionId: 'sub_1', userId, at });
         await billing.reopenPlanEnding('sub_1');
         await billing.notePlanRefund({
             orderId: 'order_1',

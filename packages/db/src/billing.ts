@@ -459,6 +459,15 @@ export async function getLiveGroupSubscription(groupId: string) {
     return row ?? null;
 }
 
+/* Every group whose billing customer names this person as its payer, whatever its plans. */
+export async function listGroupsBilledTo(userId: string) {
+    const rows = await db
+        .select({ groupId: groupBillingCustomers.groupId })
+        .from(groupBillingCustomers)
+        .where(eq(groupBillingCustomers.payerUserId, userId));
+    return rows.map((row) => row.groupId);
+}
+
 /*
  * Groups whose live plan this person pays for: their account cannot be
  * deleted, nor they leave or be removed, meanwhile. A plan set to cancel at
@@ -698,7 +707,7 @@ export async function listGivenUpReissues() {
             wanted: groupBillingSubscriptions.reissuedState,
             reason: sql<
                 string | null
-            >`case when ${refused} and not ${live} then 'dissolved-inactive' when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
+            >`case when ${refused} and not ${live} and ${groupBillingSubscriptions.dissolveRefusal} like 'paid-period:%' then 'dissolved-paid-period' when ${refused} and not ${live} and ${groupBillingSubscriptions.dissolveRefusal} like 'status:%' then 'dissolved-unknown-status' when ${refused} and not ${live} then 'dissolved-inactive' when ${refused} then 'dissolved-refused' when ${failing} then 'dissolved-failing' else ${groupBillingSubscriptions.reissueStuckReason} end`,
             since: since.mapWith(groupBillingSubscriptions.reissueGaveUpAt),
         })
         .from(groupBillingSubscriptions)
@@ -877,6 +886,58 @@ export async function releaseDissolveMail(subscriptionId: string, periodEnd: Dat
         );
 }
 
+/*
+ * A family's lapsed plan whose product the catalogue can't read (archived, or edited so it
+ * drops out), as the lapsed-plan lookup found it at Polar: written so the family page names it
+ * (and a checkout's confirmation can list it) and so its ending is told as the family's
+ * (familyPlanOf). It gives no pool or places. The lookup and every reconcile write it again as
+ * Polar has it, ended included, so it leaves the page once ended. Only a row of this family's
+ * whose product is unread (`product_name` is its product id) is ever updated: a plan the
+ * catalogue once read, whose product an operator has since edited, is left as it was. Never a
+ * live state: a row with an unread product and no quota would become the family's plan with no
+ * pool and one place, so a live one is left as it was (a reconcile already leaves a live plan
+ * of an unread product alone, as before).
+ */
+export async function recordUnreadGroupSubscription(
+    groupId: string,
+    input: {
+        id: string;
+        productId: string;
+        status: string;
+        recurringInterval: string;
+        amount: number | null;
+        currency: string | null;
+        units: number;
+        currentPeriodStart: Date;
+        currentPeriodEnd: Date;
+        cancelAtPeriodEnd: boolean;
+        endedAt: Date | null;
+    },
+) {
+    if (LIVE_STATUSES.has(input.status) && !input.endedAt) return;
+    const { id: _id, ...state } = input;
+    await db
+        .insert(groupBillingSubscriptions)
+        .values({
+            ...input,
+            groupId,
+            provider: 'polar',
+            productName: input.productId,
+            includedMembers: 1,
+            quotaBytes: 0n,
+            paidUnits: 0,
+            paidQuotaBytes: 0n,
+        })
+        .onConflictDoUpdate({
+            target: groupBillingSubscriptions.id,
+            set: { ...state, updatedAt: new Date() },
+            setWhere: and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                eq(groupBillingSubscriptions.productName, groupBillingSubscriptions.productId),
+            ),
+        });
+}
+
 /* One group subscription's row, live or not: what it had paid for before a change. */
 export async function getGroupSubscription(subscriptionId: string) {
     const [row] = await db
@@ -965,6 +1026,11 @@ export async function applyGroupState(input: {
                 currentPeriodEnd: subscription.currentPeriodEnd,
                 cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
                 endedAt: subscription.endedAt,
+                // A plan seen live (paid in the portal, resumed) or ended is no lapsed plan left
+                // unended: its refusal leaves the operators' list.
+                ...(LAPSED_STATUSES.includes(subscription.status) && !subscription.endedAt
+                    ? {}
+                    : { lapsedRevokeRefusal: null, lapsedRevokeRefusedAt: null }),
             };
             await tx
                 .insert(groupBillingSubscriptions)
@@ -1107,6 +1173,160 @@ export async function getLastEndedGroupSubscription(groupId: string) {
     return row?.endedAt ? { productName: row.productName, endedAt: row.endedAt } : null;
 }
 
+/*
+ * A family's plans Polar still holds that give nothing: not ended, and `unpaid`,
+ * `incomplete` or `paused`. A family checkout (and with it a payer takeover) revokes
+ * each first, so a payment or a resume later can't run one beside the new plan.
+ */
+export async function listLapsedGroupSubscriptionIds(groupId: string) {
+    const rows = await db
+        .select({ id: groupBillingSubscriptions.id })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groupBillingSubscriptions.endedAt),
+                inArray(groupBillingSubscriptions.status, LAPSED_STATUSES),
+            ),
+        );
+    return rows.map((row) => row.id);
+}
+
+/*
+ * The family's newest plan that Polar still holds but that gives nothing (its payment
+ * failed, or it is paused), for the family page while no plan is live; null otherwise.
+ */
+export async function getLapsedGroupSubscription(groupId: string) {
+    const [row] = await db
+        .select({
+            id: groupBillingSubscriptions.id,
+            productId: groupBillingSubscriptions.productId,
+            productName: groupBillingSubscriptions.productName,
+            status: groupBillingSubscriptions.status,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groupBillingSubscriptions.endedAt),
+                inArray(groupBillingSubscriptions.status, LAPSED_STATUSES),
+            ),
+        )
+        .orderBy(desc(groupBillingSubscriptions.currentPeriodEnd))
+        .limit(1);
+    return row ?? null;
+}
+
+/*
+ * The one rule that tells a family's plan ending from a person's (both live in
+ * personal_plan_endings, worked by the same job): a family's subscription has a row in the
+ * family mirror, group_billing_subscriptions, and its ending is keyed by the family's id.
+ * The family whose plan this subscription is, or null for a person's.
+ */
+export async function familyPlanOf(subscriptionId: string) {
+    const [row] = await db
+        .select({ groupId: groupBillingSubscriptions.groupId })
+        .from(groupBillingSubscriptions)
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+    return row ? { groupId: row.groupId } : null;
+}
+
+/* Whether an ending's owner id (personal_plan_endings.user_id) is a family's, by the same rule. */
+export async function isFamilyOwner(ownerId: string) {
+    const [row] = await db
+        .select({ id: groupBillingSubscriptions.id })
+        .from(groupBillingSubscriptions)
+        .where(eq(groupBillingSubscriptions.groupId, ownerId))
+        .limit(1);
+    return row !== undefined;
+}
+
+/*
+ * A lapsed family plan HushOS couldn't revoke, and why (null once a revoke landed): what the
+ * operators' list of blocked revokes reads.
+ */
+export async function recordLapsedRevokeRefusal(subscriptionId: string, refusal: string | null) {
+    await db
+        .update(groupBillingSubscriptions)
+        .set({
+            lapsedRevokeRefusal: refusal,
+            lapsedRevokeRefusedAt: refusal === null ? null : sql`now()`,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingSubscriptions.id, subscriptionId));
+}
+
+/* Lapsed family plans HushOS couldn't revoke that haven't ended: the operators' list. Ids only. */
+export async function listLapsedRevokeRefusals() {
+    return db
+        .select({
+            groupId: groupBillingSubscriptions.groupId,
+            subscriptionId: groupBillingSubscriptions.id,
+            status: groupBillingSubscriptions.status,
+            refusal: groupBillingSubscriptions.lapsedRevokeRefusal,
+            since: groupBillingSubscriptions.lapsedRevokeRefusedAt,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                isNotNull(groupBillingSubscriptions.lapsedRevokeRefusedAt),
+                isNull(groupBillingSubscriptions.endedAt),
+            ),
+        )
+        .orderBy(desc(groupBillingSubscriptions.lapsedRevokeRefusedAt));
+}
+
+/*
+ * Every family and every person with more than one subscription that can still charge
+ * (not ended, not `canceled` or `incomplete_expired`): live, or lapsed but able to come
+ * back. A live plan already set to end at its period's end is left out: it charges no more
+ * unless resumed, and a resume shows it here again at the next reconcile. Two such plans are a double charge waiting to happen; checkouts revoke a lapsed
+ * one first, so any row here is something that slipped past them, for an operator to
+ * look at in Polar. Ids and statuses only.
+ */
+export async function listDoubleCharging() {
+    const families = await db
+        .select({
+            id: groupBillingSubscriptions.groupId,
+            subscriptions: sql<
+                { id: string; status: string }[]
+            >`json_agg(json_build_object('id', ${groupBillingSubscriptions.id}, 'status', ${groupBillingSubscriptions.status}) order by ${groupBillingSubscriptions.id})`,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                canStillCharge,
+                // A live plan set to end at its period's end charges no more (a resume brings it back).
+                sql`not (${groupBillingSubscriptions.cancelAtPeriodEnd} and ${groupBillingSubscriptions.status} in ('active', 'trialing', 'past_due'))`,
+            ),
+        )
+        .groupBy(groupBillingSubscriptions.groupId)
+        .having(sql`count(*) > 1`)
+        .orderBy(groupBillingSubscriptions.groupId);
+    const people = await db
+        .select({
+            id: billingSubscriptions.userId,
+            subscriptions: sql<
+                { id: string; status: string }[]
+            >`json_agg(json_build_object('id', ${billingSubscriptions.id}, 'status', ${billingSubscriptions.status}) order by ${billingSubscriptions.id})`,
+        })
+        .from(billingSubscriptions)
+        .where(
+            and(
+                isNull(billingSubscriptions.endedAt),
+                notInArray(billingSubscriptions.status, [...ENDED_SUBSCRIPTION_STATUSES]),
+                sql`not (${billingSubscriptions.cancelAtPeriodEnd} and ${billingSubscriptions.status} in ('active', 'trialing', 'past_due'))`,
+            ),
+        )
+        .groupBy(billingSubscriptions.userId)
+        .having(sql`count(*) > 1`)
+        .orderBy(billingSubscriptions.userId);
+    return [
+        ...families.map((row) => ({ kind: 'family' as const, ...row })),
+        ...people.map((row) => ({ kind: 'person' as const, ...row })),
+    ];
+}
+
 /* ------------------------------------------------------------------------- */
 /* Ending a pooled member's personal plan (docs/families-shared-pool.md 5.1)  */
 /* ------------------------------------------------------------------------- */
@@ -1213,19 +1433,31 @@ async function clearUnworkedRefunds(tx: Tx, subscriptionId: string, kept = false
  * Taken over: one its owner's leaving dropped, and an earlier lapsed one whose revoke never
  * landed (no family, not revoked, settled); their unworked refund rows are settled `none`
  * first, so nothing from before is refunded under the new one. Any other ending the plan
- * has is left as it is. Returns the plan's ending as it stands.
+ * has is left as it is. Written only with the ending's lease, taken for `owner` in the same
+ * write; one another run holds is left untouched. Returns the plan's ending as it stands
+ * and whether this call holds it now.
  */
 export async function beginLapsedRevoke(input: {
     subscriptionId: string;
     userId: string;
     at: Date;
+    /* The run setting out to revoke it: the ending's lease is taken for it in the same write. */
+    owner: string;
+    leaseMs: number;
 }) {
     return db.transaction(async (tx) => {
         const [existing] = await tx
-            .select()
+            .select({
+                row: personalPlanEndings,
+                leasedByOther: sql<boolean>`${personalPlanEndings.leaseUntil} > now() and ${personalPlanEndings.leaseOwner} is distinct from ${input.owner}`,
+            })
             .from(personalPlanEndings)
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
             .for('update');
+        const lease = {
+            leaseOwner: input.owner,
+            leaseUntil: sql`now() + make_interval(secs => ${input.leaseMs / 1000})`,
+        };
         const fresh = {
             groupId: null,
             admittedAt: input.at,
@@ -1240,21 +1472,30 @@ export async function beginLapsedRevoke(input: {
         if (!existing) {
             const [row] = await tx
                 .insert(personalPlanEndings)
-                .values({ subscriptionId: input.subscriptionId, userId: input.userId, ...fresh })
+                .values({
+                    subscriptionId: input.subscriptionId,
+                    userId: input.userId,
+                    ...fresh,
+                    ...lease,
+                })
                 .returning();
-            return row!;
+            return { ending: row!, leased: true };
         }
+        // Another run holds it: nothing is written, not even a takeover's times.
+        if (existing.leasedByOther) return { ending: existing.row, leased: false };
         const takeOver =
-            existing.outcome === 'dropped' ||
-            (existing.groupId === null && !existing.revokedAt && existing.outcome === 'settled');
-        if (!takeOver) return existing;
+            existing.row.outcome === 'dropped' ||
+            (existing.row.groupId === null &&
+                !existing.row.revokedAt &&
+                existing.row.outcome === 'settled');
+        if (!takeOver) return { ending: existing.row, leased: false };
         await clearUnworkedRefunds(tx, input.subscriptionId);
         const [row] = await tx
             .update(personalPlanEndings)
-            .set({ ...fresh, updatedAt: new Date() })
+            .set({ ...fresh, ...lease, updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
             .returning();
-        return row!;
+        return { ending: row!, leased: true };
     });
 }
 
@@ -1350,7 +1591,9 @@ export async function notePaidBeforeRevoke(
             .values({ ...row, amount: 0, status: 'none' })
             .onConflictDoUpdate({
                 target: personalPlanRefunds.orderId,
-                set: { status: 'none', updatedAt: new Date() },
+                // Noted for a refund by its `order.paid`, which then held its rewards back: kept
+                // after all, so they are owed (`rewardsPending`, granted by the job once).
+                set: { status: 'none', rewardsPending: true, updatedAt: new Date() },
                 where: and(
                     eq(personalPlanRefunds.subscriptionId, row.subscriptionId),
                     eq(personalPlanRefunds.status, 'requested'),
@@ -1554,11 +1797,17 @@ export async function listUnrefundable() {
             subscriptionId: personalPlanEndings.subscriptionId,
             userId: personalPlanEndings.userId,
             groupId: personalPlanEndings.groupId,
+            /* The family whose own plan this is (its ending's `userId` is then the family's id). */
+            planOfGroupId: groupBillingSubscriptions.groupId,
             amount: personalPlanEndings.unrefundableAmount,
             currency: personalPlanEndings.unrefundableCurrency,
             since: personalPlanEndings.updatedAt,
         })
         .from(personalPlanEndings)
+        .leftJoin(
+            groupBillingSubscriptions,
+            eq(groupBillingSubscriptions.id, personalPlanEndings.subscriptionId),
+        )
         .where(sql`${personalPlanEndings.unrefundableAmount} > 0`)
         .orderBy(desc(personalPlanEndings.updatedAt));
 }
@@ -1708,13 +1957,18 @@ export async function listPlanRefunds(subscriptionId: string) {
         .where(eq(personalPlanRefunds.subscriptionId, subscriptionId));
 }
 
-/* Refunds HushOS has failed to make several times in a row: the operators' list. Ids only. */
+/*
+ * Refunds HushOS has failed to make several times in a row: the operators' list. Ids only.
+ * `groupId` names the family for a refund on a family's plan (its ending's `userId` is then
+ * the family's id too); null for a person's plan.
+ */
 export async function listRefundsOwed() {
     return db
         .select({
             orderId: personalPlanRefunds.orderId,
             subscriptionId: personalPlanRefunds.subscriptionId,
             userId: personalPlanEndings.userId,
+            groupId: groupBillingSubscriptions.groupId,
             amount: personalPlanRefunds.amount,
             currency: personalPlanRefunds.currency,
             failures: personalPlanRefunds.failures,
@@ -1724,6 +1978,10 @@ export async function listRefundsOwed() {
         .innerJoin(
             personalPlanEndings,
             eq(personalPlanEndings.subscriptionId, personalPlanRefunds.subscriptionId),
+        )
+        .leftJoin(
+            groupBillingSubscriptions,
+            eq(groupBillingSubscriptions.id, personalPlanRefunds.subscriptionId),
         )
         .where(isNotNull(personalPlanRefunds.owedSince))
         .orderBy(personalPlanRefunds.owedSince);

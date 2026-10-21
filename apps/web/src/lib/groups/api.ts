@@ -152,12 +152,22 @@ export function createGroupsApi(client = () => apiClient()) {
         patchMember: (groupId: string, userId: string, call: RosterCallBody) =>
             answer(groups(groupId).members({ userId }).patch(body(call))) as Promise<ChainHead>,
         /* 19 */
-        removeMember: (groupId: string, userId: string, call: RosterCallBody) =>
+        removeMember: (
+            groupId: string,
+            userId: string,
+            call: RosterCallBody & { endsLapsed?: string[] },
+        ) =>
             answer(
                 groups(groupId).members({ userId }).remove.post(body(call)),
             ) as Promise<ChainHead>,
+        /* 19, asked first: the plans the person pays for that give nothing, which removing them ends. */
+        removalPreview: (groupId: string, userId: string) =>
+            answer(groups(groupId).members({ userId })['remove-preview'].post({})) as Promise<{
+                plans: LapsedPlanNamed[];
+            }>,
         /* 20 */
-        leave: (groupId: string) => answer(groups(groupId).leave.post({})),
+        leave: (groupId: string, confirm: { endsLapsed?: string[] } = {}) =>
+            answer(groups(groupId).leave.post(confirm)),
         /* 21 */
         createArea: (groupId: string, call: RosterCallBody) =>
             answer(groups(groupId).areas.post(body(call))) as unknown as Promise<ChainHead>,
@@ -201,6 +211,29 @@ export function createGroupsApi(client = () => apiClient()) {
 }
 
 export type GroupsApi = ReturnType<typeof createGroupsApi>;
+
+/* A plan someone pays for that gives nothing, as `ends-lapsed` and the removal preview name it. */
+export type LapsedPlanNamed = { id: string; name: string; standing: 'payment-failed' | 'paused' };
+
+/* The plans an `ends-lapsed` refusal names, kept only as far as they are well formed. */
+export function lapsedPlansIn(data: unknown): LapsedPlanNamed[] {
+    const plans = (data as { plans?: unknown } | null)?.plans;
+    if (!Array.isArray(plans)) return [];
+    return plans.flatMap((plan) => {
+        const { id, name, standing } = (plan ?? {}) as Record<string, unknown>;
+        return typeof id === 'string' && typeof name === 'string'
+            ? [
+                  {
+                      id,
+                      name,
+                      standing:
+                          standing === 'paused' ? ('paused' as const) : ('payment-failed' as const),
+                  },
+              ]
+            : [];
+    });
+}
+
 export const groupsApi: GroupsApi = createGroupsApi();
 
 export type ServedRosterPage = Awaited<ReturnType<GroupsApi['rosters']>>;
