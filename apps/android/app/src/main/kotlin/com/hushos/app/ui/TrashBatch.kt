@@ -45,8 +45,14 @@ private fun refusedWords(failure: TrashFailure): String? = when (failure) {
  * come back with their folders).
  */
 class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: List<Pair<Opened, Throwable>>, val undoable: List<Opened> = moved) {
+    /*
+     * What the server said was in the trash already: not moved, but not where the list shows it
+     * either (another device trashed it), so its row leaves the lists too.
+     */
+    val alreadyTrashed: List<Opened> get() = failed.filter { trashFailure(it.second) == TrashFailure.ALREADY_TRASHED }.map { it.first }
+
     /* The folders whose listings changed: each read once after the batch, never once per item. */
-    val folders: Set<String> get() = moved.mapNotNull { it.node.parentId }.toSet()
+    val folders: Set<String> get() = (moved + alreadyTrashed).mapNotNull { it.node.parentId }.toSet()
 
     /*
      * The reason the notice gives: signed out when any was; offline only when every failure was;
@@ -126,8 +132,11 @@ suspend fun trashMany(items: List<Opened>, steps: TrashSteps): TrashResult {
     val undoable = items.filterIndexed { index, _ -> outcomes[index].getOrNull() == TrashMove.TRASHED }
     val failed = items.mapIndexedNotNull { index, item -> outcomes[index].exceptionOrNull()?.let { item to it } }
     val result = TrashResult(items, moved, failed, undoable)
+    // In the trash already (trashed elsewhere): the row goes as a moved one would, and its folder is read again.
+    val elsewhere = result.alreadyTrashed
+    if (elsewhere.isNotEmpty()) steps.drop(elsewhere)
     result.notice()?.let { text -> steps.announce(text, if (undoable.isEmpty()) null else ({ steps.restore(undoable) })) }
-    if (moved.isNotEmpty()) steps.settle(result.folders)
+    if (moved.isNotEmpty() || elsewhere.isNotEmpty()) steps.settle(result.folders)
     return result
 }
 
@@ -151,8 +160,10 @@ fun undoProblem(back: Int, tried: Int, errors: List<Throwable> = emptyList()): S
     if (tried <= 1 || back == tried) return null
     // A whole request turned away says why, in the web's words; the rest are still in Trash.
     val refused = errors.firstNotNullOfOrNull { (it as? BatchRefused)?.kind?.words }
+    val count = if (back == 0) "Couldn’t bring them back. " else "$back of $tried are back. "
     return when {
-        back == 0 -> "Couldn’t bring them back. " + (refused ?: "They’re still in Trash.")
-        else -> "$back of $tried are back. " + (refused ?: "The rest are still in Trash.")
+        refused != null -> count + refused + " The rest are still in Trash."
+        back == 0 -> count + "They’re still in Trash."
+        else -> count + "The rest are still in Trash."
     }
 }

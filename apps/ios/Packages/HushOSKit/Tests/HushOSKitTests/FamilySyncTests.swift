@@ -937,6 +937,10 @@ final class FamilyServer: @unchecked Sendable {
             }
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":
             return (200, ["status": "aborted"])
+        case ("GET", ["thumbnails"]):
+            // Where each version's object is: its thumbnail trailer is read from the tail of it.
+            let ids = (query.first { $0.name == "versions" }?.value ?? "").split(separator: ",").map(String.init)
+            return (200, ["urls": ids.map { ["versionId": $0, "url": "https://store.test/\($0)"] }])
         case ("GET", let rest) where rest.count == 3 && rest[0] == "versions" && rest[2] == "url":
             return (200, ["url": "https://store.test/\(rest[1])", "urlExpiresAt": "2026-10-19T11:00:00.000Z"])
         default:

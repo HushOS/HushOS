@@ -83,8 +83,14 @@ public enum TrashBatch {
         public let failed: [(item: Opened, error: Error)]
         public var undoable: [Opened] = []
 
+        /*
+         * What the server said was in the trash already: not moved, but not where the list shows
+         * it either (another device trashed it), so its row leaves the lists too.
+         */
+        public var alreadyTrashed: [Opened] { failed.filter { TrashBatch.failure(of: $0.error) == .alreadyTrashed }.map(\.item) }
+
         /* The folders whose listings changed: each read once after the batch, never once per item. */
-        public var folders: Set<String> { Set(moved.compactMap(\.node.parentId)) }
+        public var folders: Set<String> { Set((moved + alreadyTrashed).compactMap(\.node.parentId)) }
 
         /*
          * The reason the notice gives: signed out when any was; offline only when every failure
@@ -194,8 +200,11 @@ public enum TrashBatch {
         let back = undoable
         var undo: (@MainActor () -> Void)?
         if !back.isEmpty { undo = { restore(back) } }
+        // In the trash already (trashed elsewhere): the row goes as a moved one would, and its folder is read again.
+        let elsewhere = result.alreadyTrashed
+        if !elsewhere.isEmpty { drop(elsewhere) }
         if let notice = result.notice { steps.announce(notice, undo) }
-        if !moved.isEmpty { steps.settle(result.folders) }
+        if !moved.isEmpty || !elsewhere.isEmpty { steps.settle(result.folders) }
         return result
     }
 
@@ -221,8 +230,10 @@ public enum TrashBatch {
         if tried <= 1 || back == tried { return nil }
         // A whole request turned away says why, in the web's words; the rest are still in Trash.
         let refused = errors.lazy.compactMap { ($0 as? RequestRefusal)?.words }.first
-        if back == 0 { return "Couldn’t bring them back. " + (refused ?? "They’re still in Trash.") }
-        return "\(back) of \(tried) are back. " + (refused ?? "The rest are still in Trash.")
+        guard let refused else {
+            return back == 0 ? "Couldn’t bring them back. They’re still in Trash." : "\(back) of \(tried) are back. The rest are still in Trash."
+        }
+        return (back == 0 ? "Couldn’t bring them back. " : "\(back) of \(tried) are back. ") + refused + " The rest are still in Trash."
     }
 
     // MARK: The batch routes

@@ -246,9 +246,9 @@ import Testing
         #expect(TrashBatch.undoProblem(back: 0, tried: 13) == "Couldn’t bring them back. They’re still in Trash.")
         // A whole Undo request turned away says why, as the web does.
         #expect(TrashBatch.undoProblem(back: 0, tried: 13, errors: [TrashBatch.RequestRefusal.busy])
-            == "Couldn’t bring them back. Too many changes are being made here at once. Please try again.")
+            == "Couldn’t bring them back. Too many changes are being made here at once. Please try again. The rest are still in Trash.")
         #expect(TrashBatch.undoProblem(back: 200, tried: 251, errors: [TrashBatch.RequestRefusal.tooMany])
-            == "200 of 251 are back. Too many requests. Please try again shortly.")
+            == "200 of 251 are back. Too many requests. Please try again shortly. The rest are still in Trash.")
     }
 
     @Test func anItemThatWentWithItsFolderCountsAsMovedButUndoLeavesItToTheFolder() async {
@@ -269,11 +269,25 @@ import Testing
     }
 
     @Test func anItemAlreadyInTheTrashIsNotSaidToHaveStayed() async {
-        let result = await TrashBatch.trash(thirteen, Recorder().steps { item in
+        let recorder = Recorder()
+        let result = await TrashBatch.trash(thirteen, recorder.steps { item in
             if item.id == "f13" { throw DriveAPIError.trashed("This item is in the trash.") }
         })
         #expect(result.moved.count == 12)
         #expect(result.notice == "12 of 13 moved to Trash. The rest were in Trash already.")
+        // It is in the trash (trashed elsewhere): its row leaves the lists too, and its folder is read again.
+        #expect(Set(recorder.dropped) == Set(thirteen.map(\.id)))
+        #expect(recorder.settled == [["work", "photos"]])
+    }
+
+    @Test func aSelectionAnotherDeviceTrashedLeavesTheListsAndIsReadAgain() async {
+        let recorder = Recorder()
+        let result = await TrashBatch.trash(thirteen, recorder.steps { _ in throw DriveAPIError.trashed("This item is in the trash.") })
+        #expect(result.notice == "Couldn’t move to Trash. They’re in Trash already.")
+        #expect(Set(recorder.dropped) == Set(thirteen.map(\.id)))
+        #expect(recorder.settled == [["work", "photos"]])
+        // Nothing of its own to put back.
+        #expect(recorder.notices.map(\.undo) == [nil])
     }
 
     @Test func aBusyOrRateLimitedRequestSaysSoInTheWebsWords() async {

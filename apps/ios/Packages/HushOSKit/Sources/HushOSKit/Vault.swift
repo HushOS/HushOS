@@ -598,10 +598,9 @@ public actor Vault {
      * Its key outlives the forget (`forget` drops only the opened row).
      */
     public func thumbnail(of item: Opened) async throws -> Data? {
-        guard item.hasThumbnail, let version = item.node.currentVersion else { return nil }
+        guard item.hasThumbnail, item.node.currentVersion != nil else { return nil }
         let opened = try openVersion(item)
         guard opened.content.thumbnailBytes > 0 else { return nil }
-        _ = version
         guard let ciphertext = try await sealedThumbnail(for: item, opened: opened) else { return nil }
         return try thumbnailDecrypt(content: opened.content, fetched: ciphertext)
     }

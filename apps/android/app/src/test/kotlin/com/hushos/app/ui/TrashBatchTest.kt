@@ -203,9 +203,9 @@ class TrashBatchTest {
         assertEquals("11 of 13 are back. The rest are still in Trash.", undoProblem(11, 13))
         assertEquals("Couldn’t bring them back. They’re still in Trash.", undoProblem(0, 13))
         // A whole Undo request turned away says why, as the web does.
-        assertEquals("Couldn’t bring them back. Too many changes are being made here at once. Please try again.",
+        assertEquals("Couldn’t bring them back. Too many changes are being made here at once. Please try again. The rest are still in Trash.",
             undoProblem(0, 13, listOf(BatchRefused(BatchRefused.Kind.BUSY))))
-        assertEquals("200 of 251 are back. Too many requests. Please try again shortly.",
+        assertEquals("200 of 251 are back. Too many requests. Please try again shortly. The rest are still in Trash.",
             undoProblem(200, 251, listOf(BatchRefused(BatchRefused.Kind.TOO_MANY))))
     }
 
@@ -229,9 +229,24 @@ class TrashBatchTest {
 
     @Test
     fun anItemAlreadyInTheTrashIsNotSaidToHaveStayed() = runBlocking {
-        val result = trashMany(thirteen, Recorder().steps { if (it.id == "f13") throw ApiError(409, "This item is in the trash.", "trashed") })
+        val recorder = Recorder()
+        val result = trashMany(thirteen, recorder.steps { if (it.id == "f13") throw ApiError(409, "This item is in the trash.", "trashed") })
         assertEquals(12, result.moved.size)
         assertEquals("12 of 13 moved to Trash. The rest were in Trash already.", result.notice())
+        // It is in the trash (trashed elsewhere): its row leaves the lists too, and its folder is read again.
+        assertEquals(thirteen.map { it.id }.toSet(), recorder.dropped.toSet())
+        assertEquals(listOf(setOf("work", "photos")), recorder.settled)
+    }
+
+    @Test
+    fun aSelectionAnotherDeviceTrashedLeavesTheListsAndIsReadAgain() = runBlocking {
+        val recorder = Recorder()
+        val result = trashMany(thirteen, recorder.steps { throw ApiError(409, "This item is in the trash.", "trashed") })
+        assertEquals("Couldn’t move to Trash. They’re in Trash already.", result.notice())
+        assertEquals(thirteen.map { it.id }.toSet(), recorder.dropped.toSet())
+        assertEquals(listOf(setOf("work", "photos")), recorder.settled)
+        // Nothing of its own to put back.
+        assertEquals(null, recorder.notices.single().second)
     }
 
     @Test
