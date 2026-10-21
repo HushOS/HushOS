@@ -57,6 +57,15 @@ export const sections: RoadmapSection[] = [
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
             {
+                id: 'families',
+                status: 'shipped',
+                month: 'October 2026',
+                area: 'Families',
+                title: 'Family plans',
+                body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders, with each newcomer checked with their twelve words before they join. On the web; the iPhone and Android apps follow.',
+                links: [{ kind: 'blog', slug: 'family-plans', label: 'Read the announcement' }],
+            },
+            {
                 id: 'devices',
                 status: 'shipped',
                 month: 'October 2026',
@@ -151,13 +160,6 @@ export const sections: RoadmapSection[] = [
         title: 'Now',
         summary: 'Being built, or built and being finished.',
         items: [
-            {
-                id: 'families',
-                status: 'now',
-                area: 'Families',
-                title: 'Family plans',
-                body: 'One storage pool for the whole family, covering everyone’s own files and the family folders, for up to 20 people, with each newcomer checked with their twelve words before they join. Built on the web, shared pool included; it switches on at hushos.com once the last billing checks are done.',
-            },
             {
                 id: 'phone-apps',
                 status: 'now',
