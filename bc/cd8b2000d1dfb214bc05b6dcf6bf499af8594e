@@ -1,0 +1,55 @@
+apps/web/src/lib/groups/api.ts
+  s_566b8e0c4467a4::t_3227748211d271 155-159
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_c60b855245db0c 3797-3802,3804-3807,3810,3851,3876-3880,3886-3992
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_4e0054bb0fcbb5 64,68
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_e0f732084f4e9d 9,286-301,353-355,583-588,600-603,1196-1197,1305-1306,1308-1312,1324-1331,1333-1336,1339-1340,1356-1359,1383-1384,1387-1391,1401-1409,1411-1414,1507-1509,1560,1566-1571,2419-2430,2480-2483
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_c83a9b7000d9bc 83-86,93,95-102,105,108-122
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_b1f347c1b3ce92 583
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_d3aad27ec9ac10 889-940,1029-1033
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_60c3d6533fa696 2623-2626
+apps/web/src/lib/groups/removal.ts
+  s_566b8e0c4467a4::t_fb13c7b3d8a83e 43-49,92-100,105,124-125,234-239
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_95e7b6f6678201 30,35,909-910,912,1020,2056-2059,2070-2072,2076,2078-2095,2099-2124
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_96226016a82d49 14,623-624,626,648,653-663,665,668-673
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_29d23342a25027 728-729,731,734-735,742-758,761-763,765-787,794-861
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_a889fe42338116 342-343
+apps/web/src/components/families/remove-dialog.tsx
+  s_566b8e0c4467a4::t_f1763c9d34c6cc 23-27,48-49,88-90,98,104-111,150-169,335-337
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_919dd9431d0ee2 72-79,92
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_72a01b048b5305 1291
+packages/groups/src/protocol.ts
+  s_566b8e0c4467a4::t_cfeb6deb40f92e 20
+apps/web/src/lib/groups/outbox.ts
+  s_566b8e0c4467a4::t_fc229a808d2975 58-59,226-230,704-707
+apps/web/src/lib/groups/removal.test.ts
+  s_566b8e0c4467a4::t_c7ead03e885fb5 120-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bccd8b2000d1dfb214bc05b6dcf6bf499af8594e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
