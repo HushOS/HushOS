@@ -1,3 +1,8 @@
+import { wholeGibUp } from '@hushos/db/pool-count';
+
+/* How a family's pool counts what it holds, shared with the server's checks. */
+export { countedPool } from '@hushos/db/pool-count';
+
 /* Product metadata keys read from the provider's catalogue. */
 export const PLAN_METADATA_KEY = 'hushos_plan';
 export const QUOTA_METADATA_KEY = 'quota_bytes';
@@ -174,24 +179,27 @@ export function spaceOf(bytes: bigint, round: 'nearest' | 'up' = 'nearest') {
 export const planTierName = (plan: { name: string }) =>
     plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
 
-/* Bytes in whole GiB, rounded up: nothing is 0, and anything up to 1 GiB is 1 GiB. */
-const wholeGibUp = (bytes: bigint) => (bytes <= 0n ? 0n : ((bytes + GIB - 1n) / GIB) * GIB);
-
 /*
  * Why a family's first plan (or one bought again) is refused: it would be smaller than what its
- * pool holds the moment it goes live, everyone's own files and the family folders
- * (docs/families-shared-pool.md 3.2, 5.2). Compared exactly, said in whole GiB rounded up. The
- * server refuses the checkout with these words, and Plans says them before a family is made.
+ * pool counts the moment it goes live, everyone's own files and the family folders, each part
+ * rounded up to a whole GiB (countedPool; docs/families-shared-pool.md 3.2, 3.9, 5.2). The server
+ * refuses the checkout with these words, and Plans says them before a family is made, from the
+ * same count. "Choose a bigger plan" only where a bigger one is on offer.
  */
 export function firstPlanTooSmall(input: {
-    usedBytes: bigint;
+    /* What the pool counts as stored (countedPool of its parts). */
+    countedBytes: bigint;
     plan: { name: string; quotaBytes: string | bigint };
+    /* The family plans on offer, to know whether a bigger one is. */
+    tiers: readonly { quotaBytes: string | bigint; archived?: boolean }[];
     /* More than one person in the family: what "it" stores is everyone's. */
     family: boolean;
 }) {
     const room = BigInt(input.plan.quotaBytes);
-    if (input.usedBytes <= room) return null;
-    return `${input.family ? 'Your family stores' : 'Your files take'} ${spaceOf(wholeGibUp(input.usedBytes))}, more than ${planTierName(input.plan)}’s ${spaceOf(room)}. Choose a bigger plan or free at least ${spaceOf(wholeGibUp(input.usedBytes - room))}.`;
+    if (input.countedBytes <= room) return null;
+    const bigger = input.tiers.some((tier) => !tier.archived && BigInt(tier.quotaBytes) > room);
+    const free = spaceOf(wholeGibUp(input.countedBytes - room));
+    return `${input.family ? 'Your family stores' : 'Your files take'} ${spaceOf(wholeGibUp(input.countedBytes))}, more than ${planTierName(input.plan)}’s ${spaceOf(room)}. ${bigger ? `Choose a bigger plan or free at least ${free}` : `Free at least ${free}`}.`;
 }
 
 /* The organisation's default payment currency at the provider; every plan has a price in it. */
