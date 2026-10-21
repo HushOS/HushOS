@@ -290,16 +290,28 @@ private fun PlanCard(state: DriveState, onClick: () -> Unit) {
             Text("${formatSpace(it.usedBytes)} of ${formatQuota(it.quotaBytes)}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = AlpineSpace.S2))
             Meter(it.usedBytes.toFloat() / maxOf(it.quotaBytes, 1L), Modifier.padding(top = AlpineSpace.S2))
         }
-        planLine(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S2)) }
+        planLine(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = planInk(state), modifier = Modifier.padding(top = AlpineSpace.S2)) }
     }
 }
 
 /* The plan as Account shows it: the family's while the storage is its pool (docs/families-shared-pool.md 9). */
 private fun plan(state: DriveState) = PlanDisplay.of(state.allowance, state.billing)
 
-/* Whose plan it is while pooled, else when the personal plan renews or ends. */
+/* Whose plan it is while pooled, else why a lapsed plan gives nothing, or when the live one renews or ends. */
 private fun planLine(state: DriveState): String? = plan(state).let { plan ->
-    plan.source ?: shortDate(plan.periodEnd)?.let { date -> if (plan.cancelAtPeriodEnd) "Ends $date" else "Renews $date" }
+    plan.source ?: plan.lapsed?.line ?: (if (plan.overdue) "Payment overdue" else null)
+        ?: shortDate(plan.periodEnd)?.let { date -> if (plan.cancelAtPeriodEnd) "Ends $date" else "Renews $date" }
+}
+
+/* The plan's line: the danger colour while a payment is overdue or failed, ink while paused. */
+@Composable
+private fun planInk(state: DriveState) = plan(state).let { plan ->
+    val alpine = Alpine.colors
+    when {
+        plan.overdue || plan.lapsed?.paused == false -> alpine.danger
+        plan.lapsed != null -> alpine.ink
+        else -> alpine.inkMuted
+    }
 }
 
 /* A pushed page inside Account: a back arrow, a title, and its own scrolling column. */
@@ -341,9 +353,13 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
             // payments policy; Apple's 3.1.3(f)). The renewal date is account information; while
             // pooled, whose plan it is ("Shared with <family>") comes first.
             val pooled = plan(state).source != null
+            val lapsed = plan(state).lapsed
             Text((if (pooled) listOfNotNull(planLine(state), state.allowance?.let { formatQuota(it.quotaBytes) })
-                else listOfNotNull(state.allowance?.let { formatQuota(it.quotaBytes) }, planLine(state)?.replaceFirstChar { it.lowercase() })).joinToString(" · "),
-                style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                else listOfNotNull(state.allowance?.let { formatQuota(it.quotaBytes) }, planLine(state)?.let { line -> if (lapsed != null) line else line.replaceFirstChar { it.lowercase() } })).joinToString(" · "),
+                style = MaterialTheme.typography.bodyMedium, color = planInk(state))
+            // Said, never linked: the app holds no way to where plans are paid for.
+            if (lapsed != null) Text("${lapsed.room} Nothing is deleted, and uploads pause while you’re over it.",
+                style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S2))
         }
         val allowance = state.allowance
         val storage = state.storage

@@ -137,15 +137,64 @@ data class BillingSummary(
     val cancelAtPeriodEnd: Boolean,
     /* The family whose plan the storage comes from while pooled; absent on older servers. */
     val family: BillingFamily? = null,
+    /* Polar's status for the personal plan, and when it ended: `/api/billing` keeps answering with the last plan. */
+    val status: String? = null,
+    val endedAt: String? = null,
 ) {
+    val standing: PlanStanding get() = if (planName == null) PlanStanding.ENDED else PlanStanding.of(status, endedAt)
+
     companion object {
         fun from(json: JSONObject): BillingSummary {
             val subscription = json.optJSONObject("subscription")
             return BillingSummary(
                 json.optBoolean("enabled"), subscription?.optString("productName"), subscription?.optString("currentPeriodEnd"),
                 subscription?.optBoolean("cancelAtPeriodEnd") ?: false, json.optJSONObject("family")?.let(BillingFamily::from),
+                // `opt` and a type check: a JSON null is JSONObject.NULL, which `optString` turns into "null".
+                subscription?.opt("status") as? String, subscription?.opt("endedAt") as? String,
             )
         }
+    }
+}
+
+/*
+ * What a personal plan's status means, as the web's `planStanding`
+ * (packages/billing/src/protocol.ts). Only a live plan (active, trialing, or
+ * past_due while Polar retries a renewal) gives its storage and is the plan
+ * Account names. `unpaid` and `incomplete` (a payment that never went through)
+ * and `paused` haven't ended, since a payment or a resume brings them back, but
+ * give nothing: the person is on Free meanwhile. An ended plan, `canceled`,
+ * `incomplete_expired`, or a status Polar adds later is Free. A server that
+ * records an unpaid plan as ended lands on Free too, never on "Renews".
+ */
+enum class PlanStanding {
+    LIVE, PAYMENT_FAILED, PAUSED, ENDED;
+
+    companion object {
+        fun of(status: String?, endedAt: String?): PlanStanding = when {
+            endedAt != null -> ENDED
+            status == "active" || status == "trialing" || status == "past_due" -> LIVE
+            status == "unpaid" || status == "incomplete" -> PAYMENT_FAILED
+            status == "paused" -> PAUSED
+            else -> ENDED
+        }
+    }
+}
+
+/* A personal plan Polar still holds that gives nothing: its payment failed, or it is paused. */
+data class LapsedPlan(
+    /* "Pro", without an interval the product's name may end in ("Pro (monthly)"). */
+    val name: String,
+    val paused: Boolean,
+) {
+    /* The card's line: "Pro’s payment didn’t go through", "Pro is paused". */
+    val line: String get() = if (paused) "$name is paused" else "$name’s payment didn’t go through"
+    /* Why the room is Free's, for Plan and storage and Not enough room. */
+    val room: String get() = if (paused) "$name is paused, so you have Free’s storage until it resumes."
+        else "$name’s payment didn’t go through, so you have Free’s storage for now."
+
+    companion object {
+        private val interval = Regex("""\s*\((monthly|yearly|annual)\)\s*$""", RegexOption.IGNORE_CASE)
+        fun of(productName: String, paused: Boolean) = LapsedPlan(productName.replace(interval, ""), paused)
     }
 }
 
@@ -168,7 +217,8 @@ data class BillingFamily(val name: String, val planName: String?) {
  * name from `/api/billing`'s `family` ("Family plan" until that answers) and the
  * line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal plan is never shown then, since the
  * person no longer draws from it (billing ends it, 5.1). Without a readable
- * `pool` it is today's display: the personal plan, or Free.
+ * `pool` it is the personal plan while it is live (PlanStanding), else Free,
+ * with the lapsed plan's words when its payment failed or it is paused.
  */
 data class PlanDisplay(
     /* The plan's name, the card's heading. */
@@ -177,9 +227,13 @@ data class PlanDisplay(
     val source: String?,
     /* The family's name while pooled, for labels that would otherwise read as the person's own. */
     val family: String?,
-    /* The personal plan's renewal or end date, shown only when not pooled. */
+    /* The live personal plan's renewal or end date, shown only when not pooled. */
     val periodEnd: String?,
     val cancelAtPeriodEnd: Boolean,
+    /* The live personal plan's renewal is past due: Polar is still retrying it. */
+    val overdue: Boolean = false,
+    /* The personal plan that gives nothing until it is paid for or resumed; null while pooled. */
+    val lapsed: LapsedPlan? = null,
 ) {
     companion object {
         fun of(allowance: StorageAllowance?, billing: BillingSummary?): PlanDisplay {
@@ -189,7 +243,13 @@ data class PlanDisplay(
             return if (family != null) {
                 PlanDisplay(billing?.family?.planName ?: "Family plan", "Shared with $family", family, null, false)
             } else {
-                PlanDisplay(billing?.planName?.takeIf { it.isNotEmpty() } ?: "Free", null, null, billing?.periodEnd, billing?.cancelAtPeriodEnd ?: false)
+                val name = billing?.planName?.takeIf { it.isNotEmpty() }
+                val standing = billing?.standing ?: PlanStanding.ENDED
+                when {
+                    billing == null || standing == PlanStanding.ENDED -> PlanDisplay("Free", null, null, null, false)
+                    standing == PlanStanding.LIVE -> PlanDisplay(name ?: "Free", null, null, billing.periodEnd, billing.cancelAtPeriodEnd, overdue = billing.status == "past_due")
+                    else -> PlanDisplay("Free", null, null, null, false, lapsed = LapsedPlan.of(name ?: "Your plan", standing == PlanStanding.PAUSED))
+                }
             }
         }
     }

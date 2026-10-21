@@ -159,13 +159,14 @@ struct AccountView: View {
                 }
             }
             StorageMeter(used: allowance?.used ?? 0, quota: allowance?.quota ?? 1, simple: true, height: 6)
-            Text(planLine).font(Theme.Text.footnote).foregroundStyle(plan.subscription?.status == "past_due" ? Alpine.danger : Alpine.inkMuted)
+            Text(planLine).font(Theme.Text.footnote).foregroundStyle(plan.lineColour)
         }
         .padding(.vertical, Alpine.Space.s1)
     }
 
     private var planLine: String {
         if let source = plan.source { return "\(source) · Trash and earlier versions count too" }
+        if let lapsed = plan.lapsed { return lapsed.line }
         guard let subscription = plan.subscription else { return "Trash and earlier versions count too" }
         if subscription.status == "past_due" { return "Payment overdue" }
         let date = parseDate(subscription.currentPeriodEnd).map { $0.formatted(.dateTime.day().month(.abbreviated).locale(.dayMonth)) } ?? ""
@@ -268,6 +269,14 @@ struct StorageMeter: View {
 
 /* MARK: Plan and storage */
 
+extension PlanDisplay {
+    /* The plan's line: the danger colour while a payment is overdue or failed, ink while paused. */
+    var lineColour: Color {
+        if subscription?.status == "past_due" || lapsed?.paused == false { return Alpine.danger }
+        return lapsed != nil ? Alpine.ink : Alpine.inkMuted
+    }
+}
+
 /* What fills the space, not just a bar: trash and earlier versions are their own lines with a way to clear them. */
 struct PlansView: View {
     @Environment(DriveStore.self) private var store
@@ -343,18 +352,21 @@ struct PlansView: View {
                 } else if let subscription = plan.subscription {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(subscription.productName).font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-                        Text(planDetail(subscription)).font(Theme.Text.footnote).foregroundStyle(subscription.status == "past_due" ? Alpine.danger : Alpine.inkMuted)
+                        Text(planDetail(subscription)).font(Theme.Text.footnote).foregroundStyle(plan.lineColour)
                     }
                     .alpineRow()
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Free").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-                        Text(formatQuota(allowance?.quota ?? 0)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                        Text([formatQuota(allowance?.quota ?? 0), plan.lapsed?.line].compactMap { $0 }.joined(separator: " · ")).font(Theme.Text.footnote).foregroundStyle(plan.lineColour)
                     }
                     .alpineRow()
                 }
             } header: {
                 Text("Your plan").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+            } footer: {
+                // Said, never linked: the app holds no way to where plans are paid for (App Review 3.1.3(f)).
+                if let lapsed = plan.lapsed { Text("\(lapsed.room) Nothing is deleted, and uploads pause while you’re over it.") }
             }
         }
         .listStyle(.insetGrouped)
@@ -407,6 +419,7 @@ struct StorageFullSheet: View {
     @Environment(\.dismiss) private var dismiss
     let rows: [TransferRowModel]
     @State private var allowance: StorageAllowance?
+    @State private var billing: BillingSummary?
     @State private var breakdown: StorageBreakdown?
     @State private var busy: String?
 
@@ -440,10 +453,10 @@ struct StorageFullSheet: View {
             .navigationTitle("Not enough room")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Not now") { dismiss() } } }
-            .task {
-                allowance = try? await Auth.storage()
-                breakdown = try? await store.vault.storageBreakdown()
-            }
+            // Separate tasks, so a slow billing answer never holds back the ways to free room.
+            .task { allowance = try? await Auth.storage() }
+            .task { billing = try? await Auth.billing() }
+            .task { breakdown = try? await store.vault.storageBreakdown() }
         }
         .presentationDetents([.medium, .large])
     }
@@ -454,7 +467,9 @@ struct StorageFullSheet: View {
         let needed = waiting.compactMap(\.size).reduce(0, +)
         let what = waiting.count == 1 ? "“\(waiting[0].name)”" : waiting.isEmpty ? "This upload" : "These \(waiting.count) files"
         let needs = needed > 0 ? " need\(waiting.count == 1 ? "s" : "") \(formatSpace(needed))," : " doesn’t fit, "
-        return "\(what)\(needs) and \(free) is free. Trash and earlier versions count until they’re removed."
+        // A plan whose payment failed, or that is paused, is why the room is Free's: said first (never while pooled).
+        let lapsed = allowance.flatMap { PlanDisplay(allowance: $0, billing: billing).lapsed }.map { $0.room + " " } ?? ""
+        return "\(lapsed)\(what)\(needs) and \(free) is free. Trash and earlier versions count until they’re removed."
     }
 
     private func option(_ symbol: String, _ title: String, _ detail: String) -> some View {

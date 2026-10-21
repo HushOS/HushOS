@@ -62,6 +62,57 @@ public struct BillingSubscription: Codable, Sendable {
     public let quotaBytes: String
     public let currentPeriodEnd: String
     public let cancelAtPeriodEnd: Bool
+    /* When the plan ended; `/api/billing` keeps answering with the last plan after it ends. */
+    public let endedAt: String?
+
+    public var standing: PlanStanding { PlanStanding(status: status, endedAt: endedAt) }
+}
+
+/*
+ * What a personal plan's status means, as the web's `planStanding`
+ * (packages/billing/src/protocol.ts). Only a live plan (active, trialing, or
+ * past_due while Polar retries a renewal) gives its storage and is the plan
+ * Account names. `unpaid` and `incomplete` (a payment that never went through)
+ * and `paused` haven't ended, since a payment or a resume brings them back, but
+ * give nothing: the person is on Free meanwhile. An ended plan, `canceled`,
+ * `incomplete_expired`, or a status Polar adds later is Free. A server that
+ * records an unpaid plan as ended lands on Free too, never on "Renews".
+ */
+public enum PlanStanding: Sendable, Equatable {
+    case live, paymentFailed, paused, ended
+
+    public init(status: String, endedAt: String?) {
+        if endedAt != nil {
+            self = .ended
+        } else {
+            switch status {
+            case "active", "trialing", "past_due": self = .live
+            case "unpaid", "incomplete": self = .paymentFailed
+            case "paused": self = .paused
+            default: self = .ended
+            }
+        }
+    }
+}
+
+/* A personal plan Polar still holds that gives nothing: its payment failed, or it is paused. */
+public struct LapsedPlan: Sendable, Equatable {
+    /* "Pro", without an interval the product's name may end in ("Pro (monthly)"). */
+    public let name: String
+    public let paused: Bool
+
+    init(_ subscription: BillingSubscription, paused: Bool) {
+        let short = subscription.productName.replacingOccurrences(of: #"\s*\((monthly|yearly|annual)\)\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+        name = short.isEmpty ? "Your plan" : short
+        self.paused = paused
+    }
+
+    /* The card's line: "Pro’s payment didn’t go through", "Pro is paused". */
+    public var line: String { paused ? "\(name) is paused" : "\(name)’s payment didn’t go through" }
+    /* Why the room is Free's, for Plan and storage and Not enough room. */
+    public var room: String {
+        paused ? "\(name) is paused, so you have Free’s storage until it resumes." : "\(name)’s payment didn’t go through, so you have Free’s storage for now."
+    }
 }
 
 public struct BillingSummary: Codable, Sendable {
@@ -106,7 +157,8 @@ public struct BillingFamily: Codable, Sendable, Equatable {
  * name from `/api/billing`'s `family` ("Family plan" until that answers) and
  * the line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal subscription is never shown then,
  * since the person no longer draws from it (billing ends it, 5.1). Without a
- * readable `pool` it is today's display: the personal plan, or Free.
+ * readable `pool` it is the personal plan while it is live (PlanStanding), else
+ * Free, with the lapsed plan's words when its payment failed or it is paused.
  */
 public struct PlanDisplay: Sendable {
     /* The plan's name, the card's heading. */
@@ -115,8 +167,10 @@ public struct PlanDisplay: Sendable {
     public let source: String?
     /* The family's name while pooled, for labels that would otherwise read as the person's own. */
     public let family: String?
-    /* The personal plan whose renewal and status the card shows; nil while pooled. */
+    /* The live personal plan whose renewal and status the card shows; nil while pooled, lapsed or ended. */
     public let subscription: BillingSubscription?
+    /* The personal plan that gives nothing until it is paid for or resumed; nil while pooled. */
+    public let lapsed: LapsedPlan?
 
     public init(allowance: StorageAllowance?, billing: BillingSummary?) {
         // The storage answer decides; the billing one only when storage didn't answer at all,
@@ -128,11 +182,25 @@ public struct PlanDisplay: Sendable {
             source = "Shared with \(family)"
             self.family = family
             subscription = nil
+            lapsed = nil
         } else {
-            name = billing?.subscription?.productName ?? "Free"
             source = nil
             self.family = nil
-            subscription = billing?.subscription
+            let personal = billing?.subscription
+            switch (personal, personal?.standing) {
+            case (let plan?, .live):
+                name = plan.productName
+                subscription = plan
+                lapsed = nil
+            case (let plan?, .paymentFailed), (let plan?, .paused):
+                name = "Free"
+                subscription = nil
+                lapsed = LapsedPlan(plan, paused: plan.standing == .paused)
+            default:
+                name = "Free"
+                subscription = nil
+                lapsed = nil
+            }
         }
     }
 }
