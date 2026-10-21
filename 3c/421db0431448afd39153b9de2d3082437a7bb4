@@ -1,0 +1,49 @@
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_566b8e0c4467a4::t_29444b4dcf824a 193,196
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_5c7747abc8a07b 37-38,149
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_f3127e86fb9f1c 2,68-73,540,595
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_62d01f09bfbd5d 11,136-139
+apps/web/src/lib/plans.ts
+  s_566b8e0c4467a4::t_383923ce5d921f 1-2,152-174
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_abf5c1157dd0c4 39,554,750-753,805
+apps/web/src/routes/join/route.tsx
+  s_566b8e0c4467a4::t_8481acc3a2fbcd 14,267,272
+docs/groups-design.md
+  s_566b8e0c4467a4::t_08517db8cf7ee4 354
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_6bca269fa86b19 586,597,613-615
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_0bdedb748c5c81 375-376,379-381,780-785,915-919,1018-1022,1025-1026,1064-1076,1121-1124,1152-1153,1195-1205,1208-1223,1229-1234,1236-1238,1241,1256-1261,1270-1271
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_2620d4efd7fe1f 18,665
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_6e739d3e53fa9c 643-653,1488-1489,1491-1492,1494-1495,1497-1507,1511-1512,1515-1550,1552,1554-1555,1558-1559,1562-1564,1624-1642,1646-1647,1720-1721,1728-1746,1913-1928,5462-5463,5480-5484,5490,5492-5493,5498,5503,5533-5534,5544-5579
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_d2c069df97ea25 74-75,674-685,687-688,768-772,774-779
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_919f8cd73ddafc 264,266-271,274,276,278-315
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_c6205fb60917b5 1184-1191,1193,1196,1204-1205,1208-1228,1273-1278,1283,1286-1295
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_a469e4c9b6d05d 271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c421db0431448afd39153b9de2d3082437a7bb4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
