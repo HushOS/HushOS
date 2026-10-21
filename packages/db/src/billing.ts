@@ -1591,7 +1591,9 @@ export async function notePaidBeforeRevoke(
             .values({ ...row, amount: 0, status: 'none' })
             .onConflictDoUpdate({
                 target: personalPlanRefunds.orderId,
-                set: { status: 'none', updatedAt: new Date() },
+                // Noted for a refund by its `order.paid`, which then held its rewards back: kept
+                // after all, so they are owed (`rewardsPending`, granted by the job once).
+                set: { status: 'none', rewardsPending: true, updatedAt: new Date() },
                 where: and(
                     eq(personalPlanRefunds.subscriptionId, row.subscriptionId),
                     eq(personalPlanRefunds.status, 'requested'),
