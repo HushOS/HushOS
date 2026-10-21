@@ -543,7 +543,9 @@ function BillingPage() {
                                             {busy === 'resume' ? 'Resuming…' : 'Resume plan'}
                                         </Button>
                                     ) : overdue || lapsed ? (
+                                        // Unpaid: choosing a plan leads; the portal may not take the payment.
                                         <Button
+                                            variant={unpaid ? 'outline' : 'default'}
                                             disabled={busy !== null}
                                             onClick={() => void portal()}
                                         >
@@ -551,7 +553,9 @@ function BillingPage() {
                                                 ? 'Opening…'
                                                 : paused
                                                   ? 'Resume in portal'
-                                                  : 'Update card'}
+                                                  : overdue
+                                                    ? 'Update card'
+                                                    : 'Billing portal'}
                                             <ArrowUpRightIcon />
                                         </Button>
                                     ) : (
@@ -583,9 +587,8 @@ function BillingPage() {
                                         : `Your payment for ${lapsedName} didn’t go through, so you have Free’s ${freeSize ?? 'storage'} for now.`}{' '}
                                     Nothing is deleted, and uploads pause while you’re over it.{' '}
                                     {paused
-                                        ? 'Resume it in the billing portal'
-                                        : `Update your card in the billing portal to pay for ${lapsedName}`}
-                                    , or choose a plan below, which ends {lapsedName} first.
+                                        ? `Resume it in the billing portal, or choose a plan below, which ends ${lapsedName} first.`
+                                        : `Choose a plan below to get more room; that ends ${lapsedName} first. If the billing portal offers to retry the payment, that restores ${lapsedName}.`}
                                 </Notice>
                             )}
                             {live && !live.cancelAtPeriodEnd && !overdue && (
@@ -768,7 +771,7 @@ function BillingPage() {
                     {switching && !live && lapsed && (
                         <>
                             <DialogHeader>
-                                <DialogTitle>Choose {switching.name}?</DialogTitle>
+                                <DialogTitle>Choose {familyTierName(switching)}?</DialogTitle>
                                 <DialogDescription>
                                     {formatQuota(switching.quotaBytes)} for{' '}
                                     {priceLine(switching, currency)}. This ends {lapsedName}
@@ -796,7 +799,7 @@ function BillingPage() {
                                 >
                                     {busy === switching.id
                                         ? 'Opening…'
-                                        : `Choose ${switching.name}`}
+                                        : `Choose ${familyTierName(switching)}`}
                                 </Button>
                             </DialogFooter>
                         </>

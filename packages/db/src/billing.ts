@@ -21,6 +21,11 @@ import {
 
 // past_due keeps its allowance through the retry window; the entitlement's own expiry bounds it.
 const LIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+/*
+ * Polar still holds the plan, but it gives nothing: its retries ran out, its first payment
+ * never went through, or it is paused. Named, so a status Polar adds later is never revoked.
+ */
+const LAPSED_STATUSES = ['unpaid', 'incomplete', 'paused'];
 
 export type SubscriptionSnapshot = {
     id: string;
@@ -90,9 +95,9 @@ export async function listLivePlanIds(userId: string) {
 }
 
 /*
- * Personal plans Polar still holds that give no storage: not ended, and neither live
- * nor in an ended status (`unpaid`, `incomplete`, `paused`). A new checkout revokes
- * them first, so a later payment or resume can't run one beside the new plan.
+ * Personal plans Polar still holds that give no storage: not ended, and `unpaid`,
+ * `incomplete` or `paused`. A new checkout revokes them first, so a later payment or
+ * resume can't run one beside the new plan; so does the plan-ending job of someone pooled.
  */
 export async function listLapsedPlanIds(userId: string) {
     const rows = await db
@@ -102,10 +107,7 @@ export async function listLapsedPlanIds(userId: string) {
             and(
                 eq(billingSubscriptions.userId, userId),
                 isNull(billingSubscriptions.endedAt),
-                notInArray(billingSubscriptions.status, [
-                    ...LIVE_STATUSES,
-                    ...ENDED_SUBSCRIPTION_STATUSES,
-                ]),
+                inArray(billingSubscriptions.status, LAPSED_STATUSES),
             ),
         );
     return rows.map((row) => row.id);
@@ -1121,8 +1123,9 @@ export async function getMemberUsage(groupId: string) {
 
 /*
  * People whose own files draw from a family's live pool while the mirror still
- * holds a live personal subscription of theirs: every one of them is owed the
- * end of that plan. One family's, or every family's (the daily reconcile).
+ * holds a live or lapsed (unpaid, incomplete, paused) personal subscription of
+ * theirs: every one of them is owed the end of that plan. One family's, or every
+ * family's (the daily reconcile).
  */
 export async function listPooledWithPersonalPlan(groupId?: string) {
     const rows = await db
@@ -1137,7 +1140,7 @@ export async function listPooledWithPersonalPlan(groupId?: string) {
                 eq(groupMemberships.state, 'active'),
                 sql`${groupStorage.expiresAt} > ${new Date().toISOString()}::timestamptz`,
                 isNull(billingSubscriptions.endedAt),
-                inArray(billingSubscriptions.status, [...LIVE_STATUSES]),
+                inArray(billingSubscriptions.status, [...LIVE_STATUSES, ...LAPSED_STATUSES]),
             ),
         );
     return rows.map((row) => row.userId);
@@ -1175,6 +1178,35 @@ export async function ensurePlanEnding(input: {
         })
         .returning();
     return row!;
+}
+
+/*
+ * A lapsed personal plan (unpaid, incomplete, paused) HushOS revoked itself: an ending with
+ * no family, settled, since nothing of it was paid for. A payment Polar takes for it later
+ * opens it again (notePaidAfterRevoke), and the plan-ending job refunds that order whole.
+ * An ending the plan already has (its owner was pooled while it was live) is left as it is.
+ */
+export async function recordLapsedRevoke(input: {
+    subscriptionId: string;
+    userId: string;
+    revokedAt: Date;
+    periodStart: Date;
+    periodEnd: Date;
+}) {
+    await db
+        .insert(personalPlanEndings)
+        .values({
+            subscriptionId: input.subscriptionId,
+            userId: input.userId,
+            groupId: null,
+            admittedAt: input.revokedAt,
+            pooledAt: input.revokedAt,
+            revokedAt: input.revokedAt,
+            periodStart: input.periodStart,
+            periodEnd: input.periodEnd,
+            outcome: 'settled',
+        })
+        .onConflictDoNothing();
 }
 
 /* Endings with work left for this person, oldest first. */

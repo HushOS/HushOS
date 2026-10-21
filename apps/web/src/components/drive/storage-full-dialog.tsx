@@ -193,12 +193,12 @@ export function StorageFullDialog() {
                             label={
                                 planStanding(lapsed) === 'paused'
                                     ? `Resume ${familyTierName({ name: lapsed.productName })}`
-                                    : `Pay for ${familyTierName({ name: lapsed.productName })}`
+                                    : 'Choose a plan'
                             }
                             detail={
                                 planStanding(lapsed) === 'paused'
                                     ? 'It’s paused'
-                                    : 'Its payment didn’t go through'
+                                    : `${familyTierName({ name: lapsed.productName })}’s payment didn’t go through`
                             }
                             primary
                             disabled={working !== null}

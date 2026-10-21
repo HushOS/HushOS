@@ -613,7 +613,7 @@ describe('admission with billing on', () => {
         const fam = await kit.family();
         await onPlan(fam, 2);
         const newcomer = await kit.member();
-        const jobs: { userId: string; groupId: string }[] = [];
+        const jobs: { userId: string; groupId: string | null }[] = [];
         billing.setEndPersonalPlanQueue(async (job) => {
             jobs.push(job);
         });

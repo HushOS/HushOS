@@ -7,7 +7,7 @@ import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms } from './api';
-import { noteRefundUpdated, queuePlanEnding } from './endings';
+import { notePaidAfterRevoke, noteRefundUpdated, queuePlanEnding, revokeLapsed } from './endings';
 import { groupIdOf, reconcileGroup } from './groups';
 import {
     BillingError,
@@ -23,7 +23,7 @@ import {
     type BillingUser,
     type CatalogueProduct,
 } from './provider';
-import { GROUP_CUSTOMER_PREFIX, livePlan, type CancellationReason } from './protocol';
+import { GROUP_CUSTOMER_PREFIX, lapsedPlan, livePlan, type CancellationReason } from './protocol';
 
 export {
     BillingError,
@@ -109,10 +109,13 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
         billingRepository.getPooledFamily(user.id),
     ]);
     const live = livePlan(summary.subscription);
-    // A pooled person is offered no personal plan, so none is carried to checkout either.
+    // A pooled person is offered no personal plan, so none is carried to checkout either; nor
+    // is one to someone whose plan lapsed, since a checkout ends that plan first and the
+    // billing page asks before it does.
     const intendedPlan =
         !pooled &&
         !live &&
+        !lapsedPlan(summary.subscription) &&
         intent?.planProductId &&
         plans.some((plan) => plan.id === intent.planProductId)
             ? intent.planProductId
@@ -151,11 +154,14 @@ async function currentSubscription(user: BillingUser) {
 /*
  * Before a checkout: every personal plan of theirs that Polar still holds but that gives
  * nothing (`unpaid`, `incomplete`, `paused`) is revoked at Polar, so a payment taken
- * later (a card added in the portal retries what is owed) or a scheduled resume can't
- * run it beside the plan being bought. Nothing paid for is lost: such a plan gives no
- * storage, and a resume starts a new period. Each is read first; one Polar has made
- * live again meanwhile is left alone and becomes the current plan. A revoke that fails
- * stops the checkout, so two plans never run.
+ * later (a card added in the portal can retry what is owed) or a scheduled resume can't
+ * run it beside the plan being bought. Such a plan gives no storage, and a resume would
+ * start a new period, so nothing in force is taken away; a payment Polar takes for it
+ * after the revoke is refunded whole (notePaidAfterRevoke). Each is read first; one Polar
+ * has made live again meanwhile (paid in the portal a moment ago) is left alone and
+ * becomes the current plan, which the checkout then switches in place. Gone (404) or
+ * already ended (403 `AlreadyCanceledSubscription`, a second click) is nothing to do. A
+ * revoke that fails otherwise stops the checkout, so two plans never run.
  */
 async function revokeLapsedPlans(userId: string) {
     const ids = await billingRepository.listLapsedPlanIds(userId);
@@ -165,15 +171,9 @@ async function revokeLapsedPlans(userId: string) {
             const subscription = await polar().subscriptions.get(id);
             if (subscription.ended_at || livePlan({ status: subscription.status, endedAt: null }))
                 continue;
-            await polar().subscriptions.revoke(id);
-            log.info({
-                message: 'A lapsed personal plan was revoked before a new checkout',
-                billing: { user: userId, subscription: id, status: subscription.status },
-            });
+            await revokeLapsed(userId, id);
         } catch (error) {
             if (statusOf(error) === 404) continue;
-            if (statusOf(error) === 403 && polarErrorName(error) === 'AlreadyCanceledSubscription')
-                continue;
             throw unavailable(error);
         }
     }
@@ -644,7 +644,8 @@ export async function reconcileCustomer(userId: string) {
         graceMs: billingEnv.BILLING_GRACE_DAYS * 24 * 60 * 60 * 1000,
     });
     // A live personal plan of someone whose files draw from a family's pool is ended (5.1).
-    if (subscriptions.some((subscription) => livePlan(subscription))) await queuePlanEnding(userId);
+    if (subscriptions.some((subscription) => livePlan(subscription) || lapsedPlan(subscription)))
+        await queuePlanEnding(userId);
 }
 
 /*
@@ -673,6 +674,24 @@ export async function revokeForDeletion(userId: string) {
                 await polar().subscriptions.revoke(subscription.id);
             } catch (error) {
                 if (statusOf(error) !== 404 && statusOf(error) !== 403) throw error;
+            }
+        }
+        // The customer's state lists only active and trialing plans. One past due (in
+        // dunning), unpaid, incomplete or paused (which resumes on its date) can still
+        // charge, so every plan the mirror holds as not ended is revoked too.
+        const listed = new Set((state?.active_subscriptions ?? []).map((s) => s.id));
+        for (const id of await billingRepository.listUnendedSubscriptionIds(userId)) {
+            if (listed.has(id)) continue;
+            try {
+                await polar().subscriptions.revoke(id);
+            } catch (error) {
+                if (statusOf(error) === 404) continue;
+                if (
+                    statusOf(error) === 403 &&
+                    polarErrorName(error) === 'AlreadyCanceledSubscription'
+                )
+                    continue;
+                throw error;
             }
         }
         if (state) await polar().customers.deleteExternal(userId);
@@ -742,6 +761,8 @@ export async function handleWebhook(request: Request): Promise<Response> {
         if (event.type === 'refund.updated')
             await noteRefundUpdated(event.data as Parameters<typeof noteRefundUpdated>[0]);
         if (event.type === 'order.paid') {
+            // A payment for a lapsed plan HushOS revoked is refunded whole.
+            await notePaidAfterRevoke(event.data as Parameters<typeof notePaidAfterRevoke>[0]);
             await recordAffiliateEarning(
                 event.data as Parameters<typeof recordAffiliateEarning>[0],
             );

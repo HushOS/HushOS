@@ -254,6 +254,34 @@ describe('a personal plan Polar holds but that gives nothing', () => {
         expect(await standing(userId)).toEqual({ unended: [], live: [], lapsed: [] });
     });
 
+    test('a status Polar adds later is kept but never counted as lapsed, so a checkout never revokes it', async () => {
+        const { userId } = await createTestAccount();
+        await apply(userId, [subscription({ status: 'on_hold' })]);
+        expect(await standing(userId)).toEqual({ unended: ['sub_1'], live: [], lapsed: [] });
+        expect((await getStorageAllowance(userId))?.quotaBytes).toBe(GIB.toString());
+    });
+
+    test('a lapsed plan HushOS revoked is recorded as a settled ending with no family, once', async () => {
+        const { userId } = await createTestAccount();
+        const revokedAt = new Date('2026-10-21T10:00:00Z');
+        const input = {
+            subscriptionId: 'sub_1',
+            userId,
+            revokedAt,
+            periodStart: new Date('2026-10-01T00:00:00Z'),
+            periodEnd: new Date('2026-11-01T00:00:00Z'),
+        };
+        await billing.recordLapsedRevoke(input);
+        await billing.recordLapsedRevoke({ ...input, revokedAt: new Date('2026-10-22T00:00:00Z') });
+        expect(await billing.getPlanEnding('sub_1')).toMatchObject({
+            groupId: null,
+            revokedAt,
+            pooledAt: revokedAt,
+            outcome: 'settled',
+        });
+        expect(await billing.listOpenPlanEndings(userId)).toEqual([]);
+    });
+
     test('one Polar answers as canceled or expired without saying when it ended is ended now', async () => {
         const { userId } = await createTestAccount();
         await apply(userId, [

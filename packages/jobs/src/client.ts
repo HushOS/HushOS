@@ -37,7 +37,8 @@ export type JobPayloads = {
     [queues.billingReissuePending]: { groupId: string };
     [queues.billingEndPersonalPlan]: {
         userId: string;
-        groupId: string;
+        /* Null for a payment taken for a lapsed plan HushOS revoked, refunded whole. */
+        groupId: string | null;
         admittedAt: string;
         seenAt: string;
     };
