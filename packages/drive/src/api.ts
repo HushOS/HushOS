@@ -295,6 +295,23 @@ export type RestoreRefusal = 'not-found' | 'not-trashed' | 'removed' | 'parent-t
 export type RestoreBatchItem =
     | { id: string; status: 'restored'; changeSeq: number }
     | { id: string; status: 'refused'; reason: RestoreRefusal; message: string };
+/*
+ * POST /api/drive/workspaces/:id/purge-batch, the same body: Delete forever for
+ * a selection, for a member, as the single route does it (the node's versions
+ * go, their objects to the outbox once nothing else references them, and the
+ * row stays as a tombstone). Only an item with its own trashedAt goes, never a
+ * top folder. `purged` went, with its change number; `covered` goes with `by`,
+ * a folder of the same request that was purged, as anything inside a purged
+ * folder does; `refused` stayed. Refusals: `not-found` (or not a member),
+ * `root`, `not-trashed`, and `busy`: the request ran out of its share of the
+ * workspace's lock before it reached this one (or the folder covering it),
+ * so send it again. Whole-request failures as for trash-batch.
+ */
+export type PurgeRefusal = 'not-found' | 'root' | 'not-trashed' | 'busy';
+export type PurgeBatchItem =
+    | { id: string; status: 'purged'; changeSeq: number }
+    | { id: string; status: 'covered'; by: string }
+    | { id: string; status: 'refused'; reason: PurgeRefusal; message: string };
 
 /* A server refusal the client can act on. */
 export class DriveApiError extends Error {
@@ -566,6 +583,7 @@ export interface DriveApi {
     ): Promise<{ node: NodeView }>;
     trashBatch(workspaceId: string, nodeIds: string[]): Promise<{ results: TrashBatchItem[] }>;
     restoreBatch(workspaceId: string, nodeIds: string[]): Promise<{ results: RestoreBatchItem[] }>;
+    purgeBatch(workspaceId: string, nodeIds: string[]): Promise<{ results: PurgeBatchItem[] }>;
     trashListing(workspaceId: string, after?: string): Promise<TrashListing>;
     purge(workspaceId: string, nodeId: string): Promise<{ purged: boolean }>;
     emptyTrash(workspaceId: string): Promise<{ purged: number; remaining: number }>;

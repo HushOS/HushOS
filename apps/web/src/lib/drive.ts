@@ -4,6 +4,7 @@ import {
     createIndexedDbMirror,
     type DriveClient,
     type DriveNode,
+    type TrashItem,
 } from '@hushos/drive/client';
 import { ROOT_LABEL } from '@hushos/drive/protocol';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
@@ -22,7 +23,7 @@ import {
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 import { keyChangeWords } from '@/lib/key-change-words';
-import { restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
+import { purgeBatch, restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
 import { createSpaceRegistry } from '@/lib/space-registry';
 
 /*
@@ -193,8 +194,30 @@ export function refreshSharing(queryClient: QueryClient) {
 const trashParts: TrashParts = {
     trash: (workspaceId, nodeIds) => clientFor(workspaceId).trashMany(workspaceId, nodeIds),
     restore: (workspaceId, nodeIds) => clientFor(workspaceId).restoreMany(workspaceId, nodeIds),
+    purge: (workspaceId, nodeIds) => clientFor(workspaceId).purgeMany(workspaceId, nodeIds),
     ancestorsOf: (node) => clientFor(node.workspaceId).ancestorsOf(node.id),
 };
+/* Trash rows carry their own folders: the catalogue leaves out what is in the Trash. */
+function trashRowParts(items: TrashItem[]): TrashParts {
+    const above = new Map(items.map((item) => [item.node.id, item.ancestors]));
+    return { ...trashParts, ancestorsOf: (node) => above.get(node.id) ?? [] };
+}
+/* Trash rows put back where they were, in place only (lib/trash-batch.ts restoreBatch). */
+export function restoreTrashRows(items: TrashItem[], onBack?: (back: DriveNode[]) => void) {
+    return restoreBatch(
+        items.map((item) => item.node),
+        trashRowParts(items),
+        onBack,
+    );
+}
+/* Trash rows deleted forever (lib/trash-batch.ts purgeBatch). */
+export function purgeTrashRows(items: TrashItem[], onGone?: (ids: string[]) => void) {
+    return purgeBatch(
+        items.map((item) => item.node),
+        trashRowParts(items),
+        onGone,
+    );
+}
 export function trashNodes(nodes: DriveNode[], onMoved?: (ids: string[]) => void) {
     return trashBatch(nodes, trashParts, onMoved);
 }

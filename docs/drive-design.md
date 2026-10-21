@@ -343,7 +343,7 @@ drive_rotations                   a subtree key rotation in progress; at most on
 
 ### Two counters on the workspace
 
-`workspaces` gains `change_seq bigint`, incremented by every change to any node in it; the changed node takes the new value. No two nodes of a workspace share one (the index above is unique): a write that changes several nodes takes a number for each, as a batch of folders or a trash batch does, because a feed page may end after any row and the next page asks for what follows it. It also gains `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from, so that a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
+`workspaces` gains `change_seq bigint`, incremented by every change to any node in it; the changed node takes the new value. No two nodes of a workspace share one (the index above is unique): a write that changes several nodes takes a number for each, as a batch of folders, a trash batch or a purge batch does, because a feed page may end after any row and the next page asks for what follows it. It also gains `key_epoch_seq`, the counter every node key epoch in the workspace is drawn from, so that a rotation's target epoch is greater than every epoch any node in the workspace has ever had, whatever earlier rotations did to some subfolder.
 
 Every write to the tree begins by locking the workspace row to take the next value, which serialises writes within a workspace. That is deliberate: it is what makes the cycle check below sound, and each write touches a handful of rows, so the lock is held for milliseconds. A listing can be cached against it, and the change feed below is a range query on it.
 
@@ -440,6 +440,8 @@ The trash view lists every node with `trashed_at` set, from the partial index. A
 Then it assigns `change_seq` and enqueues `drive.purge-subtree`, which walks the descendants in batches of 1,000 doing the same to each. Between the request and the end of the fan-out the descendants are unreachable through the purged ancestor, so the tree is consistent throughout. The worker also purges anything trashed for more than 30 days.
 
 A person does not have to wait. **Delete forever** on a trashed item is this same request, and **Empty trash** enqueues `drive.empty-trash`, which purges the workspace's trash roots in batches of 100, because a trash can hold a hundred thousand roots and one request must not. Trashed bytes count against quota until purged, and the UI says so and shows the trash draining; this keeps accounting honest and gives people the same control an operating system does.
+
+**Delete forever for a selection** is `workspaces/:id/purge-batch`, with the same limits and the same lock rules as `trash-batch` (up to 200 ids, a 12 KiB body, 60 batch requests a minute, 2 s lock and statement timeouts), for members only: anyone else is answered without the lock being taken. Each node goes through the same purge as one (versions, storage, the outbox, shares and links, the tombstone and its own `change_seq`) or is refused on its own (`not-found`, `root`, `not-trashed`); a node inside a folder of the same request that is purged is `covered` and goes with it by the fan-out. A purge costs a dozen statements a node, so a request stops purging once it has held the lock for 1 s, keeps what it purged and answers the rest `busy`; the web sends those again while that gets further. The web counts a row answered `not-found` as gone (deleted from another tab, or by a request whose answer was lost), and sends a request turned away whole with 409 (the lock held elsewhere) once more after 1 s; a 429 is not retried, since its window runs a minute. Empty trash keeps its own loop, one root per transaction in one request: batching it would only hold the lock longer, since it has no round trips to save.
 
 ### Releasing objects and tombstones
 
@@ -791,7 +793,7 @@ Content and envelope primitives go into `@hushos/crypto` under a new `drive.ts`,
 Under `/api/drive/`:
 
 - `capabilities`
-- `workspaces/:id/root`, `workspaces/:id/changes`, `workspaces/:id/trash` (empty), `workspaces/:id/trash-batch`, `workspaces/:id/restore-batch`, `workspaces/:id/documents/:kind`
+- `workspaces/:id/root`, `workspaces/:id/changes`, `workspaces/:id/trash` (empty), `workspaces/:id/trash-batch`, `workspaces/:id/restore-batch`, `workspaces/:id/purge-batch`, `workspaces/:id/documents/:kind`
 - `nodes/:id/children` (cursor-paginated), `nodes` (create), `nodes/:id/metadata`, `nodes/:id/parent`, `nodes/:id/copy`, `nodes/:id/trash`, `nodes/:id/restore`, `nodes/:id` (purge), `nodes/rotate`
 - `uploads`, `uploads/:id/parts`, `uploads/:id/complete`, `uploads/:id/attach`, `uploads/:id` (abort)
 - `versions/:id/url`, `versions/:id` (discard a superseded version)

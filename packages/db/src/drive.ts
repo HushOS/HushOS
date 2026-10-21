@@ -129,7 +129,39 @@ export async function walk(tx: Tx, nodeId: string): Promise<Walk | null> {
         )
         select * from chain order by depth
     `);
-    const rows = result.rows;
+    return chainWalk(result.rows);
+}
+
+/*
+ * walk for many nodes in one recursive query, seeded with all of them: one
+ * statement however many there are, where a walk each would cost a round trip
+ * each. Every id comes back, null where walk would give null.
+ */
+async function walkAll(tx: Tx, nodeIds: string[]): Promise<Map<string, Walk | null>> {
+    const result = await tx.execute<ChainRow & { origin: string }>(sql`
+        with recursive chain as (
+            select id as origin, id, parent_id, workspace_id, kind, key_epoch, trashed_at,
+                   purged_at, removed_at, height_bound, 1 as depth
+            from drive_nodes where id = any(string_to_array(${nodeIds.join(',')}, ',')::uuid[])
+            union all
+            select c.origin, n.id, n.parent_id, n.workspace_id, n.kind, n.key_epoch,
+                   n.trashed_at, n.purged_at, n.removed_at, n.height_bound, c.depth + 1
+            from drive_nodes n join chain c on n.id = c.parent_id
+            where c.depth < ${WALK_CAP}
+        )
+        select * from chain order by origin, depth
+    `);
+    const chains = new Map<string, ChainRow[]>();
+    for (const { origin, ...row } of result.rows) {
+        const chain = chains.get(origin);
+        if (chain) chain.push(row);
+        else chains.set(origin, [row]);
+    }
+    return new Map(nodeIds.map((id) => [id, chainWalk(chains.get(id.toLowerCase()) ?? [])]));
+}
+
+/* A walk from its chain's rows, the node first and the root last. */
+function chainWalk(rows: ChainRow[]): Walk | null {
     const node = rows[0];
     const top = rows.at(-1);
     if (!node || !top || top.parent_id !== null) return null;
@@ -1111,6 +1143,8 @@ const BATCH_LOCK_TIMEOUT = '2s';
 const BATCH_STATEMENT_TIMEOUT = '2s';
 /* The longest a batch keeps the workspace's lock once it has it. */
 export const BATCH_HOLD_MS = 2_000;
+/* How long a purge batch keeps purging before it answers the rest `busy` (purgeNodes). */
+export const PURGE_BUDGET_MS = 1_000;
 
 /* Postgres's codes for a lock or statement timeout, anywhere in a driver error's causes. */
 function timedOut(error: unknown) {
@@ -3061,7 +3095,14 @@ async function purgeVersion(tx: Tx, workspaceId: string, version: PurgedVersion)
  * next change sequence. Descendants are left to the fan-out; until it reaches
  * them they are unreachable through this node.
  */
-async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: number) {
+async function purgeOne(
+    tx: Tx,
+    workspaceId: string,
+    nodeId: string,
+    changeSeq: number,
+    /* Its ancestors' ids, root first, when the caller walked it under this lock already. */
+    ancestorIds?: string[],
+) {
     const [node] = await tx
         .select({ id: driveNodes.id, purgedAt: driveNodes.purgedAt })
         .from(driveNodes)
@@ -3081,13 +3122,14 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
     for (const version of versions) await purgeVersion(tx, workspaceId, version);
     // Where it was when it went, for the share feeds: tombstones keep their parent, so
     // the walk reaches the root through any ancestor purged before it.
-    const chain = await walk(tx, nodeId);
+    const purgedAncestorIds =
+        ancestorIds ?? (await walk(tx, nodeId))?.ancestors.map((ancestor) => ancestor.id) ?? [];
     const now = new Date();
     await tx
         .update(driveNodes)
         .set({
             purgedAt: now,
-            purgedAncestorIds: chain ? chain.ancestors.map((ancestor) => ancestor.id) : [],
+            purgedAncestorIds,
             keyEnvelope: null,
             metadataEnvelope: null,
             metadataSignerId: null,
@@ -3116,13 +3158,115 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
 export async function purgeNode(input: { workspaceId: string; nodeId: string; writer?: string }) {
     return db.transaction(async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
-        const chain = await walk(tx, input.nodeId);
-        if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
-            return { status: 'not-found' as const };
-        if (chain.node.parent_id === null) return { status: 'root' as const };
-        if (chain.node.trashed_at === null) return { status: 'not-trashed' as const };
+        switch (purgeRefusal(await walk(tx, input.nodeId), input.workspaceId)) {
+            case 'not-found':
+                return { status: 'not-found' as const };
+            case 'root':
+                return { status: 'root' as const };
+            case 'not-trashed':
+                return { status: 'not-trashed' as const };
+        }
         await purgeOne(tx, input.workspaceId, input.nodeId, changeSeq);
         return { status: 'ok' as const };
+    });
+}
+
+/* Why a node may not be deleted forever, by its walk; null when it may. */
+function purgeRefusal(chain: Walk | null, workspaceId: string) {
+    if (!chain || chain.node.workspace_id !== workspaceId || chain.purged)
+        return 'not-found' as const;
+    if (chain.node.parent_id === null) return 'root' as const;
+    if (chain.node.trashed_at === null) return 'not-trashed' as const;
+    return null;
+}
+
+export type PurgeRefusal = 'not-found' | 'root' | 'not-trashed' | 'busy';
+export type PurgeOutcome =
+    | { id: string; status: 'purged'; changeSeq: number }
+    /* Inside `by`, a folder of the same request that was purged: the fan-out takes it with it. */
+    | { id: string; status: 'covered'; by: string }
+    | { id: string; status: 'refused'; reason: PurgeRefusal };
+
+/*
+ * Delete forever for a selection, in one transaction: each node purgeNode
+ * would purge is purged by the same purgeOne (versions, the outbox, shares and
+ * links, the tombstone), and the rest refused one by one, so one refusal keeps
+ * none of the others back. Only a node with its own trashed_at goes, never a
+ * top folder. A node inside another of the request that goes is `covered`:
+ * the fan-out purges it with its folder, as it would after a single purge of
+ * the folder, rather than this request purging it on its own.
+ *
+ * Purging is a member's (the route's requireMember): someone who is not one
+ * is answered without the workspace's lock ever being taken. A member who is
+ * held or has left in a group area moves nothing (requireStillWriter, under
+ * the lock). Each purged node takes its own change number, in the order
+ * given, as for trashNodes.
+ *
+ * A purge costs a dozen statements a node (its versions, storage, the outbox,
+ * shares and links), so 200 files can take a second here and more on a slower
+ * database: a request stops purging once it has held the lock `budgetMs`
+ * (PURGE_BUDGET_MS), keeps what it purged, and answers the rest `busy`, with
+ * whatever is covered by them, for the client to send again. BATCH_HOLD_MS
+ * still ends anything that runs past it, rolling it all back.
+ */
+export async function purgeNodes(input: {
+    workspaceId: string;
+    nodeIds: string[];
+    writer: string;
+    /* How long it may keep purging once it holds the lock; tests set it low. */
+    budgetMs?: number;
+}) {
+    const { workspaceId, nodeIds, writer, budgetMs = PURGE_BUDGET_MS } = input;
+    if (nodeIds.length < 1 || nodeIds.length > MAX_NODE_BATCH)
+        throw new RangeError(`Delete between 1 and ${MAX_NODE_BATCH} items at a time.`);
+    if (new Set(nodeIds).size !== nodeIds.length) throw new RangeError('An item is named twice.');
+    if (!(await holdsWorkspace(db, writer, workspaceId)))
+        return nodeIds.map((id): PurgeOutcome => ({ id, status: 'refused', reason: 'not-found' }));
+    return inBatch(async (tx, holding) => {
+        const firstSeq = await nextChangeSeq(tx, workspaceId, writer);
+        const inTime = holding();
+        // The budget counts from the lock; the walks are one statement, so they spend little of it.
+        const since = performance.now();
+        const walks = await walkAll(tx, nodeIds);
+        inTime();
+        const checked = nodeIds.map((id) => {
+            const chain = walks.get(id)!;
+            return { id, chain, refusal: purgeRefusal(chain, workspaceId) };
+        });
+        const passed = new Set(checked.filter((entry) => !entry.refusal).map((entry) => entry.id));
+        const outcomes = new Map<string, PurgeOutcome>();
+        const going: string[] = [];
+        for (const { id, chain, refusal } of checked) {
+            if (refusal) outcomes.set(id, { id, status: 'refused', reason: refusal });
+            else {
+                // Root first: the outermost of the request's nodes above it, which always goes.
+                const by = chain!.ancestors.find((ancestor) => passed.has(ancestor.id));
+                if (by) outcomes.set(id, { id, status: 'covered', by: by.id });
+                else going.push(id);
+            }
+        }
+        const left = new Set<string>();
+        let purged = 0;
+        for (const id of going) {
+            // Past the budget, with at least one done: the rest wait for the next request.
+            if (purged > 0 && performance.now() - since > budgetMs) {
+                left.add(id);
+                continue;
+            }
+            // Each tombstone its own number, in order, from the lock's: the lock keeps them ours.
+            const changeSeq = firstSeq + purged;
+            const ancestorIds = walks.get(id)!.ancestors.map((ancestor) => ancestor.id);
+            await purgeOne(tx, workspaceId, id, changeSeq, ancestorIds);
+            outcomes.set(id, { id, status: 'purged', changeSeq });
+            purged++;
+            inTime();
+        }
+        // The counter catches up once, past the last number a tombstone took.
+        if (purged > 1) await moreChangeSeqs(tx, workspaceId, purged - 1);
+        for (const [id, outcome] of outcomes)
+            if (outcome.status === 'covered' && left.has(outcome.by)) left.add(id);
+        for (const id of left) outcomes.set(id, { id, status: 'refused', reason: 'busy' });
+        return nodeIds.map((id) => outcomes.get(id)!);
     });
 }
 

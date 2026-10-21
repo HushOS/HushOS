@@ -1447,6 +1447,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 body.nodeIds,
             ),
     )
+    // Delete forever for a selection in the Trash: per-item results, in order.
+    .post(
+        '/drive/workspaces/:id/purge-batch',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({ nodeIds: nodeBatchSchema }) },
+        async ({ request, sessionToken, params, body }) =>
+            drive.purgeNodes(
+                (await driveMutation(request, sessionToken)).id,
+                params.id,
+                body.nodeIds,
+            ),
+    )
     .post(
         '/drive/uploads',
         {

@@ -48,9 +48,13 @@ import {
     formatWhen,
     invalidateFolders,
     nodeSize,
+    purgeTrashRows,
     refreshSharing,
+    restoreTrashRows,
     trashQueryOptions,
 } from '@/lib/drive';
+import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
+import { DriveApiError } from '@hushos/drive/api';
 import { cue } from '@/lib/sounds';
 import { emptyTrashAll } from '@/lib/trash';
 
@@ -59,7 +63,8 @@ import { emptyTrashAll } from '@/lib/trash';
  * does: click, Mod-click, Shift-click, a box drawn on empty space, arrows. Restore
  * puts an item back where it was; when that place is itself in the Trash, it goes
  * to My files instead, which is a move and a restore in one request. Deleting
- * forever always asks first, and each row leaves the list as its own request ends.
+ * forever always asks first. Several go in batch requests (lib/trash-batch.ts),
+ * and the rows each request settles leave the list as it lands.
  */
 
 /* Whether an ancestor of `item` is among `ids`: its fate then follows that ancestor's. */
@@ -173,11 +178,15 @@ export function TrashView({
     const [emptying, setEmptying] = useState<{ gone: number; total: number } | null>(null);
     /* What a restore of several couldn't do; it stays until dismissed or retried. */
     const [partial, setPartial] = useState<PartialRestore | null>(null);
-    /* A batch under way: what it is doing, and how far. */
+    /*
+     * A batch under way: what it is doing, and how far. `requests` is how many it
+     * takes; with one, it is over before a bar could say anything, so none shows.
+     */
     const [batch, setBatch] = useState<{
         verb: 'Restoring' | 'Deleting';
         done: number;
         total: number;
+        requests: number;
     } | null>(null);
     const rows = useMemo(() => trash.data ?? [], [trash.data]);
     const ids = useMemo(() => rows.map((item) => item.node.id), [rows]);
@@ -242,43 +251,63 @@ export function TrashView({
     }
 
     /*
-     * Restores the picked rows. Shallowest first, so a folder comes back before what
-     * was trashed inside it; an item whose trashed ancestors all came back in this
-     * batch goes home, one whose ancestor is still in the Trash goes to My files.
+     * Restores the picked rows. Those whose folders in the Trash are all picked
+     * too go back where they were, in batch requests that bring each folder back
+     * before what is in it. The rest, and any whose folder could not come back,
+     * go to My files, one request each, since each needs its key wrapped again.
      */
     async function restoreMany(items: TrashItem[]) {
         if (working) return;
         setPartial(null);
-        const ordered = [...items].sort((a, b) => a.ancestors.length - b.ancestors.length);
-        const back = new Set<string>();
+        const pickedIds = new Set(items.map((item) => item.node.id));
+        const home = (item: TrashItem) =>
+            item.ancestors.every((ancestor) => !ancestor.trashedAt || pickedIds.has(ancestor.id));
+        const inPlace = items.filter(home);
+        const toRoot = items.filter((item) => !home(item));
+        const total = items.length;
+        let done = 0;
+        const requests = Math.ceil(inPlace.length / MAX_TRASH_BATCH) + toRoot.length;
+        setBatch({ verb: 'Restoring', done, total, requests });
         const failed: PartialRestore['failed'] = [];
         const moved: TrashItem[] = [];
-        setBatch({ verb: 'Restoring', done: 0, total: ordered.length });
-        for (const [index, item] of ordered.entries()) {
-            const trashedAbove = item.ancestors.filter((ancestor) => ancestor.trashedAt);
-            const home = trashedAbove.every((ancestor) => back.has(ancestor.id));
+        if (inPlace.length) {
+            const byId = new Map(inPlace.map((item) => [item.node.id, item]));
+            const result = await restoreTrashRows(inPlace, (back) => {
+                for (const node of back) drop(node.id);
+                done += back.length;
+                setBatch({ verb: 'Restoring', done, total, requests });
+            });
+            for (const { node, error } of result.failed) {
+                const item = byId.get(node.id)!;
+                // Its folder was picked but stayed in the Trash: My files, as for the rest.
+                if (error instanceof DriveApiError && error.code === 'parent-trashed')
+                    toRoot.push(item);
+                else failed.push({ item, reason: driveError(error) });
+            }
+        }
+        for (const item of toRoot) {
             setActive({ id: item.node.id, verb: 'restoring' });
             try {
-                const target = home ? undefined : root.data?.folder;
-                if (!home && !target) throw new Error('My files isn’t open yet.');
+                const target = root.data?.folder;
+                if (!target) throw new Error('My files isn’t open yet.');
                 await driveClient.restore(item.node, target);
-                back.add(item.node.id);
-                if (!home) moved.push(item);
+                moved.push(item);
                 drop(item.node.id);
             } catch (error) {
                 failed.push({ item, reason: driveError(error) });
             }
-            setBatch({ verb: 'Restoring', done: index + 1, total: ordered.length });
+            setBatch({ verb: 'Restoring', done: ++done, total, requests });
         }
         setActive(null);
         setBatch(null);
-        await invalidateFolders(queryClient);
-        const restored = ordered.length - failed.length;
+        // One refresh for the whole batch, in the background: the rows have already gone.
+        void invalidateFolders(queryClient);
+        const restored = total - failed.length;
         if (restored > 0) void refreshSharing(queryClient);
         if (failed.length) {
             // Several, and some didn't come back: that stays on the page, not in a toast.
             cue('error');
-            setPartial({ restored, total: ordered.length, failed, moved });
+            setPartial({ restored, total, failed, moved });
             return;
         }
         cue('success');
@@ -287,8 +316,8 @@ export function TrashView({
             title:
                 restored === 1
                     ? moved.length
-                        ? `Restored “${ordered[0]!.node.name}” to My files`
-                        : `Restored “${ordered[0]!.node.name}” to ${folderName(ordered[0]!.ancestors.at(-1))}`
+                        ? `Restored “${items[0]!.node.name}” to My files`
+                        : `Restored “${items[0]!.node.name}” to ${folderName(items[0]!.ancestors.at(-1))}`
                     : `${restored} items restored`,
             description: moved.length
                 ? `${moved.length === 1 ? 'One went' : `${moved.length} went`} to My files, because ${moved.length === 1 ? 'its folder is' : 'their folders are'} still in the Trash.`
@@ -296,39 +325,41 @@ export function TrashView({
         });
     }
 
-    /* Deletes the picked rows forever; anything inside a picked folder goes with it, so it is not asked for twice. */
+    /*
+     * Deletes the picked rows forever, in batch requests; anything inside a picked
+     * folder goes with it, so it is not asked for twice. The count is of the rows
+     * picked that are gone, those inside a deleted folder included.
+     */
     async function purgeMany(items: TrashItem[]) {
         if (working) return;
-        const picked = new Set(items.map((item) => item.node.id));
-        const tops = items.filter((item) => !underAny(item, picked));
-        let failed = 0;
-        setBatch({ verb: 'Deleting', done: 0, total: tops.length });
-        for (const [index, item] of tops.entries()) {
-            setActive({ id: item.node.id, verb: 'deleting' });
-            try {
-                await driveClient.purge(item.node);
-                drop(item.node.id);
-                for (const inner of items)
-                    if (underAny(inner, new Set([item.node.id]))) drop(inner.node.id);
-            } catch {
-                failed++;
-            }
-            setBatch({ verb: 'Deleting', done: index + 1, total: tops.length });
-        }
-        setActive(null);
+        const pickedIds = new Set(items.map((item) => item.node.id));
+        const sent = items.filter((item) => !underAny(item, pickedIds)).length;
+        const total = items.length;
+        let done = 0;
+        const requests = Math.ceil(sent / MAX_TRASH_BATCH);
+        setBatch({ verb: 'Deleting', done, total, requests });
+        const { gone, error } = await purgeTrashRows(items, (ids) => {
+            for (const id of ids) drop(id);
+            done += ids.length;
+            setBatch({ verb: 'Deleting', done, total, requests });
+        });
         setBatch(null);
-        await invalidateFolders(queryClient);
-        cue(failed ? 'error' : 'droplet');
+        // One refresh for the whole batch, in the background: the rows have already gone.
+        void invalidateFolders(queryClient);
+        const all = gone.length === total;
+        cue(all ? 'droplet' : 'error');
         toast.add({
-            type: failed ? 'error' : 'success',
-            title: failed
-                ? `${failed} of ${tops.length} couldn’t be deleted`
-                : items.length === 1
+            type: all ? 'success' : 'error',
+            title: !all
+                ? gone.length === 0
+                    ? total === 1
+                        ? `Couldn’t delete “${items[0]!.node.name}”`
+                        : 'Couldn’t delete them'
+                    : `${gone.length} of ${total} deleted forever`
+                : total === 1
                   ? `Deleted “${items[0]!.node.name}” forever`
-                  : `${items.length} items deleted forever`,
-            description: failed
-                ? 'Check your connection and try again.'
-                : 'Their space frees up in a moment.',
+                  : `${total} items deleted forever`,
+            description: all ? 'Their space frees up in a moment.' : driveError(error),
         });
     }
 
@@ -477,7 +508,7 @@ export function TrashView({
                     </Button>
                 )}
             </PageHeader>
-            {(batch || emptying) && (
+            {(emptying || (batch && batch.requests > 1)) && (
                 <Progress
                     label={
                         emptying

@@ -470,6 +470,8 @@ const familySharing = () =>
     new DriveError('family-sharing', 'Sharing isn’t available in family folders.', 409);
 const trashed = () =>
     new DriveError('trashed', 'This item is in the trash. Restore it first.', 409);
+const topFolderPurge = () => new DriveError('invalid', 'The top folder cannot be deleted.', 409);
+const notTrashedYet = () => new DriveError('conflict', 'Move this item to the trash first.', 409);
 const topFolderToTrash = () =>
     new DriveError('invalid', 'The top folder cannot be moved to the trash.', 409);
 const notTrashed = () => new DriveError('conflict', 'This item is not in the trash.', 409);
@@ -754,6 +756,14 @@ const restoreRefusals = {
     removed: () => removedByOperator(),
     'parent-trashed': () => parentTrashedOnRestore(),
 } satisfies Record<driveRepository.RestoreRefusal, () => DriveError>;
+const purgeRefusals = {
+    'not-found': () => notFound(),
+    root: () => topFolderPurge(),
+    'not-trashed': () => notTrashedYet(),
+    // Not reached in this request's share of the lock: the client sends it again.
+    busy: () =>
+        new DriveError('conflict', 'There wasn’t time to delete this one yet. Try again.', 409),
+} satisfies Record<driveRepository.PurgeRefusal, () => DriveError>;
 
 /*
  * A batch request's ids: between one and MAX_TRASH_BATCH, none twice. One
@@ -847,6 +857,35 @@ export async function restoreNodes(userId: string, workspaceId: string, nodeIds:
     };
 }
 
+/*
+ * Delete forever for a selection: each item as purgeNode would have it,
+ * refused one by one (driveRepository.purgeNodes). A member's, as for one.
+ */
+export async function purgeNodes(userId: string, workspaceId: string, nodeIds: string[]) {
+    await requireBatch(userId, nodeIds);
+    await requireMember(userId, workspaceId);
+    const outcomes = await busyAsConflict(
+        driveRepository.purgeNodes({ workspaceId, nodeIds, writer: userId }),
+    );
+    return {
+        results: outcomes.map((outcome) => {
+            switch (outcome.status) {
+                case 'purged':
+                    return { id: outcome.id, status: outcome.status, changeSeq: outcome.changeSeq };
+                case 'covered':
+                    return { id: outcome.id, status: outcome.status, by: outcome.by };
+                case 'refused':
+                    return {
+                        id: outcome.id,
+                        status: outcome.status,
+                        reason: outcome.reason,
+                        message: purgeRefusals[outcome.reason]().message,
+                    };
+            }
+        }),
+    };
+}
+
 export async function restoreNode(
     userId: string,
     workspaceId: string,
@@ -894,9 +933,9 @@ export async function purgeNode(userId: string, workspaceId: string, nodeId: str
         case 'not-found':
             throw notFound();
         case 'root':
-            throw new DriveError('invalid', 'The top folder cannot be deleted.', 409);
+            throw topFolderPurge();
         case 'not-trashed':
-            throw new DriveError('conflict', 'Move this item to the trash first.', 409);
+            throw notTrashedYet();
         case 'ok':
             return { purged: true };
     }
