@@ -589,7 +589,15 @@ public actor Vault {
 
     /* The sealed thumbnail trailer of a file's current version, decrypted; nil when it has none. */
     public func thumbnail(_ nodeId: String) async throws -> Data? {
-        let item = try await resolve(nodeId)
+        try await thumbnail(of: try await resolve(nodeId))
+    }
+
+    /*
+     * The same for a row the caller already holds (a list's), never looked up again: a row a
+     * batch just forgot, still on screen for a moment, would otherwise list its folder once more.
+     * Its key outlives the forget (`forget` drops only the opened row).
+     */
+    public func thumbnail(of item: Opened) async throws -> Data? {
         guard item.hasThumbnail, let version = item.node.currentVersion else { return nil }
         let opened = try openVersion(item)
         guard opened.content.thumbnailBytes > 0 else { return nil }

@@ -775,7 +775,8 @@ final class DriveStore {
         guard item.hasThumbnail, thumbnails[item.id] == nil, !thumbnailTasks.contains(item.id) else { return }
         thumbnailTasks.insert(item.id)
         Task {
-            if let data = try? await vault.thumbnail(item.id) { thumbnails[item.id] = data }
+            // The row this list holds, never looked up again: one a batch just forgot would list its folder once more.
+            if let data = try? await vault.thumbnail(of: item) { thumbnails[item.id] = data }
             thumbnailTasks.remove(item.id)
         }
     }
@@ -1242,7 +1243,7 @@ final class DriveStore {
         reportFailures(errors, single: items.count == 1)
         if errors.isEmpty {
             notify(back.count == 1 ? "Restored “\(back[0].name)”" + (wasIn(back[0]).map { " to \($0)" } ?? "") : "Restored \(back.count) items")
-        } else if !errors.contains(where: endsSession), let problem = TrashBatch.undoProblem(back: back.count, tried: items.count) {
+        } else if !errors.contains(where: endsSession), let problem = TrashBatch.undoProblem(back: back.count, tried: items.count, errors: errors) {
             notify(problem)
         }
     }

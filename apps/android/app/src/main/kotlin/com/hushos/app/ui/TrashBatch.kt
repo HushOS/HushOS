@@ -13,8 +13,10 @@ import com.hushos.app.data.TrashMove
  * UNCONFIRMED is a gateway's 502 or 504, or an item a batch's answer left out: the request may
  * have landed, as it may have when there was no answer at all, so neither is ever said to have
  * "stayed". BUSY, TOO_MANY and TOO_LARGE refused a whole batch request before anything moved.
+ * ALREADY_TRASHED is an item the server refused as in the trash already (itself or through a
+ * folder): it didn't move, but it didn't stay where it was either.
  */
-enum class TrashFailure { OFFLINE, UNCONFIRMED, SIGNED_OUT, BUSY, TOO_MANY, TOO_LARGE, OTHER }
+enum class TrashFailure { OFFLINE, UNCONFIRMED, SIGNED_OUT, BUSY, TOO_MANY, TOO_LARGE, ALREADY_TRASHED, OTHER }
 
 fun trashFailure(error: Throwable): TrashFailure = when {
     error is NotAuthenticated -> TrashFailure.SIGNED_OUT
@@ -25,6 +27,7 @@ fun trashFailure(error: Throwable): TrashFailure = when {
         BatchRefused.Kind.TOO_MANY -> TrashFailure.TOO_MANY
         BatchRefused.Kind.TOO_LARGE -> TrashFailure.TOO_LARGE
     }
+    error is ApiError && error.code == "trashed" -> TrashFailure.ALREADY_TRASHED
     else -> TrashFailure.OTHER
 }
 
@@ -61,6 +64,7 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
                 TrashFailure.BUSY in kinds -> TrashFailure.BUSY
                 TrashFailure.TOO_MANY in kinds -> TrashFailure.TOO_MANY
                 TrashFailure.TOO_LARGE in kinds -> TrashFailure.TOO_LARGE
+                kinds.all { it == TrashFailure.ALREADY_TRASHED } -> TrashFailure.ALREADY_TRASHED
                 else -> TrashFailure.OTHER
             }
         }
@@ -80,6 +84,7 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
             TrashFailure.UNCONFIRMED -> "HushOS didn’t confirm it. Try again."
             TrashFailure.SIGNED_OUT -> "Sign in again, then try again."
             TrashFailure.OTHER -> "Try again."
+            TrashFailure.ALREADY_TRASHED -> "They’re in Trash already."
             else -> refusedWords(failure)!!
         }
         return "${moved.size} of ${tried.size} moved to Trash. " + when (failure) {
@@ -87,6 +92,7 @@ class TrashResult(val tried: List<Opened>, val moved: List<Opened>, val failed: 
             TrashFailure.UNCONFIRMED -> "The rest weren’t confirmed. Try again."
             TrashFailure.SIGNED_OUT -> "Sign in again to move the rest."
             TrashFailure.OTHER -> "The rest stayed where they were. Try again."
+            TrashFailure.ALREADY_TRASHED -> "The rest were in Trash already."
             else -> refusedWords(failure)!!
         }
     }
@@ -141,8 +147,12 @@ fun afterUndo(folders: Map<String, List<Opened>>, trash: List<TrashItem>, back: 
 }
 
 /* What an Undo of many says when not everything came back; null when it all did, or for one item (its error says it). */
-fun undoProblem(back: Int, tried: Int): String? = when {
-    tried <= 1 || back == tried -> null
-    back == 0 -> "Couldn’t bring them back. They’re still in Trash."
-    else -> "$back of $tried are back. The rest are still in Trash."
+fun undoProblem(back: Int, tried: Int, errors: List<Throwable> = emptyList()): String? {
+    if (tried <= 1 || back == tried) return null
+    // A whole request turned away says why, in the web's words; the rest are still in Trash.
+    val refused = errors.firstNotNullOfOrNull { (it as? BatchRefused)?.kind?.words }
+    return when {
+        back == 0 -> "Couldn’t bring them back. " + (refused ?: "They’re still in Trash.")
+        else -> "$back of $tried are back. " + (refused ?: "The rest are still in Trash.")
+    }
 }

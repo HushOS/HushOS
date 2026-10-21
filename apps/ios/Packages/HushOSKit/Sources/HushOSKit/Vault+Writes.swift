@@ -231,11 +231,16 @@ extension Vault {
     }
 
     public func trash(_ nodeId: String) async throws {
+        try await sendTrash(nodeId)
+        forget(nodeId)
+    }
+
+    /* The single route's trash, without forgetting the row: the caller forgets it once the lists let go. */
+    private func sendTrash(_ nodeId: String) async throws {
         let item = try await resolve(nodeId)
         // Nothing is sealed, but a family folder takes it only while this device may write there.
         _ = try familyTarget(item.node.workspaceId)
         _ = try await api.trash(nodeId: nodeId, workspaceId: item.node.workspaceId)
-        forget(nodeId)
     }
 
     /*
@@ -253,13 +258,17 @@ extension Vault {
             else { workspace = (try? await loadWorkspace().workspaceId) ?? "" }
             items.append((id, workspace))
         }
+        // The folders each sits in, as far as this device knows, read before anything is forgotten.
+        let chains = Dictionary(ids.map { id in (id, opened[id].map { ancestorIds(of: $0) } ?? []) }, uniquingKeysWith: { a, _ in a })
         return await TrashBatch.trashInBatches(
             items,
             send: { workspace, chunk in try await self.sendTrashBatch(workspace, chunk) },
+            // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
             sequential: { chunk in
-                await TrashBatch.trashEach(chunk, trash: { id in try await self.trash(id) }, moved: { id in await moved([id]) })
+                await TrashBatch.trashEach(chunk, trash: { id in try await self.sendTrash(id) }, moved: { id in await moved([id]); await self.forget([id]) })
                     .map { $0.map { TrashBatch.Move.trashed } }
             },
+            ancestors: { chains[$0] ?? [] },
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
             forget: { ids in await self.forget(ids) },
             moved: { landed in await moved(landed.map(\.id)) }

@@ -50,9 +50,10 @@ public enum TrashBatch {
      * `unconfirmed` is a gateway's 502 or 504, or an item a batch's answer left out: the request
      * may have landed, as it may have when there was no answer at all, so neither is ever said to
      * have "stayed". `busy`, `tooMany` and `tooLarge` refused a whole batch request before
-     * anything moved.
+     * anything moved. `alreadyTrashed` is an item the server refused as in the trash already
+     * (itself or through a folder): it didn't move, but it didn't stay where it was either.
      */
-    public enum Failure: Sendable, Equatable { case offline, unconfirmed, signedOut, busy, tooMany, tooLarge, other }
+    public enum Failure: Sendable, Equatable { case offline, unconfirmed, signedOut, busy, tooMany, tooLarge, alreadyTrashed, other }
 
     public static func failure(of error: Error) -> Failure {
         if endsSession(error) { return .signedOut }
@@ -67,6 +68,7 @@ public enum TrashBatch {
         if error is URLError { return .offline }
         if case AuthError.message(let text) = error, text == AuthError.unreachable { return .offline }
         if case DriveAPIError.server(let status, _) = error, status == 502 || status == 504 { return .unconfirmed }
+        if case DriveAPIError.trashed = error { return .alreadyTrashed }
         return .other
     }
 
@@ -95,6 +97,7 @@ public enum TrashBatch {
             if kinds.allSatisfy({ $0 == .offline }) { return .offline }
             if kinds.contains(where: { $0 == .offline || $0 == .unconfirmed }) { return .unconfirmed }
             for refused in [Failure.busy, .tooMany, .tooLarge] where kinds.contains(refused) { return refused }
+            if kinds.allSatisfy({ $0 == .alreadyTrashed }) { return .alreadyTrashed }
             return .other
         }
 
@@ -113,6 +116,7 @@ public enum TrashBatch {
                 case .unconfirmed: return "Couldn’t move to Trash. HushOS didn’t confirm it. Try again."
                 case .signedOut: return "Couldn’t move to Trash. Sign in again, then try again."
                 case .other: return "Couldn’t move to Trash. Try again."
+                case .alreadyTrashed: return "Couldn’t move to Trash. They’re in Trash already."
                 case .busy: return "Couldn’t move to Trash. " + RequestRefusal.busy.words
                 case .tooMany: return "Couldn’t move to Trash. " + RequestRefusal.tooMany.words
                 case .tooLarge: return "Couldn’t move to Trash. " + RequestRefusal.tooLarge.words
@@ -124,6 +128,7 @@ public enum TrashBatch {
             case .unconfirmed: return count + "The rest weren’t confirmed. Try again."
             case .signedOut: return count + "Sign in again to move the rest."
             case .other: return count + "The rest stayed where they were. Try again."
+            case .alreadyTrashed: return count + "The rest were in Trash already."
             case .busy: return count + RequestRefusal.busy.words
             case .tooMany: return count + RequestRefusal.tooMany.words
             case .tooLarge: return count + RequestRefusal.tooLarge.words
@@ -212,10 +217,12 @@ public enum TrashBatch {
     }
 
     /* What an Undo of many says when not everything came back; nil when it all did, or for one item (its error says it). */
-    public static func undoProblem(back: Int, tried: Int) -> String? {
+    public static func undoProblem(back: Int, tried: Int, errors: [Error] = []) -> String? {
         if tried <= 1 || back == tried { return nil }
-        if back == 0 { return "Couldn’t bring them back. They’re still in Trash." }
-        return "\(back) of \(tried) are back. The rest are still in Trash."
+        // A whole request turned away says why, in the web's words; the rest are still in Trash.
+        let refused = errors.lazy.compactMap { ($0 as? RequestRefusal)?.words }.first
+        if back == 0 { return "Couldn’t bring them back. " + (refused ?? "They’re still in Trash.") }
+        return "\(back) of \(tried) are back. " + (refused ?? "The rest are still in Trash.")
     }
 
     // MARK: The batch routes
@@ -239,8 +246,9 @@ public enum TrashBatch {
 
     /*
      * How an item reached the trash: on its own (Undo brings it back), or with a folder that went
-     * in the same request or was there already (`covered`, or refused as `trashed`): it is in the
-     * trash, so it counts as moved, and it comes back with that folder, never on its own.
+     * (`covered`, or a selected folder it sits in, which is all that was sent): it is in the trash,
+     * so it counts as moved, and it comes back with that folder, never on its own. An item refused
+     * as `trashed` (already there, itself or through a folder) did not move, as the web counts it.
      */
     public enum Move: Sendable, Equatable { case trashed, withFolder }
 
@@ -329,44 +337,69 @@ public enum TrashBatch {
 
     /*
      * Moves (id, workspace) pairs to the trash through trash-batch: one outcome per item, in the
-     * order given, and `moved` told of what each request moved as its answer lands. A request that fails as
-     * a whole fails its items with its error; no network, an ended session or a cancellation fails
-     * the rest unsent. `sequential` is the per-item route, for a server without the batch one; from
-     * then on every remaining chunk goes that way. `forget` hears the same ids only after `moved`
-     * returned: the lists let go of a row first, or a row still on screen whose node is gone is
-     * looked up again (a thumbnail, a listing).
+     * order given, and `moved` told of what each request moved as its answer lands. An item inside
+     * another selected item (`ancestors`: the folders it sits in, as far as this device knows) is
+     * never sent, as the web leaves it out: trashed on its own it would come back on Undo without
+     * its folder. It moves with its folder, landing with that folder's request, or stays with its
+     * folder's failure. A request that fails as a whole fails its items with its error; no network,
+     * an ended session or a cancellation fails the rest unsent. `sequential` is the per-item route,
+     * for a server without the batch one; from then on every remaining chunk goes that way, and it
+     * tells `moved` and `forget` of each item itself, in that order. `forget` hears ids only after
+     * `moved` returned: the lists let go of a row first, or a row still on screen whose node is
+     * gone is looked up again (a thumbnail, a listing).
      */
     public static func trashInBatches(
         _ items: [(id: String, workspace: String)],
         send: @Sendable (String, [String]) async throws -> [Answer],
         sequential: @Sendable ([String]) async -> [Result<Move, Error>],
+        ancestors: @Sendable (String) -> [String] = { _ in [] },
         forget: @Sendable ([String]) async -> Void = { _ in },
         moved: @Sendable ([(id: String, how: Move)]) async -> Void
     ) async -> [Result<Move, Error>] {
         var outcomes = [Result<Move, Error>?](repeating: nil, count: items.count)
+        let picked = Set(items.map(\.id))
+        // The selected folders each item sits in; the roots, inside none of them, are all that is sent.
+        let within = items.map { item in Array(Set(ancestors(item.id).filter { $0 != item.id && picked.contains($0) })) }
+        let roots = items.indices.filter { within[$0].isEmpty }
+        var rootOutcome: [String: Result<Move, Error>] = [:]
+        // The nested items a request's roots took with them, landing with that request.
+        func carried(_ landedRoots: Set<String>) -> [(id: String, how: Move)] {
+            var out: [(id: String, how: Move)] = []
+            for index in items.indices where outcomes[index] == nil && within[index].contains(where: landedRoots.contains) {
+                outcomes[index] = .success(.withFolder)
+                out.append((items[index].id, .withFolder))
+            }
+            return out
+        }
+        func settle(_ index: Int, _ outcome: Result<Move, Error>) {
+            outcomes[index] = outcome
+            rootOutcome[items[index].id] = outcome
+        }
         var stopped: Error?
         var perItem = false
-        for (workspace, chunk) in chunks(items) {
-            let ids = chunk.map { items[$0].id }
-            if let stopped { for index in chunk { outcomes[index] = .failure(stopped) }; continue }
+        let rootItems = roots.map { items[$0] }
+        for (workspace, chunk) in chunks(rootItems) {
+            let indexes = chunk.map { roots[$0] }
+            let ids = indexes.map { items[$0].id }
+            if let stopped { for index in indexes { settle(index, .failure(stopped)) }; continue }
             if !perItem {
                 do {
                     let answers = try await send(workspace, ids)
                     let byId = Dictionary(answers.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                     var landed: [(id: String, how: Move)] = []
-                    for index in chunk {
+                    for index in indexes {
                         let id = items[index].id
                         let outcome: Result<Move, Error>
                         switch byId[id] {
                         case .trashed?: outcome = .success(.trashed)
                         case .covered?: outcome = .success(.withFolder)
-                        case .refused(_, "trashed", _)?: outcome = .success(.withFolder)
                         case .refused(_, let reason, let message)?: outcome = .failure(refused(reason, message))
                         case .restored?, nil: outcome = .failure(unanswered)
                         }
-                        outcomes[index] = outcome
+                        settle(index, outcome)
                         if case .success(let how) = outcome { landed.append((id, how)) }
                     }
+                    landed += carried(Set(landed.map(\.id)))
                     if !landed.isEmpty {
                         await moved(landed)
                         await forget(landed.map(\.id))
@@ -375,15 +408,27 @@ public enum TrashBatch {
                 } catch is Unsupported {
                     perItem = true
                 } catch {
-                    for index in chunk { outcomes[index] = .failure(error) }
+                    for index in indexes { settle(index, .failure(error)) }
                     if stops(error) { stopped = error }
                     continue
                 }
             }
             for (at, outcome) in await sequential(ids).enumerated() {
-                outcomes[chunk[at]] = outcome
+                settle(indexes[at], outcome)
                 if case .failure(let error) = outcome, stops(error) { stopped = error }
             }
+            let carriedHere = carried(Set(ids.filter { if case .success? = rootOutcome[$0] { true } else { false } }))
+            if !carriedHere.isEmpty {
+                await moved(carriedHere)
+                await forget(carriedHere.map(\.id))
+            }
+        }
+        // Nested items whose folders all failed stay where they are, with their folder's reason.
+        for index in items.indices where outcomes[index] == nil {
+            let reason = within[index].lazy.compactMap { id -> Error? in
+                if case .failure(let error)? = rootOutcome[id] { return error } else { return nil }
+            }.first
+            outcomes[index] = .failure(reason ?? unanswered)
         }
         return outcomes.map { $0! }
     }
@@ -409,13 +454,14 @@ public enum TrashBatch {
         func pass(_ batch: [(id: String, workspace: String)]) async {
             for (workspace, chunk) in chunks(batch) {
                 let ids = chunk.map { batch[$0].id }
+                // Sent again now: whatever this request says decides whether it waits once more.
+                waiting.subtract(ids)
                 if let stopped { for id in ids { latest[id] = .failure(stopped) }; continue }
                 if !perItem {
                     do {
                         let answers = try await send(workspace, ids)
                         let byId = Dictionary(answers.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                         for id in ids {
-                            waiting.remove(id)
                             switch byId[id] {
                             case .restored?: latest[id] = .success(())
                             case .refused(_, let reason, let message)?:
@@ -445,7 +491,7 @@ public enum TrashBatch {
             let before = latest.values.filter { if case .success = $0 { true } else { false } }.count
             await pass(items.filter { waiting.contains($0.id) })
             let after = latest.values.filter { if case .success = $0 { true } else { false } }.count
-            if after == before { break }
+            if after <= before { break }
         }
         return items.map { latest[$0.id]! }
     }

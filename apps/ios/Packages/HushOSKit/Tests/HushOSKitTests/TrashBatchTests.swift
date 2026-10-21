@@ -244,6 +244,11 @@ import Testing
         #expect(TrashBatch.undoProblem(back: 0, tried: 1) == nil)
         #expect(TrashBatch.undoProblem(back: 11, tried: 13) == "11 of 13 are back. The rest are still in Trash.")
         #expect(TrashBatch.undoProblem(back: 0, tried: 13) == "Couldn’t bring them back. They’re still in Trash.")
+        // A whole Undo request turned away says why, as the web does.
+        #expect(TrashBatch.undoProblem(back: 0, tried: 13, errors: [TrashBatch.RequestRefusal.busy])
+            == "Couldn’t bring them back. Too many changes are being made here at once. Please try again.")
+        #expect(TrashBatch.undoProblem(back: 200, tried: 251, errors: [TrashBatch.RequestRefusal.tooMany])
+            == "200 of 251 are back. Too many requests. Please try again shortly.")
     }
 
     @Test func anItemThatWentWithItsFolderCountsAsMovedButUndoLeavesItToTheFolder() async {
@@ -261,6 +266,14 @@ import Testing
         _ = await TrashBatch.trash(Array(thirteen.prefix(2)), recorder.steps(withFolder: ["f1", "f2"]) { _ in })
         #expect(recorder.notices.map(\.text) == ["Moved 2 items to Trash"])
         #expect(recorder.notices.map(\.undo) == [nil])
+    }
+
+    @Test func anItemAlreadyInTheTrashIsNotSaidToHaveStayed() async {
+        let result = await TrashBatch.trash(thirteen, Recorder().steps { item in
+            if item.id == "f13" { throw DriveAPIError.trashed("This item is in the trash.") }
+        })
+        #expect(result.moved.count == 12)
+        #expect(result.notice == "12 of 13 moved to Trash. The rest were in Trash already.")
     }
 
     @Test func aBusyOrRateLimitedRequestSaysSoInTheWebsWords() async {

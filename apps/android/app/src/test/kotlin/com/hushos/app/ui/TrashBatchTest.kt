@@ -202,6 +202,11 @@ class TrashBatchTest {
         assertNull(undoProblem(0, 1))
         assertEquals("11 of 13 are back. The rest are still in Trash.", undoProblem(11, 13))
         assertEquals("Couldn’t bring them back. They’re still in Trash.", undoProblem(0, 13))
+        // A whole Undo request turned away says why, as the web does.
+        assertEquals("Couldn’t bring them back. Too many changes are being made here at once. Please try again.",
+            undoProblem(0, 13, listOf(BatchRefused(BatchRefused.Kind.BUSY))))
+        assertEquals("200 of 251 are back. Too many requests. Please try again shortly.",
+            undoProblem(200, 251, listOf(BatchRefused(BatchRefused.Kind.TOO_MANY))))
     }
 
     @Test
@@ -220,6 +225,13 @@ class TrashBatchTest {
         val recorder = Recorder()
         trashMany(thirteen.take(2), recorder.steps(withFolder = setOf("f1", "f2")) { })
         assertEquals("Moved 2 items to Trash" to null, recorder.notices.single())
+    }
+
+    @Test
+    fun anItemAlreadyInTheTrashIsNotSaidToHaveStayed() = runBlocking {
+        val result = trashMany(thirteen, Recorder().steps { if (it.id == "f13") throw ApiError(409, "This item is in the trash.", "trashed") })
+        assertEquals(12, result.moved.size)
+        assertEquals("12 of 13 moved to Trash. The rest were in Trash already.", result.notice())
     }
 
     @Test

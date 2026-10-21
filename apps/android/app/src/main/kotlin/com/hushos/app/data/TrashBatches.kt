@@ -20,9 +20,10 @@ data class Restored(override val id: String, val changeSeq: Int) : BatchAnswer
 data class BatchRefusal(override val id: String, val reason: String, val message: String) : BatchAnswer
 
 /*
- * How an item reached the trash: on its own (Undo brings it back), or with a folder that went in
- * the same request or was there already (`covered`, or refused as `trashed`): it is in the trash,
- * so it counts as moved, and it comes back with that folder, never on its own.
+ * How an item reached the trash: on its own (Undo brings it back), or with a folder that went
+ * (`covered`, or a selected folder it sits in, which is all that was sent): it is in the trash,
+ * so it counts as moved, and it comes back with that folder, never on its own. An item refused as
+ * `trashed` (already there, itself or through a folder) did not move, as the web counts it.
  */
 enum class TrashMove { TRASHED, WITH_FOLDER }
 
@@ -58,26 +59,45 @@ private fun chunks(items: List<Pair<String, String>>): List<Pair<String, List<In
 /*
  * Moves (id, workspace) pairs to the trash: one outcome per item, in the order given, and `moved`
  * told of what each request moved, together, as its answer lands (one update for the lists, not one
- * per row). A request that fails as a whole fails its items with
- * its error; no network or an ended session fails the rest unsent. `sequential` is the per-item
- * route, for a server without the batch one (the request answers BatchUnsupported); from then on
- * every remaining chunk goes that way. `forget` hears the same ids only after `moved` returned:
- * the lists let go of a row first, or a row still on screen whose node is gone is looked up again.
+ * per row). An item inside another selected item (`ancestors`: the folders it sits in, as far as
+ * this device knows) is never sent, as the web leaves it out: trashed on its own it would come
+ * back on Undo without its folder. It moves with its folder, landing with that folder's request,
+ * or stays with its folder's failure. A request that fails as a whole fails its items with its
+ * error; no network or an ended session fails the rest unsent. `sequential` is the per-item route,
+ * for a server without the batch one (the request answers BatchUnsupported); from then on every
+ * remaining chunk goes that way, and it tells `moved` and `forget` of each item itself, in that
+ * order. `forget` hears ids only after `moved` returned: the lists let go of a row first, or a row
+ * still on screen whose node is gone is looked up again.
  */
 suspend fun trashInBatches(
     items: List<Pair<String, String>>,
     send: (workspaceId: String, ids: List<String>) -> List<BatchAnswer>,
     sequential: suspend (ids: List<String>) -> List<Result<TrashMove>>,
+    ancestors: (id: String) -> List<String> = { emptyList() },
     forget: (ids: List<String>) -> Unit = {},
     moved: (landed: List<Pair<String, TrashMove>>) -> Unit,
 ): List<Result<TrashMove>> {
     val outcomes = arrayOfNulls<Result<TrashMove>>(items.size)
+    val picked = items.map { it.first }.toSet()
+    // The selected folders each item sits in; the roots, inside none of them, are all that is sent.
+    val within = items.map { (id, _) -> ancestors(id).filter { it != id && it in picked }.distinct() }
+    val roots = items.indices.filter { within[it].isEmpty() }
+    val rootOutcome = HashMap<String, Result<TrashMove>>()
+    // The nested items a request's roots took with them, landing with that request.
+    fun carried(landedRoots: Set<String>): List<Pair<String, TrashMove>> = items.indices.mapNotNull { index ->
+        if (outcomes[index] != null || within[index].none { it in landedRoots }) return@mapNotNull null
+        outcomes[index] = Result.success(TrashMove.WITH_FOLDER)
+        items[index].first to TrashMove.WITH_FOLDER
+    }
     var stopped: Throwable? = null
     var perItem = false
-    for ((workspace, chunk) in chunks(items)) {
+    val rootItems = roots.map { items[it] }
+    for ((workspace, chunk) in chunks(rootItems)) {
         coroutineContext.ensureActive()
-        val ids = chunk.map { items[it].first }
-        stopped?.let { error -> chunk.forEach { outcomes[it] = Result.failure(error) }; continue }
+        val indexes = chunk.map { roots[it] }
+        val ids = indexes.map { items[it].first }
+        fun settle(index: Int, outcome: Result<TrashMove>) { outcomes[index] = outcome; rootOutcome[items[index].first] = outcome }
+        stopped?.let { error -> indexes.forEach { settle(it, Result.failure(error)) }; continue }
         if (!perItem) {
             val answers = try {
                 send(workspace, ids)
@@ -86,24 +106,25 @@ suspend fun trashInBatches(
                 null
             } catch (error: Exception) {
                 error.rethrowIfCancelled()
-                chunk.forEach { outcomes[it] = Result.failure(error) }
+                indexes.forEach { settle(it, Result.failure(error)) }
                 if (stops(error)) stopped = error
                 continue
             }
             if (answers != null) {
                 val byId = answers.associateBy { it.id }
                 val landed = ArrayList<Pair<String, TrashMove>>()
-                for (index in chunk) {
+                for (index in indexes) {
                     val id = items[index].first
                     val outcome = when (val answer = byId[id]) {
                         is Trashed -> Result.success(TrashMove.TRASHED)
                         is Covered -> Result.success(TrashMove.WITH_FOLDER)
-                        is BatchRefusal -> if (answer.reason == "trashed") Result.success(TrashMove.WITH_FOLDER) else Result.failure(refused(answer))
+                        is BatchRefusal -> Result.failure(refused(answer))
                         else -> Result.failure(unanswered())
                     }
-                    outcomes[index] = outcome
+                    settle(index, outcome)
                     outcome.getOrNull()?.let { landed.add(id to it) }
                 }
+                landed += carried(landed.map { it.first }.toSet())
                 if (landed.isNotEmpty()) {
                     moved(landed)
                     forget(landed.map { it.first })
@@ -112,9 +133,19 @@ suspend fun trashInBatches(
             }
         }
         sequential(ids).forEachIndexed { at, outcome ->
-            outcomes[chunk[at]] = outcome
+            settle(indexes[at], outcome)
             outcome.exceptionOrNull()?.let { if (stops(it)) stopped = it }
         }
+        val carriedHere = carried(ids.filter { rootOutcome[it]?.isSuccess == true }.toSet())
+        if (carriedHere.isNotEmpty()) {
+            moved(carriedHere)
+            forget(carriedHere.map { it.first })
+        }
+    }
+    // Nested items whose folders all failed stay where they are, with their folder's reason.
+    items.indices.filter { outcomes[it] == null }.forEach { index ->
+        val reason = within[index].firstNotNullOfOrNull { rootOutcome[it]?.exceptionOrNull() } ?: unanswered()
+        outcomes[index] = Result.failure(reason)
     }
     return outcomes.map { it!! }
 }
@@ -141,6 +172,8 @@ suspend fun restoreInBatches(
         for ((workspace, chunk) in chunks(batch)) {
             coroutineContext.ensureActive()
             val ids = chunk.map { batch[it].first }
+            // Sent again now: whatever this request says decides whether it waits once more.
+            ids.forEach { waiting.remove(it) }
             stopped?.let { error -> ids.forEach { latest[it] = Result.failure(error) }; continue }
             if (!perItem) {
                 val answers = try {
@@ -157,7 +190,6 @@ suspend fun restoreInBatches(
                 if (answers != null) {
                     val byId = answers.associateBy { it.id }
                     for (id in ids) {
-                        waiting.remove(id)
                         latest[id] = when (val answer = byId[id]) {
                             is Restored -> Result.success(Unit).also { back(id) }
                             is BatchRefusal -> Result.failure<Unit>(refused(answer)).also { if (answer.reason == "parent-trashed") waiting.add(id) }
@@ -179,7 +211,7 @@ suspend fun restoreInBatches(
         val again = items.filter { it.first in waiting }
         val before = latest.count { it.value.isSuccess }
         pass(again)
-        if (latest.count { it.value.isSuccess } == before) break
+        if (latest.count { it.value.isSuccess } <= before) break
     }
     return items.map { latest.getValue(it.first) }
 }

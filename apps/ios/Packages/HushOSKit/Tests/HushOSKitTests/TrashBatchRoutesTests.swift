@@ -84,7 +84,7 @@ import Testing
         #expect(await screen.rows == ["n7"])
     }
 
-    @Test func coveredOrAlreadyInTheTrashCountsAsMovedWithItsFolder() async {
+    @Test func coveredCountsAsMovedButAlreadyInTheTrashIsARefusalAsOnTheWeb() async {
         let server = Server(answer: { id, _ in
             switch id {
             case "n2": return .covered(id: id, by: "n1")
@@ -94,9 +94,42 @@ import Testing
             }
         })
         let (outcomes, moved) = await trash(ids(4).map { ($0, "own") }, server)
-        #expect(outcomes.prefix(3).map { try? $0.get() } == [.trashed, .withFolder, .withFolder])
+        #expect(outcomes.prefix(2).map { try? $0.get() } == [.trashed, .withFolder])
+        // Already in the trash didn't move: the web counts it as a failure ("N of M") too.
+        if case .failure(let error) = outcomes[2] { #expect(TrashBatch.failure(of: error) == .alreadyTrashed) } else { Issue.record("n3 counted as moved") }
         #expect(!succeeded(outcomes[3]))
-        #expect(moved == ["n1", "n2", "n3"])
+        #expect(moved == ["n1", "n2"])
+    }
+
+    actor Landings {
+        var all: [[(id: String, how: TrashBatch.Move)]] = []
+        func add(_ landed: [(id: String, how: TrashBatch.Move)]) { all.append(landed) }
+    }
+
+    @Test func aChildOfASelectedFolderIsNeverSentAndGoesWithItsFolder() async {
+        // The child comes first, its folder after the first 200: sent, the child would be trashed on
+        // its own in the first request and come back on Undo without its folder.
+        let items = [("c", "own")] + ids(250).map { ($0, "own") } + [("F", "own")]
+        let server = Server()
+        let landings = Landings()
+        let outcomes = await TrashBatch.trashInBatches(items, send: { try await server.send($0, $1) }, sequential: { _ in [] },
+                                                       ancestors: { $0 == "c" ? ["F", "top"] : ["top"] }) { landed in await landings.add(landed) }
+        let requests = await server.requests
+        #expect(!requests.contains { $0.ids.contains("c") })
+        #expect(requests.map(\.ids.count) == [200, 51])
+        #expect((try? outcomes[0].get()) == .withFolder)
+        // It leaves the lists with its folder's request, not before.
+        let all = await landings.all
+        #expect(all.map(\.count) == [200, 52])
+        #expect(all.last?.last?.id == "c")
+    }
+
+    @Test func aChildStaysWithItsRefusedFolder() async {
+        let server = Server(answer: { id, _ in id == "F" ? .refused(id: id, reason: "forbidden", message: "You can’t change this.") : .trashed(id: id, changeSeq: 1) })
+        let outcomes = await TrashBatch.trashInBatches([("F", "own"), ("c", "own")], send: { try await server.send($0, $1) }, sequential: { _ in [] },
+                                                       ancestors: { $0 == "c" ? ["F"] : [] }) { _ in }
+        #expect(await server.requests.map(\.ids) == [["F"]])
+        if case .failure(DriveAPIError.forbidden) = outcomes[1] {} else { Issue.record("the child didn't stay with its refused folder: \(outcomes[1])") }
     }
 
     @Test func anItemLeftOutOfTheAnswerIsUnconfirmed() async {
@@ -179,6 +212,31 @@ import Testing
         let outcomes = await TrashBatch.restoreInBatches([("b", "own")], depth: { _ in 0 }, send: { try await server.send($0, $1) }, sequential: { _ in [] })
         #expect(await server.requests.count == 2)
         #expect(!succeeded(outcomes[0]))
+    }
+
+    actor OneByOne {
+        var sent: [String] = []
+        var back: Set<String> = []
+        func restore(_ id: String) -> Result<Void, Error> {
+            sent.append(id)
+            return back.insert(id).inserted ? .success(()) : .failure(DriveAPIError.server(409, "This item is not in the trash."))
+        }
+    }
+
+    @Test func anItemTheFallbackBroughtBackIsNotSentAgain() async {
+        // Round one: the batch refuses b until its folder is back. Round two finds the route gone
+        // (an older server behind a switch) and the one-by-one route brings b back; sent again, it
+        // would be refused as not in the trash and counted as failed.
+        let server = Server(answer: { id, _ in id == "b" ? .refused(id: id, reason: "parent-trashed", message: "Its folder is in the trash.") : .restored(id: id, changeSeq: 2) },
+                            fail: { _, ids in ids == ["b"] ? TrashBatch.Unsupported() : nil })
+        let oneByOne = OneByOne()
+        let outcomes = await TrashBatch.restoreInBatches([("a", "own"), ("b", "own")], depth: { _ in 0 }, send: { try await server.send($0, $1) }) { chunk in
+            var results: [Result<Void, Error>] = []
+            for id in chunk { results.append(await oneByOne.restore(id)) }
+            return results
+        }
+        #expect(await oneByOne.sent == ["b"])
+        #expect(outcomes.allSatisfy(succeeded))
     }
 
     @Test func undoOnAServerWithoutTheRouteRestoresOneByOne() async {

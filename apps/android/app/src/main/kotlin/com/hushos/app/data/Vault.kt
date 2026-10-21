@@ -1154,9 +1154,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     fun trash(id: String) {
+        val workspace = sendTrash(id)
+        forget(workspace, id)
+    }
+
+    /* The single route's trash, without forgetting the row: its workspace, for the caller to forget it once the lists let go. */
+    private fun sendTrash(id: String): String {
         val item = resolve(id)
         api.trash(id, item.node.workspaceId)
-        forget(item.node.workspaceId, id)
+        return item.node.workspaceId
     }
 
     /*
@@ -1171,7 +1177,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return trashInBatches(
             items,
             send = { ws, chunk -> api.trashBatch(ws, chunk) },
-            sequential = { chunk -> trashEach(chunk, ::trash) { moved(listOf(it)) }.map { outcome -> outcome.map { TrashMove.TRASHED } } },
+            // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
+            sequential = { chunk ->
+                trashEach(chunk, { id -> sendTrash(id) }) { id -> moved(listOf(id)); workspaces[id]?.let { forget(it, id) } }
+                    .map { outcome -> outcome.map { TrashMove.TRASHED } }
+            },
+            ancestors = { id -> nodes.find(id)?.let { ancestorIds(it) }.orEmpty() },
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
             forget = { landed -> for (id in landed) workspaces[id]?.let { forget(it, id) } },
             moved = { landed -> moved(landed.map { it.first }) },

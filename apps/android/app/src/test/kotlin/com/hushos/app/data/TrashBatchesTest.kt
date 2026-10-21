@@ -1,6 +1,7 @@
 package com.hushos.app.data
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,7 +67,7 @@ class TrashBatchesTest {
     }
 
     @Test
-    fun coveredOrAlreadyInTheTrashCountsAsMovedWithItsFolder() = runBlocking {
+    fun coveredCountsAsMovedButAlreadyInTheTrashIsARefusalAsOnTheWeb() = runBlocking {
         val server = Server { id ->
             when (id) {
                 "n2" -> Covered(id, "n1")
@@ -76,9 +77,35 @@ class TrashBatchesTest {
             }
         }
         val (outcomes, moved) = trash(ids(4).map { it to "own" }, server)
-        assertEquals(listOf(TrashMove.TRASHED, TrashMove.WITH_FOLDER, TrashMove.WITH_FOLDER), outcomes.take(3).map { it.getOrNull() })
+        assertEquals(listOf(TrashMove.TRASHED, TrashMove.WITH_FOLDER), outcomes.take(2).map { it.getOrNull() })
+        // Already in the trash didn't move: the web counts it as a failure ("N of M") too.
+        assertEquals("trashed", (outcomes[2].exceptionOrNull() as ApiError).code)
         assertTrue(outcomes[3].isFailure)
-        assertEquals(listOf("n1", "n2", "n3"), moved)
+        assertEquals(listOf("n1", "n2"), moved)
+    }
+
+    @Test
+    fun aChildOfASelectedFolderIsNeverSentAndGoesWithItsFolder() = runBlocking {
+        // The child comes first, its folder after the first 200: sent, the child would be trashed on
+        // its own in the first request and come back on Undo without its folder.
+        val items = listOf("c" to "own") + ids(250).map { it to "own" } + ("F" to "own")
+        val server = Server()
+        val landings = ArrayList<List<Pair<String, TrashMove>>>()
+        val outcomes = trashInBatches(items, server::send, { error("not used") }, ancestors = { if (it == "c") listOf("F", "top") else listOf("top") }) { landings.add(it) }
+        assertTrue(server.requests.none { "c" in it.second })
+        assertEquals(listOf(200, 51), server.requests.map { it.second.size })
+        assertEquals(TrashMove.WITH_FOLDER, outcomes[0].getOrNull())
+        // It leaves the lists with its folder's request, not before.
+        assertEquals(listOf(200, 52), landings.map { it.size })
+        assertEquals("c" to TrashMove.WITH_FOLDER, landings[1].last())
+    }
+
+    @Test
+    fun aChildStaysWithItsRefusedFolder() = runBlocking {
+        val server = Server { if (it == "F") BatchRefusal(it, "forbidden", "You can’t change this.") else Trashed(it, "now", 1) }
+        val outcomes = trashInBatches(listOf("F" to "own", "c" to "own"), server::send, { error("not used") }, ancestors = { if (it == "c") listOf("F") else emptyList() }) { }
+        assertEquals(listOf(listOf("F")), server.requests.map { it.second })
+        assertEquals("forbidden", (outcomes[1].exceptionOrNull() as ApiError).code)
     }
 
     @Test
@@ -168,6 +195,26 @@ class TrashBatchesTest {
         assertEquals(2, server.requests.size)
         assertTrue(outcomes.single().isFailure)
     }
+
+    @Test
+    fun anItemTheFallbackBroughtBackIsNotSentAgain() = runBlocking<Unit> { withTimeout(5_000) {
+        // Round one: the batch refuses b until its folder is back. Round two finds the route gone
+        // (an older server behind a switch) and the one-by-one route brings b back; sent again, it
+        // would be refused as not in the trash and counted as failed.
+        var batches = 0
+        val send = { _: String, chunk: List<String> ->
+            batches++
+            if (batches > 1) throw BatchUnsupported()
+            chunk.map { if (it == "b") BatchRefusal(it, "parent-trashed", "Its folder is in the trash.") else Restored(it, 2) }
+        }
+        val oneByOne = ArrayList<String>()
+        val back = HashSet<String>()
+        val outcomes = restoreInBatches(listOf("a" to "own", "b" to "own"), { 0 }, send, { chunk ->
+            chunk.map { id -> oneByOne.add(id); if (back.add(id)) Result.success(Unit) else Result.failure(ApiError(409, "This item is not in the trash.", "not-trashed")) }
+        })
+        assertEquals(listOf("b"), oneByOne)
+        assertTrue(outcomes.all { it.isSuccess })
+    } }
 
     @Test
     fun undoOnAServerWithoutTheRouteRestoresOneByOne() = runBlocking {

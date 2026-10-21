@@ -1435,7 +1435,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         if (back.isNotEmpty()) viewModelScope.launch { settle(back.mapNotNull { it.node.parentId }.toSet(), restored = true) }
         val errors = outcomes.mapNotNull { it.exceptionOrNull() }
         reportFailures(errors, single = moved.size == 1)
-        if (errors.none { it is NotAuthenticated }) undoProblem(back.size, moved.size)?.let { notify(it) }
+        if (errors.none { it is NotAuthenticated }) undoProblem(back.size, moved.size, errors)?.let { notify(it) }
     }
 
     /*
