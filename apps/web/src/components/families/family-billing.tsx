@@ -1,5 +1,5 @@
 import type { FamilyPlan } from '@hushos/billing/api';
-import { FAMILY_MAX_MEMBERS, spaceOf } from '@hushos/billing/protocol';
+import { FAMILY_MAX_MEMBERS, livePlan, spaceOf } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
@@ -532,7 +532,8 @@ function ChoosePlan({
     // A personal plan the person pays for ends when the family's plan starts, with the unused
     // days refunded (docs/families-shared-pool.md 3.3): said before they pay.
     const personal = useQuery(billingQueryOptions).data?.subscription;
-    const ownPlan = personal && !personal.endedAt ? tierName({ name: personal.productName }) : null;
+    const live = livePlan(personal);
+    const ownPlan = live ? tierName({ name: live.productName }) : null;
     const hint = useQuery(localeHintQueryOptions);
     const plans = summary.plans;
     const currencies = familyCurrencies(plans);

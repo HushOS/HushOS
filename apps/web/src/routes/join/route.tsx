@@ -1,3 +1,4 @@
+import { livePlan } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore } from 'react';
@@ -264,8 +265,8 @@ function OpenInvitation({
         (code === 'in-family' && error instanceof GroupApiError ? familyField(error.data) : null);
     const ownFiles =
         storage.data && !storage.data.pool ? formatSpace(storage.data.usedBytes) : null;
-    const plan = personal.data?.subscription;
-    const ownPlan = plan && !plan.endedAt ? familyTierName({ name: plan.productName }) : null;
+    const plan = livePlan(personal.data?.subscription);
+    const ownPlan = plan ? familyTierName({ name: plan.productName }) : null;
     const storageLine =
         !ownFiles || code === 'email-mismatch' || code === 'already-member'
             ? null

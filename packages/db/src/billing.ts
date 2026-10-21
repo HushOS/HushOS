@@ -61,11 +61,53 @@ export async function markWebhookProcessed(id: string) {
         .where(eq(billingWebhookEvents.id, id));
 }
 
-export async function listLiveSubscriptionIds(userId: string) {
+/*
+ * Every personal subscription not recorded as ended, whatever its status: what a
+ * reconcile reads from Polar one by one, since an `unpaid`, `incomplete` or
+ * `paused` plan leaves the customer's state but can still come back.
+ */
+export async function listUnendedSubscriptionIds(userId: string) {
     const rows = await db
         .select({ id: billingSubscriptions.id })
         .from(billingSubscriptions)
         .where(and(eq(billingSubscriptions.userId, userId), isNull(billingSubscriptions.endedAt)));
+    return rows.map((row) => row.id);
+}
+
+/* The personal plans that give storage now: not ended, and `active`, `trialing` or `past_due`. */
+export async function listLivePlanIds(userId: string) {
+    const rows = await db
+        .select({ id: billingSubscriptions.id })
+        .from(billingSubscriptions)
+        .where(
+            and(
+                eq(billingSubscriptions.userId, userId),
+                isNull(billingSubscriptions.endedAt),
+                inArray(billingSubscriptions.status, [...LIVE_STATUSES]),
+            ),
+        );
+    return rows.map((row) => row.id);
+}
+
+/*
+ * Personal plans Polar still holds that give no storage: not ended, and neither live
+ * nor in an ended status (`unpaid`, `incomplete`, `paused`). A new checkout revokes
+ * them first, so a later payment or resume can't run one beside the new plan.
+ */
+export async function listLapsedPlanIds(userId: string) {
+    const rows = await db
+        .select({ id: billingSubscriptions.id })
+        .from(billingSubscriptions)
+        .where(
+            and(
+                eq(billingSubscriptions.userId, userId),
+                isNull(billingSubscriptions.endedAt),
+                notInArray(billingSubscriptions.status, [
+                    ...LIVE_STATUSES,
+                    ...ENDED_SUBSCRIPTION_STATUSES,
+                ]),
+            ),
+        );
     return rows.map((row) => row.id);
 }
 
@@ -87,8 +129,14 @@ export async function listCustomerIds(provider: string) {
 
 /*
  * Replaces what is known about a user's subscriptions with the provider's current
- * answer. Subscriptions absent from the snapshot have ended; their entitlements are
- * revoked in the same transaction, so the allowance can never outlive the plan.
+ * answer, in one transaction. Only a live plan (`active`, `trialing`, `past_due`, no
+ * `ended_at`) holds an entitlement; every other plan's is revoked at once, so the
+ * allowance never outlives the plan. A plan in the snapshot that Polar hasn't ended
+ * (no `ended_at`, not `canceled` or `incomplete_expired`) is kept unended with Polar's
+ * status, `unpaid`, `incomplete` and `paused` included, and read again by the next
+ * reconcile: a payment or a resume can still bring it back. One absent from the
+ * snapshot (Polar answered 404), or that Polar answers as ended without saying when,
+ * is recorded as ended now.
  */
 export async function applyCustomerState(input: {
     userId: string;
@@ -118,6 +166,10 @@ export async function applyCustomerState(input: {
                 });
         const live = input.subscriptions.filter(
             (subscription) => !subscription.endedAt && LIVE_STATUSES.has(subscription.status),
+        );
+        const ended = new Set<string>(ENDED_SUBSCRIPTION_STATUSES);
+        const kept = input.subscriptions.filter(
+            (subscription) => !subscription.endedAt && !ended.has(subscription.status),
         );
         for (const subscription of input.subscriptions) {
             await tx
@@ -171,12 +223,11 @@ export async function applyCustomerState(input: {
                     set: { quotaBytes: subscription.quotaBytes, expiresAt, revokedAt: null },
                 });
         }
-        const liveIds = live.map((subscription) => subscription.id);
-        const ended = and(
+        const ofUser = and(
             eq(billingSubscriptions.userId, input.userId),
             eq(billingSubscriptions.provider, input.provider),
-            liveIds.length ? notInArray(billingSubscriptions.id, liveIds) : undefined,
         );
+        const keptIds = kept.map((subscription) => subscription.id);
         await tx
             .update(billingSubscriptions)
             .set({
@@ -184,11 +235,25 @@ export async function applyCustomerState(input: {
                 endedAt: sql`coalesce(${billingSubscriptions.endedAt}, now())`,
                 updatedAt: now,
             })
-            .where(and(ended, isNull(billingSubscriptions.endedAt)));
+            .where(
+                and(
+                    ofUser,
+                    isNull(billingSubscriptions.endedAt),
+                    keptIds.length ? notInArray(billingSubscriptions.id, keptIds) : undefined,
+                ),
+            );
+        // Everything that isn't live gives nothing, kept or ended: mid-period too, since the
+        // grace days stretch a period that ran out, not a payment that lapsed.
+        const liveIds = live.map((subscription) => subscription.id);
         const endedIds = await tx
             .select({ id: billingSubscriptions.id })
             .from(billingSubscriptions)
-            .where(ended);
+            .where(
+                and(
+                    ofUser,
+                    liveIds.length ? notInArray(billingSubscriptions.id, liveIds) : undefined,
+                ),
+            );
         if (endedIds.length)
             await tx
                 .update(storageEntitlements)
@@ -208,7 +273,11 @@ export async function applyCustomerState(input: {
     });
 }
 
-/* The current subscription is the live one, or failing that the most recently updated. */
+/*
+ * The current subscription: the live one; failing that, one Polar still holds that
+ * gives nothing (unpaid, incomplete, paused), so the page can say why; failing that,
+ * the most recently updated.
+ */
 export async function getBillingSummary(userId: string) {
     const [customer] = await db
         .select({ providerCustomerId: billingCustomers.providerCustomerId })
@@ -220,6 +289,7 @@ export async function getBillingSummary(userId: string) {
         .where(eq(billingSubscriptions.userId, userId))
         .orderBy(
             sql`${billingSubscriptions.endedAt} is not null`,
+            notInArray(billingSubscriptions.status, [...LIVE_STATUSES]),
             sql`${billingSubscriptions.updatedAt} desc`,
         )
         .limit(1);

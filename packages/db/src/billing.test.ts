@@ -4,7 +4,7 @@ import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers
 import { getStorageAllowance } from './auth';
 import * as billing from './billing';
 import { db } from './client';
-import { accountIntents, storageEntitlements } from './schema';
+import { accountIntents, billingSubscriptions, storageEntitlements } from './schema';
 
 const DAY = 24 * 60 * 60 * 1000;
 const GRACE = 3 * DAY;
@@ -110,7 +110,7 @@ describe('applyCustomerState', () => {
         expect(summary.subscription?.status).toBe('canceled');
         expect(summary.subscription?.endedAt).not.toBeNull();
         expect((await getStorageAllowance(userId))?.quotaBytes).toBe(GIB.toString());
-        expect(await billing.listLiveSubscriptionIds(userId)).toEqual([]);
+        expect(await billing.listUnendedSubscriptionIds(userId)).toEqual([]);
     });
 
     test('cancel at period end keeps the allowance; an ended subscription loses it', async () => {
@@ -190,6 +190,102 @@ describe('applyCustomerState', () => {
         });
         expect(applied).toBe(false);
         expect(await billing.getCustomer(userId)).toBeNull();
+    });
+});
+
+/* The mirror's answer to every question a status decides, for one user. */
+async function standing(userId: string) {
+    return {
+        unended: await billing.listUnendedSubscriptionIds(userId),
+        live: await billing.listLivePlanIds(userId),
+        lapsed: await billing.listLapsedPlanIds(userId),
+    };
+}
+
+function apply(userId: string, subscriptions: billing.SubscriptionSnapshot[]) {
+    return billing.applyCustomerState({
+        userId,
+        provider: 'polar',
+        customerId: 'cus_1',
+        subscriptions,
+        graceMs: GRACE,
+    });
+}
+
+describe('a personal plan Polar holds but that gives nothing', () => {
+    test.each(['unpaid', 'incomplete', 'paused'])(
+        'one Polar answers as %s stays unended with its status, gives no storage at once, and comes back when paid',
+        async (status) => {
+            const { userId, workspaceId } = await createTestAccount();
+            await apply(userId, [subscription()]);
+            expect((await getStorageAllowance(userId))?.quotaBytes).toBe((501n * GIB).toString());
+            // Mid-period: the grace days stretch a period that ran out, not a payment that lapsed.
+            await apply(userId, [subscription({ status })]);
+            const summary = await billing.getBillingSummary(userId);
+            expect(summary.subscription).toMatchObject({ id: 'sub_1', status, endedAt: null });
+            expect(await standing(userId)).toEqual({
+                unended: ['sub_1'],
+                live: [],
+                lapsed: ['sub_1'],
+            });
+            expect((await entitlements(workspaceId))[0]?.revokedAt).toBeInstanceOf(Date);
+            expect((await getStorageAllowance(userId))?.quotaBytes).toBe(GIB.toString());
+            // The next reconcile reads it again and still keeps it.
+            await apply(userId, [subscription({ status })]);
+            expect((await billing.getBillingSummary(userId)).subscription?.endedAt).toBeNull();
+            // Paid (or resumed) after all: live again, and its storage with it.
+            await apply(userId, [subscription()]);
+            expect(await standing(userId)).toEqual({
+                unended: ['sub_1'],
+                live: ['sub_1'],
+                lapsed: [],
+            });
+            expect((await getStorageAllowance(userId))?.quotaBytes).toBe((501n * GIB).toString());
+        },
+    );
+
+    test('one Polar no longer has (404) is ended, with the status it was last seen in', async () => {
+        const { userId } = await createTestAccount();
+        await apply(userId, [subscription({ status: 'unpaid' })]);
+        await apply(userId, []);
+        const summary = await billing.getBillingSummary(userId);
+        expect(summary.subscription).toMatchObject({ status: 'unpaid' });
+        expect(summary.subscription?.endedAt).not.toBeNull();
+        expect(await standing(userId)).toEqual({ unended: [], live: [], lapsed: [] });
+    });
+
+    test('one Polar answers as canceled or expired without saying when it ended is ended now', async () => {
+        const { userId } = await createTestAccount();
+        await apply(userId, [
+            subscription({ id: 'sub_a', status: 'canceled' }),
+            subscription({ id: 'sub_b', status: 'incomplete_expired' }),
+        ]);
+        expect(await standing(userId)).toEqual({ unended: [], live: [], lapsed: [] });
+        expect((await getStorageAllowance(userId))?.quotaBytes).toBe(GIB.toString());
+    });
+
+    test('the summary shows the live plan over a lapsed one, and a lapsed one over an ended one', async () => {
+        const { userId } = await createTestAccount();
+        await apply(userId, [
+            subscription({ id: 'sub_ended', status: 'canceled', endedAt: new Date() }),
+            subscription({ id: 'sub_unpaid', status: 'unpaid' }),
+        ]);
+        await db
+            .update(billingSubscriptions)
+            .set({ updatedAt: new Date(Date.now() + DAY) })
+            .where(eq(billingSubscriptions.id, 'sub_ended'));
+        expect((await billing.getBillingSummary(userId)).subscription?.id).toBe('sub_unpaid');
+        // A new plan, bought while the lapsed one was touched later still.
+        await apply(userId, [
+            subscription({ id: 'sub_unpaid', status: 'unpaid' }),
+            subscription({ id: 'sub_new', productId: 'prod_max', quotaBytes: 1024n * GIB }),
+        ]);
+        await db
+            .update(billingSubscriptions)
+            .set({ updatedAt: new Date(Date.now() + 2 * DAY) })
+            .where(eq(billingSubscriptions.id, 'sub_unpaid'));
+        expect((await billing.getBillingSummary(userId)).subscription?.id).toBe('sub_new');
+        expect((await getStorageAllowance(userId))?.quotaBytes).toBe((1025n * GIB).toString());
     });
 });
 

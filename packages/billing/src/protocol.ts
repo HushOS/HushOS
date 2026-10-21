@@ -27,6 +27,44 @@ export const TIER_METADATA_KEY = 'hushos_tier';
 export const FAMILY_TIERS = ['plus', 'pro', 'max'] as const;
 export type FamilyTier = (typeof FAMILY_TIERS)[number];
 
+/*
+ * What a personal plan's Polar status means (docs/self-hosting.md, Billing). Only a
+ * live plan gives its storage and is "the current plan" for a switch, a cancel or a
+ * resume; `past_due` is Polar still retrying a renewal. `unpaid` (Polar's retries ran
+ * out), `incomplete` (a first payment that never went through) and `paused` are not
+ * ended, since a payment or a resume can bring them back, but give nothing: the
+ * person is on Free meanwhile, and a new checkout revokes such a plan first.
+ */
+export const LIVE_PLAN_STATUSES = ['active', 'trialing', 'past_due'] as const;
+export type PlanStanding = 'live' | 'payment-failed' | 'paused' | 'ended';
+
+export function planStanding(plan: {
+    status: string;
+    endedAt: string | Date | null;
+}): PlanStanding {
+    if (plan.endedAt) return 'ended';
+    if ((LIVE_PLAN_STATUSES as readonly string[]).includes(plan.status)) return 'live';
+    if (plan.status === 'unpaid' || plan.status === 'incomplete') return 'payment-failed';
+    if (plan.status === 'paused') return 'paused';
+    // `canceled`, `incomplete_expired`, or a status Polar adds later: nothing to offer.
+    return 'ended';
+}
+
+/* The plan if it is live, else null. */
+export function livePlan<T extends { status: string; endedAt: string | Date | null }>(
+    plan: T | null | undefined,
+): T | null {
+    return plan && planStanding(plan) === 'live' ? plan : null;
+}
+
+/* The plan if Polar still holds it but it gives nothing (a failed payment, a pause), else null. */
+export function lapsedPlan<T extends { status: string; endedAt: string | Date | null }>(
+    plan: T | null | undefined,
+): T | null {
+    const standing = plan ? planStanding(plan) : 'ended';
+    return standing === 'payment-failed' || standing === 'paused' ? plan! : null;
+}
+
 /* A group's customer at the provider is keyed `group:<groupId>`; a person's by their user id. */
 export const GROUP_CUSTOMER_PREFIX = 'group:';
 

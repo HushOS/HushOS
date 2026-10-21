@@ -4,6 +4,7 @@ import { log } from '@hushos/logging';
 import type { PolarClientError } from '@polar-sh/sdk';
 import type { models } from '@polar-sh/sdk/2026-10';
 import { billingEnabled, getCatalogue, polar, statusOf } from './provider';
+import { livePlan } from './protocol';
 
 /*
  * Ending the personal plan of someone whose own files joined a family's pool
@@ -97,7 +98,7 @@ export async function queuePlanEnding(userId: string, options: { force?: boolean
     try {
         const family = await billingRepository.getPooledFamily(userId);
         if (!family) return false;
-        if (!options.force && !(await billingRepository.listLiveSubscriptionIds(userId)).length)
+        if (!options.force && !(await billingRepository.listLivePlanIds(userId)).length)
             return false;
         return await send({
             userId,
@@ -1091,7 +1092,11 @@ export async function endPersonalPlans(
  * Polar's live subscriptions to a HushOS personal plan for this person, past due
  * included, and whether the mirror holds one as live that Polar has ended (a
  * delivery missed): that one ended on its own, before or after they were pooled,
- * and is not this job's to end or refund.
+ * and is not this job's to end or refund. A plan Polar answers as `unpaid`,
+ * `incomplete` or `paused` is neither: it gives no storage and nothing of its
+ * period was paid for, so it is not revoked or refunded here. If Polar takes a
+ * payment for it later, the `order.paid` delivery queues this job again, and the
+ * plan, live by then, is ended and that payment refunded.
  */
 async function livePersonalSubscriptions(userId: string) {
     let state: models.CustomerState | null = null;
@@ -1108,12 +1113,16 @@ async function livePersonalSubscriptions(userId: string) {
     );
     // Past due leaves the customer's state but still bills: the mirror names it.
     let stale = false;
-    for (const id of await billingRepository.listLiveSubscriptionIds(userId)) {
+    const mirrorLive = new Set(await billingRepository.listLivePlanIds(userId));
+    for (const id of await billingRepository.listUnendedSubscriptionIds(userId)) {
         if (ids.has(id)) continue;
         try {
             const subscription = await polar().subscriptions.get(id);
-            if (!subscription.ended_at && plans.has(subscription.product_id)) ids.add(id);
-            else stale = true;
+            if (subscription.ended_at || !plans.has(subscription.product_id)) stale = true;
+            else if (livePlan({ status: subscription.status, endedAt: null })) ids.add(id);
+            // Lapsed (unpaid, incomplete, paused): not this job's; the mirror is behind if it
+            // still holds the plan as live.
+            else if (mirrorLive.has(id)) stale = true;
         } catch (error) {
             if (statusOf(error) !== 404) throw error;
             stale = true;

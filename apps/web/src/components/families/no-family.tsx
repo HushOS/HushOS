@@ -1,3 +1,4 @@
+import { livePlan } from '@hushos/billing/protocol';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -50,7 +51,7 @@ export function NoFamily({
     const plan = chosen
         ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
         : undefined;
-    const live = personal.data?.subscription;
+    const live = livePlan(personal.data?.subscription);
     // Arrived from Plans with a tier: the dialog opens with it, until it is closed.
     const [dismissed, setDismissed] = useState(false);
     const open = creating || (Boolean(chosen) && !dismissed);
@@ -134,9 +135,7 @@ export function NoFamily({
                     if (!next) setDismissed(true);
                 }}
                 plan={plan}
-                personalPlan={
-                    live && !live.endedAt ? familyTierName({ name: live.productName }) : null
-                }
+                personalPlan={live ? familyTierName({ name: live.productName }) : null}
             />
         </div>
     );

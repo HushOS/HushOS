@@ -3,6 +3,7 @@ import { Brand } from '@/components/brand';
 import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
 import { formatDay, useCatalogueState } from '@/lib/drive';
+import { familyTierName } from '@/lib/plans';
 import { Progress, ProgressValue } from '@/components/ui/progress';
 import {
     Sidebar,
@@ -26,6 +27,7 @@ import {
     storageQueryOptions,
     useBillingEnabled,
 } from '@/lib/queries';
+import { lapsedPlan, livePlan, planStanding } from '@hushos/billing/protocol';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useRouter } from '@tanstack/react-router';
 import {
@@ -218,8 +220,8 @@ function OwnMeter({ label }: { label: string | null }) {
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: billing });
     const used = storage ? Number(storage.usedBytes) / Number(storage.quotaBytes) : 0;
     // "Get more room" only while a plan with more room than the current one is on sale.
-    const current =
-        summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
+    const current = livePlan(summary?.subscription);
+    const lapsed = lapsedPlan(summary?.subscription);
     const currentQuota = current ? BigInt(current.quotaBytes) : 0n;
     const canUpgrade = Boolean(
         catalogue?.plans.some((plan) => BigInt(plan.quotaBytes) > currentQuota),
@@ -231,7 +233,9 @@ function OwnMeter({ label }: { label: string | null }) {
         ? null
         : ending
           ? `${ending.productName} ends ${formatDay(ending.currentPeriodEnd)}`
-          : `${formatSpace(storage.availableBytes)} free`;
+          : lapsed
+            ? `${familyTierName({ name: lapsed.productName })} ${planStanding(lapsed) === 'paused' ? 'paused' : 'payment failed'}`
+            : `${formatSpace(storage.availableBytes)} free`;
     const usedLine = storage
         ? `${formatSpace(storage.usedBytes)} of ${formatQuota(storage.quotaBytes)} used`
         : 'Storage';
