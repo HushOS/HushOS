@@ -27,9 +27,10 @@ import { verifyHybrid } from '@hushos/crypto/signatures';
 import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
 import {
     billingEnabled,
-    endLapsedFamilyPlans,
+    endLapsedPlansForDeparture,
     ensureGroupSeat,
     familyHasPlan,
+    isFamilyPayer,
     LapsedFamilyPlanError,
     lapsedPlansPaidBy,
     lapsedPlanStaysRefusal,
@@ -2072,12 +2073,7 @@ export async function removeMember(
     },
 ) {
     // The payer of a live plan stays until they cancel it: their card would go on being charged.
-    if (await paysForGroup(groupId, targetId))
-        throw new GroupError(
-            'payer',
-            'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
-            409,
-        );
+    if (await paysForGroup(groupId, targetId)) throw paysForPlan();
     // One that gives nothing (unpaid, incomplete, paused) is ended once the removal is certain:
     // after every check of the call and every rule of the write (run first and rolled back), right
     // before it is written, and only once the remover has confirmed every such plan. A removal
@@ -2091,7 +2087,8 @@ export async function removeMember(
         roster,
         { kind: 'remove', userId: targetId },
         {
-            previewFirst: true,
+            // Only where a plan could be ended: the write's own answer is enough otherwise.
+            previewFirst: billingEnabled() && (await isFamilyPayer(groupId, targetId)),
             beforeAppend: () => endPayersLapsedPlan(groupId, targetId, 'They', endsLapsed),
         },
     );
@@ -2105,7 +2102,10 @@ export async function removeMember(
  */
 export async function removalPreview(userId: string, groupId: string, targetId: string) {
     await membershipOf(groupId, userId, 'members');
-    if (await paysForGroup(groupId, targetId)) return { plans: [] };
+    // Each asks Polar about the person's plans: paced per manager and family.
+    await limit(`groups:lapsed-read:${groupId}:${userId}`, LAPSED_READ.count, LAPSED_READ.windowMs);
+    // A live plan stops the removal before anything starts (a demotion, a hold, a walk).
+    if (await paysForGroup(groupId, targetId)) throw paysForPlan();
     try {
         return lapsedAnswer(await lapsedPlansPaidBy(groupId, targetId));
     } catch (error) {
@@ -2113,6 +2113,20 @@ export async function removalPreview(userId: string, groupId: string, targetId: 
         throw new GroupError('payer', lapsedPlanStaysRefusal(error, 'remover'), 409);
     }
 }
+
+const paysForPlan = () =>
+    new GroupError(
+        'payer',
+        'They pay for this family’s plan. They can cancel it in Billing on the family’s page; then you can remove them.',
+        409,
+    );
+
+/*
+ * Reading a person's lapsed plans asks Polar for the family's subscriptions and each of them (the
+ * removal preview, and every leave or removal of a payer that answers `ends-lapsed`): twenty a
+ * person per family every ten minutes.
+ */
+const LAPSED_READ = { count: 20, windowMs: 10 * 60 * 1000 };
 
 /* The lapsed plans someone pays for, as an `ends-lapsed` answer names them for the dialog. */
 function lapsedAnswer(plans: { id: string; name: string; status: string }[]) {
@@ -2139,6 +2153,13 @@ async function endPayersLapsedPlan(
     options: { dissolving?: boolean } = {},
 ) {
     try {
+        // The reader's own pace, whoever asks: the person leaving, or the manager removing.
+        if (await isFamilyPayer(groupId, payerId))
+            await limit(
+                `groups:lapsed-read:${groupId}:${who === 'You' ? payerId : 'removal'}`,
+                LAPSED_READ.count,
+                LAPSED_READ.windowMs,
+            );
         const plans = await lapsedPlansPaidBy(groupId, payerId, options);
         // Every one must be among those the person confirmed (by id): nothing ends unseen, and
         // one found since the dialog was shown is asked about again.
@@ -2154,7 +2175,7 @@ async function endPayersLapsedPlan(
                 lapsedAnswer(plans),
             );
         }
-        await endLapsedFamilyPlans(groupId, plans);
+        await endLapsedPlansForDeparture(groupId, payerId, plans, options);
     } catch (error) {
         if (!(error instanceof LapsedFamilyPlanError)) throw error;
         throw new GroupError(

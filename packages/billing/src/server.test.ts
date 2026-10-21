@@ -4003,6 +4003,30 @@ describe('a family plan whose payment failed, or that is paused', () => {
         expect(await billingRepository.listLapsedRevokeRefusals()).toEqual([]);
     });
 
+    test('a plan resumed while the deletion ends it keeps the account: refused, the plan running and its payer kept', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('paused');
+        // Resumed in the portal just as the revoke reads the plan's orders.
+        const original = fakeClient.orders.list.bind(fakeClient.orders);
+        const spy = vi
+            .spyOn(fakeClient.orders, 'list')
+            .mockImplementationOnce(async (query: Parameters<typeof original>[0]) => {
+                subscription.status = 'active';
+                return original(query);
+            });
+        try {
+            await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
+                status: 409,
+                message:
+                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support. Your account was not deleted.',
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(payer.id);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.status).toBe('active');
+    });
+
     test('a payer whose plan was paid again a moment ago can’t delete their account: it runs, on their card', async () => {
         const { payer, groupId, subscription } = await lapsedFamily('paused');
         // Resumed in the portal; the delivery hasn't arrived.
@@ -4010,7 +4034,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
         await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
             status: 409,
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in Billing on the family’s page first; it may take a minute to show there. Your account was not deleted.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support. Your account was not deleted.',
         });
         expect(callsTo('subscriptions.revoke')).toEqual([]);
         expect(subscription.ended_at).toBeNull();

@@ -1425,7 +1425,26 @@ export async function endLapsedFamilyPlans(groupId: string, found: LapsedFamilyP
 
 /* Ends the lapsed plans of a family this person pays for, before they leave, are removed or delete their account. */
 export async function endLapsedPlansPaidBy(groupId: string, userId: string) {
-    await endLapsedFamilyPlans(groupId, await lapsedPlansPaidBy(groupId, userId));
+    await endLapsedPlansForDeparture(groupId, userId, await lapsedPlansPaidBy(groupId, userId));
+}
+
+/*
+ * endLapsedFamilyPlans before a payer goes (a leave, a removal, a deletion). A plan that came back
+ * to life between the lookup and its revoke (paid or resumed in the portal at that moment) isn't
+ * revoked (revokeLapsed lets it go, as the family's plan); endLapsedFamilyPlans then read the
+ * family again, so the mirror says so, and the departure is refused (`live`) rather than leave a
+ * running plan on the card of someone gone. The last member leaving (`dissolving`) may go: the
+ * dissolved family's job sets it to end.
+ */
+export async function endLapsedPlansForDeparture(
+    groupId: string,
+    payerId: string,
+    plans: LapsedFamilyPlan[],
+    options: { dissolving?: boolean } = {},
+) {
+    await endLapsedFamilyPlans(groupId, plans);
+    if (plans.length && !options.dissolving && (await paysForGroup(groupId, payerId)))
+        throw new LapsedFamilyPlanError('live', plans[0]!.name);
 }
 
 /*
@@ -1527,10 +1546,11 @@ export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError, who: 'payer
             return self
                 ? `The family’s ${name} plan couldn’t be ended just now, and it is still on your card. Try again in a few minutes.`
                 : `The family’s ${name} plan couldn’t be ended just now, and it is still on their card. Try again in a few minutes.`;
+        // Said where the family's page may not open (a deletion, a phone): the portal, or support.
         case 'live':
             return self
-                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it in Billing on the family’s page first; it may take a minute to show there.'
-                : 'They pay for the family’s plan, which was just paid for again. They can cancel it in Billing on the family’s page; then you can remove them.';
+                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.'
+                : 'They pay for the family’s plan, which was just paid for again. They can cancel it in the billing portal; then you can remove them.';
     }
 }
 
@@ -1704,6 +1724,12 @@ export async function createGroupPortalSession(user: BillingUser, groupId: strin
  * included. While they do, they may not leave it (nor dissolve it as its last
  * member): the card on its customer is theirs and would go on being charged.
  */
+/* Whether this person is the family's payer at Polar (its team customer's owner), live plan or not. */
+export async function isFamilyPayer(groupId: string, userId: string) {
+    if (!billingEnabled()) return false;
+    return (await billingRepository.getGroupCustomer(groupId))?.payerUserId === userId;
+}
+
 export async function paysForGroup(groupId: string, userId: string) {
     if (!billingEnabled()) return false;
     return (await billingRepository.listGroupsPaidBy(userId)).includes(groupId);

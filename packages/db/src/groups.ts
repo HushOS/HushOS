@@ -2062,21 +2062,27 @@ export async function leaveGroup(groupId: string, userId: string): Promise<Leave
 export async function previewLeave(groupId: string, userId: string): Promise<LeaveResult> {
     const preview = Symbol('preview');
     let answer: LeaveResult = { status: 'unavailable' };
-    try {
-        await db.transaction(async (tx) => {
-            const group = await lockGroup(tx, groupId);
-            if (!group) answer = { status: 'not-member' };
-            else {
-                await lockAreas(tx, groupId);
-                if (group.kind === 'family') await lockPool(tx, groupId);
-                answer = await depart(tx, groupId, userId);
+    // As leaveGroup answers: a deadlock or a lost connection is `unavailable`, not an error.
+    return answering<LeaveResult>(
+        async () => {
+            try {
+                await db.transaction(async (tx) => {
+                    const group = await lockGroup(tx, groupId);
+                    if (!group) answer = { status: 'not-member' };
+                    else {
+                        await lockAreas(tx, groupId);
+                        if (group.kind === 'family') await lockPool(tx, groupId);
+                        answer = await depart(tx, groupId, userId);
+                    }
+                    throw preview;
+                });
+            } catch (error) {
+                if (error !== preview) throw error;
             }
-            throw preview;
-        });
-    } catch (error) {
-        if (error !== preview) throw error;
-    }
-    return answer;
+            return answer;
+        },
+        async () => ({ status: 'unavailable' }),
+    );
 }
 
 /*
