@@ -60,7 +60,7 @@ struct MainView: View {
                         BrowseView().environment(store)
                     }
                     Tab("Shared", systemImage: "person.2", value: MainTab.shared) {
-                        SharedView().environment(store)
+                        SharedView(visible: tab == .shared).environment(store)
                     }
                     Tab("Account", systemImage: "person.crop.circle", value: MainTab.account) {
                         AccountView().environment(store)

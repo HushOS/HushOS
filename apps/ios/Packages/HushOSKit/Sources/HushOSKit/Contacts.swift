@@ -397,13 +397,15 @@ extension Vault {
 
 /* Who can open each of one's own shared items: the people on it and how many links open it. Names are the server's; nothing is opened. */
 public struct SharingIndex: Sendable {
-    public struct Entry: Sendable {
+    public struct Entry: Sendable, Equatable {
         public var people: [ShareView.Grantee] = []
         /* Grantee id to role ("viewer" or "editor"). */
         public var roles: [String: String] = [:]
         public var links = 0
     }
     public var entries: [String: Entry] = [:]
+    /* What By me lists (`SharingRefresh.listing`). */
+    public var listed: Set<String> = []
 }
 
 extension Vault {
@@ -416,6 +418,7 @@ extension Vault {
             index.entries[share.node.id, default: .init()].roles[share.grantee.id] = share.role
         }
         for link in reply.links { index.entries[link.node.id, default: .init()].links += 1 }
+        index.listed = SharingRefresh.listing(shares: reply.shares.map { ($0.id, $0.role) }, links: reply.links.map(\.id))
         return index
     }
 }
