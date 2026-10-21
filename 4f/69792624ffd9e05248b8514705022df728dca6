@@ -1,0 +1,21 @@
+apps/web/src/lib/trash-batch.test.ts
+  s_566b8e0c4467a4::t_d392cee03e437c 1-6,10-16,53-54,67,77-80,147,149-150,176-178,186,405,471-525
+apps/web/src/lib/trash-batch.ts
+  s_566b8e0c4467a4::t_f5ecb42aa9cc22 32-33,36-38,247-251,259-262,264-277,283,293,300-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f69792624ffd9e05248b8514705022df728dca6",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
