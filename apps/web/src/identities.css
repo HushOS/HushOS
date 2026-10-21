@@ -384,9 +384,14 @@ h2:hover > .heading-anchor,
 
 /* ── Roadmap ──────────────────────────────────────────────────────────── */
 
-/* Each item's own link, beside its title on hover or focus, as a post's sections have. */
-[data-identity='roadmap'] article h3 {
-    position: relative;
+/*
+ * Each item's own link, on hover or focus, as a post's sections have; after the title, not
+ * before it, since the rail's dot sits where a post's link would.
+ */
+[data-identity='roadmap'] article h3 > .heading-anchor {
+    position: static;
+    margin-left: 0.35em;
+    padding-right: 0;
 }
 [data-identity='roadmap'] article h3:hover > .heading-anchor {
     opacity: 1;
