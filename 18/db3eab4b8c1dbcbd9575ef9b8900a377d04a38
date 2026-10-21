@@ -1,0 +1,87 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_92ed52b3f98a35 315,342,406
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_3b6d3862f5d080 24
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_566b8e0c4467a4::t_bfc78fd10012bf 394,396-397,402,407,478,481-483
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  s_566b8e0c4467a4::t_98b2fa405cf791 62
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_23c9997ebdf250 503
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_0e26ad57090a12 166
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_9995209505aee7 201,681,683-684,795,824
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_566b8e0c4467a4::t_8a4919db19a161 150,331
+apps/android/app/src/test/kotlin/com/hushos/app/data/GranterTrustTest.kt
+  s_566b8e0c4467a4::t_39d70fe8aa69a7 48
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareOpenTest.kt
+  s_566b8e0c4467a4::t_225f98f1b4f8f2 85
+apps/android/app/src/test/kotlin/com/hushos/app/data/SharingTrustTest.kt
+  s_566b8e0c4467a4::t_adc46104e9197a 83,91,177,182-183
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_c77b0069f1bdb1 27
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_042788af313a8a 59
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_5a32f90af1839e 114,222
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_b9fe89ca252397 185,556,742,748,762,776,862,965,1113
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_566b8e0c4467a4::t_a61b5d58128e46 106-107
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_566b8e0c4467a4::t_46e7e0431948be 13,39-41
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_e07c564666b6ec 55,91-92,94
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_64bda125e66a38 23,25,192-193,203-205,210-211
+apps/web/src/components/drive/trust-as-family.tsx
+  s_566b8e0c4467a4::t_5ad1721eac8f97 47
+apps/web/src/components/drive/unverified-mark.tsx
+  s_566b8e0c4467a4::t_30ef1e1bab6d54 166,172,178
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_dea7393db0950c 357,546,548-549,708,764,773
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_566b8e0c4467a4::t_5cb80fe371b05b 1-57,60-61,63-421
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_c80d202b448f25 101,103,299,302,309,312
+docs/drive-design.md
+  s_566b8e0c4467a4::t_130abf848fb28b 674
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_4066a4847f4602 250
+docs/identity-pq-design.md
+  s_566b8e0c4467a4::t_870fb7d17e7407 94
+docs/proposed.md
+  s_566b8e0c4467a4::t_fc679d235503a0 19
+e2e/catalogue.spec.ts
+  s_566b8e0c4467a4::t_1df00606a17252 152
+e2e/contacts.spec.ts
+  s_566b8e0c4467a4::t_7f017540cbdbfd 35-36,63
+e2e/helpers.ts
+  s_566b8e0c4467a4::t_8e40edf2edd903 183
+e2e/integrity.spec.ts
+  s_566b8e0c4467a4::t_0334919b6371c7 142,144,177,293,296,360,408
+e2e/palette.spec.ts
+  s_566b8e0c4467a4::t_9500db885a53e2 41,43,45,54
+e2e/screenshots.spec.ts
+  s_566b8e0c4467a4::t_6089f5a667708b 357
+e2e/sharing.spec.ts
+  s_566b8e0c4467a4::t_07b4cb445502b1 53,104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "18db3eab4b8c1dbcbd9575ef9b8900a377d04a38",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
