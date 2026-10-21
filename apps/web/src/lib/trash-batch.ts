@@ -29,7 +29,12 @@ export type TrashParts = {
     purge: (workspaceId: string, nodeIds: string[]) => Promise<{ results: PurgeBatchItem[] }>;
     /* The folders an item sits in, as far as this device knows; any order. */
     ancestorsOf: (node: DriveNode) => { id: string }[];
+    /* Waits before a request is sent again (purgeBatch); a timer unless tests say otherwise. */
+    pause?: (ms: number) => Promise<void>;
 };
+
+/* How long a delete waits before it asks once more after the whole request was turned away. */
+export const PURGE_RETRY_MS = 1_000;
 
 type Item = TrashBatchItem | RestoreBatchItem | PurgeBatchItem;
 /* What the server said about one item: its answer, or why there is none (`error`). */
@@ -239,8 +244,11 @@ export async function restoreBatch(
  * not know (`covered`). `gone` is every picked item now deleted, those inside
  * a purged folder included, in the order given: what "N of M" counts. What a
  * request had no time for (`busy`) is sent again while that gets further.
- * `error` is the first refusal that stands. `onGone` hears the same ids as
- * each request lands.
+ * A row the server no longer has (`not-found`: deleted from another tab, or
+ * by a request whose answer never arrived) is gone too, not a failure. A
+ * request turned away whole because the workspace was busy (409) or too many
+ * were sent (429) is sent once more after PURGE_RETRY_MS. `error` is the
+ * first refusal that stands. `onGone` hears the same ids as each request lands.
  */
 export async function purgeBatch(
     nodes: DriveNode[],
@@ -248,18 +256,31 @@ export async function purgeBatch(
     onGone?: (ids: string[]) => void,
 ) {
     const { roots, wentWith } = nesting(nodes, parts);
+    const isGone = (item: PurgeBatchItem | null) =>
+        item?.status === 'purged' ||
+        item?.status === 'covered' ||
+        (item?.status === 'refused' && item.reason === 'not-found');
     const went = (answers: Answer<PurgeBatchItem>[]) =>
-        new Set(
-            answers
-                .filter(({ item }) => item?.status === 'purged' || item?.status === 'covered')
-                .map(({ node }) => node.id),
-        );
+        new Set(answers.filter(({ item }) => isGone(item)).map(({ node }) => node.id));
+    const pause =
+        parts.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const send: TrashParts['purge'] = async (workspaceId, nodeIds) => {
+        try {
+            return await parts.purge(workspaceId, nodeIds);
+        } catch (error) {
+            const turnedAway =
+                error instanceof DriveApiError && (error.status === 409 || error.status === 429);
+            if (!turnedAway) throw error;
+            await pause(PURGE_RETRY_MS);
+            return parts.purge(workspaceId, nodeIds);
+        }
+    };
     const tell = (landed: Answer<PurgeBatchItem>[]) => {
         const ids = wentWith(went(landed));
         if (ids.length) onGone?.(ids);
     };
     const latest = new Map(
-        (await sendEach(roots, parts.purge, tell)).map((answer) => [answer.node.id, answer]),
+        (await sendEach(roots, send, tell)).map((answer) => [answer.node.id, answer]),
     );
     // What a request had no time for is sent again, for as long as that gets further.
     for (;;) {
@@ -269,12 +290,15 @@ export async function purgeBatch(
         if (!waited.length) break;
         const again = await sendEach(
             waited.map(({ node }) => node),
-            parts.purge,
+            send,
             tell,
         );
         for (const answer of again) latest.set(answer.node.id, answer);
         if (!again.some(({ item }) => item?.status === 'purged')) break;
     }
     const answers = roots.map((node) => latest.get(node.id)!);
-    return { gone: wentWith(went(answers)), error: firstError(answers) };
+    return {
+        gone: wentWith(went(answers)),
+        error: firstError(answers.filter(({ item }) => !isGone(item))),
+    };
 }
