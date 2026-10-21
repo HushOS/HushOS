@@ -1,0 +1,59 @@
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_210c0fccf9d496 41,48-49,465-469,480,511-519
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_a5947b0540ce77 257-261,401-421
+apps/web/src/components/families/remove-dialog.tsx
+  s_566b8e0c4467a4::t_fcc59e4dcf5722 23,45,76-79,83-85,102-103,158-161
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_7c4f5890879184 635-636,2627,2637-2646,2669-2671
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_51b2d7f709cb94 14,670-675,678-690
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_199f56733ae230 85-86,92-103,108-114,117-118,120-121,123-131,134,136
+apps/web/src/lib/groups/api.ts
+  s_566b8e0c4467a4::t_8eb898e6deea9b 158,163-167,169-170,214-236
+apps/web/src/lib/groups/outbox.ts
+  s_566b8e0c4467a4::t_3121968203a775 58-59,229,705-708
+apps/web/src/lib/groups/removal.test.ts
+  s_566b8e0c4467a4::t_30eee9905e5191 120-142,144,147
+apps/web/src/lib/groups/removal.ts
+  s_566b8e0c4467a4::t_8f1742f438ab23 2,45-48,50,94-95,119-120,135-153,252
+apps/web/src/lib/groups/server-testkit.ts
+  s_566b8e0c4467a4::t_e8838f012b7076 84-85,317-321,504
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_bb5b407e35792b 583
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_5d1a32e2f9e847 78-79
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_958a785df143b1 1264-1265,1269-1276,1295-1310,1312,1327,1340-1341,1348,1361,1375,1436-1450,1495-1497,1530-1533,2455-2461,2467,2478,2482-2483
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_38846e92c2a9b7 175-176,668-669,1073,3905-3921,3975-4008,4032,4040-4041,4047
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_e2870351040ef3 342-343
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_7563c0a3a72917 1203
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_ecf5ef4d0756f9 1405-1409,1633-1634
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_7322b287417c3f 636-656,680-682,770,779,782,784-785,791-891,903,907-922,926,941,960
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_a94d555fb32480 908,910-917,1025,1036-1042,2067-2071,2082-2086,2094-2095,2101-2104,2106-2108,2110,2117-2127,2134-2140,2142-2157,2181-2186,2188-2189,2192-2194
+packages/logging/src/privacy.ts
+  s_566b8e0c4467a4::t_04bb3a651436df 198-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d9b12ae2728cc66fa1d4f41a92be0c60ee00a4f2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
