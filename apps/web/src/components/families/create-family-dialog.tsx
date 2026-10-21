@@ -100,8 +100,13 @@ export function CreateFamilyDialog({
         if (!trimmed || refusal || checking) return;
         setPending(true);
         setError('');
-        const from = window.location.href;
-        const stillHere = () => mounted.current && window.location.href === from;
+        // Where the dialog is: the page and the tier chosen by address (Account → Family's
+        // `create`). Other parameters may go meanwhile (Plans drops a personal checkout's
+        // `checkout_id`) without the person having gone anywhere.
+        const place = () =>
+            `${window.location.pathname}?create=${new URLSearchParams(window.location.search).get('create') ?? ''}`;
+        const from = place();
+        const stillHere = () => mounted.current && place() === from;
         // From here until the browser leaves for the checkout, the page under this dialog stays
         // as it is whatever reads the families again (lib/family-checkout.ts).
         if (plan) checkoutOpening(userId);

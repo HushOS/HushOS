@@ -2721,6 +2721,51 @@ test.describe.serial('creating a family from Plans: while the checkout opens, an
         await page.waitForTimeout(2_000);
         await expect(page).toHaveURL(/\/app\/billing$/);
     });
+
+    test('Back while it is still creating, from Account → Family: nothing moves the page after', async ({
+        browser,
+    }) => {
+        test.setTimeout(240_000);
+        const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+        const tier = planTierName({ name: plus.name });
+        const family = 'Lind family';
+        const who = await person(browser, 'Saga Lind');
+        people.push(who);
+        const { page } = who;
+        const answer = await holdCheckout(page);
+        // Locked, Plans sends Create a family to Account → Family (?create=), within the app.
+        await page.goto('/app/account', { waitUntil: 'networkidle' });
+        await page.getByRole('button', { name: 'Lock on this browser' }).click({ timeout: 60_000 });
+        await page
+            .getByRole('alertdialog')
+            .getByRole('button', { name: 'Lock', exact: true })
+            .click();
+        await expect(page.getByRole('button', { name: 'Unlock on this browser' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await page.goto('/app/billing');
+        await page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tier}` })
+            .click({ timeout: 60_000 });
+        await expect(page).toHaveURL(new RegExp(`/app/family\\?create=${plus.id}&`));
+        await page.locator('input[autocomplete=current-password]').fill(PASSWORD, {
+            timeout: 60_000,
+        });
+        await page.locator('input[autocomplete=current-password]').press('Enter');
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(family, { timeout: 60_000 });
+        const asked = page.waitForRequest(checkoutPath);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await asked;
+        await page.goBack();
+        await expect(page).toHaveURL(/\/app\/billing$/);
+        // The checkout answers after they've gone: no checkout opens, their page stays.
+        answer('/app/family#checkout');
+        await expect(page.getByText(`${family} created`)).toBeVisible({ timeout: 30_000 });
+        await page.waitForTimeout(2_000);
+        await expect(page).toHaveURL(/\/app\/billing$/);
+    });
 });
 
 /*

@@ -1197,7 +1197,8 @@ export async function startGroupCheckout(
     const tooSmall = firstPlanTooSmall({
         countedBytes: used,
         plan,
-        tiers,
+        // "A bigger plan" only among those on offer (never one archived or not sold as a tier).
+        tiers: offeredFamilies(tiers),
         family: seats > 1,
     });
     if (tooSmall) throw new BillingError(tooSmall, 409);

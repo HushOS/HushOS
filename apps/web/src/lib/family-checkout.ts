@@ -66,22 +66,28 @@ export function leftForCheckout(userId: string) {
     }
 }
 
-/* Whether Back from the checkout brought `userId` here, read once: it is forgotten as it's read. */
+/*
+ * Whether Back from the checkout brought `userId` here, read once: it is forgotten as it's read.
+ * This page's own mark (a restore from the cache: the page is the one that left) counts however
+ * long ago it left; one read from storage (the page loaded again) only within FRESH_MS.
+ */
 export function takeBackFromCheckout(userId: string) {
-    let mark = leftHere;
+    const here = leftHere;
     leftHere = null;
+    let stored = null as { userId: string; at: number } | null;
     try {
-        const stored = sessionStorage.getItem(KEY);
+        const raw = sessionStorage.getItem(KEY);
         sessionStorage.removeItem(KEY);
-        if (!mark && stored) mark = JSON.parse(stored) as typeof leftHere;
+        if (raw) stored = JSON.parse(raw) as { userId: string; at: number };
     } catch {
         // Nothing stored, or nothing readable: only this page's own mark counts.
     }
+    if (here) return here.userId === userId;
     return Boolean(
-        mark &&
-        mark.userId === userId &&
-        typeof mark.at === 'number' &&
-        Date.now() - mark.at < FRESH_MS,
+        stored &&
+        stored.userId === userId &&
+        typeof stored.at === 'number' &&
+        Date.now() - stored.at < FRESH_MS,
     );
 }
 
@@ -102,5 +108,10 @@ export function useBackFromCheckout(userId: string | undefined, { stay = false }
             void fresh.then(() => navigate({ to: '/app/family', search: {}, replace: true }));
     };
     useEffect(goOn, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
-    usePageRestored(goOn);
+    usePageRestored(() => {
+        // A page brought back from the cache has left already: whatever happens next, it is no
+        // longer held as it was for a checkout opening.
+        checkoutNotOpening();
+        goOn();
+    });
 }
