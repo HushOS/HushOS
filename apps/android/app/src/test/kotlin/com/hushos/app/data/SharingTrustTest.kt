@@ -80,7 +80,7 @@ class SharingTrustTest {
         for (swapped in listOf(served.copy(kemPublicKey = flipped(kem)), served.copy(mlDsaPublicKey = flipped(served.mlDsaPublicKey!!)),
             served.copy(mlDsaPublicKey = null, identityVersion = 1, keysSignature = null), served.copy(kemPublicKey = null))) {
             val refused = assertThrows(SharingRefused::class.java) { granteeKem(verified, swapped) }
-            assertEquals("Ada’s keys have changed since you checked them. Check it’s them in People you share with.", refused.message)
+            assertEquals("Ada’s keys have changed since you checked them. Check it’s them in Contacts.", refused.message)
         }
     }
 
@@ -88,7 +88,7 @@ class SharingTrustTest {
     fun aPinThatVouchesForNothingIsRefusedForSharing() {
         for (pin in listOf(preRelease, staleFingerprint)) {
             val refused = assertThrows(SharingRefused::class.java) { granteeKem(pin, served) }
-            assertEquals("Check Ada’s words again in People you share with: this pin was made before the words covered all their keys.", refused.message)
+            assertEquals("Check Ada’s words again in Contacts: this pin was made before the words covered all their keys.", refused.message)
         }
     }
 
@@ -174,13 +174,13 @@ class SharingTrustTest {
     @Test
     fun aRotationSaysWhoItLeftOutInsteadOfSealingClassic() {
         val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), emptyMap())
-        val changed = "Ada’s keys have changed since you checked them. Check it’s them in People you share with."
+        val changed = "Ada’s keys have changed since you checked them. Check it’s them in Contacts."
         val cases = listOf(
             Triple(verified, served.copy(kemPublicKey = null), changed),
             Triple(verified, served.copy(kemPublicKey = flipped(kem)), changed),
             Triple(verified, served.copy(mlDsaPublicKey = null, identityVersion = 1, keysSignature = null), changed),
-            Triple(staleFingerprint, served, "Check Ada’s words again in People you share with: this pin was made before the words covered all their keys."),
-            Triple(preRelease, served, "Check Ada’s words again in People you share with: this pin was made before the words covered all their keys."),
+            Triple(staleFingerprint, served, "Check Ada’s words again in Contacts: this pin was made before the words covered all their keys."),
+            Triple(preRelease, served, "Check Ada’s words again in Contacts: this pin was made before the words covered all their keys."),
         )
         for ((pin, identity, reason) in cases) {
             val plan = planReseal(nodeId, listOf(row("share-1", userId, identity)), emptyList(), ledger, mapOf(userId to pin))

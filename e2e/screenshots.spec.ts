@@ -354,7 +354,7 @@ test.beforeAll(async ({ browser }) => {
     await tag(page, 'Finances', ['Tax']);
     await tag(page, 'Lease agreement.pdf', ['Tax', 'Home']);
     await tag(page, 'Trip plan.md', ['Travel']);
-    await page.goto('/app/people', { waitUntil: 'networkidle' });
+    await page.goto('/app/contacts', { waitUntil: 'networkidle' });
     await addContact(page, jonasEmail);
     await page.goto('/app/drive', { waitUntil: 'networkidle' });
     await expect(row(page, 'Family')).toBeVisible({ timeout: 60_000 });

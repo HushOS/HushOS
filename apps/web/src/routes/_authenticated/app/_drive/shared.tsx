@@ -98,9 +98,9 @@ function Shared() {
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader title="Shared">
-                <Link to="/app/people" className={buttonVariants({ variant: 'outline' })}>
+                <Link to="/app/contacts" className={buttonVariants({ variant: 'outline' })}>
                     <ContactIcon />
-                    People you share with
+                    Contacts
                 </Link>
             </PageHeader>
             <div className="px-5 pb-4 sm:px-8">
@@ -296,20 +296,20 @@ function WithMeRow({
                         <span className="text-[13px] text-muted-foreground">
                             Opens once you’ve checked {from}’s words.{' '}
                             <Link
-                                to="/app/people"
+                                to="/app/contacts"
                                 className="font-semibold underline underline-offset-2"
                             >
-                                Add {from} in People you share with
+                                Add {from} in Contacts
                             </Link>
                         </span>
                     ) : (
                         <span role="alert" className="text-[13px] text-destructive">
                             Couldn’t open this. {share.error}{' '}
                             <Link
-                                to="/app/people"
+                                to="/app/contacts"
                                 className="font-semibold underline underline-offset-2"
                             >
-                                Go to People you share with
+                                Go to Contacts
                             </Link>
                         </span>
                     )}

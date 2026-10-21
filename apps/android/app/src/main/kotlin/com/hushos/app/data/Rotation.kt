@@ -59,7 +59,7 @@ fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>
         val granteeId = share.getString("granteeUserId")
         if (!ledger.hasShare(nodeId, granteeId)) continue
         val pin = pins[granteeId]
-        if (pin == null) { skipped.add("Someone no longer in People you share with lost access."); continue }
+        if (pin == null) { skipped.add("Someone no longer in Contacts lost access."); continue }
         // Never followed here: newer keys wait for the person to check them again, then the next pass seals to them.
         try {
             val kem = granteeKem(pin, ServedIdentity.from(share.getJSONObject("grantee")))

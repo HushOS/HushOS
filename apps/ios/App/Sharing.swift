@@ -182,7 +182,7 @@ struct ShareItemSheet: View {
                     query = ""
                     pins.append(pin)
                     chosen = pin
-                    store.notify("\(pin.name.isEmpty ? pin.email : pin.name) added to people you share with")
+                    store.notify("\(pin.name.isEmpty ? pin.email : pin.name) added to Contacts")
                 }
                 .environment(store)
             }
@@ -553,7 +553,7 @@ private struct PersonAccessSheet: View {
                 } header: {
                     Text("Can open").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
                 } footer: {
-                    if !pinned { Text("Add \(first) to people you share with to change what they can do.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                    if !pinned { Text("Add \(first) to Contacts to change what they can do.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
                 }
                 Section {
                     Button { stopping = true } label: {
@@ -739,13 +739,13 @@ struct CheckContactView: View {
                 }
                 Section {
                     if found.followed || (found.pinned.map(ReplacedKeysSeen.notice) == true && !found.changed && !found.recheck) {
-                        Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you.")
+                        Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if notUpgraded {
                         Text("\(first) hasn’t signed in since HushOS upgraded its keys. You can compare words once they have.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.recheck && !found.changed {
-                        Text("You added \(first) before the twelve words covered all of their keys. Ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with \(first) and what they share with you stays shut.")
+                        Text("You added \(first) before the twelve words covered all of their keys. Ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with \(first) and what they share with you stays shut.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.changed {
                         Label("\(first)’s account has changed since you added them. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept.", systemImage: "exclamationmark.shield")
@@ -759,7 +759,7 @@ struct CheckContactView: View {
                                 .font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
                         }
                     } else {
-                        Text("Ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
+                        Text("Ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     }
                     if let fingerprint = found.contact.fingerprint {
@@ -773,7 +773,7 @@ struct CheckContactView: View {
                 if !error.isEmpty { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
                 Section {
                     if found.pinned != nil && !found.changed && !found.recheck && found.pinned.map(ReplacedKeysSeen.notice) != true {
-                        Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in People you share with").frame(maxWidth: .infinity) }
+                        Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in Contacts").frame(maxWidth: .infinity) }
                             .buttonStyle(PrimaryCapsuleStyle())
                     } else {
                         VStack(spacing: Alpine.Space.s2) {
@@ -859,7 +859,7 @@ struct CheckContactView: View {
 }
 
 /*
- * People you share with: Add someone and Your twelve words first, so neither is buried
+ * Contacts: Add someone and Your twelve words first, so neither is buried
  * under a long list, then your contacts (Find someone from eight of them), checking
  * it's them and removing someone.
  */
@@ -962,7 +962,7 @@ struct PeopleView: View {
                 try? await Task.sleep(for: .milliseconds(600))
                 if !Task.isCancelled { AccessibilityNotification.Announcement(result).post() }
             }
-            .navigationTitle("People you share with")
+            .navigationTitle("Contacts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
@@ -1110,7 +1110,7 @@ private struct CheckItsThemSheet: View {
                 Section {
                     FingerprintWordsView(fingerprint: pin.fingerprint).padding(.vertical, Alpine.Space.s2).alpineRow()
                 } header: {
-                    Text("Ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
+                    Text("Ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 } footer: {
                     Text("If they don’t match, don’t share anything new with them. Remove them, and add them again once they’ve signed in.")

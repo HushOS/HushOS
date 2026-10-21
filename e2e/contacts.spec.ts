@@ -32,8 +32,8 @@ test.afterAll(async () => {
 test('everyone sees their own twelve words, and the code they come from', async () => {
     // The old Contacts address still lands on the page it became.
     await bob.goto('/app/contacts');
-    await expect(bob).toHaveURL(/\/app\/people$/);
-    await expect(bob.getByRole('heading', { name: 'People you share with' })).toBeVisible();
+    await expect(bob).toHaveURL(/\/app\/contacts$/);
+    await expect(bob.getByRole('heading', { name: 'Contacts' })).toBeVisible();
     // One click from the page's header, however many people are listed under it.
     await bob.getByRole('button', { name: 'Your twelve words' }).click();
     const own = bob.getByRole('dialog', { name: 'Your twelve words' });
@@ -60,7 +60,7 @@ test('everyone sees their own twelve words, and the code they come from', async 
 });
 
 test('a lookup shows the other person’s fingerprint, and a pin survives a reload', async () => {
-    await alice.goto('/app/people');
+    await alice.goto('/app/contacts');
     await expect(alice.getByText('Nobody here yet')).toBeVisible({ timeout: 60_000 });
     const sheet = alice.locator('[data-slot=dialog-content]');
     await alice.getByRole('button', { name: 'Add someone' }).click();

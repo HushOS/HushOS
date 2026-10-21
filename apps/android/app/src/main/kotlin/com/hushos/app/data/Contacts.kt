@@ -391,20 +391,20 @@ class ContactChanged : Exception("This contact's key changed since you pinned it
 /* Why sharing to a pinned person is refused: the sentence says what to do. */
 class SharingRefused(message: String) : Refused("Nothing was shared", message)
 
-/* Why a received share stays shut until the person acts in People you share with. */
+/* Why a received share stays shut until the person acts in Contacts. */
 sealed class GranterTrust(message: String) : Exception(message) {
-    class Unverified(name: String) : GranterTrust("Add $name in People you share with and check their words to open what they shared.")
-    class Changed(name: String) : GranterTrust("$name’s keys have changed since you checked them. Check it’s them in People you share with before opening what they shared.")
+    class Unverified(name: String) : GranterTrust("Add $name in Contacts and check their words to open what they shared.")
+    class Changed(name: String) : GranterTrust("$name’s keys have changed since you checked them. Check it’s them in Contacts before opening what they shared.")
     /*
      * Pinned, but the pin vouches for nothing: one made before the words covered all four keys (or one whose fingerprint
      * isn't the current one). Shares from them open once both people have compared words again.
      */
-    class Recheck(name: String) : GranterTrust("$name’s keys were upgraded. Compare words with them again in People you share with; shares from $name open once you’ve both done it.")
+    class Recheck(name: String) : GranterTrust("$name’s keys were upgraded. Compare words with them again in Contacts; shares from $name open once you’ve both done it.")
     /*
      * Other keys served at a newer version than the pin's: maybe a succession, but only checking says so (the server
      * picks the version), and a pin follows only when the person checks them again, never on its own.
      */
-    class Replaced(name: String) : GranterTrust("$name’s sharing keys changed since you checked them. Check them again in People you share with to open what they shared.")
+    class Replaced(name: String) : GranterTrust("$name’s sharing keys changed since you checked them. Check them again in Contacts to open what they shared.")
     /* Sealed under keys the granter has since replaced, which vouch for nothing now: it waits for their re-seal. */
     class Reshare(name: String) : GranterTrust("$name replaced their sharing keys since sharing this. Ask $name to share it again.")
 }
@@ -475,12 +475,12 @@ fun openShare(envelope: ByteArray, granter: GranterKey, granterName: String, ide
  */
 fun granteeKem(pin: ContactPin, served: ServedIdentity): ByteArray {
     val name = pin.displayName
-    if (!pin.verified) throw SharingRefused("Check $name’s words again in People you share with: this pin was made before the words covered all their keys.")
+    if (!pin.verified) throw SharingRefused("Check $name’s words again in Contacts: this pin was made before the words covered all their keys.")
     when (comparePin(pin, served)) {
         PinComparison.SAME -> Unit
-        PinComparison.RECHECK -> throw SharingRefused("$name’s keys were upgraded. Compare words with them again in People you share with.")
-        PinComparison.SUCCESSION -> throw SharingRefused("$name’s sharing keys changed since you checked them. Check them again in People you share with.")
-        PinComparison.CHANGED -> throw SharingRefused("$name’s keys have changed since you checked them. Check it’s them in People you share with.")
+        PinComparison.RECHECK -> throw SharingRefused("$name’s keys were upgraded. Compare words with them again in Contacts.")
+        PinComparison.SUCCESSION -> throw SharingRefused("$name’s sharing keys changed since you checked them. Check them again in Contacts.")
+        PinComparison.CHANGED -> throw SharingRefused("$name’s keys have changed since you checked them. Check it’s them in Contacts.")
     }
     // comparePin said SAME: the served ML-KEM key is the one the version 3 pin's digest names.
     val kem = served.kemPublicKey ?: throw SharingRefused("$name hasn’t got post-quantum keys yet. They get them the next time they sign in.")

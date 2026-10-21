@@ -103,8 +103,8 @@ public enum ContactError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .unpinned: return "Add them to your contacts before sharing with them."
-        case .changed: return "Their account changed since you added them. Check it’s them in People you share with before you share."
-        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in People you share with before you share."
+        case .changed: return "Their account changed since you added them. Check it’s them in Contacts before you share."
+        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in Contacts before you share."
         case .notUpgraded(let name): return "\(name) needs to sign in to HushOS once more before you can compare words."
         case .message(let text): return text
         }

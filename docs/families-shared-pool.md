@@ -247,7 +247,7 @@ Company plans are later; this records where their rules attach so nothing here h
 
 Not in a family:
 
-- Home, My files, Shared, Trash; Tags and People you share with. No Families item (`organise` loses it; `FamilyRows` goes).
+- Home, My files, Shared, Trash; Tags and Contacts. No Families item (`organise` loses it; `FamilyRows` goes).
 
 In a family:
 

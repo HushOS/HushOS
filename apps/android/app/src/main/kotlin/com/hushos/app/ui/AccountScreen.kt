@@ -163,7 +163,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             AccountRow("Recovery phrase", "Gets you back in if you forget your password", Icons.Outlined.Key) { page = Page.PHRASE }
             AccountRow("Devices", "Where you’re signed in", Icons.Outlined.Devices) { page = Page.DEVICES }
             // As on iOS: who you share with, and the words they check, beside sign-in and recovery.
-            AccountRow("People you share with", "Check it’s them before you share anything sensitive", Icons.Outlined.Group) { showingPeople = true }
+            AccountRow("Contacts", "Check it’s them before you share anything sensitive", Icons.Outlined.Group) { showingPeople = true }
             AccountRow("Your twelve words", "Read these to someone checking it’s you", Icons.Outlined.Badge) { model.openOwnWords() }
             Subheader("Your files")
             // Trash lives here, as it did before the redesign (the user's choice).

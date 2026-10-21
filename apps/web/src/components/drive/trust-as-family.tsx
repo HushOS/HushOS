@@ -44,7 +44,7 @@ export function TrustAsFamily({
             toast.add({
                 type: 'success',
                 title: `${found.name} (${found.email}) is trusted as ${found.family} does`,
-                description: `${found.family} vouches for these keys. Compare words with them in People you share with to check it yourself.`,
+                description: `${found.family} vouches for these keys. Compare words with them in Contacts to check it yourself.`,
             });
         } catch (cause) {
             toast.add({

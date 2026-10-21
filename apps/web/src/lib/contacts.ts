@@ -354,7 +354,7 @@ export function readSettingsForWrite(userId: string) {
  * chose to, and from then on they open here.
  */
 export const FAMILY_SETTINGS_NEEDED =
-    'Add someone in People you share with first. That sets up where HushOS keeps your family checks on this account.';
+    'Add someone in Contacts first. That sets up where HushOS keeps your family checks on this account.';
 
 /* The settings as families read them (lib/groups/client.ts): refused, plainly, when none opened. */
 export async function readSettingsForFamilies(userId: string) {
@@ -543,10 +543,10 @@ async function servedMatchesPin(pin: Pin, served: Served) {
     const comparison = await comparePin(pin, served);
     if (comparison === 'same') return null;
     if (comparison === 'recheck')
-        return `${pin.name}’s keys were upgraded. Compare words with them again in People you share with`;
+        return `${pin.name}’s keys were upgraded. Compare words with them again in Contacts`;
     return comparison === 'succession'
-        ? `${pin.name}’s sharing keys changed since you checked them. Check them again in People you share with`
-        : `${pin.name}’s keys have changed since you checked them. Check it’s them in People you share with`;
+        ? `${pin.name}’s sharing keys changed since you checked them. Check them again in Contacts`
+        : `${pin.name}’s keys have changed since you checked them. Check it’s them in Contacts`;
 }
 
 export type Lookup = {
@@ -705,7 +705,7 @@ export async function trustGrantee(
     if (!held) throw new Error('This person is not in your contacts. Pin them before sharing.');
     if (!(await pinVerified(held)))
         throw new Error(
-            `Check ${held.name}’s words again in People you share with: this pin was made before the words covered all their keys. Nothing was shared.`,
+            `Check ${held.name}’s words again in Contacts: this pin was made before the words covered all their keys. Nothing was shared.`,
         );
     const pinned = held;
     const moved = await servedMatchesPin(held, served);
@@ -761,7 +761,7 @@ export async function trustGranter(
     const held = loaded.settings.contacts[granter.id];
     if (!held || !(await pinVerified(held)))
         throw new UnverifiedGranterError(
-            `Add ${granter.name} in People you share with and check their words to open what they shared.`,
+            `Add ${granter.name} in Contacts and check their words to open what they shared.`,
         );
     const moved = await servedMatchesPin(held, granter);
     if (moved) throw new Error(`${moved} to open what they shared.`);
@@ -770,7 +770,7 @@ export async function trustGranter(
     const keys = await granterKeysOf(held, granter);
     if (!keys)
         throw new Error(
-            `${held.name}’s keys have changed since you checked them. Check it’s them in People you share with to open what they shared.`,
+            `${held.name}’s keys have changed since you checked them. Check it’s them in Contacts to open what they shared.`,
         );
     return {
         ...keys,

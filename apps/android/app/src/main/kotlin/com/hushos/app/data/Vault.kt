@@ -500,7 +500,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun share(item: Opened, pin: ContactPin, role: String): OwnedShare {
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         // The pin as the settings hold it now, not as the sheet last read it.
-        val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in People you share with before you share with them.")
+        val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in Contacts before you share with them.")
         val contact = Auth.lookupContact(context, current.email)
         if (contact.userId != current.userId) throw ContactChanged()
         // Other keys than the pinned ones are never followed here: replaced or changed, the person checks them again first.

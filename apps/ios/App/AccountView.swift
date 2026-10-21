@@ -56,7 +56,7 @@ struct AccountView: View {
                         row("laptopcomputer.and.iphone", "Devices", "Where you’re signed in")
                     }
                     .alpineRow()
-                    Button { showingPeople = true } label: { row("person.2", "People you share with", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
+                    Button { showingPeople = true } label: { row("person.2", "Contacts", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
                     Button { showingWords = true } label: { row("person.text.rectangle", "Your twelve words", "Read these to someone checking it’s you", chevron: true) }.alpineRow()
                 } header: {
                     sectionLabel("Sign-in and recovery")
