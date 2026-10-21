@@ -1,0 +1,51 @@
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_d6b67e6d1fb2e2 221,485,492,504-508,534-541
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_9273fe66dca50a 248-261,285-310,344-345
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_7e0b6ab5054e54 137-142
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_eb70732bd7b13b 12,308-350,378-379,383-385,403,406-407,435-436,449,458-459,468-477,501-502,601,699,706,1817-1963,1976,1993-1994,1996,2014-2029
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_9fb37d7a911292 1120-1121
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_566b8e0c4467a4::t_085d713265c45a 45-51
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_69c9a2d2c1a36f 211,585
+packages/db/drizzle/20261021140901_family_one_checkout/snapshot.json
+  s_566b8e0c4467a4::t_af174e4e185435 1-13814
+packages/db/drizzle/20261021140901_family_one_checkout/migration.sql
+  s_566b8e0c4467a4::t_23c8a64d1cb248 1-32
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_cc45f81c31a2d3 1-2,14,451-452,455-464,470,475-625,1154-1164,1209-1212,1278-1294,1301,1303-1306,1310-1315,1554,1566-1569,1580-1581,1607-1608,1809,1816
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_45a763779f84d7 47,3529-3530
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_de2d0ce97285e1 2,1456,1467-1480,1489,1494,1546,1553-1560,1589-1592
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_c7fd6c1472bc8e 14
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_2f675f6207f031 736-737
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_6acfd516c1466d 288-291,666-669,671-684,1128-1129,3624-3630,5285-6027
+docs/groups-design.md
+  s_566b8e0c4467a4::t_691fa4debad665 365
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_13e6627592cefd 473-494
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e19394c1db2680c4d1044fb0d0195779875c031",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
