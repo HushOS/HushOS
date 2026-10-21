@@ -40,7 +40,13 @@ export type RemovalOutcome =
     | { status: 'pending'; message: string }
     | { status: 'failed'; message: string }
     /* This person is not in the family any more. */
-    | { status: 'wiped' };
+    | { status: 'wiped' }
+    /*
+     * They pay for the family's plan that gives nothing (route 19 answered `ends-lapsed`): it
+     * ends at once when they are removed, so the removal waits for the remover to confirm that
+     * (`endsLapsed`). Nothing was changed.
+     */
+    | { status: 'ends-lapsed'; plan: string; standing: 'payment-failed' | 'paused' };
 
 const MAX_REBUILDS = 3;
 
@@ -83,11 +89,20 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
                   };
         case 'stale':
             return { status: 'failed', message: refusalCopy('stale', outcome.data, { family }) };
-        case 'refused':
+        case 'refused': {
+            if (outcome.code === 'ends-lapsed') {
+                const data = outcome.data as { plan?: unknown; standing?: unknown } | null;
+                return {
+                    status: 'ends-lapsed',
+                    plan: typeof data?.plan === 'string' ? data.plan : 'earlier',
+                    standing: data?.standing === 'paused' ? 'paused' : 'payment-failed',
+                };
+            }
             return {
                 status: 'failed',
                 message: refusalCopy(outcome.code, outcome.data, { family }),
             };
+        }
         default:
             return { status: 'failed', message: 'Nothing was changed.' };
     }
@@ -106,6 +121,8 @@ export async function removeMember(
     options: {
         family?: string;
         demoteFirst?: boolean;
+        /* The remover confirmed that the plan this person pays for, which gives nothing, ends. */
+        endsLapsed?: boolean;
         onStep?: (step: RemovalStep) => void;
     } = {},
 ): Promise<RemovalOutcome> {
@@ -214,7 +231,12 @@ export async function removeMember(
         const staged = await stageChange(
             ctx,
             groupId,
-            { kind: 'remove', userId, rotations: await rotations.read(groupId, areas) },
+            {
+                kind: 'remove',
+                userId,
+                rotations: await rotations.read(groupId, areas),
+                ...(options.endsLapsed ? { endsLapsed: true as const } : {}),
+            },
             {
                 writers: await rotations.writers(groupId),
                 // The server answered `rotating`: a walk that started meanwhile is finished first.

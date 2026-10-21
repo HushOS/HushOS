@@ -886,6 +886,58 @@ export async function releaseDissolveMail(subscriptionId: string, periodEnd: Dat
         );
 }
 
+/*
+ * A family's lapsed plan whose product the catalogue can't read (archived, or edited so it
+ * drops out), as the lapsed-plan lookup found it at Polar: written so the family page names it
+ * (and a checkout's confirmation can list it) and so its ending is told as the family's
+ * (familyPlanOf). It gives no pool or places. The lookup and every reconcile write it again as
+ * Polar has it, ended included, so it leaves the page once ended. Only a row of this family's
+ * whose product is unread (`product_name` is its product id) is ever updated: a plan the
+ * catalogue once read, whose product an operator has since edited, is left as it was. Never a
+ * live state: a row with an unread product and no quota would become the family's plan with no
+ * pool and one place, so a live one is left as it was (a reconcile already leaves a live plan
+ * of an unread product alone, as before).
+ */
+export async function recordUnreadGroupSubscription(
+    groupId: string,
+    input: {
+        id: string;
+        productId: string;
+        status: string;
+        recurringInterval: string;
+        amount: number | null;
+        currency: string | null;
+        units: number;
+        currentPeriodStart: Date;
+        currentPeriodEnd: Date;
+        cancelAtPeriodEnd: boolean;
+        endedAt: Date | null;
+    },
+) {
+    if (LIVE_STATUSES.has(input.status) && !input.endedAt) return;
+    const { id: _id, ...state } = input;
+    await db
+        .insert(groupBillingSubscriptions)
+        .values({
+            ...input,
+            groupId,
+            provider: 'polar',
+            productName: input.productId,
+            includedMembers: 1,
+            quotaBytes: 0n,
+            paidUnits: 0,
+            paidQuotaBytes: 0n,
+        })
+        .onConflictDoUpdate({
+            target: groupBillingSubscriptions.id,
+            set: { ...state, updatedAt: new Date() },
+            setWhere: and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                eq(groupBillingSubscriptions.productName, groupBillingSubscriptions.productId),
+            ),
+        });
+}
+
 /* One group subscription's row, live or not: what it had paid for before a change. */
 export async function getGroupSubscription(subscriptionId: string) {
     const [row] = await db
@@ -974,6 +1026,11 @@ export async function applyGroupState(input: {
                 currentPeriodEnd: subscription.currentPeriodEnd,
                 cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
                 endedAt: subscription.endedAt,
+                // A plan seen live (paid in the portal, resumed) or ended is no lapsed plan left
+                // unended: its refusal leaves the operators' list.
+                ...(LAPSED_STATUSES.includes(subscription.status) && !subscription.endedAt
+                    ? {}
+                    : { lapsedRevokeRefusal: null, lapsedRevokeRefusedAt: null }),
             };
             await tx
                 .insert(groupBillingSubscriptions)

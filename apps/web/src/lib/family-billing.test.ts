@@ -11,6 +11,7 @@ import {
     nextCharge,
     placesOf,
     lapsedPlanEndsLine,
+    removedPlanEndsLine,
     planState,
     quoteAdd,
     removeRange,
@@ -619,9 +620,10 @@ describe('a family plan whose payment didn’t go through', () => {
         expect(other).toMatchObject({ choosePlan: true, portal: false });
         // Invites and folders wait, as for no plan at all: the pool gives nothing.
         expect(needsPlan({ ...summary({ live: false }), lapsedPlan: unpaid })).toBe(true);
-        expect(needsPlan({ ...glance(false), lapsedPlan: unpaid })).toBe(true);
+        const seen = { productName: unpaid.productName, standing: unpaid.standing, youPay: false };
+        expect(needsPlan({ ...glance(false), lapsedPlan: seen })).toBe(true);
         expect(
-            Object.values(familyActions({ ...glance(false), lapsedPlan: unpaid }, organizer)),
+            Object.values(familyActions({ ...glance(false), lapsedPlan: seen }, organizer)),
         ).not.toContain(true);
     });
 });
@@ -643,16 +645,30 @@ describe('lapsedPlanEndsLine', () => {
         ).toBe(
             'Maya pays for Lindqvist family’s Family Pro plan, which is paused. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
         );
-        // Someone who doesn't pay, no lapsed plan, or a glance that names no payer: nothing said.
+        // Someone who doesn't pay, or no lapsed plan: nothing said.
         expect(lapsedPlanEndsLine(mine, 'F', { userId: 'someone', you: true })).toBeNull();
         expect(
             lapsedPlanEndsLine(summary({ live: false }), 'F', { userId: 'payer', you: true }),
         ).toBeNull();
+    });
+
+    test('a member’s glance says it to the payer leaving (one whose billing was taken), never about anyone else', () => {
+        const theirs = { productName: 'Family Pro (monthly)', standing: 'paused' as const };
+        const mine = { ...glance(false), lapsedPlan: { ...theirs, youPay: true } };
+        expect(lapsedPlanEndsLine(mine, 'F', { userId: 'me', you: true })).toBe(
+            'F’s Family Pro plan, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Not theirs to pay: nothing; and a glance never says that someone else pays.
+        const other = { ...glance(false), lapsedPlan: { ...theirs, youPay: false } };
+        expect(lapsedPlanEndsLine(other, 'F', { userId: 'me', you: true })).toBeNull();
         expect(
-            lapsedPlanEndsLine({ ...glance(false), lapsedPlan: paused }, 'F', {
-                userId: 'payer',
-                you: true,
-            }),
+            lapsedPlanEndsLine(mine, 'F', { userId: 'payer', you: false, name: 'Maya' }),
         ).toBeNull();
+    });
+
+    test('the removal’s words for a plan the server named', () => {
+        expect(removedPlanEndsLine('F', 'Maya', 'Family Pro (monthly)', 'payment-failed')).toBe(
+            'Maya pays for F’s Family Pro plan, whose payment didn’t go through. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
     });
 });

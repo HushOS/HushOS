@@ -117,6 +117,25 @@ describe('removing someone: hold, finish, remove', () => {
         expect(synced.areas[0]).toMatchObject({ write: 'writable', name: 'Family' });
     });
 
+    test('Bob pays for a plan that gives nothing: the removal waits for the remover to confirm it ends, then says so with the call', async () => {
+        const { server, ctx, groupId } = await family();
+        server.answer(
+            'remove',
+            refusal(409, 'ends-lapsed', { plan: 'Family Pro', standing: 'paused' }),
+        );
+        expect(await removeMember(ctx, groupId, BOB)).toEqual({
+            status: 'ends-lapsed',
+            plan: 'Family Pro',
+            standing: 'paused',
+        });
+        expect(server.sent('remove').map((call) => 'endsLapsed' in call)).toEqual([false]);
+        // Confirmed: the call carries it, and Bob is removed.
+        expect(await removeMember(ctx, groupId, BOB, { endsLapsed: true })).toEqual({
+            status: 'removed',
+        });
+        expect(server.sent('remove').at(-1)).toMatchObject({ endsLapsed: true });
+    });
+
     test('a removal that cannot place its hold sends nothing: another manager paused us, or Bob did', async () => {
         const { server, ctx, groupId } = await family({ bobRoles: ['members'] });
         server.answer('hold', refusal(409, 'held'));

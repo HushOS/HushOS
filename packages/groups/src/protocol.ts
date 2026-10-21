@@ -17,6 +17,7 @@ export type GroupErrorCode =
     | 'seats'
     | 'organizer'
     | 'payer'
+    | 'ends-lapsed'
     | 'no-plan'
     /* One family per account: the caller, or the person being let in, is in another family. */
     | 'in-family'

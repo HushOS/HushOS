@@ -69,6 +69,14 @@ export type FamilyLapsedPlan = {
     ids: string[];
 };
 
+/* The lapsed plan as a member's glance carries it: no ids, and whether this person pays for it. */
+export type FamilyLapsedGlance = {
+    productName: string;
+    standing: 'payment-failed' | 'paused';
+    /* This person pays for it: it ends at once when they leave. */
+    youPay: boolean;
+};
+
 /*
  * A member's view: the plan's name, the storage used and the pool's size,
  * and whether a plan is live at all, which is what keeps inviting, letting
@@ -81,7 +89,7 @@ export type FamilyPlanGlance = {
     hasPlan: boolean;
     planName: string | null;
     /* While no plan is live: one Polar still holds whose payment failed, or that is paused. */
-    lapsedPlan?: FamilyLapsedPlan | null;
+    lapsedPlan?: FamilyLapsedGlance | null;
     storage: { usedBytes: string; quotaBytes: string } | null;
     /* Absent with billing off. */
     usage?: FamilyUsage;

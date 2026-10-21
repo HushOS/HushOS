@@ -1288,7 +1288,7 @@ const LAPSED = new Set(['unpaid', 'incomplete', 'paused']);
  * job holds, or one a payment opened, is the job's: LapsedRevokeError `held`. Used before
  * a new checkout and by the plan-ending job of someone pooled, and, as `kind` `family` with
  * the family's id as its owner (`userId`), before a family checkout (groups.ts
- * revokeLapsedFamilyPlans): the ending is then the family's, worked by a job run for its id.
+ * endLapsedFamilyPlans): the ending is then the family's, worked by a job run for its id.
  */
 export async function revokeLapsed(
     userId: string,

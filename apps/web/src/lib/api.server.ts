@@ -2620,7 +2620,10 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/members/:userId/remove',
-                { params: memberParams, body: t.Object(rosterCallFields) },
+                {
+                    params: memberParams,
+                    body: t.Object({ ...rosterCallFields, endsLapsed: t.Optional(t.Boolean()) }),
+                },
                 async ({ request, sessionToken, params, body }) =>
                     groups.removeMember(
                         (await groupUser(request, sessionToken)).id,

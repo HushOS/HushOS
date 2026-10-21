@@ -80,24 +80,45 @@ export function planState(summary: FamilyBillingFull): PlanState {
 /*
  * Said before a leave or a removal: the family's plan that gives nothing (its payment failed,
  * or it is paused) ends at once when the person who pays for it goes (the server revokes it
- * first). `payerUserId` is who goes; null when the summary doesn't say that they pay (a
- * member's glance carries no payer), or nothing lapsed is there to end.
+ * first). From a manager's summary, which names the payer; from a member's glance only for
+ * the person themselves (`youPay`), which names nobody else. Null when nothing lapsed is there
+ * to end, or the summary can't say this person pays: a remover without `billing` is told by the
+ * server instead (route 19's `ends-lapsed`, removedPlanEndsLine).
  */
 export function lapsedPlanEndsLine(
     summary: FamilyBilling | undefined,
     family: string,
     goer: { userId: string; you: true } | { userId: string; you: false; name: string },
 ) {
-    if (!summary?.enabled || summary.view !== 'manage') return null;
+    if (!summary?.enabled) return null;
     const lapsed = summary.lapsedPlan;
-    if (!lapsed || summary.payer?.userId !== goer.userId) return null;
-    const name = lapsed.productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
-    const how =
-        lapsed.standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through';
+    if (!lapsed) return null;
+    const pays =
+        summary.view === 'manage'
+            ? summary.payer?.userId === goer.userId
+            : goer.you && 'youPay' in lapsed && lapsed.youPay;
+    if (!pays) return null;
+    const name = planWord(lapsed.productName);
+    const how = standingWords(lapsed.standing);
     return goer.you
         ? `${family}’s ${name} plan, which you pay for and ${how}, ends at once when you leave. Nothing of it is refunded: no part of it is in use.`
-        : `${goer.name} pays for ${family}’s ${name} plan, ${how}. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.`;
+        : removedPlanEndsLine(family, goer.name, name, lapsed.standing);
 }
+
+/* The removal's words for a lapsed plan the person pays for, as route 19 names it (`ends-lapsed`). */
+export function removedPlanEndsLine(
+    family: string,
+    who: string,
+    plan: string,
+    standing: 'payment-failed' | 'paused',
+) {
+    return `${who} pays for ${family}’s ${planWord(plan)} plan, ${standingWords(standing)}. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.`;
+}
+
+const planWord = (productName: string) =>
+    productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+const standingWords = (standing: 'payment-failed' | 'paused') =>
+    standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through';
 
 /*
  * A renewal the bank refused, and this person pays: then Manage payment and invoices is the
