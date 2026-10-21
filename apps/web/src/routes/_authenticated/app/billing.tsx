@@ -29,6 +29,7 @@ import { usePageRestored } from '@/lib/page-restore';
 import { useUnlocked } from '@/lib/families';
 import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
 import { familyCurrencies, tierTooSmall } from '@/lib/family-billing';
+import { useBackFromCheckout, useCheckoutOpening } from '@/lib/family-checkout';
 import {
     currenciesOf,
     familyPairs,
@@ -386,12 +387,17 @@ function BillingPage() {
     const groups = useGroupsEnabled();
     const families = useQuery({ ...familiesQueryOptions(user.id), enabled: groups });
     const familyPlans = catalogue.data?.families ?? [];
+    // Back from a family's checkout, the family's page is where it goes on; while one is made
+    // for its checkout, the tiers stay as they were until the browser leaves
+    // (lib/family-checkout.ts).
+    useBackFromCheckout(user.id);
+    const opening = useCheckoutOpening(user.id);
     const offerFamilies =
         selling &&
         groups &&
         familyPlans.length > 0 &&
         families.isSuccess &&
-        !activeFamily(families.data);
+        (opening || !activeFamily(families.data));
     const familySaving = twoMonthsFree(familyPairs(familyPlans, familyCurrency));
     const familyShown = familyPlans
         .filter((plan) => plan.interval === period)
@@ -710,7 +716,7 @@ function BillingPage() {
                                 const price = familyPrice(plan, familyCurrency);
                                 if (!price) return null;
                                 const name = familyTierName(plan);
-                                const tooSmall = tierTooSmall(ownStorage.data, plan);
+                                const tooSmall = tierTooSmall(ownStorage.data, plan, familyPlans);
                                 return (
                                     <PlanCard
                                         key={plan.id}

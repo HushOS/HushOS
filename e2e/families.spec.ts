@@ -2428,6 +2428,44 @@ test.describe.serial('creating a family from Plans: where it stops', () => {
         await nora.page.unroute('**/api/auth/storage', storage);
     });
 
+    test('the dialog reads her figures again as it opens: files added since Plans loaded count', async () => {
+        const plus = monthly('plus');
+        const room = BigInt(plus.quotaBytes);
+        // Her own files as the server answers them: none when Plans loads, then 1 GB past Plus
+        // (added from another device), within the 30 s the figures are kept.
+        let used = 0n;
+        const storage = async (route: Route) =>
+            route.fulfill({
+                json: {
+                    storage: {
+                        workspaceId: randomUUID(),
+                        quotaBytes: String(4096n * BigInt(GIB)),
+                        usedBytes: String(used),
+                        reservedBytes: '0',
+                        availableBytes: String(4096n * BigInt(GIB) - used),
+                        pool: null,
+                        own: null,
+                    },
+                },
+            });
+        await nora.page.route('**/api/auth/storage', storage);
+        await nora.page.goto('/app/billing');
+        const button = nora.page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tierOf(plus)}` });
+        await expect(button).toBeEnabled({ timeout: 60_000 });
+        used = room + 1n;
+        await button.click();
+        const dialog = nora.page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(
+            `Your files take ${Number(room) / GIB + 1} GB, more than ${tierOf(plus)}’s`,
+            { timeout: 30_000 },
+        );
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeDisabled();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await nora.page.unroute('**/api/auth/storage', storage);
+    });
+
     test('on a locked device, Create a family unlocks first and carries the tier', async () => {
         const plus = monthly('plus');
         await nora.page.goto('/app/account', { waitUntil: 'networkidle' });
@@ -2498,17 +2536,23 @@ test.describe.serial('creating a family from Plans: where it stops', () => {
 
 /*
  * While Polar's checkout opens, after the family was made: the page under the dialog stays as it
- * was (Plans keeps its tiers, Account → Family stays "no family" with the dialog over it), so
- * nothing jumps and the dialog is there when the browser brings the page back. Back from Polar
- * restores the page from the browser's back-forward cache; Playwright's browsers don't keep one,
- * so that return is the `pageshow` event a restore fires (persisted), dispatched here, with the
- * checkout's address changing only the fragment so the page never left. Runs only against a
- * server that sells family plans.
+ * was (Plans keeps its tiers, Account → Family stays "no family" with the dialog over it) even
+ * when the families are read again (a focus), the dialog stays on "Creating…" until the browser
+ * has left, and the address isn't touched before then. Back from Polar goes on to the family's
+ * page, where Choose a plan is, both ways a browser goes back:
+ * - restored from the back-forward cache: Playwright's browsers don't keep one, so the checkout's
+ *   address changes only the fragment (the page never leaves) and the restore is the `pageshow`
+ *   event (persisted) dispatched here;
+ * - loaded again: the checkout's address is another document (about:blank), and Back is the
+ *   browser's own.
+ * Polar is never asked: the checkout is answered on the wire. Runs only against a server that
+ * sells family plans.
  */
 test.describe.serial('creating a family from Plans: while the checkout opens, and back', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let plans: CatalogueFamily[] = [];
     const people: Person[] = [];
+    const checkoutPath = /\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/;
 
     test.beforeAll(async ({ request }) => {
         plans = await familyCatalogue(request);
@@ -2525,7 +2569,7 @@ test.describe.serial('creating a family from Plans: while the checkout opens, an
     async function holdCheckout(page: Page) {
         let answer!: (url: string) => void;
         const url = new Promise<string>((resolve) => (answer = resolve));
-        await page.route(/\/api\/billing\/groups\/[0-9a-f-]+\/checkout$/, async (route) =>
+        await page.route(checkoutPath, async (route) =>
             route.fulfill({ json: { url: await url } }),
         );
         return answer;
@@ -2537,59 +2581,146 @@ test.describe.serial('creating a family from Plans: while the checkout opens, an
             window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
         );
 
-    for (const from of ['Plans', 'Account → Family'] as const)
-        test(`from ${from}: the page stays as it was while the checkout opens, and Back goes to the family`, async ({
+    /* Someone new names a family with Family Plus from `from` and presses Create and pay. */
+    async function createAndPay(
+        browser: Browser,
+        from: 'Plans' | 'Account → Family',
+        who: { name: string; family: string },
+    ) {
+        const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+        const tier = planTierName({ name: plus.name });
+        const person_ = await person(browser, who.name);
+        people.push(person_);
+        const { page } = person_;
+        const answer = await holdCheckout(page);
+        const path =
+            from === 'Plans' ? '/app/billing' : `/app/family?create=${plus.id}&currency=usd`;
+        await page.goto(path);
+        if (from === 'Plans')
+            await page
+                .locator('[data-family-plans]')
+                .getByRole('button', { name: `Create a family with ${tier}` })
+                .click({ timeout: 60_000 });
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(who.family, { timeout: 60_000 });
+        const made = page.waitForResponse(
+            (response) =>
+                response.request().method() === 'POST' &&
+                new URL(response.url()).pathname === '/api/groups' &&
+                response.ok(),
+        );
+        const asked = page.waitForRequest(checkoutPath);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await made;
+        await asked;
+        return { page, dialog, answer, path };
+    }
+
+    /* The page under the dialog, as it was before the family existed. */
+    const under = (page: Page, from: 'Plans' | 'Account → Family') =>
+        page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]');
+
+    for (const from of ['Plans', 'Account → Family'] as const) {
+        test(`from ${from}: the page stays while the checkout opens, even read again, and Back from the cache goes to the family`, async ({
             browser,
         }) => {
             test.setTimeout(240_000);
-            const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
-            const tier = planTierName({ name: plus.name });
             const family = from === 'Plans' ? 'Lund family' : 'Moen family';
-            const who = await person(browser, from === 'Plans' ? 'Pia Lund' : 'Olga Moen');
-            people.push(who);
-            const answer = await holdCheckout(who.page);
-            const path =
-                from === 'Plans' ? '/app/billing' : `/app/family?create=${plus.id}&currency=usd`;
-            await who.page.goto(path);
-            if (from === 'Plans')
-                await who.page
-                    .locator('[data-family-plans]')
-                    .getByRole('button', { name: `Create a family with ${tier}` })
-                    .click({ timeout: 60_000 });
-            const dialog = who.page.getByRole('dialog', { name: 'Create a family' });
-            await dialog.getByLabel('Name').fill(family, { timeout: 60_000 });
-            const made = who.page.waitForResponse(
-                (response) =>
-                    response.request().method() === 'POST' &&
+            const { page, dialog, answer, path } = await createAndPay(browser, from, {
+                name: from === 'Plans' ? 'Pia Lund' : 'Olga Moen',
+                family,
+            });
+            // The families are read again while the checkout opens (the tab regains focus), and
+            // they now list the new family: the page under the dialog doesn't move for it.
+            const listed = page.waitForResponse(
+                async (response) =>
+                    response.request().method() === 'GET' &&
                     new URL(response.url()).pathname === '/api/groups' &&
-                    response.ok(),
+                    (await response.text()).includes(family),
             );
-            await dialog.getByRole('button', { name: 'Create and pay' }).click();
-            await made;
-            // The family exists and the checkout is opening: nothing under the dialog moves.
-            await who.page.waitForTimeout(3_000);
-            await expect(dialog).toBeVisible();
+            await page.evaluate(() =>
+                document.dispatchEvent(new Event('visibilitychange', { bubbles: true })),
+            );
+            await listed;
+            await page.waitForTimeout(1_000);
             await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeVisible();
-            await expect(
-                who.page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]'),
-            ).toBeVisible();
-            // The checkout answers. Leaving, the entry it leaves from becomes the family's page
-            // (where a Back without the cache reloads), and the address only changes its
-            // fragment, so the page stays.
-            answer('/app/family#checkout');
-            await expect(who.page).toHaveURL(/\/app\/family#checkout$/);
-            await expect(
-                who.page.locator(from === 'Plans' ? '[data-family-plans]' : '[data-no-family]'),
-            ).toBeVisible();
-            // Back from Polar: the page is restored as it was, and goes on to the family's page.
-            await restored(who.page);
-            await expect(who.page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });
+            await expect(under(page, from)).toBeVisible();
+            await expect(page).toHaveURL(new URL(path, page.url()).href);
+            // The checkout answers; its address changes only the fragment, so the page stays,
+            // and the dialog with it, still busy, until the browser has left.
+            answer(`${path}#checkout`);
+            await expect(page).toHaveURL(/#checkout$/);
+            await page.waitForTimeout(1_000);
+            await expect(dialog.getByRole('button', { name: 'Creating…' })).toBeVisible();
+            await expect(under(page, from)).toBeVisible();
+            // Back from Polar, restored as it was: it goes on to the family's page.
+            await restored(page);
+            await expect(page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });
             await expect(dialog).toHaveCount(0);
-            await expect(who.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            await expect(page.getByRole('heading', { level: 1, name: family })).toBeVisible({
                 timeout: 60_000,
             });
-            await expect(who.page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+            await expect(page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
         });
+
+        test(`from ${from}: Back that loads the page again goes to the family`, async ({
+            browser,
+        }) => {
+            test.setTimeout(240_000);
+            const family = from === 'Plans' ? 'Ek family' : 'Dahl family';
+            const { page, answer } = await createAndPay(browser, from, {
+                name: from === 'Plans' ? 'Ivo Ek' : 'Ada Dahl',
+                family,
+            });
+            answer('about:blank');
+            await page.waitForURL('about:blank', { timeout: 60_000 });
+            await page.goBack();
+            await expect(page).toHaveURL(/\/app\/family$/, { timeout: 60_000 });
+            await expect(page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+                timeout: 60_000,
+            });
+            await expect(page.locator('[data-choose-plan]')).toBeVisible({ timeout: 60_000 });
+            await expect(page.getByRole('dialog')).toHaveCount(0);
+        });
+    }
+
+    test('Back while it is still creating: the family is made, and nothing moves the page after', async ({
+        browser,
+    }) => {
+        test.setTimeout(240_000);
+        const plus = plans.find((plan) => plan.interval === 'month' && plan.tier === 'plus')!;
+        const tier = planTierName({ name: plus.name });
+        const family = 'Holm family';
+        const who = await person(browser, 'Tove Holm');
+        people.push(who);
+        const { page } = who;
+        const answer = await holdCheckout(page);
+        // Into Plans within the app, so Back stays in it.
+        await page.goto('/app/account');
+        await page.getByRole('link', { name: 'Plan and storage' }).first().click();
+        await expect(page).toHaveURL(/\/app\/billing$/);
+        await page
+            .locator('[data-family-plans]')
+            .getByRole('button', { name: `Create a family with ${tier}` })
+            .click({ timeout: 60_000 });
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await dialog.getByLabel('Name').fill(family, { timeout: 60_000 });
+        const asked = page.waitForRequest(checkoutPath);
+        await dialog.getByRole('button', { name: 'Create and pay' }).click();
+        await asked;
+        await page.goBack();
+        await expect(page).toHaveURL(/\/app\/account$/);
+        // The checkout answers after they've gone: no checkout opens, their page stays.
+        answer('/app/billing#checkout');
+        await expect(page.getByText(`${family} created`)).toBeVisible({ timeout: 30_000 });
+        await page.waitForTimeout(2_000);
+        await expect(page).toHaveURL(/\/app\/account$/);
+        // Nothing is left to send Plans to the family's page later.
+        await page.getByRole('link', { name: 'Plan and storage' }).first().click();
+        await expect(page).toHaveURL(/\/app\/billing$/);
+        await page.waitForTimeout(2_000);
+        await expect(page).toHaveURL(/\/app\/billing$/);
+    });
 });
 
 /*

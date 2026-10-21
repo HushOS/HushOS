@@ -7,6 +7,7 @@ import { FamilyPage } from '@/components/families/family-page';
 import { NoFamily } from '@/components/families/no-family';
 import { Button } from '@/components/ui/button';
 import { activeFamily, familiesQueryOptions, familiesSyncQueryOptions } from '@/lib/families';
+import { useBackFromCheckout, useCheckoutOpening } from '@/lib/family-checkout';
 import { errorCopy } from '@/lib/groups/copy';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/family/')({
@@ -36,6 +37,10 @@ function FamilyRoute() {
     const families = useQuery(familiesQueryOptions(userId));
     // Read here, never started: the Drive runtime runs it.
     const pass = useQuery({ ...familiesSyncQueryOptions(userId), enabled: false });
+    // Back from a family's checkout, it goes on here, to the family (lib/family-checkout.ts); a
+    // family being made for its checkout leaves this page as it was until the browser leaves.
+    useBackFromCheckout(userId, { stay: !create });
+    const opening = useCheckoutOpening(userId);
     if (families.isPending) return <SkeletonRows rows={3} />;
     if (families.isError)
         return (
@@ -47,7 +52,7 @@ function FamilyRoute() {
             </EmptyState>
         );
     const notices = pass.data?.notices ?? [];
-    const yours = activeFamily(families.data);
+    const yours = opening ? undefined : activeFamily(families.data);
     if (yours)
         return (
             <FamilyPage
