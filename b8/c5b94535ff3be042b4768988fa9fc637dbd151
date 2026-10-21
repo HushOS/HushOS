@@ -1,0 +1,47 @@
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_2ed320e7d09f30 6,30,223-224,236-238
+packages/billing/src/protocol.ts
+  s_566b8e0c4467a4::t_1cb413463d2cb8 30-67
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_ec447e78fe0d1f 2,535-536
+packages/billing/src/provider.ts
+  s_566b8e0c4467a4::t_2fcf91d3c1b5b6 88-94
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_f22f3bedc5a146 7,101,1095-1099,1116-1117,1121-1125
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_566b8e0c4467a4::t_163d50219eeca9 4-10,22,26,87-89,190-211
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_c7fd754f7dcfa9 1,54,138
+apps/web/src/routes/join/route.tsx
+  s_566b8e0c4467a4::t_db479f4b7a1f3d 1,268-269
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_fc086186da0ce4 64-69,77-113,132-139,170-173,226,230,238-247,251-256,276-280,292
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_216b89b69496c4 69-71,211-213,216,223,228,242,358-360,363,372-373,411,413-416,493,508,521-531,545,550-554,579-590,661,753,768-804
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_95600f0505a0a1 1370-1469,4199,4213,5071,5087,5166-5216
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_8a96688b6143e9 212,559,586,599-616
+apps/web/src/routes/pricing/route.tsx
+  s_566b8e0c4467a4::t_249c8fe1470c3d 39,279,281-283,361
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_69c3e95de040c9 7,113,196-291
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_c5a5122522031c 20,26,111,146,148-180,200,610-612,630,647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b8c5b94535ff3be042b4768988fa9fc637dbd151",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
