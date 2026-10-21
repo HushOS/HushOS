@@ -293,6 +293,28 @@ function GlanceTop({
     if (summary.hasPlan) return null;
     const who = organizersLine(members);
     const empty = summary.storage !== null && summary.storage.quotaBytes === '0';
+    const lapsed = summary.lapsedPlan;
+    if (lapsed) {
+        const name = tierName({ name: lapsed.productName });
+        const paused = lapsed.standing === 'paused';
+        return (
+            <div className="px-5 sm:px-8">
+                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
+                    <AlertTitle>
+                        {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
+                    </AlertTitle>
+                    <AlertDescription>
+                        {paused
+                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
+                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                        Nothing can be added to the family folders, nobody new can join, and your
+                        own files count against your own storage again. Nothing is deleted.{' '}
+                        {who ? `${who} can sort it out.` : 'The organizer can sort it out.'}
+                    </AlertDescription>
+                </Alert>
+            </div>
+        );
+    }
     return (
         <div className="px-5 sm:px-8">
             <Alert data-plan-notice="none">
@@ -478,6 +500,52 @@ function PlanTop(props: Inner) {
 
     // Any `billing` holder can choose a plan while none is live (the server makes them the payer).
     const ask = organizersLine(members);
+    if (state.kind === 'unpaid') {
+        const name = tierName({ name: state.productName });
+        const paused = state.standing === 'paused';
+        const payer = payerName ?? 'The person who pays for it';
+        // The way forward, for whoever is reading: a new plan ends this one first (the server
+        // revokes it before the checkout), and only the payer has a portal.
+        const next = actions.choosePlan
+            ? payerYou
+                ? paused
+                    ? `Resume it in the billing portal, or choose a plan below, which ends ${name} first.`
+                    : `Choose a plan below; that ends ${name} first. If the billing portal offers to retry the payment, that restores ${name}.`
+                : paused
+                  ? `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can resume it instead.`
+                  : `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can instead retry the payment in the billing portal, if it offers to.`
+            : payerYou
+              ? paused
+                  ? 'Resume it in the billing portal.'
+                  : 'Retry the payment in the billing portal, if it offers to.'
+              : ask
+                ? `${ask} can sort it out.`
+                : `${payer} can sort it out.`;
+        return (
+            <div className="flex flex-col gap-2 px-5 sm:px-8">
+                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
+                    <AlertTitle>
+                        {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
+                    </AlertTitle>
+                    <AlertDescription>
+                        {paused
+                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
+                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                        Nothing can be added to the family folders, nobody new can join, and
+                        everyone’s own files count against their own storage again. Nothing is
+                        deleted. {next}
+                    </AlertDescription>
+                </Alert>
+                {actions.portal && (
+                    <PortalButton
+                        groupId={props.groupId}
+                        label={paused ? 'Resume in portal' : 'Billing portal'}
+                    />
+                )}
+                {actions.choosePlan && <ChoosePlan {...props} renewing />}
+            </div>
+        );
+    }
     if (state.kind === 'lapsed')
         return (
             <div className="flex flex-col gap-2 px-5 sm:px-8">
@@ -518,6 +586,47 @@ function PlanTop(props: Inner) {
                           : 'The organizer can choose one.'}
                 </AlertDescription>
             </Alert>
+        </div>
+    );
+}
+
+/*
+ * The payer's portal, where Polar may retry a failed payment or resume a paused plan. Outline:
+ * choosing a plan (the one blue button) leads, since the portal may not take the payment.
+ */
+function PortalButton({ groupId, label }: { groupId: string; label: string }) {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    usePageRestored(() => setBusy(false));
+    async function open() {
+        setBusy(true);
+        setError('');
+        try {
+            const { url } = await groupBillingApi.portal(groupId);
+            window.location.assign(url);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+            setBusy(false);
+        }
+    }
+    return (
+        <div className="flex flex-col gap-1 pb-2">
+            <Button
+                variant="outline"
+                className="w-fit"
+                disabled={busy}
+                onClick={() => void open()}
+                data-family-portal
+            >
+                {busy ? 'Opening portal' : label}
+                <ArrowUpRightIcon />
+            </Button>
+            {error && (
+                <p role="alert" className="text-sm text-destructive">
+                    {error}
+                </p>
+            )}
         </div>
     );
 }

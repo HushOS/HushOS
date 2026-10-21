@@ -48,6 +48,11 @@ export type PlanState =
     | { kind: 'none' }
     /* A plan ran out or was cancelled, and nothing has replaced it. */
     | { kind: 'lapsed'; productName: string; endedAt: string }
+    /*
+     * A plan Polar still holds whose payment didn't go through (or that is paused): the pool
+     * and the extra places give nothing meanwhile, and choosing a plan ends it first.
+     */
+    | { kind: 'unpaid'; productName: string; standing: 'payment-failed' | 'paused' }
     | {
           kind: 'live';
           subscription: FamilySubscription;
@@ -67,6 +72,7 @@ export function planState(summary: FamilyBillingFull): PlanState {
             ending: live.cancelAtPeriodEnd,
             overdue: live.status === 'past_due',
         };
+    if (summary.lapsedPlan) return { kind: 'unpaid', ...summary.lapsedPlan };
     if (summary.lastPlan) return { kind: 'lapsed', ...summary.lastPlan };
     return { kind: 'none' };
 }

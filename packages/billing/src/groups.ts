@@ -6,8 +6,8 @@ import { groupsEnv } from '@hushos/env/groups';
 import { log } from '@hushos/logging';
 import type { models } from '@polar-sh/sdk/2026-10';
 import type { PolarClientError } from '@polar-sh/sdk';
-import type { FamilyUsage, GroupBillingSummary } from './api';
-import { queuePlanEnding } from './endings';
+import type { FamilyLapsedPlan, FamilyUsage, GroupBillingSummary } from './api';
+import { LapsedRevokeError, queuePlanEnding, revokeLapsed } from './endings';
 import {
     BillingError,
     PROVIDER,
@@ -1170,10 +1170,98 @@ async function takeOverPayer(
     }
 }
 
+/* Polar's statuses for a family plan it still holds that gives nothing (db's LAPSED_STATUSES). */
+const LAPSED = new Set(['unpaid', 'incomplete', 'paused']);
+
+/*
+ * Before a family checkout, and so before a payer takeover (ensureTeamCustomer): every
+ * plan of the family that Polar still holds but that gives nothing (`unpaid`,
+ * `incomplete`, `paused`) is revoked at Polar, so a payment taken for it later (a card
+ * added in its payer's portal, a dunning email answered) or a scheduled resume can't
+ * charge for it beside the plan being bought. As revokeLapsedPlans does for a person's
+ * (server.ts), through the same revokeLapsed: its ending is written first (keyed by the
+ * family's id, whose job then works it), with the orders already paid noted, so a
+ * payment Polar takes afterwards is refunded whole by the plan-ending job, even when the
+ * revoke's answer was lost.
+ *
+ * Found in the mirror, and in Polar's own list of the team customer's subscriptions,
+ * which also holds one whose delivery never reached HushOS (a first checkout that never
+ * went through). Each is read first: ended is nothing to do; live again (paid in the
+ * portal a moment ago) is left alone, and the checkout's customer-state check refuses. An
+ * unpaid or incomplete plan with its current period's order paid is kept and the
+ * checkout refused with words; so is one Polar has locked (logged at error level), and
+ * one whose ending the job holds. A 5xx or no answer refuses the checkout and keeps the
+ * ending, since the revoke may have landed. Throws a BillingError for each.
+ */
+async function revokeLapsedFamilyPlans(groupId: string) {
+    const ids = new Set(await billingRepository.listLapsedGroupSubscriptionIds(groupId));
+    if (await billingRepository.getGroupCustomer(groupId)) {
+        let listed: models.Subscription[] = [];
+        try {
+            listed = (
+                await polar().subscriptions.list({
+                    external_customer_id: customerKey(groupId),
+                    limit: 100,
+                })
+            ).items;
+        } catch (error) {
+            if (statusOf(error) !== 404) throw unavailable(error);
+        }
+        for (const subscription of listed)
+            if (!subscription.ended_at && LAPSED.has(subscription.status)) ids.add(subscription.id);
+    }
+    if (!ids.size) return;
+    for (const id of ids) {
+        let name = 'earlier';
+        try {
+            const subscription = await polar().subscriptions.get(id);
+            const plan = await planOf(subscription.product_id);
+            if (plan) name = tierName(plan);
+            // Ended is nothing to do. Live again (paid in the portal just now) is the family's
+            // plan: left alone, and the customer-state check below refuses the checkout.
+            if (subscription.ended_at || !LAPSED.has(subscription.status)) continue;
+            await revokeLapsed(groupId, id, 'family');
+        } catch (error) {
+            if (error instanceof BillingError) throw error;
+            if (statusOf(error) === 404) continue;
+            if (statusOf(error) === 409 && polarErrorName(error) === 'SubscriptionLocked')
+                throw new BillingError(
+                    `Polar is still working on a change to the family’s ${name} plan, so it can’t be ended yet. Try again later, or contact support.`,
+                    409,
+                    { cause: error },
+                );
+            if (error instanceof LapsedRevokeError && error.reason === 'paid')
+                throw new BillingError(
+                    `Polar shows a payment for the family’s ${name} plan that hasn’t taken effect yet, so it’s kept and can’t be ended. Try again in a few minutes, or contact support.`,
+                    409,
+                    { cause: error },
+                );
+            if (error instanceof LapsedRevokeError)
+                throw new BillingError(
+                    `The family’s ${name} plan is still being ended. Try again in a few minutes.`,
+                    409,
+                    { cause: error },
+                );
+            // Any other refusal changed nothing at Polar: the plan stays the family's.
+            const status = statusOf(error);
+            if (status !== null && status < 500)
+                throw new BillingError(
+                    `Polar wouldn’t end the family’s ${name} plan, so no new plan was started. Contact support.`,
+                    409,
+                    { cause: error },
+                );
+            throw unavailable(error);
+        }
+    }
+    await reconcileGroup(groupId);
+}
+
 /*
  * Polar's hosted checkout for a family plan, for `units` places (at least
  * the plan's included members and the members already admitted, at most the
- * plan's maximum). The person who starts it becomes the payer.
+ * plan's maximum). The person who starts it becomes the payer. A plan of the
+ * family that Polar still holds but that gives nothing is revoked first
+ * (revokeLapsedFamilyPlans).
  */
 export async function startGroupCheckout(
     user: BillingUser,
@@ -1211,6 +1299,10 @@ export async function startGroupCheckout(
         );
     if (units > plan.maxMembers)
         throw new BillingError(`A family can have at most ${plan.maxMembers} members.`, 400);
+    // Before the payer can change (ensureTeamCustomer), and before either reads Polar's customer
+    // state: whether that state lists an unpaid plan as active (its SDK types say only `active`
+    // and `trialing`), none of the family's is left by then to refuse the checkout over.
+    await revokeLapsedFamilyPlans(groupId);
     const customerId = await ensureTeamCustomer(groupId, user);
     // A plan Polar has that has not reached HushOS yet (a delivery still on its way) is one too.
     let state: models.CustomerState | null = null;
@@ -2037,6 +2129,16 @@ async function usageFor(groupId: string, userId: string): Promise<FamilyUsage> {
     };
 }
 
+/* The family's plan Polar still holds that gives nothing, as the page names it (FamilyLapsedPlan). */
+async function lapsedOf(groupId: string): Promise<FamilyLapsedPlan | null> {
+    const row = await billingRepository.getLapsedGroupSubscription(groupId);
+    if (!row) return null;
+    return {
+        productName: row.productName,
+        standing: row.status === 'paused' ? 'paused' : 'payment-failed',
+    };
+}
+
 export async function getGroupBilling(
     user: BillingUser,
     groupId: string,
@@ -2086,6 +2188,8 @@ export async function getGroupBilling(
             view,
             hasPlan: live !== null,
             planName: live?.productName ?? null,
+            // Only while no plan is live: a live plan's glance stays exactly what it was.
+            ...(live ? {} : { lapsedPlan: await lapsedOf(groupId) }),
             storage,
             usage: people,
         };
@@ -2095,6 +2199,7 @@ export async function getGroupBilling(
         groupsRepository.seatsUsed(groupId),
     ]);
     const lastPlan = live ? null : await billingRepository.getLastEndedGroupSubscription(groupId);
+    const lapsedPlan = live ? null : await lapsedOf(groupId);
     const plan = live ? families.find((candidate) => candidate.id === live.productId) : undefined;
     const price = plan && live?.currency ? plan.prices[live.currency] : undefined;
     return {
@@ -2133,6 +2238,7 @@ export async function getGroupBilling(
         lastPlan: lastPlan
             ? { productName: lastPlan.productName, endedAt: lastPlan.endedAt.toISOString() }
             : null,
+        lapsedPlan,
         storage,
         usage: people,
         seats: { used, limit: live ? billingRepository.seatLimitOf(live) : UNPAID_GROUP_SEATS },

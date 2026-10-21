@@ -197,6 +197,12 @@ function AdminPage() {
                                 anchor: '#refunds-owed',
                             },
                             {
+                                label: 'More than one plan',
+                                value: count(data.doubleCharges.length),
+                                tone: data.doubleCharges.length > 0 ? 'danger' : undefined,
+                                anchor: '#double-charges',
+                            },
+                            {
                                 label: 'On hold',
                                 value: count(data.reports.held),
                                 to: { to: '/app/admin/reports', search: { status: 'held' } },
@@ -319,7 +325,7 @@ function AdminPage() {
                                 <thead>
                                     <tr>
                                         <th className={th}>Polar order</th>
-                                        <th className={th}>Account</th>
+                                        <th className={th}>Account or family</th>
                                         <th className={cn(th, 'text-right')}>Before tax</th>
                                         <th className={cn(th, 'text-right')}>Failed tries</th>
                                         <th className={th}>Since</th>
@@ -329,7 +335,9 @@ function AdminPage() {
                                     {data.refundsOwed.map((row) => (
                                         <tr key={row.orderId} className="hover:bg-muted">
                                             <td className={td}>{row.orderId}</td>
-                                            <td className={td}>{row.userId}</td>
+                                            <td className={td}>
+                                                {row.groupId ? `family ${row.groupId}` : row.userId}
+                                            </td>
                                             <td className={cn(td, 'text-right tabular-nums')}>
                                                 {formatMoney(row.amount, row.currency)}
                                             </td>
@@ -345,10 +353,55 @@ function AdminPage() {
                             </OperatorTable>
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
                                 The unused part of a personal plan that ended when its owner’s files
-                                joined a family, or a payment Polar took for a lapsed plan HushOS
-                                had already revoked (refunded whole). HushOS keeps trying; to settle
-                                one now, refund the order in Polar’s dashboard for the amount shown
-                                (Polar adds the tax), and the row goes at the next try.
+                                joined a family, or a payment Polar took for a lapsed plan (a
+                                person’s or a family’s) HushOS had already revoked (refunded whole).
+                                HushOS keeps trying; to settle one now, refund the order in Polar’s
+                                dashboard for the amount shown (Polar adds the tax), and the row
+                                goes at the next try.
+                            </p>
+                        </>
+                    )}
+                    {data.doubleCharges.length > 0 && (
+                        <>
+                            <h2
+                                id="double-charges"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                More than one plan
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family or account</th>
+                                        <th className={th}>Polar subscriptions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.doubleCharges.map((row) => (
+                                        <tr
+                                            key={`${row.kind}:${row.id}`}
+                                            className="hover:bg-muted"
+                                        >
+                                            <td className={td}>
+                                                {row.kind === 'family'
+                                                    ? `family ${row.id}`
+                                                    : row.id}
+                                            </td>
+                                            <td className={td}>
+                                                {row.subscriptions
+                                                    .map((sub) => `${sub.id} (${sub.status})`)
+                                                    .join(', ')}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                Each of these has more than one plan that can still charge: live, or
+                                unpaid, incomplete or paused and able to come back. A new plan
+                                revokes a lapsed one first, so a row here is a double charge or one
+                                waiting to happen. Check the subscriptions in Polar’s dashboard,
+                                revoke the one that shouldn’t run, and refund what it took.
                             </p>
                         </>
                     )}

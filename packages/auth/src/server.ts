@@ -1041,11 +1041,12 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const [overview, stuck, owed, unrefundable] = await Promise.all([
+    const [overview, stuck, owed, unrefundable, doubled] = await Promise.all([
         adminRepository.getOverview(),
         billingRepository.listGivenUpReissues(),
         billingRepository.listRefundsOwed(),
         billingRepository.listUnrefundable(),
+        billingRepository.listDoubleCharging(),
     ]);
     return {
         ...overview,
@@ -1070,6 +1071,7 @@ export async function getAdminOverview(sessionToken: string | null) {
             orderId: row.orderId,
             subscriptionId: row.subscriptionId,
             userId: row.userId,
+            groupId: row.groupId,
             amount: row.amount,
             currency: row.currency,
             failures: row.failures,
@@ -1086,6 +1088,12 @@ export async function getAdminOverview(sessionToken: string | null) {
             currency: row.currency ?? 'usd',
             since: row.since.toISOString(),
         })),
+        /*
+         * Families and people with more than one subscription that can still charge (live, or
+         * lapsed and able to come back): a double charge, or one waiting to happen. Checkouts
+         * revoke a lapsed plan first, so a row here slipped past them. Ids and statuses only.
+         */
+        doubleCharges: doubled,
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },
         objects: {
             ...overview.objects,
