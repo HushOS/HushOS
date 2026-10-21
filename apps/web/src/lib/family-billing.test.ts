@@ -10,6 +10,7 @@ import {
     needsPlan,
     nextCharge,
     placesOf,
+    planState,
     quoteAdd,
     removeRange,
     seatNoteFor,
@@ -586,5 +587,36 @@ describe('tierTooSmall', () => {
             ),
         ).toBeNull();
         expect(tierTooSmall(undefined, plus, tiers)).toBeNull();
+    });
+});
+
+describe('a family plan whose payment didn’t go through', () => {
+    const organizer = ['billing', 'members'];
+    const unpaid = { productName: 'Family Pro (monthly)', standing: 'payment-failed' as const };
+    const lapsed = { productName: 'Family (monthly)', endedAt: end.toISOString() };
+
+    test('is the plan the page shows while none is live, ahead of an older one that ended', () => {
+        expect(
+            planState({ ...summary({ live: false, lastPlan: lapsed }), lapsedPlan: unpaid }),
+        ).toEqual({ kind: 'unpaid', ...unpaid });
+        // A live plan beats it, and without it the ended one shows as before.
+        expect(planState({ ...summary(), lapsedPlan: unpaid }).kind).toBe('live');
+        expect(planState(summary({ live: false, lastPlan: lapsed })).kind).toBe('lapsed');
+    });
+
+    test('its payer gets the portal and a new plan; another billing holder only a new plan; nothing moves storage meanwhile', () => {
+        const payer = familyActions({ ...summary({ live: false }), lapsedPlan: unpaid }, organizer);
+        expect(payer).toMatchObject({ choosePlan: true, portal: true, addPlaces: false });
+        const other = familyActions(
+            { ...summary({ live: false, you: false }), lapsedPlan: unpaid },
+            organizer,
+        );
+        expect(other).toMatchObject({ choosePlan: true, portal: false });
+        // Invites and folders wait, as for no plan at all: the pool gives nothing.
+        expect(needsPlan({ ...summary({ live: false }), lapsedPlan: unpaid })).toBe(true);
+        expect(needsPlan({ ...glance(false), lapsedPlan: unpaid })).toBe(true);
+        expect(
+            Object.values(familyActions({ ...glance(false), lapsedPlan: unpaid }, organizer)),
+        ).not.toContain(true);
     });
 });

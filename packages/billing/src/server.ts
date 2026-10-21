@@ -500,6 +500,15 @@ export async function grantOrderRewards(
     await rewardPaidReferral(userId);
 }
 
+/*
+ * What a paid order of a family's plan earns, as its `order.paid` delivery gives it: the
+ * commission of the affiliate whose discount it used, never one found through a person (the
+ * family's customer is not one), and no referral reward.
+ */
+export async function grantFamilyOrderRewards(order: Parameters<typeof recordAffiliateEarning>[0]) {
+    await recordAffiliateEarning({ ...order, customer: null });
+}
+
 /* The inviter's storage when someone they invited pays for a plan; once per invitee, under a cap. */
 async function rewardPaidReferral(userId: string) {
     const bonus = appEnv.REFERRAL_PAID_BONUS_BYTES;

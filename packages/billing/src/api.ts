@@ -57,6 +57,14 @@ export type FamilyPlan = {
 export type GroupBillingSummary = FamilyBillingDetail | FamilyPlanGlance;
 
 /*
+ * A family plan Polar still holds that gives nothing, shown while no plan is live: its
+ * payment didn't go through (`unpaid`, `incomplete`: `payment-failed`) or it is paused.
+ * The pool and the extra places are gone meanwhile (docs/groups-design.md 3.5); a new
+ * checkout ends it first. Absent from servers before this field.
+ */
+export type FamilyLapsedPlan = { productName: string; standing: 'payment-failed' | 'paused' };
+
+/*
  * A member's view: the plan's name, the storage used and the pool's size,
  * and whether a plan is live at all, which is what keeps inviting, letting
  * people in and new family folders shut (the server refuses them anyway). No
@@ -67,6 +75,8 @@ export type FamilyPlanGlance = {
     view: 'member';
     hasPlan: boolean;
     planName: string | null;
+    /* While no plan is live: one Polar still holds whose payment failed, or that is paused. */
+    lapsedPlan?: FamilyLapsedPlan | null;
     storage: { usedBytes: string; quotaBytes: string } | null;
     /* Absent with billing off. */
     usage?: FamilyUsage;
@@ -129,6 +139,11 @@ export type FamilyBillingDetail = {
      * cancelled. Null while a plan is live, and for a family that never had one.
      */
     lastPlan: { productName: string; endedAt: string } | null;
+    /*
+     * While no plan is live: one Polar still holds whose payment failed, or that is paused.
+     * The page shows it in place of `lastPlan`; choosing a plan ends it first.
+     */
+    lapsedPlan?: FamilyLapsedPlan | null;
     /*
      * The family's storage pool as Drive reads it: every family folder's bytes
      * against the pool's size (zero once a plan has ended). Null for a family
