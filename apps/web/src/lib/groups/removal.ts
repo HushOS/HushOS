@@ -1,5 +1,5 @@
 import type { GroupView } from '@hushos/crypto';
-import { GroupApiError, isNotMember } from './api';
+import { GroupApiError, isNotMember, lapsedPlansIn, type LapsedPlanNamed } from './api';
 import type { GroupContext } from './context';
 import { refusalCopy } from './copy';
 import { fillGrants, markDepartedLeft, renewHold, stageChange, type StageOutcome } from './outbox';
@@ -42,11 +42,12 @@ export type RemovalOutcome =
     /* This person is not in the family any more. */
     | { status: 'wiped' }
     /*
-     * They pay for the family's plan that gives nothing (route 19 answered `ends-lapsed`): it
-     * ends at once when they are removed, so the removal waits for the remover to confirm that
-     * (`endsLapsed`). Nothing was changed.
+     * They pay for the family's plans that give nothing (asked first, or route 19 answered
+     * `ends-lapsed`): those end at once when they are removed, so the removal waits for the
+     * remover to confirm them, by id (`endsLapsed`). Nothing was changed: asked before any
+     * demotion, hold or walk.
      */
-    | { status: 'ends-lapsed'; plan: string; standing: 'payment-failed' | 'paused' };
+    | { status: 'ends-lapsed'; plans: LapsedPlanNamed[] };
 
 const MAX_REBUILDS = 3;
 
@@ -90,14 +91,8 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
         case 'stale':
             return { status: 'failed', message: refusalCopy('stale', outcome.data, { family }) };
         case 'refused': {
-            if (outcome.code === 'ends-lapsed') {
-                const data = outcome.data as { plan?: unknown; standing?: unknown } | null;
-                return {
-                    status: 'ends-lapsed',
-                    plan: typeof data?.plan === 'string' ? data.plan : 'earlier',
-                    standing: data?.standing === 'paused' ? 'paused' : 'payment-failed',
-                };
-            }
+            if (outcome.code === 'ends-lapsed')
+                return { status: 'ends-lapsed', plans: lapsedPlansIn(outcome.data) };
             return {
                 status: 'failed',
                 message: refusalCopy(outcome.code, outcome.data, { family }),
@@ -121,8 +116,8 @@ export async function removeMember(
     options: {
         family?: string;
         demoteFirst?: boolean;
-        /* The remover confirmed that the plan this person pays for, which gives nothing, ends. */
-        endsLapsed?: boolean;
+        /* The lapsed plans (ids) this person pays for that the remover confirmed end. */
+        endsLapsed?: string[];
         onStep?: (step: RemovalStep) => void;
     } = {},
 ): Promise<RemovalOutcome> {
@@ -136,6 +131,25 @@ export async function removeMember(
         return { status: 'failed', message: `Couldn’t check ${family}. Try again.` };
     if (!synced.view.members.some((m) => m.userId === userId && m.status === 'active'))
         return { status: 'changed' };
+
+    // Asked first, before anything changes (a demotion, a hold, a walk): the plans they pay for
+    // that give nothing, which removing them ends. One not yet confirmed stops here; a plan that
+    // can't be ended (a checkout waiting on the bank, one paid again just now) is said as it is.
+    let preview: { plans: LapsedPlanNamed[] };
+    try {
+        preview = await ctx.api.removalPreview(groupId, userId);
+    } catch (error) {
+        if (isNotMember(error)) {
+            await syncGroup(ctx, groupId);
+            return { status: 'wiped' };
+        }
+        if (error instanceof GroupApiError && error.code === 'payer')
+            return { status: 'failed', message: error.message };
+        throw error;
+    }
+    const confirmed = new Set(options.endsLapsed ?? []);
+    if (preview.plans.some((plan) => !confirmed.has(plan.id)))
+        return { status: 'ends-lapsed', plans: preview.plans };
 
     if (options.demoteFirst && manages(synced.view, userId)) {
         options.onStep?.('demote');
@@ -235,7 +249,7 @@ export async function removeMember(
                 kind: 'remove',
                 userId,
                 rotations: await rotations.read(groupId, areas),
-                ...(options.endsLapsed ? { endsLapsed: true as const } : {}),
+                ...(options.endsLapsed?.length ? { endsLapsed: options.endsLapsed } : {}),
             },
             {
                 writers: await rotations.writers(groupId),

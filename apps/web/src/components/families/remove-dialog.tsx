@@ -20,11 +20,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import {
-    familyBillingQueryOptions,
-    lapsedPlanEndsLine,
-    removedPlanEndsLine,
-} from '@/lib/family-billing';
+import { familyBillingQueryOptions, lapsedEndsWords, lapsedPlanShown } from '@/lib/family-billing';
 import { cue } from '@/lib/sounds';
 import { afterMembershipChange, familyContext, firstName, type FamilyMember } from '@/lib/families';
 import { errorCopy } from '@/lib/groups/copy';
@@ -46,7 +42,7 @@ import '@/lib/spaces';
 type Phase =
     | { kind: 'confirm' }
     /* The server named a lapsed plan they pay for: it ends with the removal, asked first. */
-    | { kind: 'confirm-plan'; line: string; demote: boolean }
+    | { kind: 'confirm-plan'; line: string; ids: string[]; demote: boolean }
     | { kind: 'running'; step: RemovalStep; demote: boolean; finished: boolean }
     | { kind: 'done'; outcome: RemovalOutcome; demoted: boolean; finished: boolean }
     | { kind: 'error'; message: string };
@@ -77,17 +73,16 @@ export function RemoveDialog({
     const queryClient = useQueryClient();
     const who = firstName(member.name);
     const billing = useQuery(familyBillingQueryOptions(userId, groupId));
-    const planLine = lapsedPlanEndsLine(billing.data, family, {
-        userId: member.userId,
-        you: false,
-        name: who,
-    });
+    const planShown = lapsedPlanShown(billing.data, { userId: member.userId, you: false });
+    const planLine = planShown
+        ? lapsedEndsWords(family, [planShown], { you: false, name: who })
+        : null;
     const [phase, setPhase] = useState<Phase>({ kind: 'confirm' });
     const busy = phase.kind === 'running';
 
-    // `endsLapsed`: the person has read that the plan ends (the line shown, or confirmed after
-    // the server named it).
-    async function run(demote: boolean, endsLapsed = planLine !== null) {
+    // `endsLapsed`: the plans (ids) the person has read end: the line shown, or the plans the
+    // server named when it asked first.
+    async function run(demote: boolean, endsLapsed: string[] = planShown?.ids ?? []) {
         // Whether an earlier key change was running and had to be finished: its step shows then.
         let finished = false;
         setPhase({ kind: 'running', step: demote ? 'demote' : 'hold', demote, finished });
@@ -104,7 +99,8 @@ export function RemoveDialog({
             if (outcome.status === 'ends-lapsed') {
                 setPhase({
                     kind: 'confirm-plan',
-                    line: removedPlanEndsLine(family, who, outcome.plan, outcome.standing),
+                    line: lapsedEndsWords(family, outcome.plans, { you: false, name: who }),
+                    ids: outcome.plans.map((plan) => plan.id),
                     demote,
                 });
                 return;
@@ -159,7 +155,10 @@ export function RemoveDialog({
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <Button variant="destructive" onClick={() => void run(phase.demote, true)}>
+                        <Button
+                            variant="destructive"
+                            onClick={() => void run(phase.demote, phase.ids)}
+                        >
                             Remove and end the plan
                         </Button>
                     </AlertDialogFooter>

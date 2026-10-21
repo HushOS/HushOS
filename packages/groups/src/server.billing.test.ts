@@ -633,8 +633,27 @@ describe('admission with billing on', () => {
             const subscription = await onPlan(fam, 1);
             subscription.status = status;
             await billing.reconcileGroup(fam.groupId);
-            // Nothing live: they may leave, and as its last member, dissolve it.
-            expect(await groups.leave(fam.organizer.userId, fam.groupId)).toEqual({
+            // Nothing live: they may leave, and as its last member, dissolve it, once they
+            // confirm the plan ends (asked first, by id).
+            expect(await refusal(groups.leave(fam.organizer.userId, fam.groupId))).toEqual({
+                code: 'ends-lapsed',
+                status: 409,
+                data: {
+                    plans: [
+                        {
+                            id: subscription.id,
+                            name: 'Family',
+                            standing: status === 'paused' ? 'paused' : 'payment-failed',
+                        },
+                    ],
+                },
+            });
+            expect(polar.revokes).toEqual([]);
+            expect(
+                await groups.leave(fam.organizer.userId, fam.groupId, {
+                    endsLapsed: [subscription.id],
+                }),
+            ).toEqual({
                 state: 'left',
                 dissolved: true,
             });
@@ -658,7 +677,9 @@ describe('admission with billing on', () => {
         subscription.status = 'paused';
         await billing.reconcileGroup(fam.groupId);
         polar.revokeRefusal = { status: 409, error: 'SubscriptionLocked' };
-        const refused = groups.leave(fam.organizer.userId, fam.groupId);
+        const refused = groups.leave(fam.organizer.userId, fam.groupId, {
+            endsLapsed: [subscription.id],
+        });
         await expect(refused).rejects.toMatchObject({
             code: 'payer',
             status: 409,
@@ -746,6 +767,7 @@ describe('admission with billing on', () => {
         fam: Awaited<ReturnType<typeof kit.family>>,
         marked: Member[],
         remaining: Member[],
+        signer: Member = fam.organizer,
     ) {
         let entries = kit.entries(fam.h);
         for (const m of marked) {
@@ -754,17 +776,118 @@ describe('admission with billing on', () => {
                 entry.userId === m.userId ? { ...before, status: 'left' as const } : entry,
             );
         }
-        const { at, call } = await kit.nextRoster(fam, fam.organizer, entries);
+        const { at, call } = await kit.nextRoster(fam, signer, entries);
         return {
             ...call,
-            rotations: [await kit.rotationWire(fam.areaId, fam.organizer.who, 1)],
+            rotations: [await kit.rotationWire(fam.areaId, signer.who, 1)],
             grants: await Promise.all(
-                [fam.organizer, ...remaining].map((m) =>
-                    kit.grantWire(fam.groupId, fam.areaId, 2, fam.organizer.who, m.who, at),
+                [signer, ...remaining].map((m) =>
+                    kit.grantWire(fam.groupId, fam.areaId, 2, signer.who, m.who, at),
                 ),
             ),
         };
     }
+
+    test('removing the family’s only billing holder, who pays for a paused plan, ends nothing: the write would refuse it', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const payer = await kit.member();
+        await kit.admitted(fam, payer, ['billing']);
+        // The organizer hands billing over: keeps members and guardian, drops billing.
+        const { call: roles } = await kit.nextRoster(
+            fam,
+            fam.organizer,
+            kit.withEntry(fam.h, fam.organizer.who.entry(['guardian', 'members'])),
+        );
+        await groups.patchMember(fam.organizer.userId, fam.groupId, fam.organizer.userId, roles);
+        expect(
+            await billingRepository.setGroupPayer(fam.groupId, fam.organizer.userId, payer.userId),
+        ).toBe(true);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        const call = await removal(fam, [payer], []);
+        // Refused by the write's own rule (no `billing` holder would be left), confirmed or not,
+        // and before anything ends: never asked to confirm a removal that can't happen.
+        for (const endsLapsed of [undefined, [subscription.id]])
+            expect(
+                await refusal(
+                    groups.removeMember(fam.organizer.userId, fam.groupId, payer.userId, {
+                        ...call,
+                        ...(endsLapsed ? { endsLapsed } : {}),
+                    }),
+                ),
+            ).toMatchObject({ code: 'invalid', status: 400 });
+        expect(polar.revokes).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(await state(fam.groupId, payer.userId)).toBe('active');
+    });
+
+    test('a co-manager removing the organizer, the only billing holder, who pays for a paused plan: refused, nothing ended', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const manager = await kit.member();
+        await kit.admitted(fam, manager, ['members']);
+        subscription.status = 'paused';
+        await billing.reconcileGroup(fam.groupId);
+        const call = await removal(fam, [fam.organizer], [], manager);
+        expect(
+            await refusal(
+                groups.removeMember(manager.userId, fam.groupId, fam.organizer.userId, {
+                    ...call,
+                    endsLapsed: [subscription.id],
+                }),
+            ),
+        ).toMatchObject({ status: expect.any(Number) });
+        expect(polar.revokes).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
+    });
+
+    test('a payer whose plan was paid again a moment ago can’t leave or be removed: it runs, on their card', async () => {
+        const { fam, subscription, plain } = await pausedPayer();
+        // Paid in the portal: live at Polar, its delivery not in yet.
+        subscription.status = 'active';
+        await expect(
+            groups.leave(plain.userId, fam.groupId, { endsLapsed: [subscription.id] }),
+        ).rejects.toMatchObject({
+            code: 'payer',
+            message:
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in Billing on the family’s page first; it may take a minute to show there.',
+        });
+        expect(polar.revokes).toEqual([]);
+        expect(await state(fam.groupId, plain.userId)).toBe('active');
+        // Read again: the family's page shows the plan.
+        expect((await billingRepository.getLiveGroupSubscription(fam.groupId))?.status).toBe(
+            'active',
+        );
+        // Billing marked live now: paysForGroup refuses the removal as for any live plan.
+        await expect(
+            groups.removalPreview(fam.organizer.userId, fam.groupId, plain.userId),
+        ).resolves.toEqual({ plans: [] });
+    });
+
+    test('a payer whose plan was paid again a moment ago can’t be removed either, before the mirror knows', async () => {
+        const { fam, subscription, plain } = await pausedPayer();
+        subscription.status = 'active';
+        await expect(
+            groups.removalPreview(fam.organizer.userId, fam.groupId, plain.userId),
+        ).rejects.toMatchObject({
+            code: 'payer',
+            message:
+                'They pay for the family’s plan, which was just paid for again. They can cancel it in Billing on the family’s page; then you can remove them.',
+        });
+        expect(polar.revokes).toEqual([]);
+    });
+
+    test('the removal preview names nothing for someone who doesn’t pay, and is only for managers', async () => {
+        const { fam, plain } = await pausedPayer();
+        expect(
+            await groups.removalPreview(fam.organizer.userId, fam.groupId, fam.organizer.userId),
+        ).toEqual({ plans: [] });
+        await expect(
+            groups.removalPreview(plain.userId, fam.groupId, fam.organizer.userId),
+        ).rejects.toMatchObject({ status: 403 });
+    });
 
     test('a member removed while they pay for a paused plan has it revoked, once the remover confirms it', async () => {
         const { fam, subscription, plain } = await pausedPayer();
@@ -777,14 +900,30 @@ describe('admission with billing on', () => {
         ).toEqual({
             code: 'ends-lapsed',
             status: 409,
-            data: { plan: 'Family', standing: 'paused' },
+            data: { plans: [{ id: subscription.id, name: 'Family', standing: 'paused' }] },
         });
         expect(polar.revokes).toEqual([]);
         expect(await state(fam.groupId, plain.userId)).toBe('active');
+        // Confirming another plan than the one found ends nothing: asked again.
+        expect(
+            await refusal(
+                groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+                    ...call,
+                    endsLapsed: ['sub_some_other'],
+                }),
+            ),
+        ).toMatchObject({ code: 'ends-lapsed' });
+        expect(polar.revokes).toEqual([]);
+        // The removal's own preview names it the same way, before anything is changed.
+        expect(
+            await groups.removalPreview(fam.organizer.userId, fam.groupId, plain.userId),
+        ).toEqual({
+            plans: [{ id: subscription.id, name: 'Family', standing: 'paused' }],
+        });
         // Confirmed: the same call, ending it.
         await groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
             ...call,
-            endsLapsed: true,
+            endsLapsed: [subscription.id],
         });
         expect(await state(fam.groupId, plain.userId)).toBe('removed');
         expect(polar.revokes).toEqual([subscription.id]);
@@ -799,7 +938,7 @@ describe('admission with billing on', () => {
             await refusal(
                 groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
                     ...wrong,
-                    endsLapsed: true,
+                    endsLapsed: [subscription.id],
                 }),
             ),
         ).toMatchObject({ status: 400 });
@@ -818,7 +957,7 @@ describe('admission with billing on', () => {
             await refusal(
                 groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
                     ...stale,
-                    endsLapsed: true,
+                    endsLapsed: [subscription.id],
                 }),
             ),
         ).toMatchObject({ code: 'left-due', status: 409 });

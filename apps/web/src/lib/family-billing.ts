@@ -82,41 +82,58 @@ export function planState(summary: FamilyBillingFull): PlanState {
  * or it is paused) ends at once when the person who pays for it goes (the server revokes it
  * first). From a manager's summary, which names the payer; from a member's glance only for
  * the person themselves (`youPay`), which names nobody else. Null when nothing lapsed is there
- * to end, or the summary can't say this person pays: a remover without `billing` is told by the
- * server instead (route 19's `ends-lapsed`, removedPlanEndsLine).
+ * to end, or the summary can't say this person pays: then the server names the plans itself
+ * (`ends-lapsed`, or the removal preview), and lapsedEndsWords says them.
  */
 export function lapsedPlanEndsLine(
     summary: FamilyBilling | undefined,
     family: string,
     goer: { userId: string; you: true } | { userId: string; you: false; name: string },
 ) {
+    const shown = lapsedPlanShown(summary, goer);
+    return shown ? lapsedEndsWords(family, [shown], goer) : null;
+}
+
+/*
+ * The lapsed plan the summary shows as ending with this person's leave or removal, with the ids
+ * to confirm it by (all the family's lapsed plans, as the page knows them); null as above.
+ */
+export function lapsedPlanShown(
+    summary: FamilyBilling | undefined,
+    goer: { userId: string; you: boolean },
+) {
     if (!summary?.enabled) return null;
     const lapsed = summary.lapsedPlan;
     if (!lapsed) return null;
-    const pays =
-        summary.view === 'manage'
-            ? summary.payer?.userId === goer.userId
-            : goer.you && 'youPay' in lapsed && lapsed.youPay;
-    if (!pays) return null;
-    const name = planWord(lapsed.productName);
-    const how = standingWords(lapsed.standing);
-    return goer.you
-        ? `${family}’s ${name} plan, which you pay for and ${how}, ends at once when you leave. Nothing of it is refunded: no part of it is in use.`
-        : removedPlanEndsLine(family, goer.name, name, lapsed.standing);
+    if (summary.view === 'manage')
+        return summary.payer?.userId === goer.userId
+            ? { name: lapsed.productName, standing: lapsed.standing, ids: lapsed.ids }
+            : null;
+    return goer.you && 'youPay' in lapsed && lapsed.youPay
+        ? { name: lapsed.productName, standing: lapsed.standing, ids: lapsed.ids ?? [] }
+        : null;
 }
 
-/* The removal's words for a lapsed plan the person pays for, as route 19 names it (`ends-lapsed`). */
-export function removedPlanEndsLine(
+/* What ends when the person who pays for these plans goes, every plan named. */
+export function lapsedEndsWords(
     family: string,
-    who: string,
-    plan: string,
-    standing: 'payment-failed' | 'paused',
+    plans: { name: string; standing: 'payment-failed' | 'paused' }[],
+    goer: { you: true } | { you: false; name: string },
 ) {
-    return `${who} pays for ${family}’s ${planWord(plan)} plan, ${standingWords(standing)}. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.`;
+    const several = plans.length > 1;
+    const names = `${plans.map((plan) => planWord(plan.name)).join(' and ')} ${several ? 'plans' : 'plan'}`;
+    const how = several ? 'which give nothing now' : standingWords(plans[0]!.standing);
+    const after = several
+        ? 'Nothing of them is refunded: no part of them is in use.'
+        : 'Nothing of it is refunded: no part of it is in use.';
+    return goer.you
+        ? `${family}’s ${names}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
+        : `${goer.name} pays for ${family}’s ${names}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
 }
 
+/* "Family Pro (monthly)" → "Family Pro"; a neutral "Family plan" → "Family", as "…’s Family plan". */
 const planWord = (productName: string) =>
-    productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+    productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '').replace(/\s+plan$/i, '');
 const standingWords = (standing: 'payment-failed' | 'paused') =>
     standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through';
 

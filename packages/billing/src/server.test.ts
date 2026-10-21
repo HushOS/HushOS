@@ -172,6 +172,8 @@ const polar = {
     beforeCut: null as (() => Promise<void>) | null,
     /* Orders cannot be read (a token without orders:read, an outage). */
     ordersFail: false,
+    /* Polar refuses to list subscriptions with this status while set. */
+    listFailure: null as number | null,
     /* Runs once as Polar takes the next product change: an admission landing mid-flight. */
     beforeProductChange: null as (() => Promise<void>) | null,
     /* Runs once as Polar takes the next raise: an upgrade landing mid-flight. */
@@ -663,6 +665,8 @@ const fakeClient = {
         // A customer's subscriptions, ended ones included, as Polar lists them.
         async list(query: { external_customer_id?: string }) {
             polar.calls.push(`subscriptions.list:${query.external_customer_id}`);
+            if (polar.listFailure !== null)
+                throw new PolarClientError(polar.listFailure, { error: 'ListFailed' });
             const customer = query.external_customer_id
                 ? polar.customers.get(query.external_customer_id)
                 : undefined;
@@ -1066,6 +1070,7 @@ beforeEach(async () => {
     polar.cutFailures = 0;
     polar.beforeCut = null;
     polar.ordersFail = false;
+    polar.listFailure = null;
     polar.beforeProductChange = null;
     polar.ignoresMoves = false;
     polar.ordersLag = false;
@@ -3897,6 +3902,23 @@ describe('a family plan whose payment failed, or that is paused', () => {
         expect(
             (await priced(billing.getGroupBilling(payer, groupId))).lapsedPlan?.ids.sort(),
         ).toEqual(['sub_unread', subscription.id].sort());
+        // Named neutrally, never by Polar's product id.
+        const unreadOnly = await familyOnPlan({ product: PRO_FAMILY });
+        unreadOnly.subscription.status = 'canceled';
+        unreadOnly.subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(unreadOnly.groupId);
+        familySubscription(unreadOnly.groupId, {
+            id: 'sub_unread_only',
+            status: 'paused',
+            product_id: 'prod_archived',
+        });
+        await expect(checkout(unreadOnly.payer, unreadOnly.groupId)).rejects.toMatchObject({
+            code: 'ends-lapsed',
+        });
+        expect(
+            (await priced(billing.getGroupBilling(unreadOnly.payer, unreadOnly.groupId))).lapsedPlan
+                ?.productName,
+        ).toBe('Family plan');
         await checkout(payer, groupId);
         expect(callsTo('subscriptions.revoke').sort()).toEqual(
             ['subscriptions.revoke:sub_unread', `subscriptions.revoke:${subscription.id}`].sort(),
@@ -3950,6 +3972,40 @@ describe('a family plan whose payment failed, or that is paused', () => {
         expect(await billingRepository.listLapsedRevokeRefusals()).toEqual([]);
     });
 
+    test('a payer whose plan was paid again a moment ago can’t delete their account: it runs, on their card', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('paused');
+        // Resumed in the portal; the delivery hasn't arrived.
+        subscription.status = 'active';
+        await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in Billing on the family’s page first; it may take a minute to show there. Your account was not deleted.',
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(subscription.ended_at).toBeNull();
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(payer.id);
+    });
+
+    test('Polar refusing to list the family’s plans (a token without the scope) refuses the checkout as unavailable, and says it at error level', async () => {
+        const { payer, groupId, subscription } = await lapsedFamily('paused');
+        polar.listFailure = 401;
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            await expect(checkout(payer, groupId)).rejects.toMatchObject({ status: 503 });
+            expect(error).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    message:
+                        'Polar refused to read a family’s plans; checkouts, leaves and removals wait',
+                    billing: expect.objectContaining({ group: groupId, status: 401 }),
+                }),
+            );
+        } finally {
+            error.mockRestore();
+            polar.listFailure = null;
+        }
+        expect(subscription.ended_at).toBeNull();
+    });
+
     test('a live plan on a product HushOS can’t read never becomes the family’s plan', async () => {
         const { groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
         const seats = (await groupsRepository.getGroupRow(groupId))?.seatLimit;
@@ -3973,7 +4029,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
     });
 
     test('a member’s glance names the lapsed plan without its ids, and says whether they pay for it', async () => {
-        const { payer, groupId } = await lapsedFamily('paused');
+        const { payer, groupId, subscription } = await lapsedFamily('paused');
         const plain = await createTestAccount();
         await setTestMember({ groupId, userId: plain.userId, state: 'active', roles: [] });
         expect((await billing.getGroupBilling(userOf(plain), groupId)).lapsedPlan).toEqual({
@@ -3981,12 +4037,14 @@ describe('a family plan whose payment failed, or that is paused', () => {
             standing: 'paused',
             youPay: false,
         });
-        // The payer whose `billing` was taken still pays: their glance says so, for their Leave.
+        // The payer whose `billing` was taken still pays: their glance says so, with the ids
+        // their Leave confirms it by.
         await setTestMember({ groupId, userId: payer.id, state: 'active', roles: [] });
         expect((await billing.getGroupBilling(payer, groupId)).lapsedPlan).toEqual({
             productName: 'Family Pro (monthly)',
             standing: 'paused',
             youPay: true,
+            ids: [subscription.id],
         });
     });
 

@@ -1200,6 +1200,7 @@ export async function getLapsedGroupSubscription(groupId: string) {
     const [row] = await db
         .select({
             id: groupBillingSubscriptions.id,
+            productId: groupBillingSubscriptions.productId,
             productName: groupBillingSubscriptions.productName,
             status: groupBillingSubscriptions.status,
         })
