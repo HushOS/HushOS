@@ -10,7 +10,7 @@ public struct ShareMount: Sendable, Identifiable {
     public var id: String { share.id }
 }
 
-/* Why a received share stays shut until the person acts in People you share with, or the granter does. */
+/* Why a received share stays shut until the person acts in Contacts, or the granter does. */
 public enum GranterTrust: Error, LocalizedError, Sendable, Equatable {
     case unverified(name: String), changed(name: String)
     /* Pinned before the post-quantum release (or edited): as good as not checked until words are compared again. */
@@ -36,9 +36,9 @@ public enum GranterTrust: Error, LocalizedError, Sendable, Equatable {
     }
     public var errorDescription: String? {
         switch self {
-        case .unverified(let name): return "Add \(name) in People you share with and check their words to open what they shared."
-        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in People you share with. Shares from them open once you’ve both compared words."
-        case .changed(let name): return "\(name)’s key has changed since you added them. Check again in People you share with before opening what they shared."
+        case .unverified(let name): return "Add \(name) in Contacts and check their words to open what they shared."
+        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in Contacts. Shares from them open once you’ve both compared words."
+        case .changed(let name): return "\(name)’s key has changed since you added them. Check again in Contacts before opening what they shared."
         case .reseal(let name): return "Ask \(name) to share it again."
         }
     }

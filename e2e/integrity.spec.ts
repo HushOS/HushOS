@@ -139,9 +139,9 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
 });
 
 test('a file from someone not checked is Unverified, says who, and clears once checked', async () => {
-    await maya.goto('/app/people');
+    await maya.goto('/app/contacts');
     await addContact(maya, samEmail);
-    await sam.goto('/app/people');
+    await sam.goto('/app/contacts');
     await addContact(sam, mayaEmail);
 
     await maya.goto('/app/drive');
@@ -174,7 +174,7 @@ test('a file from someone not checked is Unverified, says who, and clears once c
     await expect(mark(maya, 'module.ts')).toHaveCount(0);
 
     // Without that check, it is someone she hasn't checked.
-    await maya.goto('/app/people');
+    await maya.goto('/app/contacts');
     await maya.getByRole('button', { name: 'More for Sam Okafor' }).click();
     await maya.getByRole('menuitem', { name: 'Remove' }).click();
     await maya.getByRole('alertdialog').getByRole('button', { name: 'Remove' }).click();
@@ -290,10 +290,10 @@ test('after Sam replaces his sharing keys, Maya follows only when she checks, an
     // Maya's device does not follow his new keys by itself: his share waits for her to check.
     await maya.goto('/app/shared');
     await expect(maya.locator('[data-shared="Shared folder"]').getByRole('alert')).toContainText(
-        'Sam Okafor’s sharing keys changed since you checked them. Check them again in People you share with',
+        'Sam Okafor’s sharing keys changed since you checked them. Check them again in Contacts',
         { timeout: 60_000 },
     );
-    await maya.goto('/app/people');
+    await maya.goto('/app/contacts');
     await expect(maya.locator(`[data-contact="${samEmail}"]`)).toBeVisible({ timeout: 60_000 });
     await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
 
@@ -357,7 +357,7 @@ test('after Sam replaces his sharing keys, Maya follows only when she checks, an
     await expect(row(sam, 'module.ts')).toBeVisible({ timeout: 60_000 });
 
     // Comparing words again clears the notice.
-    await maya.goto('/app/people');
+    await maya.goto('/app/contacts');
     await maya
         .locator(`[data-succession="${samEmail}"]`)
         .getByRole('button', { name: 'Compare words again' })
@@ -405,7 +405,7 @@ test('rotating Sam’s account key carries his earlier keys and his settings key
     await saveKit(sam);
     await expect(sam).toHaveURL(/\/app/, { timeout: 60_000 });
 
-    await sam.goto('/app/people');
+    await sam.goto('/app/contacts');
     await expect(sam.locator(`[data-contact="${mayaEmail}"]`)).toBeVisible({ timeout: 60_000 });
     await sam.goto('/app/shared');
     await sam

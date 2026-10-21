@@ -198,7 +198,7 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
     if (checking != null) {
         CheckThemSheet(model, email = checking!!, pinned = null, dismiss = { checking = null }) { pin ->
             checking = null; query = ""; chosen = pin; scope.launch { pins = model.contacts() ?: pins }
-            model.notify("${pin.name.ifEmpty { pin.email }} added to people you share with")
+            model.notify("${pin.name.ifEmpty { pin.email }} added to Contacts")
         }
         return
     }
@@ -678,10 +678,10 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
             Text(
                 when {
                     lookup.changed -> "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
-                    lookup.followed || (lookup.pinned?.verified == true && lookup.pinned.keysReplacedAt != null) -> "$first replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask $first to open People you share with in HushOS, choose Your twelve words, and read them to you."
+                    lookup.followed || (lookup.pinned?.verified == true && lookup.pinned.keysReplacedAt != null) -> "$first replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask $first to open Contacts in HushOS, choose Your twelve words, and read them to you."
                     notUpgraded -> "$first hasn’t signed in since HushOS upgraded its keys. You can compare words once they have."
-                    lookup.recheck -> "You added $first before the twelve words covered all of their keys. Ask $first to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with $first and what they share with you stays shut."
-                    else -> "Ask $first to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them."
+                    lookup.recheck -> "You added $first before the twelve words covered all of their keys. Ask $first to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with $first and what they share with you stays shut."
+                    else -> "Ask $first to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them."
                 },
                 style = MaterialTheme.typography.bodyMedium, color = if (lookup.changed) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
             )
@@ -792,7 +792,7 @@ fun OwnWordsSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit)
 }
 
 /*
- * People you share with: someone new by email and Your twelve words first, then everyone
+ * Contacts: someone new by email and Your twelve words first, then everyone
  * this account added, by name (Find someone from eight of them), with a way to check
  * each is really them or remove them (asked first).
  */
@@ -821,7 +821,7 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
         Column(Modifier.fillMaxWidth().heightIn(min = 480.dp).verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S2, end = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = dismiss) { Icon(Icons.Outlined.Close, "Close") }
-                Text("People you share with", style = MaterialTheme.typography.titleLarge)
+                Text("Contacts", style = MaterialTheme.typography.titleLarge)
             }
             Text("Everyone you’ve shared with or added. Check it’s them before you share anything sensitive.",
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2))

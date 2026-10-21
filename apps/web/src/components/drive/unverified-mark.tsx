@@ -163,19 +163,19 @@ export function UnverifiedMark({
                     type: 'success',
                     title: `${name} replaced their sharing keys`,
                     description:
-                        'The change is signed by their previous keys. Compare words in People you share with to be sure.',
+                        'The change is signed by their previous keys. Compare words in Contacts to be sure.',
                 });
             else if (outcome === 'recheck')
                 toast.add({
                     type: 'error',
                     title: `${name}’s keys were upgraded`,
-                    description: 'Compare words with them again in People you share with.',
+                    description: 'Compare words with them again in Contacts.',
                 });
             else if (outcome === 'changed')
                 toast.add({
                     type: 'error',
                     title: `${name}’s keys have changed`,
-                    description: 'Check it’s them in People you share with.',
+                    description: 'Check it’s them in Contacts.',
                 });
             else
                 toast.add({

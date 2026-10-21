@@ -180,7 +180,7 @@ export async function newFolder(page: Page) {
     await page.getByRole('menuitem', { name: /new folder/i }).click();
 }
 
-/* In People you share with: adds someone by email after checking their twelve words are the ones shown. */
+/* In Contacts: adds someone by email after checking their twelve words are the ones shown. */
 export async function addContact(page: Page, email: string) {
     await page.getByRole('button', { name: 'Add someone' }).click();
     const sheet = page.locator('[data-slot=dialog-content]');

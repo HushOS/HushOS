@@ -50,7 +50,7 @@ test.afterAll(async () => {
 });
 
 test('the owner pins the guest and shares a folder as editor', async () => {
-    await owner.goto('/app/people');
+    await owner.goto('/app/contacts');
     await owner.getByRole('button', { name: 'Add someone' }).click();
     await dialog(owner).getByLabel('Email').fill(guestEmail);
     await dialog(owner).getByRole('button', { name: 'Look up' }).click();
@@ -101,7 +101,7 @@ test('the guest’s share stays shut until they check the owner’s words, then 
     const waiting = guest.locator('[data-shared="Shared folder"]');
     await expect(waiting).toBeVisible({ timeout: 60_000 });
     await expect(waiting).toContainText('Opens once you’ve checked E2E’s words.');
-    await guest.goto('/app/people');
+    await guest.goto('/app/contacts');
     await expect(guest.locator('[data-contact]')).toHaveCount(0, { timeout: 60_000 });
     await addContact(guest, ownerEmail);
     await expect(guest.locator('[data-contact]')).toHaveCount(1);

@@ -38,11 +38,11 @@ test('goes places from any page, and the folder view lends its actions', async (
     // Off the folder view, its actions are gone and places remain.
     await page.keyboard.press(`${await shortcutModifier(page)}+k`);
     await expect(page.getByRole('option', { name: /New folder/ })).toHaveCount(0);
-    await palette(page).fill('people you share');
+    await palette(page).fill('contacts');
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/\/app\/people/);
+    await expect(page).toHaveURL(/\/app\/contacts/);
     // The address changes before the page commits; the next test's goto must not cut it off.
-    await expect(page.getByRole('heading', { name: 'People you share with' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible();
 });
 
 test('empties the trash from anywhere, after asking', async () => {
@@ -51,7 +51,7 @@ test('empties the trash from anywhere, after asking', async () => {
     await page.keyboard.press('Backspace');
     await expect(row(page, 'notes.md')).toHaveCount(0);
     // A full navigation: the entry is a real button only once the page has hydrated.
-    await page.goto('/app/people', { waitUntil: 'networkidle' });
+    await page.goto('/app/contacts', { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: 'Search' }).click();
     await palette(page).fill('empty trash');
     await page.keyboard.press('Enter');

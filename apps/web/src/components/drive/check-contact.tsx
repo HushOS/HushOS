@@ -20,9 +20,9 @@ import { cue } from '@/lib/sounds';
 /*
  * Adding someone: look them up by email, then check it's them. The server hands
  * over their key; the fingerprint is how a person knows it is really theirs, read
- * aloud by the other person from their own People you share with page. Nobody is
+ * aloud by the other person from their own Contacts page. Nobody is
  * added until "They match". Used from the share dialog, so sharing never has to
- * stop for it, and from People you share with.
+ * stop for it, and from Contacts.
  */
 export function CheckContact({
     userId,
@@ -189,8 +189,8 @@ export function CheckContact({
             ) : found.followed || (recheck && found.pinned && replacementUnseen(found.pinned)) ? (
                 <p className="text-sm leading-snug">
                     {first} replaced their sharing keys; the change is signed by their previous
-                    keys. To be sure it was them, ask {first} to open People you share with in
-                    HushOS, choose Your twelve words, and read them to you.
+                    keys. To be sure it was them, ask {first} to open Contacts in HushOS, choose
+                    Your twelve words, and read them to you.
                 </p>
             ) : notUpgraded ? (
                 <p className="text-sm leading-snug text-muted-foreground">
@@ -200,16 +200,15 @@ export function CheckContact({
             ) : found.stale ? (
                 <p className="text-sm leading-snug text-muted-foreground">
                     You added {first} before the twelve words covered all of their keys. Ask {first}{' '}
-                    to open People you share with in HushOS, choose Your twelve words, and read them
-                    to you, on a call or in person. Until you do, nothing is shared with {first} and
-                    what they share with you stays shut.
+                    to open Contacts in HushOS, choose Your twelve words, and read them to you, on a
+                    call or in person. Until you do, nothing is shared with {first} and what they
+                    share with you stays shut.
                 </p>
             ) : (
                 <p className="text-sm leading-snug text-muted-foreground">
                     {familyVouched && <span data-vouched>{familyVouched}. </span>}
-                    Ask {first} to open People you share with in HushOS, choose Your twelve words,
-                    and read them to you, on a call or in person. If they match these, it’s really
-                    them.
+                    Ask {first} to open Contacts in HushOS, choose Your twelve words, and read them
+                    to you, on a call or in person. If they match these, it’s really them.
                 </p>
             )}
             {found.fingerprint && <FingerprintWords fingerprint={found.fingerprint} />}

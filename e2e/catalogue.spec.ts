@@ -149,7 +149,7 @@ test('a tag applied to a folder is found by name and by tag, and a rename reache
 test('after a revoked share is rotated, the rotated items are still found, through the feed and from the mirror', async () => {
     test.setTimeout(480_000);
     // Share the tagged folder, with a file in it, then take it back.
-    await owner.goto('/app/people');
+    await owner.goto('/app/contacts');
     await addContact(owner, guestEmail);
     await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
 

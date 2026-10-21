@@ -64,8 +64,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -149,7 +147,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
             TextButton(onClick = { people = true }) {
                 Icon(Icons.Outlined.Group, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.size(AlpineSpace.S2))
                 // Short on screen; its full name for TalkBack, the place's name everywhere else.
-                Text("People", modifier = Modifier.semantics { contentDescription = "People you share with" })
+                Text("Contacts")
             }
         }
     }) { padding ->
@@ -330,7 +328,7 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
     val from = first(mount.share.granterName, mount.share.granterEmail)
     val trust = mount.trust
     if (root == null && trust != null) {
-        // Shut until the granter is checked in People you share with: the server's word for their key is not enough.
+        // Shut until the granter is checked in Contacts: the server's word for their key is not enough.
         // A pin that vouches for nothing waits for a words check, like someone not added yet.
         // Only keys that changed without a signed succession are a warning; replaced keys and a share waiting for its re-seal are a step to take.
         val unverified = trust !is GranterTrust.Changed

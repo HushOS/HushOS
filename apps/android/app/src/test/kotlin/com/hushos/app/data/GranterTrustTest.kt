@@ -45,7 +45,7 @@ class GranterTrustTest {
         val replaced = assertThrows(GranterTrust.Replaced::class.java) {
             granterKey("user-ana", "Ana Lima", served(enc = serverKey, sig = ByteArray(32) { 7 }, version = 3uL), pins)
         }
-        assertEquals("Ana Lima’s sharing keys changed since you checked them. Check them again in People you share with to open what they shared.", replaced.message)
+        assertEquals("Ana Lima’s sharing keys changed since you checked them. Check them again in Contacts to open what they shared.", replaced.message)
         // A succession is always to version 2 keys: newer keys served without an ML-DSA key are no succession at all.
         assertThrows(GranterTrust.Changed::class.java) {
             granterKey("user-ana", "Ana Lima", served(enc = serverKey, sig = ByteArray(32) { 7 }, version = 3uL).copy(mlDsaPublicKey = null), pins)

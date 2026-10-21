@@ -111,7 +111,7 @@ struct SharedView: View {
                 .font(.body.weight(.semibold)).padding(.horizontal, 14).frame(minHeight: Theme.control).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("People you share with")
+        .accessibilityLabel("Contacts")
     }
 
     private var header: some View {
@@ -219,7 +219,7 @@ struct SharedView: View {
             }
             .itemRow()
         } else if let trust = mount.trust {
-            // Shut until the granter is checked in People you share with (the server's word for their key is not enough),
+            // Shut until the granter is checked in Contacts (the server's word for their key is not enough),
             // checked again after their keys changed, or, signed with keys they replaced, sealed again by them.
             let unverified = trust.unverified
             Button {

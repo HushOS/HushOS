@@ -52,7 +52,7 @@ export type NavItem = {
         | '/app/trash'
         | '/app/shared'
         | '/app/account'
-        | '/app/people'
+        | '/app/contacts'
         | '/app/tags'
         | '/app/billing'
         | '/app/recovery-key'
@@ -88,10 +88,10 @@ export const workspace: NavItem[] = [
 export const organise: NavItem[] = [
     { to: '/app/tags', label: 'Tags', icon: TagIcon, active: under('/app/tags') },
     {
-        to: '/app/people',
-        label: 'People you share with',
+        to: '/app/contacts',
+        label: 'Contacts',
         icon: ContactIcon,
-        active: under('/app/people'),
+        active: under('/app/contacts'),
     },
 ];
 export const operator: NavItem[] = [
