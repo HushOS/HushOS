@@ -1,0 +1,28 @@
+apps/web/src/lib/family-checkout.ts
+  s_566b8e0c4467a4::t_0a3094fa191388 1-104
+  s_566b8e0c4467a4::t_698bb5dc4f029b 105-106
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_6deea031304b0f 4,21-27,73,75-81,84-95,100,103-108,112,120-136,147-153,157,188-189,252
+apps/web/src/routes/_authenticated/app/_drive/family/index.tsx
+  s_566b8e0c4467a4::t_3f457a1dc6ef4b 10,40-43,55
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_6957cf0a3a8002 32,390-394,400,719
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_bd54925bbe5467 2431-2468,2539-2549,2555,2572,2584-2624,2629-2637,2639-2642,2644-2645,2647-2658,2660,2663,2665-2723
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c81e820f872cf66e7cfc9bac6ab9b38461d21791",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
