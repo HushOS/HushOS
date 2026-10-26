@@ -1,6 +1,6 @@
 import { bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
-import { fingerprint, hexBytes, publicKeyBytes } from './fingerprint';
+import { fingerprint, hexBytes, keyDigest, publicKeyBytes } from './fingerprint';
 
 /*
  * The rules a device applies to the pins and settings the server hands back.
@@ -34,6 +34,112 @@ export async function pinVerified(pin: {
     } catch {
         return false;
     }
+}
+
+/*
+ * The key fields of a contact pin, as every rule below reads them. A pin
+ * comes out of the settings document, so any field may be missing or of
+ * another type; every rule treats that as not holding.
+ */
+export type PinKeys = {
+    keyVersion?: number | null;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    mlDsaPublicKeyHash?: string | null;
+    kemPublicKeyHash?: string | null;
+    fingerprint: string;
+};
+
+/*
+ * The key commitment (docs/optional-verification.md 1): the version 3
+ * fingerprint over a pin's four keys, whether or not anyone compared it. It is
+ * how two pins, a pin and a guard entry, or a pin and a staged admission are
+ * compared; the pin's own `fingerprint` never is, since every first-seen pin
+ * holds `""` there. Null when a key field is missing or not in canonical form
+ * (base64url keys, 64 lowercase hex digests), so a malformed pin matches
+ * nothing. The Rust core's `key_commitment` is its twin.
+ */
+export async function keyCommitment(pin: Omit<PinKeys, 'fingerprint'>) {
+    if (!pin.mlDsaPublicKeyHash || !pin.kemPublicKeyHash) return null;
+    try {
+        return await fingerprint(
+            canonicalKey(pin.encryptionPublicKey),
+            canonicalKey(pin.signingPublicKey),
+            hexBytes(pin.mlDsaPublicKeyHash),
+            hexBytes(pin.kemPublicKeyHash),
+        );
+    } catch {
+        return null;
+    }
+}
+
+/*
+ * What a contact pin stands for (docs/optional-verification.md 2.2), the one
+ * rule every client applies, twinned by the Rust core's `pin_trust`:
+ * - verified: pinVerified, a words check over its four keys;
+ * - seen: a first-seen pin, `fingerprint` exactly `""` with every key field
+ *   well formed: the keys this person's devices first saw, which nobody
+ *   checked;
+ * - legacy: no ML-DSA digest, a pin from before post-quantum identities;
+ * - invalid: anything else (a fingerprint over other keys, a malformed key).
+ *   Treated as legacy: it can become first-seen again, never verified.
+ */
+export type PinTrust = 'verified' | 'seen' | 'legacy' | 'invalid';
+export async function pinTrust(pin: PinKeys): Promise<PinTrust> {
+    if (!pin.mlDsaPublicKeyHash) return 'legacy';
+    if (await pinVerified(pin)) return 'verified';
+    if (pin.fingerprint === '' && (await keyCommitment(pin)) !== null) return 'seen';
+    return 'invalid';
+}
+
+/*
+ * The key fields of a version 3 pin of keys the server serves: the X25519 and
+ * Ed25519 keys, the digests of the ML-DSA and ML-KEM keys, the key version,
+ * and the fingerprint: the version 3 one when the two people just compared
+ * words (`verified`), `""` for a first-seen pin (`seen`). Refused when the
+ * keys would not make a pin of that kind, so nothing malformed is pinned.
+ * The Rust core's `pin_of_served` is its twin.
+ */
+export async function pinKeysOfServed(
+    served: {
+        keyVersion: number;
+        encryptionPublicKey: string;
+        signingPublicKey: string;
+        mlDsaPublicKey: string;
+        kemPublicKey: string;
+    },
+    form: 'verified' | 'seen',
+) {
+    let keys;
+    try {
+        const mlDsa = canonicalBytes(served.mlDsaPublicKey, 1952);
+        const kem = canonicalBytes(served.kemPublicKey, 1184);
+        keys = {
+            encryptionPublicKey: served.encryptionPublicKey,
+            signingPublicKey: served.signingPublicKey,
+            mlDsaPublicKeyHash: await keyDigest(mlDsa),
+            kemPublicKeyHash: await keyDigest(kem),
+            keyVersion: integer(served.keyVersion, 'key version'),
+        };
+    } catch {
+        throw new CryptoError('Invalid identity key.');
+    }
+    const commitment = await keyCommitment(keys);
+    if (commitment === null) throw new CryptoError('Invalid identity key.');
+    return { ...keys, fingerprint: form === 'verified' ? commitment : '' };
+}
+
+/* Bytes of exactly `length` in canonical base64url, as the Rust core's decode takes them; anything else throws. */
+function canonicalBytes(value: string, length: number) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]*$/.test(value))
+        throw new Error('Invalid key.');
+    const bytes = publicKeyBytes(value);
+    const again = btoa(String.fromCharCode(...bytes))
+        .replaceAll('+', '-')
+        .replaceAll('/', '_')
+        .replace(/=+$/, '');
+    if (bytes.length !== length || again !== value) throw new Error('Invalid key.');
+    return bytes;
 }
 
 /*

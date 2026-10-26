@@ -267,6 +267,8 @@ impl Judge {
 pub(crate) fn copy_prior(verdict: GroupVerdict) -> CoreResult<Integrity> {
     match verdict {
         GroupVerdict::Verified => Ok(Integrity::Verified),
+        // A first-seen writer's record is copied as the copier's own (docs/optional-verification.md 2.6).
+        GroupVerdict::Seen => Ok(Integrity::Seen),
         GroupVerdict::SavedFromLink => Ok(Integrity::SavedFromLink),
         GroupVerdict::Unchecked => {
             Err(input("HushOS couldn't check who wrote this, so it was not locked again."))

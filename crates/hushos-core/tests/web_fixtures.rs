@@ -402,11 +402,12 @@ fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
         b(metadata, "envelope"),
         b(metadata, "signature")
     ));
-    let current = TrustedKeys { current: public.clone(), retired: vec![] };
+    let current = TrustedKeys { current: public.clone(), retired: vec![], seen: false };
     // The web's successor key as current, the signer's key only as retired.
     let replaced = TrustedKeys {
         current: base64url_decode(s(&fixture()["succession"]["identity"], "signingPublicKey")).unwrap(),
         retired: vec![public.clone()],
+        seen: false,
     };
     let verdict = |trusted: &TrustedKeys, signature: &str| {
         metadata_integrity(
@@ -452,7 +453,7 @@ fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
         b(version, "envelope"),
         b(version, "signature")
     ));
-    let current = TrustedKeys { current: public, retired: vec![] };
+    let current = TrustedKeys { current: public, retired: vec![], seen: false };
     assert_eq!(
         version_integrity(
             Some(current.clone()),
@@ -781,7 +782,7 @@ fn the_web_s_scoped_ids_derive_here_from_the_same_seed_and_scope() {
 fn the_web_s_saved_signatures_read_as_saved_and_as_nothing_else() {
     let signatures = &fixture()["signatures"];
     let public = b(signatures, "signingPublicKey");
-    let me = TrustedKeys { current: public.clone(), retired: vec![] };
+    let me = TrustedKeys { current: public.clone(), retired: vec![], seen: false };
     let metadata = &signatures["metadata"];
     let statement = MetadataStatement {
         workspace_id: s(&metadata["statement"], "workspaceId"),

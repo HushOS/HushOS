@@ -2283,7 +2283,7 @@ async function groupVerdictOf(
             return { integrity: 'key-conflict', via: null };
         case 'former-member': {
             const integrity = unknown(await check(trust.signer), trust.linksLoaded);
-            const valid = ['verified', 'saved-from-link', 'resealed', 'retired-key'];
+            const valid = ['verified', 'seen', 'saved-from-link', 'resealed', 'retired-key'];
             return {
                 integrity: valid.includes(integrity) ? 'former-member' : integrity,
                 via: null,
@@ -2351,7 +2351,7 @@ export async function groupRekeyedIntegrityOf(
             checks.rekeySigned,
             async (signer) => {
                 const integrity = await checks.rekeyer(signer);
-                attested = integrity === 'verified';
+                attested = integrity === 'verified' || integrity === 'seen';
                 return integrity;
             },
         );

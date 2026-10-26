@@ -134,6 +134,19 @@ function bodyText(value: unknown): string | null {
 }
 
 /*
+ * The keys a kept admission was staged over, as its `admits` names them: `keys`
+ * (their key commitment) when the entry carries it, else an older entry's
+ * `fingerprint`, which is the key commitment exactly when the pin it came
+ * from held the keys it was taken over. Null when neither is a string; `keys`
+ * present but not a string is null too, never a fall back to `fingerprint`.
+ */
+export function admittedKeys(admits: unknown): string | null {
+    if (!isObject(admits)) return null;
+    const staged = 'keys' in admits ? admits.keys : admits.fingerprint;
+    return typeof staged === 'string' ? staged : null;
+}
+
+/*
  * An outbox entry as opened from the device store, read for `groupId`: null
  * when it is no entry (deleted, and counted as lost), else what to do with it,
  * field by field in the core's order (version, a non-empty id and, with
@@ -141,13 +154,18 @@ function bodyText(value: unknown): string | null {
  * earlier version's held-back admission; against `options.head`, the
  * committed chain's roster digests, landed or superseded; an admission's keys;
  * a creation committed but not pinned). An admission is sent only while `pin`,
- * the admin's pin of the person now (their user id and fingerprint), has the
- * fingerprint the entry was built from.
+ * the admin's pin of the person now (their user id and its key commitment,
+ * keyCommitment in ./pins, null when it has none), holds the keys the entry
+ * was built from: `admits.keys`, the key commitment it was staged over. An
+ * entry from before it was kept carries `admits.fingerprint` instead, the
+ * pin's fingerprint then, which matches only a pin whose key commitment it is
+ * (`""`, a first-seen pin's, matches nothing); `keys`, when present, decides
+ * alone (docs/optional-verification.md 2.2).
  */
 export function readOutboxEntry(
     value: unknown,
     groupId: string,
-    pin: { userId: string; fingerprint: string } | null,
+    pin: { userId: string; keys: string | null } | null,
     options: { id?: string; head?: readonly string[] | null } = {},
 ): OutboxRead | null {
     if (!isObject(value)) return null;
@@ -179,14 +197,17 @@ export function readOutboxEntry(
     }
     if (route.kind === 'admit') {
         const admits = isObject(value.admits) ? value.admits : null;
+        const staged = admittedKeys(admits);
         const same =
             admits !== null &&
             typeof admits.userId === 'string' &&
-            typeof admits.fingerprint === 'string' &&
+            staged !== null &&
             pin !== null &&
+            typeof pin.keys === 'string' &&
+            pin.keys !== '' &&
             admits.userId === route.userId &&
             pin.userId === route.userId &&
-            admits.fingerprint === pin.fingerprint;
+            staged === pin.keys;
         if (!same) return hold('other-keys');
     }
     if (state === 'committed') return hold('committed');

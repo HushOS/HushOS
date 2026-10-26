@@ -1614,7 +1614,7 @@ impl AreaLedger {
     /// ```
     /// use hushos_core::*;
     /// let seed = random_bytes(32)?;
-    /// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+    /// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
     /// let statement = MetadataStatement {
     ///     workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(),
     ///     node_id: "0e0e0e0e-0000-4000-8000-000000000002".into(), kind: NodeKind::File, metadata_version: 1,
@@ -1691,7 +1691,7 @@ impl AreaLedger {
     /// ```
     /// use hushos_core::*;
     /// let seed = random_bytes(32)?;
-    /// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+    /// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
     /// let statement = MetadataStatement {
     ///     workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(),
     ///     node_id: "0e0e0e0e-0000-4000-8000-000000000002".into(), kind: NodeKind::File, metadata_version: 1,
@@ -3002,7 +3002,7 @@ mod tests {
             self.people[n - 1].user_id.clone()
         }
         fn keys(&self, n: usize) -> TrustedKeys {
-            TrustedKeys { current: signing_public_key(self.seed(n)).unwrap(), retired: vec![] }
+            TrustedKeys { current: signing_public_key(self.seed(n)).unwrap(), retired: vec![], seen: false }
         }
         /* Person `n`'s ledger: the account opened, the area writable at version 2, its top level opened. */
         fn ledger(&self, n: usize) -> Arc<AreaLedger> {

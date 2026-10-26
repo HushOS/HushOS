@@ -2538,7 +2538,7 @@ pub fn group_writer_trust(
         }
         _ => entry_key,
     };
-    let signer = TrustedKeys { current, retired };
+    let signer = TrustedKeys { current, retired, seen: false };
     // A former member still holds their keys, and a signature has no trustworthy date. Marked
     // before any personal pin is consulted: inside the group's areas, leaving is what matters.
     if entry.status == MemberStatus::Left {
@@ -2599,6 +2599,8 @@ pub fn group_writer_trust(
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum GroupVerdict {
     Verified,
+    /// Under a first-seen pin's keys (docs/optional-verification.md 2.6): no mark, never verified.
+    Seen,
     SavedFromLink,
     Resealed,
     RetiredKey,
@@ -2614,6 +2616,7 @@ impl From<Integrity> for GroupVerdict {
     fn from(integrity: Integrity) -> Self {
         match integrity {
             Integrity::Verified => GroupVerdict::Verified,
+            Integrity::Seen => GroupVerdict::Seen,
             Integrity::SavedFromLink => GroupVerdict::SavedFromLink,
             Integrity::Resealed => GroupVerdict::Resealed,
             Integrity::RetiredKey => GroupVerdict::RetiredKey,
@@ -2659,6 +2662,7 @@ fn group_integrity(
         GroupWriterTrust::FormerMember { signer, links_loaded } => {
             match unknown(check(Some(signer)), links_loaded) {
                 Integrity::Verified
+                | Integrity::Seen
                 | Integrity::SavedFromLink
                 | Integrity::Resealed
                 | Integrity::RetiredKey => (GroupVerdict::FormerMember, None),
@@ -2750,7 +2754,7 @@ fn group_rekeyed(rekeyed: Option<Rekeyed>, trust: GroupRekeyedTrust) -> GroupRek
         rekeyed.rekey_signature.is_some(),
         |trusted| {
             let integrity = rekeyed.rekeyer(trusted.as_ref());
-            attested.set(integrity == Integrity::Verified);
+            attested.set(matches!(integrity, Integrity::Verified | Integrity::Seen));
             integrity
         },
     );

@@ -1,7 +1,7 @@
 import type { DriveSigners, GroupIntegrity } from '@hushos/crypto';
 import type { ContactPin } from '@hushos/crypto/contacts';
-import { fingerprintOfKeys, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
-import { pinVerified } from '@hushos/crypto/pins';
+import { keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
+import { pinKeysOfServed, pinTrust } from '@hushos/crypto/pins';
 import type { Integrity, SignatureForm } from '@hushos/crypto/signatures';
 import type { NodeView, ServedIdentity, Signer, VersionView } from './api';
 
@@ -31,14 +31,17 @@ export type RecordIntegrity = GroupIntegrity;
  * a folder recreated by a copy: a verified original stays ordinary, one that
  * verified as saved from a link stays saved, and anything else (Unverified,
  * Couldn't check, re-sealed, retired keys, never checked) is re-sealed, so
- * writing it again never turns it into a record this person vouches for.
+ * writing it again never turns it into a record this person vouches for. A
+ * first-seen writer's record (`seen`) is written again as the copier's own,
+ * as uploading a file they downloaded would be
+ * (docs/optional-verification.md 2.6).
  */
 export function signatureFormFor(
     prior: RecordIntegrity | null | undefined,
     source: 'link' | 'drive' = 'drive',
 ): SignatureForm {
     if (source === 'link') return 'saved';
-    if (prior === 'verified') return 'ordinary';
+    if (prior === 'verified' || prior === 'seen') return 'ordinary';
     if (prior === 'saved-from-link') return 'saved';
     return 'resealed';
 }
@@ -88,18 +91,21 @@ export function replacementUnseen(pin: Pin) {
 
 /*
  * The signing keys driveVerify may accept for each account other than this
- * one: a verified pin's current key, which alone can verify a record, and the
- * earlier ones it followed a chain from, which only say `retired-key`. A pin
- * made before the words covered both keys vouches for nothing.
+ * one: a pin's current key, which alone can make a record `verified` (a
+ * verified pin) or `seen` (a first-seen pin, marked `seen`), and the earlier
+ * ones it followed a chain from, which only say `retired-key`. A pin from
+ * before post-quantum identities, or a malformed one, vouches for nothing.
  */
 export type { DriveSigners };
 export async function signersFromPins(contacts: Record<string, Pin>): Promise<DriveSigners> {
     const signers: DriveSigners = {};
     for (const pin of Object.values(contacts)) {
-        if (!(await pinVerified(pin))) continue;
+        const trust = await pinTrust(pin);
+        if (trust !== 'verified' && trust !== 'seen') continue;
         signers[pin.userId] = {
             current: pin.signingPublicKey,
             retired: [...(pin.previousSigningKeys ?? [])],
+            ...(trust === 'seen' ? { seen: true } : {}),
         };
     }
     return signers;
@@ -108,13 +114,15 @@ export async function signersFromPins(contacts: Record<string, Pin>): Promise<Dr
 /*
  * What a pin says about the keys the server serves for that person now
  * (docs/identity-pq-design.md 2):
- * - same: a version 3 pin, and the served X25519 and Ed25519 keys are the
- *   pinned ones and the served ML-DSA and ML-KEM keys match its digests;
- * - recheck: a pin from before the release (no ML-DSA digest) over the same
- *   X25519 and Ed25519 keys: the person upgraded, and only comparing words
- *   again trusts them ("Check words again"); until then, nothing is trusted;
+ * - same: a verified or first-seen pin (pinTrust), and the served X25519 and
+ *   Ed25519 keys are the pinned ones and the served ML-DSA and ML-KEM keys
+ *   match its digests;
+ * - recheck: a pin from before the release (no ML-DSA digest), or a malformed
+ *   one, over the same X25519 and Ed25519 keys: nothing is trusted through it
+ *   until it is pinned again (firstSeenOfLegacy, or a words check);
  * - succession: other keys at a higher key version, so a signed chain from a
- *   version 3 pin may explain it;
+ *   verified or first-seen pin may explain it (a followed first-seen pin stays
+ *   first-seen, pinAfterSuccession);
  * - changed: anything else, including a served identity with no ML-DSA key, or
  *   one whose ML-DSA or ML-KEM key differs, beside the pinned classical keys.
  */
@@ -127,9 +135,10 @@ export async function comparePin(pin: Pin, served: ServedKeys): Promise<PinCompa
     const sameKeys =
         pin.encryptionPublicKey === served.encryptionPublicKey &&
         pin.signingPublicKey === served.signingPublicKey;
-    const verified = await pinVerified(pin);
+    const trust = await pinTrust(pin);
+    const held = trust === 'verified' || trust === 'seen';
     if (sameKeys) {
-        if (!verified) return 'recheck';
+        if (!held) return 'recheck';
         if (!served.mlDsaPublicKey || !served.kemPublicKey) return 'changed';
         const [mlDsa, kem] = await Promise.all([
             digestOf(served.mlDsaPublicKey),
@@ -139,10 +148,11 @@ export async function comparePin(pin: Pin, served: ServedKeys): Promise<PinCompa
             ? 'same'
             : 'changed';
     }
-    // A succession is always to a version 2 identity, and only a version 3 pin passes trust on.
+    // A succession is always to a version 2 identity, and only a verified or first-seen pin is
+    // followed along one.
     if (!served.mlDsaPublicKey || !served.kemPublicKey) return 'changed';
     // A pin with no version: the chain is then looked for from 1.
-    if (served.keyVersion > (pin.keyVersion ?? 1) && verified) return 'succession';
+    if (served.keyVersion > (pin.keyVersion ?? 1) && held) return 'succession';
     return 'changed';
 }
 
@@ -156,26 +166,18 @@ async function digestOf(publicKey: string) {
 }
 
 /*
- * A version 3 pin of the served keys, as comparing words writes it: the
- * X25519 and Ed25519 keys, the digests of the ML-DSA and ML-KEM keys, and the
- * version 3 fingerprint over all four (docs/identity-pq-design.md 2).
+ * A version 3 pin of the served keys: the X25519 and Ed25519 keys, the
+ * digests of the ML-DSA and ML-KEM keys, and the fingerprint. `verified`, as
+ * comparing words writes it, holds the version 3 fingerprint over all four
+ * (docs/identity-pq-design.md 2); `seen`, a first-seen pin, holds `""`
+ * (docs/optional-verification.md 2.2). Only call it with an identity whose
+ * keys statement holds.
  */
 export async function pinOfServed(
     served: ServedKeys & { mlDsaPublicKey: string; kemPublicKey: string },
+    form: 'verified' | 'seen' = 'verified',
 ) {
-    return {
-        encryptionPublicKey: served.encryptionPublicKey,
-        signingPublicKey: served.signingPublicKey,
-        mlDsaPublicKeyHash: await keyDigest(publicKeyBytes(served.mlDsaPublicKey)),
-        kemPublicKeyHash: await keyDigest(publicKeyBytes(served.kemPublicKey)),
-        fingerprint: await fingerprintOfKeys(
-            publicKeyBytes(served.encryptionPublicKey),
-            publicKeyBytes(served.signingPublicKey),
-            publicKeyBytes(served.mlDsaPublicKey),
-            publicKeyBytes(served.kemPublicKey),
-        ),
-        keyVersion: served.keyVersion,
-    };
+    return pinKeysOfServed(served, form);
 }
 
 /*
@@ -207,11 +209,14 @@ export async function keysPassedThrough(
 
 /*
  * The pin after a succession chain from it to the served keys verified: the
- * served keys as a version 3 pin, and every signing key it held or the chain
- * passed through kept beside them (`passed`, from keysPassedThrough), but
- * never the served one, which is current, not previous. The pinned key is
+ * served keys as a version 3 pin of the same kind (a verified pin stays
+ * verified, a first-seen one stays first-seen: following a chain signed by
+ * keys nobody checked checks nothing), and every signing key it held or the
+ * chain passed through kept beside them (`passed`, from keysPassedThrough),
+ * but never the served one, which is current, not previous. The pinned key is
  * kept whatever `passed` holds, so a start keysPassedThrough failed to find
- * cannot drop it. Only call it with a chain that held.
+ * cannot drop it. Only call it with a chain that held, from a pin comparePin
+ * said `succession` of.
  */
 export async function pinAfterSuccession(
     pin: Pin,
@@ -224,9 +229,12 @@ export async function pinAfterSuccession(
     );
     for (const key of [pin.signingPublicKey, ...passed])
         if (key !== served.signingPublicKey && !previous.includes(key)) previous.push(key);
+    const trust = await pinTrust(pin);
+    if (trust !== 'verified' && trust !== 'seen')
+        throw new Error('Only a verified or first-seen pin follows a succession.');
     return {
         ...pin,
-        ...(await pinOfServed(served)),
+        ...(await pinOfServed(served, trust === 'verified' ? 'verified' : 'seen')),
         previousSigningKeys: previous,
         keysReplacedAt: now.toISOString(),
         resealShares: true,
@@ -297,14 +305,22 @@ export type RekeyCause = 'mismatch' | 'unconfirmed' | 'unattested';
  */
 export type IntegrityIssue = {
     record: 'metadata' | 'version';
-    integrity: Exclude<RecordIntegrity, 'verified' | 'saved-from-link'>;
+    integrity: Exclude<RecordIntegrity, 'verified' | 'seen' | 'saved-from-link'>;
     signer: Signer | null;
     rekey?: { cause: RekeyCause; rekeyer: RecordIntegrity };
 };
 
+/*
+ * The verdicts that are no issue at all: a verified record, a first-seen
+ * writer's (no row mark; Info says "Added by Maya" and "Not verified",
+ * docs/optional-verification.md 2.6), and a copy saved from a link.
+ */
+const UNMARKED: RecordIntegrity[] = ['verified', 'seen', 'saved-from-link'];
+
 /* The re-keyer verdicts that leave the record unmarked: said in Info, never as a mark (decision D5). */
 const INFO_ONLY: RecordIntegrity[] = [
     'verified',
+    'seen',
     'saved-from-link',
     'retired-key',
     'unknown-signer',
@@ -345,8 +361,12 @@ export function recordIssues(
                 rekey: { cause: 'unconfirmed', rekeyer },
             });
         else {
-            if (integrity !== 'verified' && integrity !== 'saved-from-link')
-                issues.push({ record, integrity, signer: note.writer });
+            if (!UNMARKED.includes(integrity))
+                issues.push({
+                    record,
+                    integrity: integrity as IntegrityIssue['integrity'],
+                    signer: note.writer,
+                });
             if (!INFO_ONLY.includes(rekeyer))
                 issues.push({
                     record,
@@ -357,8 +377,8 @@ export function recordIssues(
         }
         return issues;
     }
-    if (integrity !== 'verified' && integrity !== 'saved-from-link')
-        issues.push({ record, integrity, signer });
+    if (!UNMARKED.includes(integrity))
+        issues.push({ record, integrity: integrity as IntegrityIssue['integrity'], signer });
     return issues;
 }
 

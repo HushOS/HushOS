@@ -97,7 +97,7 @@ import {
 } from './identity';
 import { checkId, newId } from './ids';
 import { decode, encode } from './keys';
-import type { GroupPin, OpenedArea } from './pins';
+import { keyCommitment, type GroupPin, type OpenedArea } from './pins';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import { GROUP_OPERATIONS } from './protocol';
 import type { GranteeSecrets } from './sealing';
@@ -284,7 +284,7 @@ export type GroupWriter = {
     pinned: WriterPin | null;
     served: ServedKeys | null;
     links: SuccessionLink[] | null;
-    personal: { current: string; retired: string[] } | null;
+    personal: { current: string; retired: string[]; seen?: boolean } | null;
 };
 /* driveRotateNodes in a group's area: whose roster judges each record before it is signed again. */
 export type GroupRotationTrust = {
@@ -638,8 +638,11 @@ export type GroupStaged = {
     needsCheck: string[];
     /* Workspace documents that did not open and were replaced by an empty one of their kind. */
     replaced: ReplacedDocument[];
-    /* An admission's newcomer and the fingerprint of the contact pin it was built from (the outbox's `admits`). */
-    admits: { userId: string; fingerprint: string } | null;
+    /*
+     * An admission's newcomer and the key commitment of the contact pin it was
+     * built from (the outbox's `admits`; keyCommitment in ./pins).
+     */
+    admits: { userId: string; keys: string } | null;
     /* The head the call was built on and its own roster, by digest: whether a kept call landed, or never can. */
     previousRosterDigest: string;
     rosterDigest: string;
@@ -2783,7 +2786,7 @@ export function createGroupSession(host: GroupHost) {
         };
         let rotations: AreaRotationInput[] = [];
         let newArea: { workspaceId: string; idSeed: string; name: string } | null = null;
-        let admits: { userId: string; fingerprint: string } | null = null;
+        let admits: { userId: string; keys: string } | null = null;
         const needsCheck: string[] = [];
         const folded: string[] = [];
         switch (op.kind) {
@@ -2792,13 +2795,17 @@ export function createGroupSession(host: GroupHost) {
                     throw new CryptoError('This person is in the family already.');
                 const pin = contactPin(op.userId);
                 if (!pin) throw new CryptoError(NOT_CHECKED);
-                admits = { userId: op.userId, fingerprint: pin.fingerprint };
                 const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,
                     rosterVersion: next,
                 });
                 if (entry.userId !== op.userId)
                     throw new CryptoError('These are not the keys whose words were checked.');
+                // The keys it is built from, by their commitment: never the pin's `fingerprint`,
+                // which every first-seen pin holds as "".
+                const keys = await keyCommitment(pin);
+                if (keys === null) throw new CryptoError(NOT_CHECKED);
+                admits = { userId: op.userId, keys };
                 put(entry);
                 break;
             }

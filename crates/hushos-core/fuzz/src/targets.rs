@@ -1420,7 +1420,8 @@ fn outbox_entry_kind(value: &Value) -> Option<Value> {
     let entry = value.get("entry")?;
     let pin = match value.get("pin") {
         None | Some(Value::Null) => None,
-        Some(pin) => Some((text(pin, "userId")?, text(pin, "fingerprint")?)),
+        // The pin by its key commitment (`keys`); seeds from before name it `fingerprint`.
+        Some(pin) => Some((text(pin, "userId")?, text(pin, "keys").or_else(|| text(pin, "fingerprint"))?)),
     };
     let id = shape::optional_text(value, "id")?;
     let head: Option<Vec<String>> = match value.get("head") {

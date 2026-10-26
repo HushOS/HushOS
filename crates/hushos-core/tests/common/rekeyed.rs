@@ -54,7 +54,7 @@ fn nullable<T>(value: &Value, key: &str, read: impl Fn(&Value) -> Option<T>) -> 
 fn signer_of(value: &Value) -> Option<TrustedKeys> {
     let current = bytes(value, "current")?;
     let retired = value.get("retired")?.as_array()?.iter().map(bytes_of).collect::<Option<Vec<_>>>()?;
-    Some(TrustedKeys { current, retired })
+    Some(TrustedKeys { current, retired, seen: false })
 }
 
 fn group_trust_of(value: &Value) -> Option<GroupWriterTrust> {
@@ -175,6 +175,7 @@ pub fn read(value: &Value) -> Option<Input> {
 pub fn integrity_name(integrity: Integrity) -> &'static str {
     match integrity {
         Integrity::Verified => "verified",
+        Integrity::Seen => "seen",
         Integrity::SavedFromLink => "saved-from-link",
         Integrity::Resealed => "resealed",
         Integrity::RetiredKey => "retired-key",
@@ -188,6 +189,7 @@ pub fn integrity_name(integrity: Integrity) -> &'static str {
 pub fn group_verdict_name(verdict: GroupVerdict) -> &'static str {
     match verdict {
         GroupVerdict::Verified => "verified",
+        GroupVerdict::Seen => "seen",
         GroupVerdict::SavedFromLink => "saved-from-link",
         GroupVerdict::Resealed => "resealed",
         GroupVerdict::RetiredKey => "retired-key",

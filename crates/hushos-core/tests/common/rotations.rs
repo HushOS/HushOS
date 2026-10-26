@@ -1060,6 +1060,7 @@ pub fn read_back(
     let keys_of = |p: &Person| TrustedKeys {
         current: base64url_decode(p.served.signing_public_key.clone()).unwrap(),
         retired: vec![],
+        seen: false,
     };
     let me = &people[reader - 1];
     let writers: Vec<GroupWriter> = people

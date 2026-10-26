@@ -10,6 +10,7 @@ import {
 } from './identity';
 import { fingerprintOfKeys, keyDigest } from './fingerprint';
 import {
+    CONTACTS_FULL,
     createSettingsKey,
     EMPTY_SETTINGS,
     fingerprint,
@@ -17,7 +18,9 @@ import {
     openSettingsKey,
     rewrapSettingsKey,
     sealSettings,
+    SETTINGS_MAX_BYTES,
     SETTINGS_PAD_STEP,
+    settingsWithPin,
     type Settings,
     type SettingsEnvelope,
 } from './contacts';
@@ -378,6 +381,60 @@ describe('settings', () => {
                 name: 'x'.repeat(80),
             };
         await expect(sealSettings(key, USER, 1, big)).rejects.toThrow(/too large/);
+    });
+});
+
+describe('room for first-seen pins', () => {
+    /* A first-seen pin as adding someone writes it (docs/optional-verification.md 2.2), for person `i`. */
+    const firstSeen = (i: number) => {
+        const userId = `${i.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`;
+        const fill = (n: number) => Buffer.from(new Uint8Array(32).fill(n)).toString('base64url');
+        return {
+            userId,
+            email: `person.number${i}@example.com`,
+            name: `Person Number ${i}`,
+            encryptionPublicKey: fill(i % 251),
+            signingPublicKey: fill((i + 1) % 251),
+            mlDsaPublicKeyHash: (i % 256).toString(16).padStart(2, '0').repeat(32),
+            kemPublicKeyHash: ((i + 7) % 256).toString(16).padStart(2, '0').repeat(32),
+            fingerprint: '',
+            pinnedAt: '2026-10-26T10:00:00.000Z',
+            keyVersion: 1,
+            firstSeen: 'added' as const,
+        };
+    };
+
+    test('about a hundred people fit; at the cap one more is refused and nothing is changed', async () => {
+        let settings: Settings = { version: 2, contacts: {}, sharing: { shares: {}, links: {} } };
+        let count = 0;
+        for (;;) {
+            try {
+                settings = settingsWithPin(settings, firstSeen(count));
+            } catch (error) {
+                expect((error as Error).message).toBe(CONTACTS_FULL);
+                break;
+            }
+            count++;
+        }
+        expect(count).toBeGreaterThanOrEqual(100);
+        // The full document still seals: the refusal came before anything was written.
+        const { key } = await createSettingsKey(crypto.getRandomValues(new Uint8Array(32)), USER);
+        const before = structuredClone(settings);
+        await expect(sealSettings(key, USER, 1, settings)).resolves.toBeDefined();
+        expect(() => settingsWithPin(settings, firstSeen(count))).toThrow(CONTACTS_FULL);
+        expect(settings).toEqual(before);
+        expect(Object.keys(settings.contacts)).toHaveLength(count);
+        // What the refusal stood for: the document with that pin would not seal.
+        const over = { ...settings, contacts: { ...settings.contacts, x: firstSeen(count) } };
+        expect(new TextEncoder().encode(JSON.stringify(over)).length).toBeGreaterThan(
+            SETTINGS_MAX_BYTES,
+        );
+        await expect(sealSettings(key, USER, 1, over)).rejects.toThrow(/too large/);
+        // Writing a pin over one already there needs no room it does not have.
+        expect(
+            settingsWithPin(settings, { ...firstSeen(0), name: 'P' }).contacts[firstSeen(0).userId]!
+                .name,
+        ).toBe('P');
     });
 });
 

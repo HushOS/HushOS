@@ -63,6 +63,10 @@ pub enum Integrity {
     /// The signer is someone this person trusts, and the signature holds under
     /// their current signing key over the ordinary statement.
     Verified,
+    /// The same, under keys this person's devices first saw for the signer and
+    /// nobody checked (a first-seen pin, docs/optional-verification.md 2.6):
+    /// no mark, never `Verified`.
+    Seen,
     /// There is a signature, but by nobody this person has verified.
     UnknownSigner,
     /// The signer is trusted, and the signature does not hold.
@@ -88,12 +92,16 @@ pub enum Integrity {
 
 /// The signing keys a reader trusts for one account: the current one, which
 /// alone can make a record `Verified` (or `Resealed`), and the ones it held
-/// before, which can only make it `RetiredKey`.
+/// before, which can only make it `RetiredKey`. `seen`: the keys are a
+/// first-seen pin's, which nobody checked, so a record that would verify
+/// under them is `Seen` instead.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TrustedKeys {
     pub current: Vec<u8>,
     pub retired: Vec<Vec<u8>>,
+    #[cfg_attr(feature = "uniffi", uniffi(default = false))]
+    pub seen: bool,
 }
 
 /// The node a metadata envelope belongs to, as its signature names it.
@@ -328,7 +336,7 @@ fn integrity(
         return Integrity::BadSignature;
     };
     if verify(&trusted.current, &messages.ordinary, &signature) {
-        return Integrity::Verified;
+        return if trusted.seen { Integrity::Seen } else { Integrity::Verified };
     }
     if verify(&trusted.current, &messages.saved, &signature) {
         return Integrity::SavedFromLink;
@@ -369,7 +377,9 @@ fn version_messages(statement: &VersionStatement, envelope: &[u8]) -> CoreResult
  */
 fn reseal_form(prior: Integrity) -> CoreResult<Form> {
     match prior {
-        Integrity::Verified => Ok(Form::Ordinary),
+        // A first-seen writer's record is written again as the re-signer's own
+        // (docs/optional-verification.md 2.6), as packages/drive's signatureFormFor does.
+        Integrity::Verified | Integrity::Seen => Ok(Form::Ordinary),
         Integrity::SavedFromLink => Ok(Form::Saved),
         Integrity::Unchecked => {
             Err(input("HushOS couldn't check who wrote this, so it was not locked again."))
@@ -602,7 +612,7 @@ pub fn version_saved_verify(
 /// ```
 /// use hushos_core::*;
 /// let seed = random_bytes(32)?;
-/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
 /// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 1 };
 /// // A planted record nobody this person trusts signed, re-sealed by them:
 /// let signature = metadata_reseal_sign(seed.clone(), Integrity::UnknownSigner, statement.clone(), b"new".to_vec())?;
@@ -644,7 +654,7 @@ pub fn version_reseal_sign(
 /// ```
 /// use hushos_core::*;
 /// let seed = random_bytes(32)?;
-/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
 /// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 1 };
 /// let check = |signature| metadata_integrity(Some(me.clone()), statement.clone(), b"copy".to_vec(), Some(signature));
 /// let from_link = metadata_copy_sign(seed.clone(), Integrity::Unchecked, true, statement.clone(), b"copy".to_vec())?;
@@ -690,7 +700,7 @@ pub fn version_copy_sign(
 /// ```
 /// use hushos_core::*;
 /// let seed = random_bytes(32)?;
-/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
 /// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 1 };
 /// let read = |signature| metadata_integrity(Some(me.clone()), statement.clone(), b"new".to_vec(), Some(signature));
 /// let own = metadata_compat_sign(seed.clone(), Integrity::Verified, true, statement.clone(), b"new".to_vec())?;
@@ -1195,7 +1205,7 @@ impl Rekeyed {
             return Integrity::BadSignature;
         };
         if verify(&trusted.current, message, signature) {
-            return Integrity::Verified;
+            return if trusted.seen { Integrity::Seen } else { Integrity::Verified };
         }
         if trusted.retired.iter().any(|key| verify(key, message, signature)) {
             return Integrity::RetiredKey;
@@ -1212,7 +1222,8 @@ fn rekeyed_verdict(rekeyed: Option<Rekeyed>, trust: Option<RekeyedTrust>) -> Rek
         return UNCHECKED;
     };
     let rekeyer = rekeyed.rekeyer(trust.rekeyer.as_ref());
-    let bound = rekeyed.bound(rekeyer == Integrity::Verified);
+    // Attested: the re-key signature holds under the current key the reader holds for them.
+    let bound = rekeyed.bound(matches!(rekeyer, Integrity::Verified | Integrity::Seen));
     let origin = match bound {
         Some(true) => rekeyed.origin(trust.origin.as_ref()),
         Some(false) => Integrity::BadSignature,
@@ -1231,7 +1242,7 @@ fn rekeyed_verdict(rekeyed: Option<Rekeyed>, trust: Option<RekeyedTrust>) -> Rek
 /// let (ws, n1) = ("0b6f0e1c-6a52-4f37-9d0e-5f1f2a3b4c5d", "f4a7c2d9-1e3b-4c5a-8f6e-7d8c9b0a1e2f");
 /// let (old, fresh) = (random_bytes(32)?, random_bytes(32)?);
 /// let (writer, rekeyer) = (random_bytes(32)?, random_bytes(32)?);
-/// let trusted = |seed: &Vec<u8>| Some(TrustedKeys { current: signing_public_key(seed.clone()).unwrap(), retired: vec![] });
+/// let trusted = |seed: &Vec<u8>| Some(TrustedKeys { current: signing_public_key(seed.clone()).unwrap(), retired: vec![], seen: false });
 /// let ctx = MetadataContext { workspace_id: ws.into(), node_id: n1.into(), metadata_version: 1 };
 /// let statement = MetadataStatement { workspace_id: ws.into(), node_id: n1.into(), kind: NodeKind::File, metadata_version: 1 };
 /// // Sam writes; Maya rotates the folder to epoch 2 and keeps Sam's record.
@@ -1361,12 +1372,12 @@ pub(crate) fn version_origin_carry_with(
 /// let seed = random_bytes(32)?;
 /// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::Folder, metadata_version: 2 };
 /// let signature = metadata_sign(seed.clone(), statement.clone(), b"sealed".to_vec())?;
-/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
 /// assert_eq!(metadata_integrity(Some(me.clone()), statement.clone(), b"sealed".to_vec(), Some(signature.clone())), Integrity::Verified);
 /// assert_eq!(metadata_integrity(None, statement.clone(), b"sealed".to_vec(), Some(signature.clone())), Integrity::UnknownSigner);
 /// assert_eq!(metadata_integrity(Some(me.clone()), statement.clone(), b"swapped".to_vec(), Some(signature.clone())), Integrity::BadSignature);
 /// assert_eq!(metadata_integrity(Some(me), statement.clone(), b"sealed".to_vec(), None), Integrity::Unsigned);
-/// let replaced = TrustedKeys { current: signing_public_key(random_bytes(32)?)?, retired: vec![signing_public_key(seed)?] };
+/// let replaced = TrustedKeys { current: signing_public_key(random_bytes(32)?)?, retired: vec![signing_public_key(seed)?], seen: false };
 /// assert_eq!(metadata_integrity(Some(replaced), statement, b"sealed".to_vec(), Some(signature)), Integrity::RetiredKey);
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
@@ -1720,7 +1731,7 @@ mod tests {
         let envelope = random(84);
         let by_earlier = version_sign(earlier.clone(), version(), envelope.clone()).unwrap();
         let by_current = version_sign(current.clone(), version(), envelope.clone()).unwrap();
-        let chain = TrustedKeys { current: key(&current), retired: vec![key(&earlier)] };
+        let chain = TrustedKeys { current: key(&current), retired: vec![key(&earlier)], seen: false };
         let check = |trusted: Option<TrustedKeys>, signature: &[u8]| {
             version_integrity(trusted, version(), envelope.clone(), Some(signature.to_vec()))
         };
@@ -1728,7 +1739,7 @@ mod tests {
         assert_eq!(check(Some(chain.clone()), &by_earlier), Integrity::RetiredKey);
         // No chain to the earlier key at all: it is simply not theirs.
         assert_eq!(
-            check(Some(TrustedKeys { current: key(&current), retired: vec![] }), &by_earlier),
+            check(Some(TrustedKeys { current: key(&current), retired: vec![], seen: false }), &by_earlier),
             Integrity::BadSignature
         );
         assert_eq!(check(None, &by_current), Integrity::UnknownSigner);
@@ -1761,7 +1772,7 @@ mod tests {
         assert!(version_resealed_verify(key(&seed), version(), envelope.clone(), resealed.clone()));
         let metadata_resealed = metadata_resealed_sign(seed.clone(), statement(), envelope.clone()).unwrap();
         assert!(!metadata_verify(key(&seed), statement(), envelope.clone(), metadata_resealed.clone()));
-        let trusted = TrustedKeys { current: key(&seed), retired: vec![key(&earlier)] };
+        let trusted = TrustedKeys { current: key(&seed), retired: vec![key(&earlier)], seen: false };
         assert_eq!(
             version_integrity(Some(trusted.clone()), version(), envelope.clone(), Some(resealed.clone())),
             Integrity::Resealed
@@ -1790,7 +1801,7 @@ mod tests {
     #[test]
     fn re_signing_after_a_check_vouches_only_for_what_verified() {
         let seed = random(32);
-        let me = TrustedKeys { current: key(&seed), retired: vec![] };
+        let me = TrustedKeys { current: key(&seed), retired: vec![], seen: false };
         let envelope = random(84);
         for prior in [
             Integrity::UnknownSigner,
@@ -1896,7 +1907,7 @@ mod tests {
             }
         }
         // And the verdicts: each form reads as itself, saved under a replaced key is only retired.
-        let trusted = TrustedKeys { current: public.clone(), retired: vec![] };
+        let trusted = TrustedKeys { current: public.clone(), retired: vec![], seen: false };
         let verdicts: Vec<_> = versions
             .iter()
             .map(|(_, signature)| {
@@ -1913,7 +1924,7 @@ mod tests {
             ),
             Integrity::SavedFromLink
         );
-        let replaced = TrustedKeys { current: key(&random(32)), retired: vec![public] };
+        let replaced = TrustedKeys { current: key(&random(32)), retired: vec![public], seen: false };
         assert_eq!(
             version_integrity(Some(replaced), version(), envelope.clone(), Some(versions[1].1.clone())),
             Integrity::RetiredKey
@@ -1928,7 +1939,7 @@ mod tests {
     #[test]
     fn a_copy_is_signed_by_where_it_came_from_and_a_reseal_keeps_only_what_checked() {
         let seed = random(32);
-        let me = TrustedKeys { current: key(&seed), retired: vec![] };
+        let me = TrustedKeys { current: key(&seed), retired: vec![], seen: false };
         let envelope = random(84);
         let read = |signature: Vec<u8>| {
             version_integrity(Some(me.clone()), version(), envelope.clone(), Some(signature))
@@ -2113,8 +2124,8 @@ mod tests {
 
     fn trust_of(r: &Rotated) -> RekeyedTrust {
         RekeyedTrust {
-            origin: Some(TrustedKeys { current: key(&r.sam), retired: vec![] }),
-            rekeyer: Some(TrustedKeys { current: key(&r.maya), retired: vec![] }),
+            origin: Some(TrustedKeys { current: key(&r.sam), retired: vec![], seen: false }),
+            rekeyer: Some(TrustedKeys { current: key(&r.maya), retired: vec![], seen: false }),
         }
     }
 
@@ -2181,7 +2192,7 @@ mod tests {
         let r = rotated();
         let unsigned = RekeyedMetadata { rekey_signature: None, ..r.record.clone() };
         assert_eq!(read(&r, unsigned), verdict(Integrity::Verified, Integrity::Unsigned, Some(true)));
-        let maya = TrustedKeys { current: key(&r.maya), retired: vec![] };
+        let maya = TrustedKeys { current: key(&r.maya), retired: vec![], seen: false };
         for form in [Form::Ordinary, Form::Saved, Form::Resealed] {
             let signed = sign_metadata_as(form, &r.maya, &sealed(), &r.record.envelope).unwrap();
             let record = RekeyedMetadata { rekey_signature: Some(signed), ..r.record.clone() };
@@ -2260,7 +2271,7 @@ mod tests {
     #[test]
     fn the_legacy_form_beside_it_is_honest_and_never_refuses() {
         let seed = random(32);
-        let me = TrustedKeys { current: key(&seed), retired: vec![] };
+        let me = TrustedKeys { current: key(&seed), retired: vec![], seen: false };
         let envelope = random(84);
         for prior in [
             Integrity::Verified,

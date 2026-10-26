@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { fingerprint, keyDigest } from '@hushos/crypto/fingerprint';
-import { pinVerified } from '@hushos/crypto/pins';
+import { pinTrust, pinVerified } from '@hushos/crypto/pins';
 import {
     comparePin,
     copySignatureForms,
     granterKeysOf,
     integrityIssues,
+    pinOfServed,
     keysPassedThrough,
     signatureFormFor,
     pinAfterSuccession,
@@ -203,6 +204,106 @@ describe('a pin after a succession', () => {
         expect(await granterKeysOf(after, { mlDsaPublicKey: ML_DSA })).toBeNull();
         expect(await granterKeysOf(after, { mlDsaPublicKey: null })).toBeNull();
         expect(await granterKeysOf(await versionTwoPin(), { mlDsaPublicKey: ML_DSA })).toBeNull();
+    });
+});
+
+/* Maya as a first-seen pin: the keys first seen for her, which nobody checked. */
+async function firstSeen(overrides: Partial<Pin> = {}): Promise<Pin> {
+    return { ...(await pin()), fingerprint: '', firstSeen: 'added', ...overrides };
+}
+
+describe('a first-seen pin', () => {
+    test('is the same keys only while every served key matches; a served ML-DSA or ML-KEM key whose digest differs is a change', async () => {
+        const pinned = await firstSeen();
+        expect(await pinTrust(pinned)).toBe('seen');
+        expect(await comparePin(pinned, served())).toBe('same');
+        expect(await comparePin(pinned, served({ mlDsaPublicKey: OTHER_ML_DSA }))).toBe('changed');
+        expect(await comparePin(pinned, served({ kemPublicKey: OTHER_KEM }))).toBe('changed');
+        expect(await comparePin(pinned, served({ mlDsaPublicKey: null }))).toBe('changed');
+        expect(await comparePin(pinned, served({ kemPublicKey: null }))).toBe('changed');
+        // Other classical keys at the same version: no chain can explain it.
+        expect(await comparePin(pinned, served({ signingPublicKey: key(9) }))).toBe('changed');
+    });
+
+    test('may be followed along a succession, and the followed pin is still first-seen, never verified', async () => {
+        const before = await firstSeen({ keyVersion: 1 });
+        const next = {
+            keyVersion: 2,
+            encryptionPublicKey: key(3),
+            signingPublicKey: key(4),
+            mlDsaPublicKey: OTHER_ML_DSA,
+            kemPublicKey: OTHER_KEM,
+        };
+        expect(await comparePin(before, served(next))).toBe('succession');
+        const after = await pinAfterSuccession(before, next, new Date('2026-10-26T10:00:00.000Z'), [
+            before.signingPublicKey,
+        ]);
+        expect(after).toMatchObject({
+            encryptionPublicKey: key(3),
+            signingPublicKey: key(4),
+            mlDsaPublicKeyHash: await digest(OTHER_ML_DSA),
+            kemPublicKeyHash: await digest(OTHER_KEM),
+            fingerprint: '',
+            firstSeen: 'added',
+            previousSigningKeys: [key(2)],
+            resealShares: true,
+        });
+        expect(await pinVerified(after)).toBe(false);
+        expect(await pinTrust(after)).toBe('seen');
+        expect(await comparePin(after, served(next))).toBe('same');
+        // A verified pin followed the same way stays verified.
+        const checked = await pinAfterSuccession(await pin(), next, new Date(), [key(2)]);
+        expect(await pinTrust(checked)).toBe('verified');
+        // Only a pin comparePin would follow is followed.
+        await expect(
+            pinAfterSuccession(await versionTwoPin(), next, new Date(), []),
+        ).rejects.toThrow();
+    });
+
+    test('is written over the served keys, "" in place of the fingerprint', async () => {
+        const fresh = await pinOfServed(served() as never, 'seen');
+        expect(fresh).toEqual({
+            encryptionPublicKey: key(1),
+            signingPublicKey: key(2),
+            mlDsaPublicKeyHash: await digest(ML_DSA),
+            kemPublicKeyHash: await digest(KEM),
+            keyVersion: 1,
+            fingerprint: '',
+        });
+        expect((await pinOfServed(served() as never)).fingerprint).toBe((await pin()).fingerprint);
+    });
+
+    test('vouches for its key as seen, never as verified; a verified pin as verified; anything else for nobody', async () => {
+        const sam = await firstSeen({ userId: 'sam', previousSigningKeys: [key(7)] });
+        // A fingerprint written in over keys the pin does not hold.
+        const forged = await firstSeen({
+            userId: 'ana',
+            signingPublicKey: key(8),
+            fingerprint: (await pin()).fingerprint,
+        });
+        expect(
+            await signersFromPins({
+                maya: await pin(),
+                sam,
+                ana: forged,
+                old: { ...(await versionTwoPin()), userId: 'old' },
+            }),
+        ).toEqual({
+            maya: { current: key(2), retired: [] },
+            sam: { current: key(2), retired: [key(7)], seen: true },
+        });
+    });
+
+    test('a first-seen writer’s record carries no mark, and a copy of it is signed as the copier’s own', () => {
+        expect(
+            integrityIssues({
+                metadataSigner: null,
+                currentVersion: { signer: null },
+                integrity: { metadata: 'seen', version: 'seen' },
+            }),
+        ).toEqual([]);
+        expect(signatureFormFor('seen')).toBe('ordinary');
+        expect(signatureFormFor('seen', 'link')).toBe('saved');
     });
 });
 

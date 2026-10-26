@@ -67,6 +67,14 @@ export type ContactPin = {
      * check over the keys clears it.
      */
     trustedVia?: string | null;
+    /*
+     * How a first-seen pin (`fingerprint` exactly "", pinTrust in pins.ts)
+     * came to be: added by email, met through something they shared, or a
+     * family's newcomer (docs/optional-verification.md 2.2). Informational
+     * only, for Technical details and support: no rule reads it, and a words
+     * check over the keys keeps it.
+     */
+    firstSeen?: 'added' | 'shared-with-me' | 'family';
 };
 
 export type Settings = {
@@ -93,6 +101,23 @@ export type Settings = {
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };
+
+/* What adding someone says when the settings have no room for one more pin (docs/optional-verification.md 2.7). */
+export const CONTACTS_FULL = 'Your contacts are full. Remove someone you no longer share with.';
+
+/*
+ * The settings with `pin` written for its person, as a new document: the one
+ * given is never changed, so a pin that does not fit leaves nothing behind.
+ * Refused, with CONTACTS_FULL, when the document would no longer seal
+ * (SETTINGS_MAX_BYTES, as sealSettings measures it). A first-seen pin is
+ * about 500 bytes, so a document holds roughly a hundred people.
+ */
+export function settingsWithPin<S extends Settings>(settings: S, pin: S['contacts'][string]): S {
+    const next = { ...settings, contacts: { ...settings.contacts, [pin.userId]: pin } };
+    const json = new TextEncoder().encode(JSON.stringify({ ...next, version: 2 }));
+    if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError(CONTACTS_FULL);
+    return next;
+}
 
 /*
  * The settings key, apart from the identity: 32 random bytes wrapped under a

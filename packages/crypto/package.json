@@ -19,6 +19,7 @@
         "./fingerprint": "./src/fingerprint.ts",
         "./links": "./src/links.ts",
         "./pins": "./src/pins.ts",
+        "./first-seen": "./src/first-seen.ts",
         "./join-check": "./src/join-check.ts",
         "./join-session": "./src/join-session.ts",
         "./record-acceptance": "./src/record-acceptance.ts",

@@ -640,9 +640,10 @@ export type DriveNodeInput = {
 /*
  * The signing keys a caller trusts, per account id, base64url: the account's
  * current key, and the keys it replaced (a succession chain vouched for them),
- * which only ever yield `retired-key`. See TrustedSigner.
+ * which only ever yield `retired-key`; `seen` for a first-seen pin's keys, so
+ * what they sign reads `seen`, never `verified`. See TrustedSigner.
  */
-export type DriveSigners = Record<string, { current: string; retired: string[] }>;
+export type DriveSigners = Record<string, { current: string; retired: string[]; seen?: boolean }>;
 /* A node's signed records as the server serves them, for driveVerify. */
 export type DriveSignedNode = {
     id: string;
@@ -1059,6 +1060,7 @@ export function createCryptoSession() {
                 trusted.set(userId.toLowerCase(), {
                     current: decode(keys.current, 32),
                     retired: keys.retired.map((key) => decode(key, 32)),
+                    ...(keys.seen === true ? { seen: true } : {}),
                 });
             } catch {
                 throw new CryptoError(

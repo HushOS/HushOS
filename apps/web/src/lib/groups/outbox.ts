@@ -1,4 +1,5 @@
 import {
+    admittedKeys,
     outboxStep,
     readOutboxEntry,
     type CreateGroupBody,
@@ -7,6 +8,7 @@ import {
     type GroupWriter,
     type RosterCallBody,
 } from '@hushos/crypto';
+import { keyCommitment, type PinKeys } from '@hushos/crypto/pins';
 import { MAX_GRANTS_PER_CALL } from '@hushos/groups/protocol';
 import { GroupApiError, isNotMember, isRefusal, type ChainHead } from './api';
 import type { GroupContext, GroupNotice } from './context';
@@ -88,12 +90,14 @@ export type OutboxEntry = {
     /* What the person should hear once the call lands (documents that went on empty). */
     notices?: GroupNotice[];
     /*
-     * An admission's newcomer keys as the admin checked them: the fingerprint
-     * (over all four keys) of the contact pin the entry was built from. A kept
-     * admission is resent by "Let them in" only while the admin's pin still
-     * has this fingerprint. Absent on entries from before it was kept.
+     * An admission's newcomer keys as the admin held them: `keys`, the key
+     * commitment (keyCommitment in @hushos/crypto/pins) of the contact pin the
+     * entry was built from. A kept admission is resent only while the admin's
+     * pin still holds those keys. Entries from before it was kept carry
+     * `fingerprint` instead (the pin's fingerprint then), read by
+     * admittedKeys; absent on entries older still.
      */
-    admits?: { userId: string; fingerprint: string };
+    admits?: { userId: string; keys: string } | { userId: string; fingerprint: string };
     /* The head the call was built on and its own roster, by digest (the core's outbox entry has them too). */
     previousRosterDigest?: string;
     rosterDigest?: string;
@@ -474,11 +478,12 @@ async function sendLocked(
     // An admission goes only to the keys the admin's pin of the person holds now: resent after
     // their account changed and was checked again, it would grant the family's folders to the
     // old keys. Checked here, so a page open, a sync and "Let them in" all obey it.
-    let pin: { userId: string; fingerprint: string } | null = null;
+    let pin: { userId: string; keys: string | null } | null = null;
     if (entry.route.kind === 'admit' && entry.state !== 'awaiting-check') {
         const { settings } = await ctx.settings.read();
         const contact = settings.contacts?.[entry.route.userId];
-        pin = contact ? { userId: entry.route.userId, fingerprint: contact.fingerprint } : null;
+        // By the keys it holds, never by its fingerprint: every first-seen pin's is "".
+        pin = contact ? { userId: entry.route.userId, keys: await keyCommitment(contact) } : null;
     }
     const read = readOutboxEntry(entry, entry.groupId, pin);
     // Not an entry the shared reader takes: never sent (fail closed), dropped and counted lost.
@@ -837,10 +842,11 @@ export function letIn(
     ctx: GroupContext,
     groupId: string,
     op: Extract<GroupStageOp, { kind: 'admit' }>,
-    /* The fingerprint of the admin's contact pin of them now, to tell a kept admission's keys. */
-    fingerprint: string,
+    /* The admin's contact pin of them now, to tell a kept admission's keys by their commitment. */
+    pin: PinKeys,
 ): Promise<StageOutcome> {
     return ctx.lock(groupId, async () => {
+        const keys = await keyCommitment(pin);
         const kept = (await loadOutbox(ctx, groupId)).entries.filter(
             (entry) => entry.route.kind === 'admit' && entry.route.userId === op.userId,
         );
@@ -851,7 +857,7 @@ export function letIn(
             }
             // Sealed to keys the admin no longer holds as checked: resending would grant the
             // family's folders to them. The admin drops it first, knowingly.
-            if (entry.admits?.fingerprint !== fingerprint)
+            if (keys === null || admittedKeys(entry.admits) !== keys)
                 return { status: 'kept-other-keys' as const, entry };
             return {
                 status: 'sent' as const,
