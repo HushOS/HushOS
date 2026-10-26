@@ -1,0 +1,51 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_3a9ec391717d5d 160,631
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_566b8e0c4467a4::t_0a0fda6cee9523 56,165-168,171-172,174,179-184
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_a8d37396afae72 477,488,505
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_d47df811be3639 196
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_dca7af310036d5 438,602
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_ad9607d3b0d26a 49,62,76,363,582,1047,1049,1165
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_10fbeb21cfabef 120,130,328,351
+apps/ios/App/BackgroundAccess.swift
+  s_566b8e0c4467a4::t_f426221cdf53b3 149
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_cedeeb82120829 41,55
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_12da174bd37208 252,467,510
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_59624623835f1a 279,285,744,746
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_ad8709087e739a 682,706
+apps/ios/App/RecoveryView.swift
+  s_566b8e0c4467a4::t_2bdb50e24e2b70 88,302,304
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_1a14aed6f6d174 469,474,479,554
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_a2ee9eaba7932b 209
+apps/ios/App/Theme.swift
+  s_566b8e0c4467a4::t_60a02e2c7e896c 26,58-79
+apps/ios/App/Uploads.swift
+  s_566b8e0c4467a4::t_ef7759036657ca 511
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec07dbf7e1a0f655f94e6c8c064f2a7db7918a00",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
