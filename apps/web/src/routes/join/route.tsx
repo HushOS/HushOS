@@ -235,6 +235,16 @@ function OpenInvitation({
         );
     if (opened.isError) {
         const gone = opened.error instanceof GroupApiError && opened.error.code === 'gone';
+        // Sent to another address: the server says nothing more, and neither does the page.
+        if (opened.error instanceof GroupApiError && opened.error.code === 'email-mismatch')
+            return (
+                <AuthLayout
+                    title="This invitation is for someone else"
+                    description="It was sent to another email address. Sign in with that address to open it."
+                    art="JOIN"
+                    footer={signedInAs}
+                />
+            );
         return (
             <AuthLayout
                 title={gone ? 'This invitation is no longer open' : 'This invitation didn’t open'}

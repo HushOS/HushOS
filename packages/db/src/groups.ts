@@ -2340,12 +2340,14 @@ export async function createInvitation(input: {
 }
 
 /* An open invitation by its token's hash, with its group; null when used, revoked, expired or the group is gone. */
-export async function openInvitation(tokenHash: Buffer) {
+export async function openInvitation(tokenHash: Buffer, userId: string) {
     const [row] = await db
         .select({
             invitation: groupInvitations,
             group: { id: groups.id, kind: groups.kind, name: groups.name },
             inviter: { id: users.id, name: users.name, email: users.email },
+            // Whether the invitation is addressed to this account: anyone else learns nothing more.
+            forAccount: sql<boolean>`exists (select 1 from ${users} account where account.id = ${userId} and account.normalized_email = ${groupInvitations.normalizedEmail})`,
         })
         .from(groupInvitations)
         .innerJoin(groups, eq(groups.id, groupInvitations.groupId))

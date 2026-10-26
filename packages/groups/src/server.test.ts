@@ -819,6 +819,40 @@ describe('one family per account (families-shared-pool 3.2)', () => {
         ]);
     });
 
+    test('an invitation for another address tells whoever holds the link nothing about the family', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        const token = await invitation(ortega, sam);
+        // A stranger with the link, with no family of their own, then with one (whose refusal
+        // would otherwise name the family they were invited to).
+        const stranger = await member();
+        const noticed = async (promise: Promise<unknown>) => {
+            const error = await promise.then(
+                () => null,
+                (cause: unknown) => cause,
+            );
+            expect(error).toBeInstanceOf(groups.GroupError);
+            const refused = error as InstanceType<typeof groups.GroupError>;
+            expect({ code: refused.code, status: refused.status, data: refused.data }).toEqual({
+                code: 'email-mismatch',
+                status: 403,
+                data: undefined,
+            });
+            expect(refused.message).not.toContain('Ortega');
+        };
+        await noticed(groups.openInvitation(stranger.userId, token, ADDRESS));
+        await noticed(groups.acceptInvitation(stranger.userId, token, ADDRESS));
+        await family(stranger);
+        await noticed(groups.openInvitation(stranger.userId, token, ADDRESS));
+        await noticed(groups.acceptInvitation(stranger.userId, token, ADDRESS));
+        // The invitation is untouched: the person it was sent to still opens it, by name.
+        expect(await groups.openInvitation(sam.userId, token, ADDRESS)).toMatchObject({
+            groupId: ortega.groupId,
+            name: 'Ortega family',
+        });
+    });
+
     test('opening an invitation says which family you are in; accepting is refused and leaves nothing waiting', async () => {
         const ortega = await family();
         await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
