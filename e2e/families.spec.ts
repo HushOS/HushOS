@@ -1690,7 +1690,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         // Nothing of anyone's own exact bytes, not even the manager's, in the list.
         await expect(usage.locator('[data-usage-own]')).toHaveCount(0);
 
-        // A member: the family's total and their own files exactly, the folders; nobody else's.
+        // A member: the family's total, their own files exactly, the folders; nobody else's.
         await show({
             enabled: true,
             view: 'member',
@@ -1705,7 +1705,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         });
         await expect(own.locator('[data-usage-member]')).toHaveCount(0);
         await expect(own.locator('[data-usage-folders]')).toHaveText('Family foldersNone');
-        // The family's total, exactly, and that it is full.
+        // The family's total, as the server counts it, and that it is full.
         await expect(own.locator('[data-usage-total]')).toHaveText(
             'Used2 TB of 2 TBThe family’s storage is full',
         );

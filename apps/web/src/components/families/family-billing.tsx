@@ -130,8 +130,9 @@ const roundedLabel = (bytes: string) => (bytes === '0' ? 'Under 1 GB' : formatQu
  * The family's storage, said once on the page (docs/families-shared-pool.md 3.9, 7.3), in
  * one format per viewer. Someone who manages the family sees each person's own files as the
  * server rounds them (whole GB, rounded up, largest first), the family folders and what is
- * free; never the exact total beside the rounded rows, which would contradict them. Everyone
- * else sees the family's total exactly, their own files exactly and the family folders.
+ * free, never a total beside the rows. Everyone else sees the family's total (Used, which the
+ * server counts part by part in whole GB, so it gives no one member away), their own files
+ * exactly, and the family folders.
  * Nobody sees names, counts or types of anyone's files. Shown only while the family has a
  * pool to share (billing on, a live plan).
  */
