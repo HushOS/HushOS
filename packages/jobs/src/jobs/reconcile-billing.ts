@@ -5,6 +5,7 @@ import {
     reconcileGroup,
     reconcilePlanEndings,
     reissueCut,
+    relistUnlistedFamilies,
 } from '@hushos/billing/server';
 import { billingRepository } from '@hushos/db';
 import { createLogger, sanitizeFailure } from '@hushos/logging';
@@ -41,6 +42,14 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
                 failed += 1;
                 if (error instanceof Error) event.error(error);
             }
+        }
+        // Families whose list of plans at Polar is owed (a read that failed): listed again, so a
+        // plan the mirror never held is found even after a dissolved family's job gave up.
+        try {
+            failed += (await relistUnlistedFamilies()).failed;
+        } catch (error) {
+            failed += 1;
+            if (error instanceof Error) event.error(error);
         }
         // Pooled members' personal plans still live, and endings with a refund pending or owed.
         let endings = 0;

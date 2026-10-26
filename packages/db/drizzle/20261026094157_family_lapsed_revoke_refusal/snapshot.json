@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "988befcd-3122-4903-95ab-8e52c59b4bb3",
+    "id": "6316cac2-cd13-4af6-86ae-966871e5935d",
     "prevIds": ["bb9fc702-d677-442b-bfd8-17564d2f505b"],
     "ddl": [
         {
@@ -5650,6 +5650,19 @@
         {
             "type": "timestamp with time zone",
             "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "plans_unlisted_since",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_customers"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
             "notNull": true,
             "dimensions": 0,
             "default": "now()",
@@ -6137,6 +6150,19 @@
             "generated": null,
             "identity": null,
             "name": "lapsed_revoke_refused_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "boolean",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "false",
+            "generated": null,
+            "identity": null,
+            "name": "product_unread",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

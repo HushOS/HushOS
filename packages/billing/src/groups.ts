@@ -1351,6 +1351,50 @@ function refusedRead(groupId: string, error: unknown) {
     return unavailable(error);
 }
 
+/*
+ * Every plan Polar lists for this family's team customer, every page of it; null when Polar has
+ * no such customer (404). A read that fails marks the list owed (`plans_unlisted_since`: the
+ * daily reconcile asks again, operators see it, the purge waits) and throws, unavailable; one
+ * read in full clears it. Every lookup of a family's plans at Polar goes through here.
+ */
+export async function listFamilySubscriptions(groupId: string) {
+    const all: models.Subscription[] = [];
+    try {
+        for await (const subscription of polar().subscriptions.iterList({
+            external_customer_id: customerKey(groupId),
+            limit: 100,
+        }))
+            all.push(subscription);
+    } catch (error) {
+        if (statusOf(error) === 404) {
+            await billingRepository.plansListed(groupId);
+            return null;
+        }
+        await billingRepository.markPlansUnlisted(groupId);
+        throw refusedRead(groupId, error);
+    }
+    await billingRepository.plansListed(groupId);
+    return all;
+}
+
+/*
+ * The daily reconcile's: every family whose list of plans at Polar is owed (a read failed, its
+ * dissolved family's job ran out of retries) is listed again, and a plan found there is recorded
+ * and reconciled (a dissolved family's then queues its job). One that still fails stays owed.
+ */
+export async function relistUnlistedFamilies() {
+    let failed = 0;
+    for (const { groupId } of await billingRepository.listUnlistedFamilies()) {
+        try {
+            await findLapsedFamilyPlans(groupId);
+            await reconcileGroup(groupId);
+        } catch {
+            failed += 1;
+        }
+    }
+    return { failed };
+}
+
 export async function findLapsedFamilyPlans(groupId: string, options: { payer?: string } = {}) {
     const none = { plans: [] as LapsedFamilyPlan[], liveAgain: false, charging: false };
     if (!billingEnabled() || !UUID.test(groupId)) return none;
@@ -1358,17 +1402,7 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
     if (options.payer !== undefined && customer?.payerUserId !== options.payer) return none;
     const ids = new Set(await billingRepository.listLapsedGroupSubscriptionIds(groupId));
     if (customer) {
-        let listed: models.Subscription[] = [];
-        try {
-            listed = (
-                await polar().subscriptions.list({
-                    external_customer_id: customerKey(groupId),
-                    limit: 100,
-                })
-            ).items;
-        } catch (error) {
-            if (statusOf(error) !== 404) throw refusedRead(groupId, error);
-        }
+        const listed = (await listFamilySubscriptions(groupId)) ?? [];
         // Every plan listed that can charge: a lapsed one to end, and a live one the mirror
         // missed (past due, which Polar's customer state doesn't list), which is the family's plan.
         for (const subscription of listed)
@@ -2570,7 +2604,7 @@ async function lapsedOf(groupId: string): Promise<FamilyLapsedPlan | null> {
     const row = await billingRepository.getLapsedGroupSubscription(groupId);
     if (!row) return null;
     return {
-        productName: row.productName === row.productId ? UNREAD_PLAN_NAME : row.productName,
+        productName: row.productUnread ? UNREAD_PLAN_NAME : row.productName,
         standing: row.status === 'paused' ? 'paused' : 'payment-failed',
         ids: await billingRepository.listLapsedGroupSubscriptionIds(groupId),
     };

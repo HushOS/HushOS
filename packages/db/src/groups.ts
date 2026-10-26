@@ -3524,6 +3524,11 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
                   ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
                   sql`, `,
               )}))`,
+        // A family whose list of plans at Polar is still owed (a read failed): one the mirror
+        // never held may be charging, so it is kept until the list is read.
+        billingEnv.BILLING_PROVIDER === 'none'
+            ? undefined
+            : sql`not exists (select 1 from ${groupBillingCustomers} c where c.group_id = ${groups.id} and c.plans_unlisted_since is not null)`,
     );
     const due = await db
         .select({ id: groups.id })

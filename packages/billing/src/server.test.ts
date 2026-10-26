@@ -680,6 +680,8 @@ const fakeClient = {
         // Every page.
         async *iterList(query: { external_customer_id?: string }) {
             polar.calls.push(`subscriptions.list:${query.external_customer_id}`);
+            if (polar.listFailure !== null)
+                throw new PolarClientError(polar.listFailure, { error: 'ListFailed' });
             const customer = query.external_customer_id
                 ? polar.customers.get(query.external_customer_id)
                 : undefined;
@@ -7679,6 +7681,93 @@ describe('a dissolved family’s plan', () => {
         await billing.reconcileGroup(groupId);
         expect(cancelJobs).toEqual([]);
         expect(callsTo('subscriptions.revoke')).toEqual([]);
+    });
+
+    test('a plan past due beyond Polar’s first page of 100 is found: every page of the family’s plans is read', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        // A hundred ended plans first, then one past due HushOS has no record of.
+        for (let i = 0; i < 100; i++)
+            familySubscription(groupId, {
+                id: `sub_old_${String(i).padStart(3, '0')}`,
+                status: 'canceled',
+                ended_at: new Date(Date.now() - DAY).toISOString(),
+                product_id: PRO_FAMILY,
+            });
+        const hidden = familySubscription(groupId, {
+            id: 'sub_zz_page_two',
+            status: 'past_due',
+            product_id: 'prod_archived',
+        });
+        expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        expect(await quietly(() => billing.cancelDissolvedPlan(groupId))).toMatchObject({
+            cancelled: 1,
+        });
+        expect(hidden.cancel_at_period_end).toBe(true);
+    });
+
+    test('a family whose list of plans can’t be read is owed one: listed for operators, kept from the purge, and listed again daily', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        const hidden = familySubscription(groupId, {
+            id: 'sub_hidden_owed',
+            status: 'past_due',
+            product_id: 'prod_archived',
+        });
+        expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        // Polar's list fails on every try the job gets.
+        polar.listFailure = 503;
+        for (let i = 0; i < 3; i++)
+            await quietly(async () => {
+                await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeTruthy();
+            });
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([
+            expect.objectContaining({ groupId, since: expect.any(Date) }),
+        ]);
+        // Its folders gone and the retention over: still not purged.
+        await purgeDue(groupId);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 0 });
+        // Polar recovers: the daily run lists it again, records the plan and queues the job.
+        polar.listFailure = null;
+        cancelJobs.length = 0;
+        expect(await quietly(() => billing.relistUnlistedFamilies())).toEqual({ failed: 0 });
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([]);
+        expect(await billingRepository.getGroupSubscription(hidden.id)).toMatchObject({
+            status: 'past_due',
+            endedAt: null,
+        });
+        expect(cancelJobs).toEqual([groupId]);
+    });
+
+    test('a plan whose unreadable product Polar changes for another unreadable one stays unread: never the family’s plan', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription, payer } = family;
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        const odd = familySubscription(groupId, { id: 'sub_odd', product_id: 'prod_archived' });
+        await quietly(() => billing.reconcileGroup(groupId));
+        // Moved to another product the catalogue can't read either.
+        odd.product_id = 'prod_archived_too';
+        await quietly(() => billing.reconcileGroup(groupId));
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(await billingRepository.getGroupSubscription(odd.id)).toMatchObject({
+            productId: 'prod_archived_too',
+            productUnread: true,
+        });
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([]);
+        expect((await billingRepository.getGroupPool(groupId))?.expiresAt ?? null).toBeNull();
     });
 
     test('a plan the mirror never held (an unreadable product, past due) is found by the dissolved family’s job at Polar, and set to end', async () => {

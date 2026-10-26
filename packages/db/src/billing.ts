@@ -442,12 +442,12 @@ export async function listUnendedGroupSubscriptionIds(groupId: string) {
 }
 
 /*
- * A plan whose product the catalogue could read (recordUnreadGroupSubscription marks the others
- * with their product id for a name): only such a plan is ever the family's plan, its places and
- * pool, or makes its payer one who pays for the family. An unread one is still a plan that can
- * charge (a dissolved family's job ends it, operators see it).
+ * A plan whose product the catalogue could read (`product_unread` false): only such a plan is
+ * ever the family's plan, its places and pool, or makes its payer one who pays for the family.
+ * An unread one is still a plan that can charge (a dissolved family's job ends it, operators see
+ * it), whatever product Polar moves it to while it stays unread.
  */
-const readablePlan = sql`${groupBillingSubscriptions.productName} <> ${groupBillingSubscriptions.productId}`;
+const readablePlan = eq(groupBillingSubscriptions.productUnread, false);
 
 const liveGroupSubscription = (groupId: string) =>
     and(
@@ -932,6 +932,7 @@ export async function recordUnreadGroupSubscription(
             groupId,
             provider: 'polar',
             productName: input.productId,
+            productUnread: true,
             includedMembers: 1,
             quotaBytes: 0n,
             paidUnits: 0,
@@ -939,12 +940,51 @@ export async function recordUnreadGroupSubscription(
         })
         .onConflictDoUpdate({
             target: groupBillingSubscriptions.id,
-            set: { ...state, updatedAt: new Date() },
+            set: { ...state, productName: input.productId, updatedAt: new Date() },
             setWhere: and(
                 eq(groupBillingSubscriptions.groupId, groupId),
-                eq(groupBillingSubscriptions.productName, groupBillingSubscriptions.productId),
+                eq(groupBillingSubscriptions.productUnread, true),
             ),
         });
+}
+
+/*
+ * Polar's list of this family's plans couldn't be read (an outage, a refusal): owed from now,
+ * the first failure kept. Cleared by plansListed once a list is read in full.
+ */
+export async function markPlansUnlisted(groupId: string) {
+    await db
+        .update(groupBillingCustomers)
+        .set({
+            plansUnlistedSince: sql`coalesce(${groupBillingCustomers.plansUnlistedSince}, now())`,
+            updatedAt: new Date(),
+        })
+        .where(eq(groupBillingCustomers.groupId, groupId));
+}
+
+/* Polar's list of this family's plans was read in full: nothing owed. */
+export async function plansListed(groupId: string) {
+    await db
+        .update(groupBillingCustomers)
+        .set({ plansUnlistedSince: null, updatedAt: new Date() })
+        .where(
+            and(
+                eq(groupBillingCustomers.groupId, groupId),
+                isNotNull(groupBillingCustomers.plansUnlistedSince),
+            ),
+        );
+}
+
+/* Families whose list of plans is owed, oldest first: the daily reconcile's, and operators'. */
+export async function listUnlistedFamilies() {
+    return db
+        .select({
+            groupId: groupBillingCustomers.groupId,
+            since: groupBillingCustomers.plansUnlistedSince,
+        })
+        .from(groupBillingCustomers)
+        .where(isNotNull(groupBillingCustomers.plansUnlistedSince))
+        .orderBy(groupBillingCustomers.plansUnlistedSince);
 }
 
 /* One group subscription's row, live or not: what it had paid for before a change. */
@@ -1035,6 +1075,8 @@ export async function applyGroupState(input: {
                 currentPeriodEnd: subscription.currentPeriodEnd,
                 cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
                 endedAt: subscription.endedAt,
+                // Its product reads (this snapshot came from the catalogue): no longer unread.
+                productUnread: false,
                 // A plan seen live (paid in the portal, resumed) or ended is no lapsed plan left
                 // unended: its refusal leaves the operators' list.
                 ...(LAPSED_STATUSES.includes(subscription.status) && !subscription.endedAt
@@ -1209,7 +1251,7 @@ export async function getLapsedGroupSubscription(groupId: string) {
     const [row] = await db
         .select({
             id: groupBillingSubscriptions.id,
-            productId: groupBillingSubscriptions.productId,
+            productUnread: groupBillingSubscriptions.productUnread,
             productName: groupBillingSubscriptions.productName,
             status: groupBillingSubscriptions.status,
         })

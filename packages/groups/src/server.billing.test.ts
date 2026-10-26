@@ -116,6 +116,15 @@ const fakeClient = {
                 : undefined;
             return { items: (team?.subscriptions ?? []).map((s) => structuredClone(s)) };
         },
+        async *iterList(query: { external_customer_id?: string }) {
+            const hook = polar.beforeList;
+            polar.beforeList = null;
+            await hook?.();
+            const team = query.external_customer_id
+                ? polar.teams.get(query.external_customer_id)
+                : undefined;
+            for (const s of team?.subscriptions ?? []) yield structuredClone(s);
+        },
         // Ends it now; one already ended is refused as Polar refuses it.
         async revoke(id: string) {
             polar.revokes.push(id);

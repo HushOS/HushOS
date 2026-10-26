@@ -98,6 +98,12 @@ export const groupBillingCustomers = pgTable(
         provider: text().notNull(),
         providerCustomerId: text('provider_customer_id').notNull().unique(),
         payerUserId: uuid('payer_user_id').references(() => users.id, { onDelete: 'set null' }),
+        /*
+         * Since when HushOS has owed Polar's own list of this family's plans (a read that failed:
+         * a plan the mirror never held may be charging). Retried by the daily reconcile until it
+         * succeeds, listed for operators meanwhile, and the family isn't purged while it is set.
+         */
+        plansUnlistedSince: timestamp('plans_unlisted_since', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
@@ -235,6 +241,12 @@ export const groupBillingSubscriptions = pgTable(
          */
         lapsedRevokeRefusal: text('lapsed_revoke_refusal'),
         lapsedRevokeRefusedAt: timestamp('lapsed_revoke_refused_at', { withTimezone: true }),
+        /*
+         * Its product is one the catalogue can't read (archived, edited): recorded as Polar has
+         * it, so a plan that can charge is never lost, but never the family's plan, its places or
+         * pool, nor its payer's, since its tier can't be read. Cleared once its product reads.
+         */
+        productUnread: boolean('product_unread').notNull().default(false),
         /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.

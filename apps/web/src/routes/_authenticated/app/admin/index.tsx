@@ -218,6 +218,12 @@ function AdminPage() {
                                 anchor: '#lapsed-not-ended',
                             },
                             {
+                                label: 'Family plans not listed',
+                                value: count(data.unlistedFamilies.length),
+                                tone: data.unlistedFamilies.length > 0 ? 'danger' : undefined,
+                                anchor: '#plans-not-listed',
+                            },
+                            {
                                 label: 'More than one plan',
                                 value: count(data.doubleCharges.length),
                                 tone: data.doubleCharges.length > 0 ? 'danger' : undefined,
@@ -423,6 +429,40 @@ function AdminPage() {
                                 set out to revoke (before a new plan, or before its payer left, was
                                 removed or deleted their account) and couldn’t. What asked for it is
                                 refused until the plan ends. The row goes once a revoke lands.
+                            </p>
+                        </>
+                    )}
+                    {data.unlistedFamilies.length > 0 && (
+                        <>
+                            <h2
+                                id="plans-not-listed"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Family plans not listed
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.unlistedFamilies.map((row) => (
+                                        <tr key={row.groupId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                Polar’s list of these families’ plans couldn’t be read, so a plan
+                                HushOS has no record of may be charging. The daily reconcile asks
+                                again; a dissolved family is kept until it can. Check the family’s
+                                customer in Polar’s dashboard if the row stays.
                             </p>
                         </>
                     )}

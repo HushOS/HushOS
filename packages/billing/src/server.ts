@@ -73,6 +73,7 @@ export {
     isFamilyPayer,
     MAX_REISSUES,
     paysForGroup,
+    relistUnlistedFamilies,
     queueDissolvedCancel,
     quoteUnitsChange,
     reconcileGroup,
