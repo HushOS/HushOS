@@ -1,0 +1,23 @@
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_0f7bfcefcf2361 10,133,186-192,467-475
+apps/web/src/components/families/rename-dialog.tsx
+  s_566b8e0c4467a4::t_222b90cdf9e8b9 1-119
+apps/web/src/components/page-header.tsx
+  s_566b8e0c4467a4::t_076402e0d2b792 7,12,18,26-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ad803ebbcf2edf742d4a4adb84ddce150049b50",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
