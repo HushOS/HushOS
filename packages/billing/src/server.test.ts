@@ -5700,6 +5700,58 @@ describe('a deleted family’s plan billing again', () => {
         expect(refundsMade()).toEqual([['order_reinstated', 999]]);
     });
 
+    test('an ending with no payment since its cutoff is read once, marked done, and never read again for it', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        // Reinstated, nothing charged yet; the first run writes its ending, then can't read orders.
+        subscription.status = 'active';
+        subscription.ended_at = null;
+        let armed = false;
+        const reads: string[] = [];
+        const error = vi.spyOn(log, 'error').mockImplementation((entry) => {
+            if (
+                (entry as { message: string }).message ===
+                'A deleted family’s plan is billing again: revoked, and what it took refunded'
+            )
+                armed = true;
+        });
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        const original = fakeClient.orders.list.bind(fakeClient.orders);
+        const orders = vi
+            .spyOn(fakeClient.orders, 'list')
+            .mockImplementation(async (query: Parameters<typeof original>[0]) => {
+                if (query.subscription_id === subscription.id) reads.push(subscription.id);
+                if (armed && query.subscription_id === subscription.id) {
+                    armed = false;
+                    throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+                }
+                return original(query);
+            });
+        try {
+            await expect(
+                billing.reconcileGroup(groupId, { fromDelivery: true }),
+            ).rejects.toBeTruthy();
+            expect(
+                (await billingRepository.getPlanEnding(subscription.id))?.ordersNotedAt,
+            ).toBeNull();
+            // Polar ends it; the next reconcile reads its orders: none paid since the cutoff.
+            subscription.status = 'canceled';
+            subscription.ended_at = new Date().toISOString();
+            await billing.reconcileGroup(groupId);
+            expect(
+                (await billingRepository.getPlanEnding(subscription.id))?.ordersNotedAt,
+            ).toBeTruthy();
+            reads.length = 0;
+            await billing.reconcileGroup(groupId);
+            await billing.reconcileGroup(groupId);
+            expect(reads).toEqual([]);
+        } finally {
+            error.mockRestore();
+            warn.mockRestore();
+            orders.mockRestore();
+        }
+        expect(refundsMade()).toEqual([]);
+    });
+
     test('a plan HushOS revoked, reinstated, charged and ended again between reads: its own order.paid has the charge refunded', async () => {
         const { groupId, subscription } = await purgedFamily();
         subscription.status = 'active';
@@ -6186,6 +6238,39 @@ describe('one plan per family', () => {
         expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe(
             subscription.id,
         );
+    });
+
+    test('a cure that stops right after its mark, the plan then ended at Polar: the next reconcile notes and refunds its payment', async () => {
+        const { groupId, newer } = await twoPlans();
+        // The run stops as soon as the mark is written, before anything else is asked of Polar.
+        const error = vi.spyOn(log, 'error').mockImplementation((entry) => {
+            if (
+                (entry as { message: string }).message ===
+                'A family had two live plans: one is revoked and its overlap refunded'
+            )
+                throw new Error('The run stopped.');
+        });
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        try {
+            await expect(billing.reconcileGroup(groupId)).rejects.toThrow('The run stopped.');
+        } finally {
+            error.mockRestore();
+            warn.mockRestore();
+        }
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        // Its ending was written with the mark, its orders not yet noted.
+        expect(await billingRepository.getPlanEnding(newer.id)).toMatchObject({
+            outcome: 'settled',
+            ordersNotedAt: null,
+        });
+        // Polar ends it meanwhile (the payer cancelled it).
+        newer.status = 'canceled';
+        newer.ended_at = new Date().toISOString();
+        await quietly(async () => {
+            await billing.reconcileGroup(groupId);
+            await runQueued(0);
+        });
+        expect(refundsMade()).toEqual([['order_newer', 999]]);
     });
 
     test('a cure whose ending is written but its orders never noted, the plan then ended at Polar, is finished by the next reconcile', async () => {

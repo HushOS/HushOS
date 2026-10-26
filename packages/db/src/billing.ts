@@ -1406,9 +1406,11 @@ async function supersedeOthers(
     const superseded = live
         .slice(1)
         .map((row) => ({ id: row.id, paidAfter: cutoffs.get(row.id) ?? new Date(0) }));
-    // Each with its refund cutoff, stored with the mark: a run that fails before ending it leaves
-    // it for the next, which ends it from this same cutoff (listSupersededToEnd).
-    for (const plan of superseded)
+    // Each with its refund cutoff, stored with the mark, and its ending written in the same
+    // transaction (settled, no lease, its orders not yet noted): a run that stops before ending it
+    // leaves it for the next, which ends it from this same cutoff (listSupersededToEnd), and
+    // takes that ending over (beginLapsedRevoke keeps its `paid_after`).
+    for (const plan of superseded) {
         await tx
             .update(groupBillingSubscriptions)
             .set({
@@ -1424,6 +1426,19 @@ async function supersedeOthers(
                     isNull(groupBillingSubscriptions.supersededAt),
                 ),
             );
+        await tx
+            .insert(personalPlanEndings)
+            .values({
+                subscriptionId: plan.id,
+                userId: groupId,
+                groupId: null,
+                admittedAt: now,
+                pooledAt: now,
+                outcome: 'settled',
+                paidAfter: plan.paidAfter,
+            })
+            .onConflictDoNothing({ target: personalPlanEndings.subscriptionId });
+    }
     return { kept, superseded };
 }
 
@@ -1437,6 +1452,8 @@ async function supersedeOthers(
  */
 export async function listSupersededToEnd(groupId: string) {
     const ending = personalPlanEndings;
+    // Its orders were noted on its ending (noteEndingOrders, or a read that found none to note).
+    const noted = sql`exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.ordersNotedAt} is not null)`;
     const rows = await db
         .select({
             id: groupBillingSubscriptions.id,
@@ -1445,16 +1462,16 @@ export async function listSupersededToEnd(groupId: string) {
             // Its ending has its revoke already (the job then refunds): asked again only if Polar
             // shows the plan live again, or its orders were never noted.
             revoked: sql<boolean>`exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.revokedAt} is not null)`,
-            // An ending written whose orders were never noted (the run stopped between the two):
-            // unfinished, even once Polar shows the plan ended.
-            unnoted: sql<boolean>`exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.paidAfter} is not null and ${ending.ordersNotedAt} is null)`,
+            // Its orders never noted (the run stopped after the mark, or between the ending and the
+            // notes): unfinished, even once Polar shows the plan ended.
+            unnoted: sql<boolean>`not ${noted}`,
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 eq(groupBillingSubscriptions.groupId, groupId),
                 isNotNull(groupBillingSubscriptions.supersededAt),
-                sql`(${groupBillingSubscriptions.endedAt} is null or exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.paidAfter} is not null and ${ending.ordersNotedAt} is null))`,
+                sql`(${groupBillingSubscriptions.endedAt} is null or not ${noted})`,
             ),
         );
     return rows.map((row) => ({
@@ -2274,7 +2291,8 @@ export async function beginLapsedRevoke(input: {
         await clearUnworkedRefunds(tx, input.subscriptionId);
         const [row] = await tx
             .update(personalPlanEndings)
-            .set({ ...fresh, ...lease, paidAfter, updatedAt: new Date() })
+            // Its unworked notes are cleared: its orders are no longer noted until read again.
+            .set({ ...fresh, ...lease, paidAfter, ordersNotedAt: null, updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
             .returning();
         return { ending: row!, leased: true };
@@ -2463,6 +2481,23 @@ export async function noteEndingOrders(input: {
             .set({ ordersNotedAt: sql`now()`, updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId));
     });
+}
+
+/*
+ * An unwanted plan's ending whose orders were read and none was paid since its cutoff: nothing to
+ * note, and the read is finished (`orders_noted_at`), so it is never read again for this.
+ */
+export async function markOrdersNoted(subscriptionId: string) {
+    await db
+        .update(personalPlanEndings)
+        .set({ ordersNotedAt: sql`now()`, updatedAt: new Date() })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, subscriptionId),
+                isNotNull(personalPlanEndings.paidAfter),
+                isNull(personalPlanEndings.ordersNotedAt),
+            ),
+        );
 }
 
 /*

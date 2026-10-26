@@ -1518,8 +1518,11 @@ export async function endUnwantedFamilyPlan(
             !orders.items.some(
                 (order) => order.paid && Date.parse(order.created_at) >= paidAfter.getTime(),
             )
-        )
+        ) {
+            // Nothing paid since the cutoff: an ending already written has its read done.
+            await billingRepository.markOrdersNoted(subscriptionId);
             return false;
+        }
     }
     const owner = randomUUID();
     const begun = await billingRepository.beginLapsedRevoke({
