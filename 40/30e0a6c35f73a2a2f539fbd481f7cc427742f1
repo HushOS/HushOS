@@ -1,0 +1,59 @@
+bun.lock
+  s_566b8e0c4467a4::t_ee675ed4b7191e 284
+compose.yaml
+  s_566b8e0c4467a4::t_28c850eeaaf993 163-165
+docs/groups-design.md
+  s_566b8e0c4467a4::t_cf9b5cac739faf 334-335
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_6708e49cfefdfd 77,87,214,726
+packages/db/drizzle/20261026140033_group_dissolve_notices/migration.sql
+  s_566b8e0c4467a4::t_59354205446ad6 1-26
+packages/db/drizzle/20261026140033_group_dissolve_notices/snapshot.json
+  s_566b8e0c4467a4::t_d7a41b9866d0c0 1-13873
+packages/db/src/dissolve-notices.ts
+  s_566b8e0c4467a4::t_2eece1cba9ff47 1-188
+packages/db/src/groups.dissolve-notices-off.test.ts
+  s_566b8e0c4467a4::t_622af1d49b8e80 1-54
+packages/db/src/groups.dissolve-notices.test.ts
+  s_566b8e0c4467a4::t_38a275dab48c5b 1-584
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_06ffbac235104e 15,1954-1955,3430-3431
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_d64dea528690fa 14
+packages/db/src/schema/groups.ts
+  s_566b8e0c4467a4::t_35518bcd4f4acb 413-456
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_0a4d8ba349cbd5 2,215-258
+packages/emails/src/rendered/family-dissolved.ts
+  s_566b8e0c4467a4::t_720ef1899844b8 1-15
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_8676b780baf7f1 6,285-315
+packages/emails/src/templates/family-dissolved.tsx
+  s_566b8e0c4467a4::t_dcc9ebb14c52ae 1-293
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_b1588d41e9039e 30
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_9854511137e540 21
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_5f7011358f7561 29,59,157-169
+packages/jobs/src/jobs/groups.ts
+  s_566b8e0c4467a4::t_67dc22046ef653 2-3,48-115
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_b8aee22a01023e 11,14,105-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4030e0a6c35f73a2a2f539fbd481f7cc427742f1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
