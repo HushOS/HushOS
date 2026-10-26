@@ -1,0 +1,31 @@
+apps/web/src/lib/groups/outbox.test.ts
+  s_566b8e0c4467a4::t_0b1908a2b4481d 558-604
+apps/web/src/lib/groups/outbox.ts
+  s_566b8e0c4467a4::t_744d7c83a55c3f 473-491,499-501,521-523,543-544
+crates/hushos-core/fixtures/pin-cases.json
+  s_566b8e0c4467a4::t_d49af397ff0eb1 326-439,505-528
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_db6ab74455993f 1383-1384
+packages/crypto/scripts/pin-cases.ts
+  s_566b8e0c4467a4::t_6b276682f15038 161-196,217-228
+packages/crypto/src/pins.ts
+  s_566b8e0c4467a4::t_b8e0275b91e2f1 132-137,141-146,150-162
+packages/drive/src/trust.ts
+  s_566b8e0c4467a4::t_5ee52cae40fa76 3,158-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c891d3a5362a2b0c24d68c86e4e3126293df0693",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
