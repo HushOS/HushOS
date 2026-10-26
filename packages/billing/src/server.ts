@@ -681,10 +681,14 @@ function snapshot(
  * Webhooks only say that something changed; the provider's customer state says
  * what is true now. Subscriptions that left the state (past due, unpaid, incomplete,
  * paused, ended) are read individually so a retry window is honoured, a lapsed plan
- * is kept with its status, and an ending is recorded as such.
+ * is kept with its status, and an ending is recorded as such. A reconcile that began
+ * before the newest one written writes nothing and stops: two overlap (a burst of
+ * webhooks, the daily run), and the newer read Polar later and does what follows.
  */
 export async function reconcileCustomer(userId: string) {
     if (!billingEnabled() || !USER_ID_PATTERN.test(userId)) return;
+    // Before the first Polar read: any reconcile that began later read Polar later.
+    const readingFrom = await billingRepository.readingStamp();
     let state: models.CustomerState | null;
     try {
         state = await polar().customers.getStateExternal(userId);
@@ -708,13 +712,15 @@ export async function reconcileCustomer(userId: string) {
             if (statusOf(error) !== 404) throw unavailable(error);
         }
     }
-    await billingRepository.applyCustomerState({
+    const outcome = await billingRepository.applyCustomerState({
         userId,
         provider: PROVIDER,
         customerId: state?.id ?? null,
         subscriptions,
         graceMs: billingEnv.BILLING_GRACE_DAYS * 24 * 60 * 60 * 1000,
+        readingFrom,
     });
+    if (outcome === 'stale') return;
     // A live personal plan of someone whose files draw from a family's pool is ended (5.1).
     if (subscriptions.some((subscription) => livePlan(subscription) || lapsedPlan(subscription)))
         await queuePlanEnding(userId);

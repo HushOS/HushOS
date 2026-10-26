@@ -98,6 +98,7 @@ function plan(quotaBytes: bigint, overrides: Partial<GroupSubscriptionSnapshot> 
 
 async function apply(groupId: string, subscriptions: GroupSubscriptionSnapshot[]) {
     return billing.applyGroupState({
+        readingFrom: await billing.readingStamp(),
         groupId,
         provider: 'polar',
         customerId: 'cus_family',
@@ -951,7 +952,7 @@ describe('races', () => {
                 return { writing, uploading };
             },
         );
-        expect(await writing).toBe(true);
+        expect(await writing).toBe('applied');
         // Checked against the 100-byte pool the plan wrote, not the folder's old 10 GiB.
         expect(await uploading).toBe('over-quota');
     });
@@ -1049,7 +1050,7 @@ describe('races', () => {
             // A leave that lands first makes the admission wait for its marking; never a deadlock.
             expect(['ok', 'left-due']).toContain(admitted.status);
             expect(left).toEqual({ status: 'left' });
-            expect(written).toBe(true);
+            expect(written).toBe('applied');
             expect(uploads).toEqual(['ok', 'ok', 'ok']);
         }
     }, 180_000);

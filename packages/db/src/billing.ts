@@ -27,6 +27,39 @@ const LIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
  */
 const LAPSED_STATUSES = ['unpaid', 'incomplete', 'paused'];
 
+/*
+ * When a reading of Polar begins, by the database's clock, as text to the microsecond (a Date
+ * keeps milliseconds only, and two readings can begin within one). Every write of Polar's state
+ * carries one, and is compared under readingLock with the newest written: the database's clock
+ * is the one clock every web and worker container shares, however many hosts run them.
+ */
+export type ReadingStamp = string & { readonly reading: unique symbol };
+
+export async function readingStamp() {
+    const result = await db.execute<{ at: string }>(sql`select clock_timestamp()::text as at`);
+    return result.rows[0]!.at as ReadingStamp;
+}
+
+/*
+ * What a write of Polar's state did: written; nothing, a newer reading being written already
+ * (`stale`); nothing, a newer change of one plan being written that this whole reading began
+ * before, so its caller reads Polar again (`rerun`); or nothing, the person or family gone.
+ */
+export type ReadingOutcome = 'applied' | 'stale' | 'rerun' | 'gone';
+
+const READING_LOCK_SPACE = 0x72656164;
+
+/*
+ * Serialises every write of one person's or family's Polar state, whether or not a customer row
+ * exists yet to lock; held to the transaction's end and taken before any row lock, so it never
+ * waits on a lock held by a transaction that waits on it. Never held across a Polar call.
+ */
+async function readingLock(tx: Tx, key: string) {
+    await tx.execute(
+        sql`select pg_advisory_xact_lock(${READING_LOCK_SPACE}::int, hashtext(${key}))`,
+    );
+}
+
 export type SubscriptionSnapshot = {
     id: string;
     productId: string;
@@ -139,6 +172,10 @@ export async function listCustomerIds(provider: string) {
  * reconcile: a payment or a resume can still bring it back. One absent from the
  * snapshot (Polar answered 404), or that Polar answers as ended without saying when,
  * is recorded as ended now.
+ *
+ * `readingFrom` is when the reconcile began reading Polar (readingStamp). One that began before
+ * the newest reconcile written writes nothing (`stale`): two can overlap (a burst of webhooks,
+ * the daily run), and the one that read Polar earlier can commit last.
  */
 export async function applyCustomerState(input: {
     userId: string;
@@ -146,14 +183,24 @@ export async function applyCustomerState(input: {
     customerId: string | null;
     subscriptions: SubscriptionSnapshot[];
     graceMs: number;
-}) {
+    readingFrom: ReadingStamp;
+}): Promise<ReadingOutcome> {
     return db.transaction(async (tx) => {
+        await readingLock(tx, `user:${input.userId}`);
         const [personal] = await tx
             .select({ workspaceId: personalWorkspaces.workspaceId })
             .from(personalWorkspaces)
             .where(eq(personalWorkspaces.userId, input.userId));
-        if (!personal) return false;
+        if (!personal) return 'gone';
+        const [customer] = await tx
+            .select({
+                newer: sql<boolean>`coalesce(${billingCustomers.reconciledFrom} > ${input.readingFrom}::timestamptz, false)`,
+            })
+            .from(billingCustomers)
+            .where(eq(billingCustomers.userId, input.userId));
+        if (customer?.newer) return 'stale';
         const now = new Date();
+        const reconciledFrom = sql`${input.readingFrom}::timestamptz`;
         if (input.customerId)
             await tx
                 .insert(billingCustomers)
@@ -161,11 +208,18 @@ export async function applyCustomerState(input: {
                     userId: input.userId,
                     provider: input.provider,
                     providerCustomerId: input.customerId,
+                    reconciledFrom,
                 })
                 .onConflictDoUpdate({
                     target: billingCustomers.userId,
-                    set: { providerCustomerId: input.customerId, updatedAt: now },
+                    set: { providerCustomerId: input.customerId, reconciledFrom, updatedAt: now },
                 });
+        // No customer at Polar: the row HushOS holds, if any, still records this reading.
+        else if (customer)
+            await tx
+                .update(billingCustomers)
+                .set({ reconciledFrom, updatedAt: now })
+                .where(eq(billingCustomers.userId, input.userId));
         const live = input.subscriptions.filter(
             (subscription) => !subscription.endedAt && LIVE_STATUSES.has(subscription.status),
         );
@@ -271,7 +325,7 @@ export async function applyCustomerState(input: {
                         isNull(storageEntitlements.revokedAt),
                     ),
                 );
-        return true;
+        return 'applied';
     });
 }
 
@@ -910,68 +964,122 @@ export async function releaseDissolveMail(subscriptionId: string, periodEnd: Dat
  * plan, its places or pool, nor makes its payer one who pays for the family (readablePlan),
  * since its tier can't be read.
  */
+export type UnreadGroupSubscription = {
+    id: string;
+    productId: string;
+    status: string;
+    recurringInterval: string;
+    amount: number | null;
+    currency: string | null;
+    units: number;
+    currentPeriodStart: Date;
+    currentPeriodEnd: Date;
+    cancelAtPeriodEnd: boolean;
+    endedAt: Date | null;
+};
+
+/*
+ * As one plan's change (the lapsed-plan lookup's read of it): `readingFrom` is when it was read,
+ * and nothing is written if a reconcile that began later is written already. A reconcile writes
+ * its own unread plans inside applyGroupState, under the same check.
+ */
 export async function recordUnreadGroupSubscription(
     groupId: string,
-    input: {
-        id: string;
-        productId: string;
-        status: string;
-        recurringInterval: string;
-        amount: number | null;
-        currency: string | null;
-        units: number;
-        currentPeriodStart: Date;
-        currentPeriodEnd: Date;
-        cancelAtPeriodEnd: boolean;
-        endedAt: Date | null;
-    },
-) {
+    input: UnreadGroupSubscription,
+    readingFrom: ReadingStamp,
+): Promise<ReadingOutcome> {
+    return db.transaction(async (tx) => {
+        await readingLock(tx, `group:${groupId}`);
+        const claimed = await claimGroupReading(tx, groupId, readingFrom, false);
+        if (claimed !== 'applied') return claimed;
+        await writeUnread(tx, groupId, input);
+        return 'applied';
+    });
+}
+
+async function writeUnread(tx: Tx, groupId: string, input: UnreadGroupSubscription) {
     const where = and(
         eq(groupBillingSubscriptions.id, input.id),
         eq(groupBillingSubscriptions.groupId, groupId),
     );
-    await db.transaction(async (tx) => {
+    await tx
+        .insert(groupBillingSubscriptions)
+        .values({
+            ...input,
+            groupId,
+            provider: 'polar',
+            productName: input.productId,
+            productUnread: true,
+            includedMembers: 1,
+            quotaBytes: 0n,
+            paidUnits: 0,
+            paidQuotaBytes: 0n,
+        })
+        .onConflictDoNothing({ target: groupBillingSubscriptions.id });
+    // Where it stands at Polar, on any row of this family's: a plan the catalogue once read
+    // that Polar ends, or reinstates, while its product can't be read follows Polar too.
+    await tx
+        .update(groupBillingSubscriptions)
+        .set({
+            status: input.status,
+            endedAt: input.endedAt,
+            cancelAtPeriodEnd: input.cancelAtPeriodEnd,
+            currentPeriodStart: input.currentPeriodStart,
+            currentPeriodEnd: input.currentPeriodEnd,
+            updatedAt: new Date(),
+        })
+        .where(where);
+    // What it is, only on a row that was never read: one the catalogue read keeps its known
+    // product, tier and places.
+    await tx
+        .update(groupBillingSubscriptions)
+        .set({
+            productId: input.productId,
+            productName: input.productId,
+            recurringInterval: input.recurringInterval,
+            amount: input.amount,
+            currency: input.currency,
+            units: input.units,
+        })
+        .where(and(where, eq(groupBillingSubscriptions.productUnread, true)));
+}
+
+/*
+ * Under readingLock: whether a reading of the family's plans that began at `readingFrom` is
+ * still the newest, and if so recorded as such. A whole reconcile (`complete`) that began before
+ * the newest reconcile written is `stale` (that one read Polar later, and did everything this one
+ * would); one that began before the newest change written is `rerun` (the change is newer than
+ * what it read, the rest of its reading may not be). One plan's change is `stale` only behind a
+ * newer reconcile, never behind another change, which may be of another plan.
+ */
+async function claimGroupReading(
+    tx: Tx,
+    groupId: string,
+    readingFrom: ReadingStamp,
+    complete: boolean,
+): Promise<'applied' | 'stale' | 'rerun'> {
+    const stamp = sql`${readingFrom}::timestamptz`;
+    const [row] = await tx
+        .select({
+            newerReconcile: sql<boolean>`coalesce(${groupBillingCustomers.reconciledFrom} > ${stamp}, false)`,
+            newerChange: sql<boolean>`coalesce(${groupBillingCustomers.changedFrom} > ${stamp}, false)`,
+        })
+        .from(groupBillingCustomers)
+        .where(eq(groupBillingCustomers.groupId, groupId));
+    if (row?.newerReconcile) return 'stale';
+    if (complete && row?.newerChange) return 'rerun';
+    if (row)
         await tx
-            .insert(groupBillingSubscriptions)
-            .values({
-                ...input,
-                groupId,
-                provider: 'polar',
-                productName: input.productId,
-                productUnread: true,
-                includedMembers: 1,
-                quotaBytes: 0n,
-                paidUnits: 0,
-                paidQuotaBytes: 0n,
-            })
-            .onConflictDoNothing({ target: groupBillingSubscriptions.id });
-        // Where it stands at Polar, on any row of this family's: a plan the catalogue once read
-        // that Polar ends, or reinstates, while its product can't be read follows Polar too.
-        await tx
-            .update(groupBillingSubscriptions)
-            .set({
-                status: input.status,
-                endedAt: input.endedAt,
-                cancelAtPeriodEnd: input.cancelAtPeriodEnd,
-                currentPeriodStart: input.currentPeriodStart,
-                currentPeriodEnd: input.currentPeriodEnd,
-                updatedAt: new Date(),
-            })
-            .where(where);
-        // What it is, only on a row that was never read: one the catalogue read keeps its known
-        // product, tier and places.
-        await tx
-            .update(groupBillingSubscriptions)
-            .set({
-                productId: input.productId,
-                productName: input.productId,
-                recurringInterval: input.recurringInterval,
-                amount: input.amount,
-                currency: input.currency,
-                units: input.units,
-            })
-            .where(and(where, eq(groupBillingSubscriptions.productUnread, true)));
-    });
+            .update(groupBillingCustomers)
+            .set(
+                complete
+                    ? { reconciledFrom: stamp }
+                    : {
+                          changedFrom: sql`greatest(${groupBillingCustomers.changedFrom}, ${stamp})`,
+                      },
+            )
+            .where(eq(groupBillingCustomers.groupId, groupId));
+    return 'applied';
 }
 
 /*
@@ -1062,15 +1170,30 @@ export async function applyGroupState(input: {
      * not a plan it knows): left exactly as they are, never swept as ended.
      */
     keepIds?: string[];
-}) {
+    /*
+     * Plans whose product the catalogue can't read, as Polar has them: written first, under the
+     * same check (recordUnreadGroupSubscription's rows).
+     */
+    unread?: UnreadGroupSubscription[];
+    /*
+     * When the reading began (readingStamp): before the reconcile's first Polar read, or as a
+     * change's Polar call answered. Compared with the newest written (claimGroupReading).
+     */
+    readingFrom: ReadingStamp;
+}): Promise<ReadingOutcome> {
     return db.transaction(async (tx) => {
+        await readingLock(tx, `group:${input.groupId}`);
         const [group] = await tx
             .select({ id: groups.id })
             .from(groups)
             .where(eq(groups.id, input.groupId))
             .for('no key update');
-        if (!group) return false;
+        if (!group) return 'gone';
+        const complete = input.complete !== false;
+        const claimed = await claimGroupReading(tx, input.groupId, input.readingFrom, complete);
+        if (claimed !== 'applied') return claimed;
         const now = new Date();
+        const stamp = sql`${input.readingFrom}::timestamptz`;
         if (input.customerId)
             await tx
                 .insert(groupBillingCustomers)
@@ -1078,11 +1201,14 @@ export async function applyGroupState(input: {
                     groupId: input.groupId,
                     provider: input.provider,
                     providerCustomerId: input.customerId,
+                    // A first row is this reading's (claimGroupReading recorded it on one held).
+                    ...(complete ? { reconciledFrom: stamp } : { changedFrom: stamp }),
                 })
                 .onConflictDoUpdate({
                     target: groupBillingCustomers.groupId,
                     set: { providerCustomerId: input.customerId, updatedAt: now },
                 });
+        for (const unread of input.unread ?? []) await writeUnread(tx, input.groupId, unread);
         for (const subscription of input.subscriptions) {
             const paid = subscription.paidUnits;
             const values = {
@@ -1157,7 +1283,7 @@ export async function applyGroupState(input: {
             .filter((subscription) => !subscription.endedAt && !ENDED.has(subscription.status))
             .map((subscription) => subscription.id)
             .concat(input.keepIds ?? []);
-        if (input.complete !== false)
+        if (complete)
             await tx
                 .update(groupBillingSubscriptions)
                 .set({
@@ -1214,7 +1340,7 @@ export async function applyGroupState(input: {
                 target: groupStorage.groupId,
                 set: { ...pool, updatedAt: now },
             });
-        return true;
+        return 'applied';
     });
 }
 

@@ -272,7 +272,18 @@ async function tierStateOf(
  * where it was. The tier paid for is re-derived from Polar's orders
  * (tierStateOf). False when the product isn't a family plan.
  */
-async function applyChanged(groupId: string, subscription: models.Subscription, paid: boolean) {
+async function applyChanged(
+    groupId: string,
+    subscription: models.Subscription,
+    paid: boolean,
+    /*
+     * When Polar's answer came (readingStamp, taken as it arrived): by default now, for a caller
+     * that applies the answer as soon as it has it. Nothing is written when a reconcile that
+     * began later is written already: it read Polar after this answer.
+     */
+    readingFrom?: billingRepository.ReadingStamp,
+) {
+    const answeredAt = readingFrom ?? (await billingRepository.readingStamp());
     const plan = await planOf(subscription.product_id);
     if (!plan) return false;
     const tier = await tierStateOf(subscription, plan);
@@ -283,6 +294,7 @@ async function applyChanged(groupId: string, subscription: models.Subscription, 
         subscriptions: [snapshotOf(subscription, plan, paid, tier)],
         graceMs: graceMs(),
         complete: false,
+        readingFrom: answeredAt,
     });
     return true;
 }
@@ -290,20 +302,28 @@ async function applyChanged(groupId: string, subscription: models.Subscription, 
 const LIVE = new Set(['active', 'trialing', 'past_due']);
 
 /* A family plan whose product the catalogue can't read, as Polar has it (recordUnreadGroupSubscription). */
-const recordUnread = (groupId: string, subscription: models.Subscription) =>
-    billingRepository.recordUnreadGroupSubscription(groupId, {
-        id: subscription.id,
-        productId: subscription.product_id,
-        status: subscription.status,
-        recurringInterval: subscription.recurring_interval,
-        amount: subscription.amount,
-        currency: subscription.currency,
-        units: subscription.units ?? 1,
-        currentPeriodStart: new Date(subscription.current_period_start),
-        currentPeriodEnd: new Date(subscription.current_period_end),
-        cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        endedAt: subscription.ended_at ? new Date(subscription.ended_at) : null,
-    });
+const unreadOf = (
+    subscription: models.Subscription,
+): billingRepository.UnreadGroupSubscription => ({
+    id: subscription.id,
+    productId: subscription.product_id,
+    status: subscription.status,
+    recurringInterval: subscription.recurring_interval,
+    amount: subscription.amount,
+    currency: subscription.currency,
+    units: subscription.units ?? 1,
+    currentPeriodStart: new Date(subscription.current_period_start),
+    currentPeriodEnd: new Date(subscription.current_period_end),
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    endedAt: subscription.ended_at ? new Date(subscription.ended_at) : null,
+});
+
+/* As one plan's change: written unless a reconcile that began after `readingFrom` is written. */
+const recordUnread = (
+    groupId: string,
+    subscription: models.Subscription,
+    readingFrom: billingRepository.ReadingStamp,
+) => billingRepository.recordUnreadGroupSubscription(groupId, unreadOf(subscription), readingFrom);
 
 /*
  * A webhook says only that something changed: the team customer's state says
@@ -324,17 +344,40 @@ const recordUnread = (groupId: string, subscription: models.Subscription) =>
  * HushOS still means to have that Polar lost is asked for again, and queued
  * for a retry if Polar refuses.
  */
-export async function reconcileGroup(
-    groupId: string,
-    options: {
-        fromDissolveCancel?: boolean;
-        /* The subscription a delivery is about, read even if Polar's state doesn't list it. */
-        subscriptionId?: string;
-        /* A delivery (not a sync or the daily run): a deleted family's list is read once. */
-        fromDelivery?: boolean;
-    } = {},
-) {
+type ReconcileOptions = {
+    fromDissolveCancel?: boolean;
+    /* The subscription a delivery is about, read even if Polar's state doesn't list it. */
+    subscriptionId?: string;
+    /* A delivery (not a sync or the daily run): a deleted family's list is read once. */
+    fromDelivery?: boolean;
+};
+
+export async function reconcileGroup(groupId: string, options: ReconcileOptions = {}) {
     if (!billingEnabled() || !UUID.test(groupId)) return;
+    // Read again only when a change of one plan landed after this reading began: the reading
+    // after it starts later than that change, so it is written unless another change lands.
+    for (let attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt++)
+        if ((await reconcileGroupOnce(groupId, options)) !== 'rerun') return;
+    log.warn({
+        message: 'Group reconcile gave way to newer changes on every try; the next one writes it',
+        billing: { group: groupId, attempts: RECONCILE_ATTEMPTS },
+    });
+}
+
+/* Reads (a reconcile behind a newer change is read again) before reconcileGroup gives way. */
+const RECONCILE_ATTEMPTS = 3;
+
+/*
+ * One reading of Polar and its write. `stale` when a reconcile that began later is written
+ * already: that one read Polar later and does everything after the write this one would (its
+ * personal plans to end, a dissolved family's cancel, cuts), so this one stops.
+ */
+async function reconcileGroupOnce(
+    groupId: string,
+    options: ReconcileOptions,
+): Promise<billingRepository.ReadingOutcome | undefined> {
+    // Before the first Polar read: any write that began later read Polar later.
+    const readingFrom = await billingRepository.readingStamp();
     let state: models.CustomerState | null;
     try {
         state = await polar().customers.getStateExternal(customerKey(groupId));
@@ -346,14 +389,17 @@ export async function reconcileGroup(
     if (!state && !(await billingRepository.getGroupCustomer(groupId))) return;
     // A family HushOS has deleted (purged after it was dissolved) has nothing a plan can buy:
     // one Polar bills again is revoked, and what it took refunded.
-    if (!(await groupsRepository.getGroupRow(groupId)))
-        return revokeOrphanedPlans(groupId, state, {
+    if (!(await groupsRepository.getGroupRow(groupId))) {
+        await revokeOrphanedPlans(groupId, state, {
             subscriptionId: options.subscriptionId,
             listPolar: options.fromDelivery,
         });
+        return;
+    }
     const ids = new Set((state?.active_subscriptions ?? []).map((subscription) => subscription.id));
     for (const id of await billingRepository.listUnendedGroupSubscriptionIds(groupId)) ids.add(id);
     const subscriptions: billingRepository.GroupSubscriptionSnapshot[] = [];
+    const unread: billingRepository.UnreadGroupSubscription[] = [];
     const unresolved: string[] = [];
     const stale: string[] = [];
     // Products bigger than the tier paid for, for more than STALE_RAISE_DAYS (an unpaid upgrade).
@@ -375,7 +421,8 @@ export async function reconcileGroup(
                 unresolved.push(subscription.id);
             // A lapsed plan the lookup wrote with its product unread (findLapsedFamilyPlans) is
             // kept as Polar has it, so it leaves the page once ended; any other row is untouched.
-            await recordUnread(groupId, subscription);
+            // Written with the rest, under the same check.
+            unread.push(unreadOf(subscription));
             log.warn({
                 message: 'Group subscription left as it was: its product is not a family plan',
                 billing: { group: groupId, subscription: subscription.id },
@@ -397,7 +444,7 @@ export async function reconcileGroup(
             staleTier.push(subscription.id);
         subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false, tier));
     }
-    const applied = await billingRepository.applyGroupState({
+    const outcome = await billingRepository.applyGroupState({
         groupId,
         provider: PROVIDER,
         customerId: state?.id ?? null,
@@ -405,14 +452,19 @@ export async function reconcileGroup(
         graceMs: graceMs(),
         complete: true,
         keepIds: unresolved,
+        unread,
+        readingFrom,
     });
+    if (outcome === 'stale' || outcome === 'rerun') return outcome;
     // The family was purged between the read above and the write (applyGroupState found no row):
     // its plans are a deleted family's, ended as any other's would be.
-    if (!applied && !(await groupsRepository.getGroupRow(groupId)))
-        return revokeOrphanedPlans(groupId, state, {
+    if (outcome === 'gone' && !(await groupsRepository.getGroupRow(groupId))) {
+        await revokeOrphanedPlans(groupId, state, {
             subscriptionId: options.subscriptionId,
             listPolar: options.fromDelivery,
         });
+        return;
+    }
     // Everyone whose files now draw from a live pool with a personal plan still live has that
     // plan ended (docs/families-shared-pool.md 5.1): the organizer's first purchase, a family's
     // lapsed plan bought again, a checkout that raced an admission.
@@ -1636,24 +1688,26 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
                 if (statusOf(error) === 404) continue;
                 throw refusedRead(groupId, error);
             }
+            // As Polar's answer came: what this run writes of the plan is as of then.
+            const answeredAt = await billingRepository.readingStamp();
             const plan = await planOf(subscription.product_id);
             const held = await billingRepository.getGroupSubscription(id);
             // One whose product the catalogue can't read (archived, edited) is written to the mirror
             // as it stands at Polar, ended or not, since no reconcile updates it: so the page names
             // it, its ending is told as the family's (familyPlanOf), and it leaves once ended.
-            if (!plan) await recordUnread(groupId, subscription);
+            if (!plan) await recordUnread(groupId, subscription, answeredAt);
             // Ended is nothing to do. Live (paid in the portal just now, or one the mirror missed) is
             // the family's plan: written to the mirror if it wasn't there, so the reconcile sees it.
             if (subscription.ended_at || !LAPSED.has(subscription.status)) {
                 if (!subscription.ended_at && LIVE.has(subscription.status)) {
                     liveAgain = true;
                     if (!subscription.cancel_at_period_end) charging = true;
-                    if (!held && plan) await applyChanged(groupId, subscription, false);
+                    if (!held && plan) await applyChanged(groupId, subscription, false, answeredAt);
                 }
                 continue;
             }
             // Written to the mirror if it wasn't there, so the page names it.
-            if (!held && plan) await applyChanged(groupId, subscription, false);
+            if (!held && plan) await applyChanged(groupId, subscription, false, answeredAt);
             found.push({
                 id,
                 name: plan ? tierName(plan) : 'earlier',
@@ -2261,6 +2315,8 @@ async function raisePlaces(
     } catch (error) {
         return refusedRaise(error);
     }
+    // As Polar answered: the orders read below don't make the raise's own answer any newer.
+    const answeredAt = await billingRepository.readingStamp();
     // Billed on another product than the one it was asked on (changed outside HushOS meanwhile):
     // its places and its order are not credited, and the plan is read again from Polar.
     if (raised.product_id !== subscription.product_id) {
@@ -2272,7 +2328,7 @@ async function raisePlaces(
             live.id,
             await raiseOrders(raised, target, startedAt),
         );
-        await applyChanged(groupId, raised, false);
+        await applyChanged(groupId, raised, false, answeredAt);
         await reconcileGroup(groupId);
         return { status: 'changed' };
     }
@@ -2282,7 +2338,7 @@ async function raisePlaces(
     if (cut !== null) await billingRepository.setIntendedUnits(live.id, null);
     // Paid only when Polar shows no order waiting; one that cannot be read is not paid yet.
     const paid = (await orderState(subscription.id)).unpaid === false;
-    await applyChanged(groupId, raised, paid);
+    await applyChanged(groupId, raised, paid, answeredAt);
     // Polar keeps a scheduled move through a raise; were it lost, it is asked for again.
     await restorePending(groupId);
     return paid ? { status: 'ok' } : { status: 'confirm', url: null };

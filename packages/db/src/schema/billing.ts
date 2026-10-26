@@ -22,6 +22,11 @@ export const billingCustomers = pgTable('billing_customers', {
         .references(() => users.id, { onDelete: 'cascade' }),
     provider: text().notNull(),
     providerCustomerId: text('provider_customer_id').notNull().unique(),
+    /*
+     * When the newest reconcile written here began reading Polar, by the database's clock
+     * (readingStamp): one that began earlier and commits later writes nothing.
+     */
+    reconciledFrom: timestamp('reconciled_from', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -104,6 +109,16 @@ export const groupBillingCustomers = pgTable(
          * succeeds, listed for operators meanwhile, and the family isn't purged while it is set.
          */
         plansUnlistedSince: timestamp('plans_unlisted_since', { withTimezone: true }),
+        /*
+         * When the newest reconcile written here began reading Polar, by the database's clock
+         * (readingStamp): one that began earlier and commits later writes nothing.
+         */
+        reconciledFrom: timestamp('reconciled_from', { withTimezone: true }),
+        /*
+         * When the newest change written here (one plan as a raise, cut or revoke answered it)
+         * was answered: a reconcile that began earlier writes nothing and reads Polar again.
+         */
+        changedFrom: timestamp('changed_from', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },

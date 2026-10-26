@@ -1189,6 +1189,7 @@ describe('admission with billing on', () => {
         try {
             // Their own Pro, as HushOS's mirror of Polar holds it.
             await billingRepository.applyCustomerState({
+                readingFrom: await billingRepository.readingStamp(),
                 userId: newcomer.userId,
                 provider: 'polar',
                 customerId: 'cus_newcomer',
