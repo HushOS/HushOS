@@ -391,19 +391,67 @@ describe('sending what is owed', () => {
         expect((await deliver()).notices).toEqual([]);
     });
 
-    test('a send that fails gives its email back for the next run and stops this one', async () => {
+    test('an email that keeps failing is given back, and the ones after it are still sent', async () => {
         const f = await familyAboutToDissolve();
         await groups.leaveGroup(f.groupId, f.organizer.userId);
-        const refused = new Error('provider down');
-        const failed = await deliver(async () => {
-            throw refused;
+        // The last member's is the oldest, so a run reaches it first.
+        await db
+            .update(s.groupDissolveNotices)
+            .set({ createdAt: sql`now() - interval '1 hour'` })
+            .where(eq(s.groupDissolveNotices.userId, f.organizer.userId));
+        const refused = new Error('mailbox refused');
+        const first = await deliver(async (notice) => {
+            if (notice.email === f.organizer.email) throw refused;
         });
-        expect(failed).toMatchObject({ sent: 0, notices: [], failure: refused });
-        const next = await deliver();
-        expect(next.notices.map((notice) => notice.email).sort()).toEqual(
-            [f.organizer.email, f.waiting.email, 'sam@hushos.test'].sort(),
+        expect(first).toMatchObject({ sent: 2, failed: 1, failure: refused });
+        expect(first.notices.map((notice) => notice.email).sort()).toEqual(
+            [f.waiting.email, 'sam@hushos.test'].sort(),
         );
+        const next = await deliver();
+        expect(next.notices.map((notice) => notice.email)).toEqual([f.organizer.email]);
         expect((await deliver()).notices).toEqual([]);
+    });
+
+    test('a run stops after three failed sends, and the next run sends them all', async () => {
+        const f = await familyAboutToDissolve();
+        await groups.leaveGroup(f.groupId, f.organizer.userId);
+        // The family beside it dissolves too: six emails owed in all.
+        const [neighbour] = await db
+            .select({ userId: s.groupMemberships.userId })
+            .from(s.groupMemberships)
+            .where(
+                and(
+                    eq(s.groupMemberships.groupId, f.other.groupId),
+                    eq(s.groupMemberships.state, 'active'),
+                ),
+            );
+        expect(await groups.leaveGroup(f.other.groupId, neighbour!.userId)).toEqual({
+            status: 'dissolved',
+        });
+        let tried = 0;
+        const down = await deliver(async () => {
+            tried++;
+            throw new Error('provider down');
+        });
+        expect(tried).toBe(3);
+        expect(down).toMatchObject({ sent: 0, failed: 3 });
+        expect((await deliver()).notices).toHaveLength(6);
+        expect((await deliver()).notices).toEqual([]);
+    });
+
+    test('one whose invitation address was forgotten is dropped, and the rest are sent', async () => {
+        const f = await familyAboutToDissolve();
+        await groups.leaveGroup(f.groupId, f.organizer.userId);
+        // As the cleanup job forgets the address of an invitation no longer open.
+        await db
+            .update(s.groupInvitations)
+            .set({ email: null, normalizedEmail: null })
+            .where(eq(s.groupInvitations.id, f.open));
+        const run = await deliver();
+        expect(run).toMatchObject({ sent: 2, dropped: 1, failed: 0 });
+        expect(await owed(f.groupId)).not.toContainEqual(
+            expect.objectContaining({ invitationId: f.open }),
+        );
     });
 
     test('one whose account went before it was sent is dropped, and a week-old one is left unsent', async () => {

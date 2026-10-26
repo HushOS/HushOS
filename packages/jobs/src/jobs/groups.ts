@@ -57,7 +57,8 @@ const deletesOnFormat = new Intl.DateTimeFormat('en-GB', {
  * The emails dissolving a family owes (docs/groups-design.md 3.3), written in the
  * transaction that dissolved it: the last member is told when its folders are deleted,
  * and whoever was still joining it that it no longer exists. Each is claimed before it
- * is sent, so a retry or a second run never sends one twice. The folders' date uses the
+ * is sent, so two runs never both send one; a send whose provider reply was lost counts
+ * as failed and may be sent again by the next run. The folders' date uses the
  * retention drive.purge is given (TRASH_RETENTION_DAYS), the one that deletes them.
  * The mail module and the app origin are loaded here, not with the worker: both read
  * settings when they load, and a worker an operator gave no email settings must still
@@ -96,7 +97,9 @@ export async function groupsDissolveNotices(
                         : { kind: notice.kind, groupName: notice.groupName, appUrl: appOrigin },
                 ),
         });
-        event.set({ notices: { sent: outcome.sent, dropped: outcome.dropped } });
+        event.set({
+            notices: { sent: outcome.sent, dropped: outcome.dropped, failed: outcome.failed },
+        });
         if (outcome.failure) {
             event.set({ failure: sanitizeFailure(outcome.failure) });
             event.warn('Family dissolved email not sent: the next run tries again');

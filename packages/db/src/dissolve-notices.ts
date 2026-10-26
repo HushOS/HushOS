@@ -89,16 +89,20 @@ export type DissolveNotice = {
     foldersDeletedAt: Date;
 };
 
+/* A run stops after this many failed sends: the provider is down or unconfigured. */
+const FAILURES_PER_RUN = 3;
+
 /*
  * Sends what is owed, oldest first, at most `limit` a run, through `send`. Each
- * email is claimed before it is handed over, by a conditional update only one
- * run can win, so two runs at once, or a job retried after it sent, never send
- * one twice; a crash between the claim and the send loses that email rather
- * than repeating it. A send that throws gives its claim back for the next run
- * and stops this one (the provider is down or unconfigured, so the rest would
- * fail too). One whose account or address is gone is dropped. Emails owed more
- * than `maxAgeDays` ago are no longer news and are left unsent; the family's
- * purge deletes them with it.
+ * email is read first (one whose account or address is gone is dropped), then
+ * claimed by a conditional update only one run can win, then handed over: two
+ * runs at once never both send one. A send that throws gives its claim back for
+ * the next run, and this run goes on to the next email, stopping after
+ * FAILURES_PER_RUN failures. A send that throws after the provider took the
+ * email (its reply lost to a timeout) counts as failed, so the next run may
+ * send that email again; a crash between the claim and the send loses it.
+ * Emails owed more than `maxAgeDays` ago are no longer news and are left
+ * unsent; the family's purge deletes them with it.
  */
 export async function deliverDissolveNotices(input: {
     folderRetentionDays: number;
@@ -106,7 +110,7 @@ export async function deliverDissolveNotices(input: {
     limit?: number;
     maxAgeDays?: number;
 }) {
-    const outcome = { sent: 0, dropped: 0, failure: undefined as unknown };
+    const outcome = { sent: 0, dropped: 0, failed: 0, failure: undefined as unknown };
     const due = await db
         .select({ id: groupDissolveNotices.id })
         .from(groupDissolveNotices)
@@ -116,21 +120,27 @@ export async function deliverDissolveNotices(input: {
                 sql`${groupDissolveNotices.createdAt} > now() - make_interval(days => ${input.maxAgeDays ?? 7})`,
             ),
         )
-        .orderBy(asc(groupDissolveNotices.createdAt))
+        .orderBy(asc(groupDissolveNotices.createdAt), asc(groupDissolveNotices.id))
         .limit(input.limit ?? 100);
     for (const { id } of due) {
+        // Read before the claim: a read that fails then loses nothing.
+        const notice = await readNotice(id, input.folderRetentionDays);
+        const unclaimed = and(eq(groupDissolveNotices.id, id), isNull(groupDissolveNotices.sentAt));
+        if (!notice) {
+            const gone = await db
+                .delete(groupDissolveNotices)
+                .where(unclaimed)
+                .returning({ id: groupDissolveNotices.id });
+            outcome.dropped += gone.length;
+            continue;
+        }
         const [claimed] = await db
             .update(groupDissolveNotices)
             .set({ sentAt: sql`now()` })
-            .where(and(eq(groupDissolveNotices.id, id), isNull(groupDissolveNotices.sentAt)))
+            .where(unclaimed)
             .returning({ id: groupDissolveNotices.id });
         // Another run claimed it first.
         if (!claimed) continue;
-        const notice = await readNotice(id, input.folderRetentionDays);
-        if (!notice) {
-            outcome.dropped++;
-            continue;
-        }
         try {
             await input.send(notice);
             outcome.sent++;
@@ -139,8 +149,9 @@ export async function deliverDissolveNotices(input: {
                 .update(groupDissolveNotices)
                 .set({ sentAt: null })
                 .where(eq(groupDissolveNotices.id, id));
-            outcome.failure = error;
-            break;
+            outcome.failed++;
+            outcome.failure ??= error;
+            if (outcome.failed >= FAILURES_PER_RUN) break;
         }
     }
     return outcome;

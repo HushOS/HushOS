@@ -418,7 +418,8 @@ export const groupHolds = pgTable(
  * rolled back owes nothing; one row per person, at most one per address. A row
  * names an account or an invitation, never an address, and goes with either.
  * `sent_at` is the claim, set before the mail is handed over and given back
- * only when sending failed, so no run or retry sends one twice.
+ * only when sending failed: two runs never both send one, though a send whose
+ * provider reply was lost counts as failed and may be sent again.
  */
 export type DissolveNoticeKind = 'dissolved' | 'accepted' | 'invited';
 export const groupDissolveNotices = pgTable(

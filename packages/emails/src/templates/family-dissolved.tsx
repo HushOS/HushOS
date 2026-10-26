@@ -49,7 +49,7 @@ export default function FamilyDissolved({
     kind?: FamilyDissolvedKind;
     /** The family's name, as its organiser typed it. */
     groupName?: string;
-    /** The day Drive's purge deletes the family's folders, written out in UTC (`dissolved` only). */
+    /** The earliest day Drive's purge deletes the family's folders, in UTC (`dissolved` only). */
     deletesOn?: string;
     /** The logo: the brand square as one image, the same in both colour schemes. */
     logoUrl?: string;
@@ -58,23 +58,22 @@ export default function FamilyDissolved({
 }) {
     const copy = {
         dissolved: {
-            preview: `Your HushOS family was dissolved. Its folders are deleted on ${deletesOn}.`,
+            preview: `Your HushOS family was dissolved. Its folders will be deleted on or after ${deletesOn}.`,
             heading: 'Your family was dissolved.',
-            body: `You were its last member, so leaving ended it. Its family folders and everything in them are deleted on ${deletesOn}. Until then nobody can open them, you included, and the family can’t be reopened.`,
+            body: `You were its last member, so leaving ended it. Its family folders and everything in them will be deleted on or after ${deletesOn}. Until then nobody can open them, you included, and the family can’t be reopened.`,
             facts: [
                 ['Family', `“${groupName}”`],
-                ['Folders deleted', deletesOn],
+                ['Folders deleted', `On or after ${deletesOn}`],
                 ['Your own files', 'Not touched'],
             ],
-            footer: 'Your own files stay in your own space, on your own storage. If they’re over it, you can’t upload more until you make room. Nothing in your own space is deleted.',
+            footer: 'Your own files stay where they are.',
         },
         accepted: {
             preview: 'The family you were joining on HushOS no longer exists.',
             heading: 'The family you were joining no longer exists.',
             body: 'Its last member left before you were let in, so the family was dissolved. Nothing in it was ever shared with you, and nothing of yours has changed.',
             facts: [
-                // The organiser's own words, quoted as theirs: never HushOS speaking.
-                ['Family, as they named it', `“${groupName}”`],
+                ['Family', `“${groupName}”`],
                 ['Your acceptance', 'Closed'],
             ],
             footer: 'To join a family later, you need a new invitation.',
@@ -84,7 +83,7 @@ export default function FamilyDissolved({
             heading: 'The family you were invited to join no longer exists.',
             body: 'Its last member left, so the family was dissolved. Your invitation was closed with it, and nothing of yours has changed.',
             facts: [
-                ['Family, as they named it', `“${groupName}”`],
+                ['Family', `“${groupName}”`],
                 ['Invitation', 'Closed'],
             ],
             footer: 'The link in the invitation no longer works. To join a family later, you need a new invitation.',

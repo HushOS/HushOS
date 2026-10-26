@@ -156,7 +156,8 @@ export async function ensureQueues(boss: PgBoss) {
     });
     /*
      * The emails a dissolved family owes, every minute: each is claimed before it is sent,
-     * so a retry, or a run beside another, never sends one twice. One at a time is enough.
+     * so two runs never both send one (a send whose provider reply was lost may be sent
+     * again by the next run). One at a time is enough.
      */
     await boss.createQueue(queues.groupsDissolveNotices, {
         policy: 'singleton',
