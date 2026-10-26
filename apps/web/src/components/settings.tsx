@@ -45,14 +45,17 @@ export function Setting({
     children,
     action,
     below,
+    data,
 }: {
     label: ReactNode;
     children?: ReactNode;
     action?: ReactNode;
     below?: ReactNode;
+    /* `data-*` attributes for the row, which tests and verification find it by. */
+    data?: Record<`data-${string}`, string | boolean>;
 }) {
     return (
-        <div className="flex flex-col gap-2 border-b border-rule py-4 last:border-0">
+        <div {...data} className="flex flex-col gap-2 border-b border-rule py-4 last:border-0">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 sm:grid-cols-[11rem_minmax(0,1fr)_auto]">
                 <span className="text-sm font-semibold max-sm:col-span-2">{label}</span>
                 <div className="min-w-0 text-[15px]">{children}</div>

@@ -4,9 +4,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { Segmented } from '@/components/settings';
+import { Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -100,17 +100,7 @@ function organizersLine(members: readonly FamilyMember[] | undefined) {
     return names.length ? names.join(' or ') : null;
 }
 
-function Section({ id, title, children }: { id?: string; title: string; children: ReactNode }) {
-    return (
-        <section id={id} className="flex scroll-mt-4 flex-col" aria-label={title}>
-            <h2 className="eyebrow px-5 pt-6 pb-2 text-muted-foreground sm:px-8">{title}</h2>
-            <div className="flex flex-col gap-3 border-t border-rule px-5 pt-4 sm:px-8">
-                {children}
-            </div>
-        </section>
-    );
-}
-
+/* A label and its figure in a dialog's list of amounts (a `dl` grid). */
 function Fact({ label, children }: { label: string; children: ReactNode }) {
     return (
         <>
@@ -120,31 +110,30 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
     );
 }
 
-function PoolLine({ storage }: { storage: FamilyBilling['storage'] }) {
-    // No pool (a family from before plans were sold), or an empty one: nothing to measure.
-    if (!storage || storage.quotaBytes === '0') return null;
-    const used = Number(storage.usedBytes);
-    const quota = Number(storage.quotaBytes);
-    return (
-        <span className="flex flex-col gap-1.5">
-            <span>
-                {formatSpace(storage.usedBytes)} of {formatQuota(storage.quotaBytes)} used
-            </span>
-            <StorageMeter used={used} quota={quota} parts={null} className="h-1.5 max-w-64" />
-        </span>
-    );
+/* A figure in a row of facts: tabular, so sizes and dates line up down the column. */
+function Figure({ children }: { children: ReactNode }) {
+    return <span className="tabular-nums">{children}</span>;
+}
+
+/* The family has a pool to share, and the server said who stores what in it: Storage shows. */
+function poolShown(data: FamilyBilling | undefined): data is FamilyBilling & {
+    usage: NonNullable<FamilyBilling['usage']>;
+    storage: NonNullable<FamilyBilling['storage']>;
+} {
+    return Boolean(data?.enabled && data.usage && data.storage && data.storage.quotaBytes !== '0');
 }
 
 /* A member's own files as a manager sees them: whole GB, rounded up on the server. */
 const roundedLabel = (bytes: string) => (bytes === '0' ? 'Under 1 GB' : formatQuota(bytes));
 
 /*
- * Who stores what in the family's pool (docs/families-shared-pool.md 3.9, 7.3), under the
- * plan. Everyone sees their own files exactly, the family folders' total and what is free;
- * the organizer and anyone who manages the family also see each member's own files, which
- * the server rounds up to the whole GB before they leave it, largest first. Nobody sees
- * names, counts or types of anyone's files. Shown only while the family has a pool to share
- * (billing on, a live plan).
+ * The family's storage, said once on the page (docs/families-shared-pool.md 3.9, 7.3), in
+ * one format per viewer. Someone who manages the family sees each person's own files as the
+ * server rounds them (whole GB, rounded up, largest first), the family folders and what is
+ * free; never the exact total beside the rounded rows, which would contradict them. Everyone
+ * else sees the family's total exactly, their own files exactly and the family folders.
+ * Nobody sees names, counts or types of anyone's files. Shown only while the family has a
+ * pool to share (billing on, a live plan).
  */
 export function FamilyStorage({
     userId,
@@ -161,9 +150,18 @@ export function FamilyStorage({
     // uploads in flight; the summary's own arithmetic only for a payer who isn't pooled.
     const account = useQuery(storageQueryOptions);
     const data = summary.data;
-    if (!data?.enabled || !data.usage || !data.storage || data.storage.quotaBytes === '0')
-        return null;
+    if (!poolShown(data)) return null;
     const { usage, storage } = data;
+    // Someone without billing sees the plan here, beside the storage it gives, not in a
+    // section of its own that would only repeat the page header's places.
+    const planRow =
+        data.view === 'member' && data.hasPlan && data.planName ? (
+            <Setting label="Plan" data={{ 'data-family-plan': 'glance' }}>
+                <span className="font-semibold">
+                    {planTierName({ name: data.planName })} · {formatQuota(storage.quotaBytes)}
+                </span>
+            </Setting>
+        ) : null;
     const quota = BigInt(storage.quotaBytes);
     const used = BigInt(storage.usedBytes);
     const free =
@@ -177,59 +175,68 @@ export function FamilyStorage({
         const member = detail.data?.members.find((at) => at.userId === id);
         return member ? member.name : 'Someone in the family';
     };
+    const meter = (
+        <StorageMeter
+            used={Number(used)}
+            quota={Number(quota)}
+            parts={null}
+            className="mt-2 h-1.5 max-w-64"
+        />
+    );
+    const full = (
+        <span className="font-semibold text-destructive">The family’s storage is full</span>
+    );
+    const folders = (
+        <Setting data={{ 'data-usage-folders': true }} label="Family folders">
+            <Figure>{usage.foldersBytes === '0' ? 'None' : formatQuota(usage.foldersBytes)}</Figure>
+        </Setting>
+    );
     return (
-        <Section title="Storage">
-            <div
-                data-family-usage={usage.members ? 'manager' : 'member'}
-                className="flex flex-col gap-3"
-            >
-                <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2.5 text-sm sm:max-w-md">
-                    {usage.members
-                        ? usage.members.map((member) => (
-                              <div key={member.userId} className="contents" data-usage-member>
-                                  <dt className="truncate">{nameOf(member.userId)}</dt>
-                                  <dd className="text-right tabular-nums">
-                                      {roundedLabel(member.ownBytesRounded)}
-                                  </dd>
-                              </div>
-                          ))
-                        : usage.ownBytes !== null && (
-                              <div className="contents" data-usage-own>
-                                  <dt>Your files</dt>
-                                  <dd className="text-right tabular-nums">
-                                      {formatSpace(usage.ownBytes)}
-                                  </dd>
-                              </div>
-                          )}
-                    <div className="contents" data-usage-folders>
-                        <dt>Family folders</dt>
-                        <dd className="text-right tabular-nums">
-                            {usage.foldersBytes === '0' ? 'None' : formatQuota(usage.foldersBytes)}
-                        </dd>
-                    </div>
-                    <div className="contents" data-usage-free>
-                        <dt className="text-muted-foreground">Free</dt>
-                        <dd
-                            className={cn(
-                                'text-right tabular-nums',
-                                free === 0n
-                                    ? 'font-semibold text-destructive'
-                                    : 'text-muted-foreground',
-                            )}
+        <SettingsGroup
+            title="Storage"
+            description={
+                usage.members
+                    ? 'Each person’s own files, rounded up to the whole GB.'
+                    : `The people who manage ${family} see only how much your files take, rounded up to the whole GB.`
+            }
+        >
+            {usage.members ? (
+                <div data-family-usage="manager" className="flex flex-col">
+                    {planRow}
+                    {usage.members.map((member) => (
+                        <Setting
+                            key={member.userId}
+                            data={{ 'data-usage-member': true }}
+                            label={nameOf(member.userId)}
                         >
-                            {free === 0n
-                                ? 'The family’s storage is full'
-                                : formatSpace(free.toString())}
-                        </dd>
-                    </div>
-                </dl>
-                <p className="max-w-[43em] text-[13px] text-muted-foreground">
-                    {usage.members
-                        ? 'How much each person’s own files take, rounded up to the whole GB. You can’t see what the files are.'
-                        : `Your files include your Trash and earlier versions. The people who manage ${family} see how much your files take, rounded up to the whole GB, never what they are.`}
-                </p>
-            </div>
-        </Section>
+                            <Figure>{roundedLabel(member.ownBytesRounded)}</Figure>
+                        </Setting>
+                    ))}
+                    {folders}
+                    <Setting data={{ 'data-usage-free': true }} label="Free">
+                        {free === 0n ? full : <Figure>{formatSpace(free.toString())}</Figure>}
+                        {meter}
+                    </Setting>
+                </div>
+            ) : (
+                <div data-family-usage="member" className="flex flex-col">
+                    {planRow}
+                    <Setting data={{ 'data-usage-total': true }} label="Used">
+                        <Figure>
+                            {formatSpace(storage.usedBytes)} of {formatQuota(storage.quotaBytes)}
+                        </Figure>
+                        {free === 0n && <span className="block">{full}</span>}
+                        {meter}
+                    </Setting>
+                    {usage.ownBytes !== null && (
+                        <Setting data={{ 'data-usage-own': true }} label="Your files">
+                            <Figure>{formatSpace(usage.ownBytes)}</Figure>
+                        </Setting>
+                    )}
+                    {folders}
+                </div>
+            )}
+        </SettingsGroup>
     );
 }
 
@@ -298,8 +305,9 @@ function GlanceTop({
         const name = tierName({ name: lapsed.productName });
         const paused = lapsed.standing === 'paused';
         return (
-            <div className="px-5 sm:px-8">
-                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
+            <div>
+                {/* Nothing here is theirs to fix: said plainly, without the payer's alarm. */}
+                <Alert data-plan-notice="unpaid">
                     <AlertTitle>
                         {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
                     </AlertTitle>
@@ -316,7 +324,7 @@ function GlanceTop({
         );
     }
     return (
-        <div className="px-5 sm:px-8">
+        <div>
             <Alert data-plan-notice="none">
                 <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
                 <AlertDescription>
@@ -339,24 +347,29 @@ function GlanceSection({
     /* The family's places, as its page header says them (placesOf): the same figure in both. */
     seats: { used: number; limit: number } | null;
 }) {
-    if (!summary.hasPlan || !summary.planName) return null;
+    // With a pool to share, Storage names the plan beside what it gives (FamilyStorage).
+    if (!summary.hasPlan || !summary.planName || poolShown(summary)) return null;
+    // The storage it gives is Storage's, below: said there once, not here as well.
     return (
-        <Section title="Plan">
-            <div data-family-plan="glance" className="flex flex-col gap-2 text-sm">
-                <span className="text-base font-bold">
-                    {planTierName({ name: summary.planName })}
-                    {summary.storage && summary.storage.quotaBytes !== '0'
-                        ? ` · ${formatQuota(summary.storage.quotaBytes)}`
-                        : ''}
-                </span>
-                <PoolLine storage={summary.storage} />
-                {seats && (
-                    <span className="text-muted-foreground tabular-nums" data-glance-places>
-                        {seats.used} of {seats.limit} places taken
+        <SettingsGroup title="Plan">
+            <div data-family-plan="glance" className="flex flex-col">
+                <Setting label="Plan">
+                    <span className="font-semibold">
+                        {planTierName({ name: summary.planName })}
+                        {summary.storage && summary.storage.quotaBytes !== '0'
+                            ? ` · ${formatQuota(summary.storage.quotaBytes)}`
+                            : ''}
                     </span>
+                </Setting>
+                {seats && (
+                    <Setting label="Places" data={{ 'data-glance-places': true }}>
+                        <Figure>
+                            {seats.used} of {seats.limit} taken
+                        </Figure>
+                    </Setting>
                 )}
             </div>
-        </Section>
+        </SettingsGroup>
     );
 }
 
@@ -424,7 +437,7 @@ function PlanTop(props: Inner) {
 
     if (activating)
         return (
-            <div className="px-5 sm:px-8">
+            <div>
                 <Alert variant={gaveUp ? 'warning' : 'info'}>
                     <AlertDescription>
                         {gaveUp
@@ -441,7 +454,7 @@ function PlanTop(props: Inner) {
         const waiting = live.units - live.paidUnits;
         if (state.overdue)
             return (
-                <div className="px-5 sm:px-8" data-plan-notice="overdue">
+                <div data-plan-notice="overdue">
                     <Alert variant="destructive">
                         <AlertTitle>
                             The last payment for {family}’s plan didn’t go through
@@ -456,7 +469,7 @@ function PlanTop(props: Inner) {
             );
         if (state.ending)
             return (
-                <div className="px-5 sm:px-8" data-plan-notice="ending">
+                <div data-plan-notice="ending">
                     <Alert>
                         <AlertTitle>
                             {family}’s plan ends on {ends}
@@ -473,7 +486,7 @@ function PlanTop(props: Inner) {
             );
         if (upgradeWaiting(live) && payerYou)
             return (
-                <div className="px-5 sm:px-8" data-plan-notice="upgrade-waiting">
+                <div data-plan-notice="upgrade-waiting">
                     <Alert variant="warning">
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for{' '}
@@ -486,7 +499,7 @@ function PlanTop(props: Inner) {
             );
         if (waiting > 0 && payerYou)
             return (
-                <div className="px-5 sm:px-8">
+                <div>
                     <Alert variant="warning">
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for {places(waiting)} yet. They
@@ -522,7 +535,7 @@ function PlanTop(props: Inner) {
                 ? `${ask} can sort it out.`
                 : `${payer} can sort it out.`;
         return (
-            <div className="flex flex-col gap-2 px-5 sm:px-8">
+            <div className="flex flex-col gap-6">
                 <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
                     <AlertTitle>
                         {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
@@ -535,20 +548,22 @@ function PlanTop(props: Inner) {
                         everyone’s own files count against their own storage again. Nothing is
                         deleted. {next}
                     </AlertDescription>
+                    {actions.portal && (
+                        <AlertAction>
+                            <PortalButton
+                                groupId={props.groupId}
+                                label={paused ? 'Resume in portal' : 'Billing portal'}
+                            />
+                        </AlertAction>
+                    )}
                 </Alert>
-                {actions.portal && (
-                    <PortalButton
-                        groupId={props.groupId}
-                        label={paused ? 'Resume in portal' : 'Billing portal'}
-                    />
-                )}
                 {actions.choosePlan && <ChoosePlan {...props} renewing />}
             </div>
         );
     }
     if (state.kind === 'lapsed')
         return (
-            <div className="flex flex-col gap-2 px-5 sm:px-8">
+            <div className="flex flex-col gap-6">
                 <Alert data-plan-notice="lapsed">
                     <AlertTitle>
                         {family}’s plan ended on {formatDay(state.endedAt)}
@@ -572,7 +587,7 @@ function PlanTop(props: Inner) {
     // Never paid for.
     if (actions.choosePlan) return <ChoosePlan {...props} />;
     return (
-        <div className="px-5 sm:px-8">
+        <div>
             <Alert data-plan-notice="none">
                 <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
                 <AlertDescription>
@@ -611,7 +626,7 @@ function PortalButton({ groupId, label }: { groupId: string; label: string }) {
         }
     }
     return (
-        <div className="flex flex-col gap-1 pb-2">
+        <div className="flex flex-col gap-1">
             <Button
                 variant="outline"
                 className="w-fit"
@@ -715,7 +730,7 @@ function ChoosePlan({
             id="choose-plan"
             aria-labelledby={`${groupId}-choose`}
             data-choose-plan
-            className={cn('flex scroll-mt-4 flex-col gap-4', !renewing && 'px-5 sm:px-8')}
+            className="flex scroll-mt-4 flex-col gap-4"
         >
             <div className="flex min-w-0 flex-col gap-0.5 border-b border-rule pb-3">
                 <h2 id={`${groupId}-choose`} className="text-lg font-bold tracking-[-0.01em]">
@@ -920,18 +935,26 @@ function PlanSection(props: Inner) {
         : null;
     const payerName = summary.payer?.you ? 'You' : personLine(members, summary.payer?.userId);
 
+    const anyChange =
+        actions.changePlan ||
+        actions.keepTier ||
+        actions.addPlaces ||
+        actions.removePlaces ||
+        actions.keepPlaces;
+
     return (
-        <Section id="billing" title="Billing">
-            <div
-                data-family-plan="billing"
-                className={cn(
-                    'flex flex-col gap-4 rounded-xl border p-4 sm:p-5',
-                    state.overdue ? 'border-destructive' : 'border-rule',
-                )}
-            >
-                <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-                    <div className="flex min-w-0 flex-col gap-1">
-                        <span className="text-xl font-bold">{name}</span>
+        <SettingsGroup
+            title="Billing"
+            description={
+                access === 'billing'
+                    ? 'Only the person who pays for the plan can change it.'
+                    : undefined
+            }
+        >
+            <div data-family-plan="billing" id="billing" className="flex scroll-mt-4 flex-col">
+                <Setting label="Plan">
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="font-semibold">{name}</span>
                         <span className="text-sm text-muted-foreground">
                             {amountLine ? `${amountLine} · ` : ''}
                             {state.ending ? (
@@ -950,51 +973,63 @@ function PlanSection(props: Inner) {
                                 {ends}
                             </span>
                         )}
-                    </div>
-                    {actions.portal && (
-                        // The page's one blue button only while a renewal failed and you pay;
-                        // otherwise Invite someone keeps it, and the notice above says the rest.
-                        <Button
-                            variant={paymentNeedsYou(summary) ? 'default' : 'outline'}
-                            disabled={busy !== null}
-                            onClick={() => void portal()}
-                        >
-                            {busy === 'portal' ? 'Opening…' : 'Manage payment and invoices'}
-                            <ArrowUpRightIcon />
-                        </Button>
-                    )}
-                </div>
-                <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2.5 text-sm">
-                    <Fact label="Places">
+                    </span>
+                </Setting>
+                <Setting label="Places">
+                    <Figure>
                         {summary.seats.used} of {summary.seats.limit} taken · {live.includedMembers}{' '}
                         included
-                        {live.pendingUnits !== null && live.pendingUnits < live.units && (
-                            <span className="block text-muted-foreground">
-                                {places(live.units)} paid for until {ends}
-                            </span>
-                        )}
-                        {live.paidUnits < live.units && (
-                            <span className="block text-muted-foreground">
-                                {places(live.units - live.paidUnits)} wait for the bank
-                            </span>
-                        )}
-                    </Fact>
-                    <Fact label="Storage">
-                        <PoolLine storage={summary.storage} />
-                    </Fact>
-                    {charge && (
-                        <Fact label="Next charge">
-                            {formatMoney(charge.amount, charge.currency)} on {formatDay(charge.on)}
-                        </Fact>
+                    </Figure>
+                    {live.pendingUnits !== null && live.pendingUnits < live.units && (
+                        <span className="block text-sm text-muted-foreground">
+                            {places(live.units)} paid for until {ends}
+                        </span>
                     )}
-                    {payerName && <Fact label="Paid by">{payerName}</Fact>}
-                </dl>
-                {(actions.changePlan ||
-                    actions.keepTier ||
-                    actions.addPlaces ||
-                    actions.removePlaces ||
-                    actions.keepPlaces) && (
-                    <div className="flex flex-wrap gap-2">
+                    {live.paidUnits < live.units && (
+                        <span className="block text-sm text-muted-foreground">
+                            {places(live.units - live.paidUnits)} wait for the bank
+                        </span>
+                    )}
+                </Setting>
+                {charge && (
+                    <Setting
+                        label="Next charge"
+                        below={
+                            <p className="text-[13px] text-muted-foreground">{TAX_ON_CHARGES}</p>
+                        }
+                    >
+                        <Figure>
+                            {formatMoney(charge.amount, charge.currency)} on {formatDay(charge.on)}
+                        </Figure>
+                    </Setting>
+                )}
+                {payerName && (
+                    <Setting
+                        label="Paid by"
+                        action={
+                            actions.portal && (
+                                // The payer's card, invoices, cancelling and resuming are all in
+                                // Polar's portal. Blue only while a renewal failed and you pay;
+                                // otherwise Invite someone keeps the page's one blue button.
+                                <Button
+                                    variant={paymentNeedsYou(summary) ? 'default' : 'outline'}
+                                    disabled={busy !== null}
+                                    onClick={() => void portal()}
+                                >
+                                    {busy === 'portal'
+                                        ? 'Opening portal'
+                                        : 'Manage payment and invoices'}
+                                    <ArrowUpRightIcon />
+                                </Button>
+                            )
+                        }
+                    >
+                        {payerName}
+                    </Setting>
+                )}
+                {(anyChange || actions.cancel) && (
+                    // One row: the changes first, Cancel plan last and quiet, at the row's end.
+                    <div className="flex flex-wrap items-center gap-2 py-4">
                         {actions.changePlan && (
                             <Button
                                 variant="outline"
@@ -1042,29 +1077,25 @@ function PlanSection(props: Inner) {
                                 Remove places at renewal
                             </Button>
                         )}
+                        {actions.cancel && (
+                            // Asked once, in a dialog; quiet here so it never outweighs the plan.
+                            <Button
+                                variant="destructive-ghost"
+                                disabled={busy !== null}
+                                onClick={() => setCancelling(true)}
+                                // At the row's end, its words line up with the column's edge, as the outline buttons' do.
+                                className={cn(anyChange && 'sm:-mr-3.5 sm:ml-auto')}
+                            >
+                                Cancel plan
+                            </Button>
+                        )}
                     </div>
                 )}
                 {error && (
-                    <p role="alert" className="text-sm text-destructive">
+                    <p role="alert" className="pb-4 text-sm text-destructive">
                         {error}
                     </p>
                 )}
-                {actions.cancel && (
-                    // It opens a dangerous flow (asked once), so destructive-outline, as DESIGN.md says.
-                    <Button
-                        variant="destructive-outline"
-                        disabled={busy !== null}
-                        onClick={() => setCancelling(true)}
-                        className="self-start"
-                    >
-                        Cancel plan
-                    </Button>
-                )}
-                <p className="text-[13px] text-muted-foreground">
-                    {access === 'billing'
-                        ? `Only the person who pays for the plan can change it. ${TAX_ON_CHARGES}`
-                        : TAX_ON_CHARGES}
-                </p>
             </div>
             {actions.addPlaces && (
                 <AddPlacesDialog
@@ -1113,7 +1144,7 @@ function PlanSection(props: Inner) {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
-        </Section>
+        </SettingsGroup>
     );
 }
 

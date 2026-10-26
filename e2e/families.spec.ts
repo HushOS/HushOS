@@ -89,6 +89,15 @@ test.beforeAll(async ({ request }) => {
 
 type Person = { page: Page; email: string; name: string };
 
+/* Opens "Technical details and leaving" on the family page, if it isn't open already. */
+async function openTechnical(page: Page) {
+    const toggle = page.getByRole('button', {
+        name: /^(Show|Hide) technical details and leaving$/,
+    });
+    await expect(toggle).toBeVisible({ timeout: 60_000 });
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+}
+
 async function person(browser: Browser, name: string) {
     const page = await (await newContext(browser)).newPage();
     const { email } = await registerAccount(page, name);
@@ -447,17 +456,17 @@ test.describe.serial('two people', () => {
         await expect(
             sam.page.locator(`[data-member="${maya.email}"] [data-roles] [data-slot=badge]`),
         ).toHaveText(['Organizer', 'Manages the family']);
-        await sam.page.getByText('Technical details and leaving').click();
+        await openTechnical(sam.page);
         await expect(sam.page.getByText('Member list version')).toBeVisible();
         // A plain member may leave: offered, under Technical details and leaving.
         await expect(sam.page.getByRole('button', { name: 'Leave family' })).toBeEnabled();
         // The organizer is never offered Leave family only to be refused: it says why up front.
-        await maya.page.getByText('Technical details and leaving').click();
+        await openTechnical(maya.page);
         await expect(maya.page.getByRole('button', { name: 'Leave family' })).toBeDisabled();
         await expect(maya.page.locator('#leave-blocked')).toHaveText(
             'Make someone else the organizer first.',
         );
-        await maya.page.getByText('Technical details and leaving').click();
+        await maya.page.getByRole('button', { name: 'Hide technical details and leaving' }).click();
         await expect(
             sam.page.getByRole('link', { name: family, exact: true }).first(),
         ).toBeVisible();
@@ -881,7 +890,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         const walk = await holdWalk(maya.page);
         const others = [await holdWalk(ana.page), await holdWalk(sam.page)];
         const before = await rotationsDone(maya.page);
-        await maya.page.getByText('Technical details and leaving').click();
+        await openTechnical(maya.page);
         const keys = maya.page.locator('[data-folder-keys="Family"]');
         await expect(keys).toContainText('Key version 1', { timeout: 60_000 });
         await keys.getByRole('button', { name: 'Replace keys' }).click();
@@ -1187,7 +1196,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         test.setTimeout(360_000);
         await openFamilyPage(ana, groupPath, family);
         // Under Technical details and leaving, the quietest place on the page.
-        await ana.page.getByText('Technical details and leaving').click();
+        await openTechnical(ana.page);
         await ana.page.getByRole('button', { name: 'Leave family' }).click();
         const dialog = ana.page.getByRole('alertdialog', { name: `Leave ${family}?` });
         await expect(
@@ -1208,7 +1217,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         });
         await expect(maya.page.locator('[data-left-due]')).toHaveCount(0, { timeout: 90_000 });
         await waitForRotation(maya.page, before);
-        await maya.page.getByText('Technical details and leaving').click();
+        await openTechnical(maya.page);
         await expect(maya.page.locator('[data-folder-keys="Family"]')).toContainText(
             'Key version 4',
             { timeout: 60_000 },
@@ -1415,6 +1424,8 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             ...overrides,
         },
         storage: { usedBytes: String(usedGib * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
+        // As the server rounds it for the organizer: the folders hold it all.
+        usage: { ownBytes: '0', foldersBytes: String(usedGib * 1024 ** 3), members: [] },
         seats: { used: 1, limit: 8 },
         nextPlace: { amount: 96, currency: 'usd' },
     });
@@ -1510,7 +1521,9 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(billing).toContainText('1 of 8 taken · 4 included');
         // The header reads the same paid limit, not the family row's default.
         await expect(maya.page.getByText('1 of 8 places taken.')).toBeVisible();
-        await expect(billing).toContainText('300 GB of 2 TB used');
+        // Storage is said once, under Storage, as the organizer sees it: not in Billing too.
+        await expect(billing).not.toContainText('used');
+        await expect(maya.page.locator('[data-usage-free]')).toHaveText('Free1.71 TB');
         await expect(billing).toContainText('Paid by');
         await expect(maya.page.locator('[data-choose-plan]')).toHaveCount(0);
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toBeVisible();
@@ -1623,10 +1636,12 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             hasPlan: true,
             planName: 'Family Pro (monthly)',
             storage: { usedBytes: String(300 * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
+            usage: { ownBytes: String(1024 ** 3), foldersBytes: '0', members: null },
         });
+        // The plan is named under Storage, beside the family's total, said once.
         const glance = maya.page.locator('[data-family-plan="glance"]');
-        await expect(glance).toContainText('Family Pro · 2 TB', { timeout: 60_000 });
-        await expect(glance).toContainText('300 GB of 2 TB used');
+        await expect(glance).toHaveText('PlanFamily Pro · 2 TB', { timeout: 60_000 });
+        await expect(maya.page.locator('[data-usage-total]')).toHaveText('Used300 GB of 2 TB');
         await expect(maya.page.getByText('Next charge')).toHaveCount(0);
         await expect(maya.page.getByRole('button', { name: 'Add places' })).toHaveCount(0);
         await expect(
@@ -1667,13 +1682,15 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(usage.locator('[data-usage-folders]')).toHaveText('Family folders40 GB');
         // 2 TB less the 300 GB the family stores.
         await expect(usage.locator('[data-usage-free]')).toHaveText('Free1.71 TB');
-        await expect(usage).toContainText(
-            'How much each person’s own files take, rounded up to the whole GB. You can’t see what the files are.',
-        );
+        await expect(
+            maya.page.getByText('Each person’s own files, rounded up to the whole GB.'),
+        ).toBeVisible();
+        // One format for a manager: no exact total beside the rounded rows.
+        await expect(usage.locator('[data-usage-total]')).toHaveCount(0);
         // Nothing of anyone's own exact bytes, not even the manager's, in the list.
         await expect(usage.locator('[data-usage-own]')).toHaveCount(0);
 
-        // A member: their own files exactly, the folders and what is free; nobody else's.
+        // A member: the family's total and their own files exactly, the folders; nobody else's.
         await show({
             enabled: true,
             view: 'member',
@@ -1688,12 +1705,15 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         });
         await expect(own.locator('[data-usage-member]')).toHaveCount(0);
         await expect(own.locator('[data-usage-folders]')).toHaveText('Family foldersNone');
-        await expect(own.locator('[data-usage-free]')).toHaveText(
-            'FreeThe family’s storage is full',
+        // The family's total, exactly, and that it is full.
+        await expect(own.locator('[data-usage-total]')).toHaveText(
+            'Used2 TB of 2 TBThe family’s storage is full',
         );
-        await expect(own).toContainText(
-            `The people who manage ${family} see how much your files take, rounded up to the whole GB, never what they are.`,
-        );
+        await expect(
+            maya.page.getByText(
+                `The people who manage ${family} see only how much your files take, rounded up to the whole GB.`,
+            ),
+        ).toBeVisible();
     });
 });
 
@@ -2326,7 +2346,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
         await expect(theo.page.locator('[data-storage-meter="pool"]')).toContainText(family);
 
         // Leaving says what it does to his files: back on his own allowance, which they fit.
-        await theo.page.getByText('Technical details and leaving').click();
+        await openTechnical(theo.page);
         await theo.page.getByRole('button', { name: 'Leave family' }).click();
         const leave = theo.page.getByRole('alertdialog', { name: `Leave ${family}?` });
         await expect(leave.locator('[data-leave-storage="fits"]')).toHaveText(

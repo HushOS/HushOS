@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { RowMenuButton } from '@/components/drive/file-list';
 import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
+import { SettingsGroup } from '@/components/settings';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -61,12 +62,12 @@ import { removeBlocker } from '@/lib/family-leave';
  * A member's menu changes roles and, last, removes them from the family.
  */
 
+/* A list on the family page, in the page's one section pattern (SettingsGroup). */
 function Section({ title, children }: { title: string; children: ReactNode }) {
     return (
-        <section className="flex flex-col" aria-label={title}>
-            <h2 className="eyebrow px-5 pt-6 pb-2 text-muted-foreground sm:px-8">{title}</h2>
-            <ul className="flex flex-col border-t border-rule">{children}</ul>
-        </section>
+        <SettingsGroup title={title}>
+            <ul className="flex flex-col">{children}</ul>
+        </SettingsGroup>
     );
 }
 
@@ -77,6 +78,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
  */
 function Row({
     name,
+    you = false,
     seed,
     line,
     badges,
@@ -85,7 +87,10 @@ function Row({
     mark,
     children,
 }: {
+    /* The person's name alone: it is what their initials are drawn from. */
     name: string;
+    /* The row is the viewer's own: "(you)" beside the name, never part of it. */
+    you?: boolean;
     seed: string;
     line: string;
     badges?: ReactNode;
@@ -99,12 +104,15 @@ function Row({
     return (
         <li
             {...data}
-            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-5 pl-5 sm:pr-8 sm:pl-8"
+            className="flex min-h-14 items-center gap-3 border-b border-rule py-2 last:border-0"
         >
             {mark ?? <PersonAvatar name={name} seed={seed} />}
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="min-w-0 truncate text-[15px] font-medium">{name}</span>
+                    <span className="min-w-0 truncate text-[15px] font-medium">
+                        {name}
+                        {you && <span className="font-normal text-muted-foreground"> (you)</span>}
+                    </span>
                     {badges}
                 </span>
                 <span className="truncate text-[13px] text-muted-foreground">{line}</span>
@@ -327,7 +335,8 @@ export function MemberList({
                 return (
                     <Row
                         key={member.userId}
-                        name={self ? `${member.name} (you)` : member.name}
+                        name={member.name}
+                        you={self}
                         seed={member.userId}
                         data={{ 'data-member': member.email ?? member.userId }}
                         line={member.email ?? ''}
@@ -638,7 +647,9 @@ export function InvitationList({
                     note={`Invited by ${inviter(invitation.invitedBy)}`}
                 >
                     <Button
-                        variant="destructive-outline"
+                        variant="destructive-ghost"
+                        // Its words line up with the column's edge, as an outline button's do.
+                        className="-mr-3.5 pointer-coarse:-mr-4"
                         disabled={busy !== null}
                         onClick={() => setConfirming(invitation)}
                     >
