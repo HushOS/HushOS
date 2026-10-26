@@ -182,6 +182,7 @@ describe('who gets which controls', () => {
             keepPlaces: false,
             portal: true,
             cancel: true,
+            resume: false,
         });
     });
 
@@ -189,6 +190,10 @@ describe('who gets which controls', () => {
         expect(Object.values(familyActions(summary({ you: false }), organizer))).not.toContain(
             true,
         );
+        // Nor resumes one set to end: the server answers them 403.
+        expect(
+            Object.values(familyActions(summary({ you: false, ending: true }), organizer)),
+        ).not.toContain(true);
     });
 
     test('a member’s glance, a manager without billing included, gets no controls at all', () => {
@@ -196,7 +201,7 @@ describe('who gets which controls', () => {
         expect(Object.values(familyActions(glance(false), ['members']))).not.toContain(true);
     });
 
-    test('a plan set to end can only be resumed in the portal: no place changes, no second cancel', () => {
+    test('a plan set to end can only be resumed: no place changes, no second cancel', () => {
         expect(familyActions(summary({ units: 8, used: 3, ending: true }), organizer)).toEqual({
             choosePlan: false,
             changePlan: false,
@@ -206,6 +211,7 @@ describe('who gets which controls', () => {
             keepPlaces: false,
             portal: true,
             cancel: false,
+            resume: true,
         });
     });
 

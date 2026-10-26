@@ -428,6 +428,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Back links: the family page leads back to Account; its join screen, and a family folder you're no longer in, lead to Family
         - Create a family (only offered to someone in no family; "You’re in Lindqvist family. Leave it before you create another." in place of the dialog's description for someone already in one, with the field and Create family disabled: an account is in one family at most)
         - Invite someone
+        - Rename (beside the family's name on its page, for those who manage it: "Rename family", the name prefilled, "Everyone in the family sees the new name, and so does the server.", Save; "Renamed to Ortega family")
         - Cancel invitation (asks once: "Cancel the invitation to sam@example.com?", "The link in their email stops working. You can invite them again.", Keep invitation, Cancel invitation)
         - Waiting to join
         - Let them in ("They’ve joined another family since they accepted. They can join yours once they leave it." when they have, never naming that family)
@@ -487,7 +488,8 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Remove places at renewal ("Nothing is refunded and nobody is removed. Nobody new can take the places you remove, starting now.", Places from 17 Nov, Remove places)
         - Keep 8 places (withdraws a scheduled cut)
         - Manage payment and invoices (the billing portal)
-        - Cancel plan (asks once: "Cancel Lindqvist family’s plan?", Keep the plan, Cancel in the billing portal)
+        - Cancel plan (the payer, here as for a personal plan: "Cancel Lindqvist family’s plan?", what the family keeps and until when, "Why are you cancelling?" and "Anything else?", which go to Polar; Keep the plan, Cancel plan; then "Lindqvist family’s plan ends on 17 Nov")
+        - Resume plan (the payer, while the plan is set to end; "Lindqvist family keeps Family Pro", "It renews on 17 Nov.")
         - Confirm with your bank
         - Can join once there’s a plan (Waiting to join, in place of Let them in, while the family has no plan)
         - "Choose a plan for Lindqvist family first. Until it has one, nobody can be invited and no family folders can be made." (the server's refusal)
@@ -511,7 +513,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
     - Appearance:
         - Appearance is Light, Dark and Same as this computer
         - a narrow switch (the site's phone menu) shows the last as Auto, read to screen readers as "Auto (same as this computer)"
-- **Trash** keeps items for 30 days, and says so. Removing a file from the phone says it stays in HushOS.
+- **Trash** keeps items for 30 days, and says so. On the web, someone in a family sees two sections, My files and Family folders, as one list each with the same columns (Name, Was in, Trashed, Size) and the same actions (Restore, Delete forever as a quiet trash icon); a section with nothing in it is one line ("Nothing in My files’ Trash.", "Nothing in the family folders’ Trash."). Removing a file from the phone says it stays in HushOS.
 - **Dates**, on every client: "Today, 14:02", "Yesterday", "29 Sept" this year, "29 Sept 2025" in another; day and month the en-GB way, the time on the person's own 12 or 24 hour clock. In a sentence: "Added today, 14:02", "on 3 Sept", "until 12 Oct". Web helpers: `formatWhen`, `formatDay`, `formatTime` in `apps/web/src/lib/drive.ts`.
 - **Sizes:** "1.6 KB", "1.5 GB of 2 GB used", "512 MB free"; quotas never show decimals they don't have.
 - **Errors** say what happened and what to do: "Couldn't reach HushOS. Check your connection, then retry."

@@ -1535,6 +1535,13 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         ])
             await expect(billing.getByRole('button', { name })).toBeVisible();
 
+        // Cancelling is asked here, with a reason for Polar, not sent to the portal.
+        await billing.getByRole('button', { name: 'Cancel plan' }).click();
+        const cancel = maya.page.getByRole('dialog', { name: `Cancel ${family}’s plan?` });
+        await expect(cancel).toContainText('Why are you cancelling?');
+        await cancel.getByRole('button', { name: 'Keep the plan' }).click();
+        await expect(cancel).toHaveCount(0);
+
         await billing.getByRole('button', { name: 'Add places' }).click();
         const dialog = maya.page.getByRole('dialog', { name: 'Add places' });
         await expect(dialog).toContainText('Each place past the 4 included is $1.50 a month.');
@@ -1597,6 +1604,8 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         ).toBeVisible();
         for (const name of ['Add places', 'Change plan', 'Remove places at renewal', 'Cancel plan'])
             await expect(billing.getByRole('button', { name })).toHaveCount(0);
+        // Set to end: the payer takes it back here.
+        await expect(billing.getByRole('button', { name: 'Resume plan' })).toBeVisible();
 
         await show({
             ...none,
@@ -1980,7 +1989,10 @@ test.describe.serial('moving between My files and a family folder', () => {
         // Deleted, not left in the Trash, where it would still count.
         await ada.page.goto('/app/trash', { waitUntil: 'networkidle' });
         // Not left in the Trash either, where it would still count: nothing of hers is there.
-        await expect(ada.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+        // In a family, My files' Trash is one section of two and says so in a line.
+        await expect(ada.page.getByText('Nothing in My files’ Trash.')).toBeVisible({
+            timeout: 60_000,
+        });
     }
 
     test('without one pool (billing off) the copy is charged to the folder: the file lands there byte for byte, and the original is gone', async () => {
@@ -2858,7 +2870,9 @@ test.describe
             ben.page.getByRole('heading', { level: 2, name: 'Family folders' }),
         ).toBeVisible();
         // My files' Trash holds nothing of it; the family folders' does.
-        await expect(ben.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+        await expect(ben.page.getByText('Nothing in My files’ Trash.')).toBeVisible({
+            timeout: 60_000,
+        });
         const section = ben.page.locator('[data-family-trash]');
         const row = section.locator('[data-node-id]').filter({ hasText: 'shopping.txt' });
         await expect(row).toBeVisible({ timeout: 90_000 });

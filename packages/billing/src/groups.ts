@@ -36,6 +36,7 @@ import {
     planTierName,
     quoteUnitsChange,
     spaceOf,
+    type CancellationReason,
 } from './protocol';
 
 /* Pure, so the web quotes a raise with the server's own arithmetic. */
@@ -2098,6 +2099,58 @@ export async function createGroupPortalSession(user: BillingUser, groupId: strin
     requireFamilyBilling();
     await requirePayer(groupId, user.id);
     return portalFor(groupId, user.id);
+}
+
+/*
+ * The payer ends the family's plan at its period's end, as a person does their own (Polar
+ * keeps the reason), or takes that back. Cancelling stays open to a payer who left, as the
+ * portal does: they can always stop paying. Resuming needs them in the family holding
+ * `billing`, so a family that has gone (dissolved, or the payer left) is never billed again
+ * from here. Either way Polar is read back before the answer, so the page shows what Polar
+ * holds, not what was asked.
+ */
+export async function cancelGroupPlan(
+    user: BillingUser,
+    groupId: string,
+    input: { reason?: CancellationReason; comment?: string } = {},
+) {
+    requireFamilyBilling();
+    await requirePayer(groupId, user.id);
+    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    if (!live) throw new BillingError('This family has no plan.', 404);
+    if (live.cancelAtPeriodEnd) throw new BillingError('This plan is already set to end.', 409);
+    await setGroupPlanEnding(groupId, live.id, {
+        cancel_at_period_end: true,
+        customer_cancellation_reason: input.reason ?? null,
+        customer_cancellation_comment: input.comment?.trim() || null,
+    });
+    return { billing: await getGroupBilling(user, groupId) };
+}
+
+export async function resumeGroupPlan(user: BillingUser, groupId: string) {
+    requireFamilyBilling();
+    await requirePayer(groupId, user.id);
+    await familyOf(groupId, user.id, 'billing');
+    const live = await billingRepository.getLiveGroupSubscription(groupId);
+    if (!live) throw new BillingError('This family has no plan.', 404);
+    if (!live.cancelAtPeriodEnd) throw new BillingError('This plan isn’t set to end.', 409);
+    await setGroupPlanEnding(groupId, live.id, { cancel_at_period_end: false });
+    return { billing: await getGroupBilling(user, groupId) };
+}
+
+async function setGroupPlanEnding(
+    groupId: string,
+    subscriptionId: string,
+    body: models.SubscriptionUpdate,
+) {
+    try {
+        await polar().subscriptions.update(subscriptionId, body);
+    } catch (error) {
+        // Refused or lost: whatever Polar holds now is written, then the refusal is said.
+        await reconcileGroup(groupId).catch(() => undefined);
+        throw unavailable(error);
+    }
+    await reconcileGroup(groupId);
 }
 
 /*

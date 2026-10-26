@@ -349,6 +349,12 @@ export interface GroupBillingApi {
     }>;
     portal(groupId: string): Promise<{ url: string }>;
     sync(groupId: string): Promise<GroupBillingSummary>;
+    /* The payer sets the plan to end at its period's end (the reason goes to Polar), or takes that back. */
+    cancel(
+        groupId: string,
+        input: { reason?: CancellationReason; comment?: string },
+    ): Promise<{ billing: GroupBillingSummary }>;
+    resume(groupId: string): Promise<{ billing: GroupBillingSummary }>;
 }
 
 export interface BillingApi {

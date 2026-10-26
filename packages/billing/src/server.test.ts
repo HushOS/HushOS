@@ -5735,6 +5735,127 @@ describe('cancelling and payers', () => {
     });
 });
 
+describe('cancelling and resuming a family plan in HushOS', () => {
+    const endings = () => polar.calls.filter((call) => call.includes('"cancel_at_period_end"'));
+    const ending = async (groupId: string) =>
+        (await billingRepository.getLiveGroupSubscription(groupId))?.cancelAtPeriodEnd;
+
+    test('the payer sets the plan to end with their reason, then takes it back; each is read back from Polar', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 7 });
+        const cancelled = await billing.cancelGroupPlan(payer, groupId, {
+            reason: 'too_expensive',
+            comment: '  We share one account now.  ',
+        });
+        expect(endings()).toEqual([
+            `subscriptions.update:${subscription.id}:${JSON.stringify({
+                cancel_at_period_end: true,
+                customer_cancellation_reason: 'too_expensive',
+                customer_cancellation_comment: 'We share one account now.',
+            })}`,
+        ]);
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+        expect(cancelled.billing).toMatchObject({ subscription: { cancelAtPeriodEnd: true } });
+        // The family keeps what it paid for until the period ends.
+        expect(await seatLimit(groupId)).toBe(7);
+
+        polar.calls = [];
+        const resumed = await billing.resumeGroupPlan(payer, groupId);
+        expect(endings()).toEqual([
+            `subscriptions.update:${subscription.id}:${JSON.stringify({ cancel_at_period_end: false })}`,
+        ]);
+        expect(await ending(groupId)).toBe(false);
+        expect(resumed.billing).toMatchObject({ subscription: { cancelAtPeriodEnd: false } });
+    });
+
+    test('nobody but the payer can cancel or resume, a second billing holder included', async () => {
+        const { groupId, others } = await familyOnPlan({ members: 1 });
+        const member = others[0]!;
+        await expect(billing.cancelGroupPlan(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        await setTestMember({
+            groupId,
+            userId: member.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        await expect(billing.cancelGroupPlan(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        await expect(billing.resumeGroupPlan(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(false);
+    });
+
+    test('a plan already ending is not cancelled again, and only one that is ending resumes', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+        });
+        expect(endings()).toEqual([]);
+        await billing.cancelGroupPlan(payer, groupId);
+        polar.calls = [];
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('a payer who left can still cancel, but not resume a plan for a family they are not in', async () => {
+        const { payer, groupId } = await familyOnPlan({ members: 1 });
+        await setTestMember({ groupId, userId: payer.id, state: 'left' });
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await ending(groupId)).toBe(true);
+        polar.calls = [];
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('Polar down changes nothing; Polar refusing is said as a refusal; a lost answer is read back', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan();
+        polar.cancelFailures = 1;
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 503,
+        });
+        expect(await ending(groupId)).toBe(false);
+
+        polar.cancelRefusal = { status: 403, error: 'AlreadyCanceledSubscription' };
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+        });
+        expect(await ending(groupId)).toBe(false);
+        polar.cancelRefusal = null;
+
+        // Polar kept the change but the answer never came: the page is told it failed, and
+        // the reconcile after it has written what Polar holds, so the next look is right.
+        polar.cancelAnswerLost = true;
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 503,
+        });
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('a family with no live plan has nothing to cancel', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan();
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        polar.calls = [];
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(endings()).toEqual([]);
+    });
+});
+
 describe('family tiers', () => {
     const updates = () => polar.calls.filter((call) => call.startsWith('subscriptions.update'));
     const pool = async (groupId: string) =>

@@ -58,6 +58,7 @@ export {
 } from './endings';
 export {
     cancelDissolvedPlan,
+    cancelGroupPlan,
     changeGroupPlan,
     createGroupPortalSession,
     DissolveCancelBusyError,
@@ -78,6 +79,7 @@ export {
     quoteUnitsChange,
     reconcileGroup,
     reissueCut,
+    resumeGroupPlan,
     seatError,
     setCutRetryQueue,
     setDissolveCancelQueue,

@@ -1,5 +1,12 @@
 import type { FamilyPlan } from '@hushos/billing/api';
-import { FAMILY_MAX_MEMBERS, spaceOf, planTierName } from '@hushos/billing/protocol';
+import {
+    CANCELLATION_REASONS,
+    FAMILY_MAX_MEMBERS,
+    cancellationReasonLabels,
+    planTierName,
+    spaceOf,
+    type CancellationReason,
+} from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
@@ -7,15 +14,6 @@ import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import {
-    AlertDialog,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -27,6 +25,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
 import { billingQueryOptions, localeHintQueryOptions } from '@/lib/billing';
 import { storageQueryOptions } from '@/lib/queries';
@@ -479,7 +485,7 @@ function PlanTop(props: Inner) {
                             After that, nobody can upload to the family folders, and everyone’s own
                             files count against their own storage again. Nothing is deleted.{' '}
                             {payerYou
-                                ? 'To keep the plan, resume it in Manage payment and invoices, under Billing.'
+                                ? 'To keep it, choose Resume plan under Billing.'
                                 : `${payerName ?? 'The person who pays for it'} can resume it before then.`}
                         </AlertDescription>
                     </Alert>
@@ -865,7 +871,7 @@ function PlanSection(props: Inner) {
     const [removing, setRemoving] = useState(false);
     const [changing, setChanging] = useState(false);
     const [cancelling, setCancelling] = useState(false);
-    const [busy, setBusy] = useState<'portal' | 'keep' | 'tier' | null>(null);
+    const [busy, setBusy] = useState<'portal' | 'keep' | 'tier' | 'resume' | null>(null);
     const [error, setError] = useState('');
     usePageRestored(() => setBusy(null));
     if (state.kind !== 'live') return null;
@@ -918,6 +924,26 @@ function PlanSection(props: Inner) {
             toast.add({
                 type: 'success',
                 title: `${family} keeps ${tierName({ name: live.productName })}`,
+            });
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function resume() {
+        setBusy('resume');
+        setError('');
+        try {
+            const result = await groupBillingApi.resume(groupId);
+            settle(result.billing);
+            cue('success');
+            toast.add({
+                type: 'success',
+                title: `${family} keeps ${tierName({ name: live.productName })}`,
+                description: `It renews on ${ends}.`,
             });
         } catch (cause) {
             cue('error');
@@ -1009,9 +1035,9 @@ function PlanSection(props: Inner) {
                         label="Paid by"
                         action={
                             actions.portal && (
-                                // The payer's card, invoices, cancelling and resuming are all in
-                                // Polar's portal. Blue only while a renewal failed and you pay;
-                                // otherwise Invite someone keeps the page's one blue button.
+                                // The payer's card and invoices are in Polar's portal. Blue only
+                                // while a renewal failed and you pay; otherwise Invite someone
+                                // keeps the page's one blue button.
                                 <Button
                                     variant={paymentNeedsYou(summary) ? 'default' : 'outline'}
                                     disabled={busy !== null}
@@ -1028,7 +1054,7 @@ function PlanSection(props: Inner) {
                         {payerName}
                     </Setting>
                 )}
-                {(anyChange || actions.cancel) && (
+                {(anyChange || actions.cancel || actions.resume) && (
                     // One row: the changes first, Cancel plan last and quiet, at the row's end.
                     <div className="flex flex-wrap items-center gap-2 py-4">
                         {actions.changePlan && (
@@ -1078,6 +1104,15 @@ function PlanSection(props: Inner) {
                                 Remove places at renewal
                             </Button>
                         )}
+                        {actions.resume && (
+                            <Button
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => void resume()}
+                            >
+                                {busy === 'resume' ? 'Resuming…' : 'Resume plan'}
+                            </Button>
+                        )}
                         {actions.cancel && (
                             // Asked once, in a dialog; quiet here so it never outweighs the plan.
                             <Button
@@ -1122,30 +1157,146 @@ function PlanSection(props: Inner) {
                     onDone={settle}
                 />
             )}
-            <AlertDialog open={cancelling} onOpenChange={setCancelling}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Cancel {family}’s plan?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            You cancel it in the billing portal. The family keeps its plan and{' '}
-                            {formatQuota(live.quotaBytes)} until {ends}. After that, nobody can
-                            upload to the family folders, and everyone’s own files count against
-                            their own storage again. Nothing is deleted.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Keep the plan</AlertDialogCancel>
-                        <Button
-                            variant="destructive"
-                            disabled={busy !== null}
-                            onClick={() => void portal()}
-                        >
-                            {busy === 'portal' ? 'Opening…' : 'Cancel in the billing portal'}
-                        </Button>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
+            {actions.cancel && (
+                <CancelFamilyPlanDialog
+                    groupId={groupId}
+                    family={family}
+                    planName={tierName({ name: live.productName })}
+                    quotaBytes={live.quotaBytes}
+                    ends={ends}
+                    open={cancelling}
+                    onOpenChange={setCancelling}
+                    onDone={(next) => {
+                        settle(next);
+                        setCancelling(false);
+                        toast.add({ type: 'success', title: `${family}’s plan ends on ${ends}` });
+                    }}
+                />
+            )}
         </SettingsGroup>
+    );
+}
+
+const reasonItems = [
+    { value: '', label: 'Prefer not to say' },
+    ...CANCELLATION_REASONS.map((value) => ({ value, label: cancellationReasonLabels[value] })),
+];
+
+/*
+ * Cancelling the family's plan, here as a person cancels their own: what the family keeps and
+ * until when, then why (the reason goes to Polar with it). It ends at the period's end, and
+ * Resume plan takes it back until then.
+ */
+function CancelFamilyPlanDialog({
+    groupId,
+    family,
+    planName,
+    quotaBytes,
+    ends,
+    open,
+    onOpenChange,
+    onDone,
+}: {
+    groupId: string;
+    family: string;
+    planName: string;
+    quotaBytes: string;
+    ends: string;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onDone: (billing: FamilyBilling) => void;
+}) {
+    const id = useId();
+    const [reason, setReason] = useState<CancellationReason | ''>('');
+    const [comment, setComment] = useState('');
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    async function submit() {
+        setPending(true);
+        setError('');
+        try {
+            const result = await groupBillingApi.cancel(groupId, {
+                reason: reason || undefined,
+                comment: comment.trim() || undefined,
+            });
+            cue('success');
+            onDone(result.billing);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    return (
+        <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+            <DialogContent className="sm:max-w-[480px]" data-cancel-family-plan>
+                <DialogHeader>
+                    <DialogTitle>Cancel {family}’s plan?</DialogTitle>
+                    <DialogDescription>
+                        The family keeps {planName} and {formatQuota(quotaBytes)} until {ends}.
+                        After that, nothing new can be added to the family folders, and everyone’s
+                        own files count against their own storage again. Nothing is deleted, and you
+                        can resume the plan until then.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-1.5">
+                    <label htmlFor={`${id}-reason`} className="text-[13px] font-semibold">
+                        Why are you cancelling?
+                    </label>
+                    <Select
+                        value={reason}
+                        disabled={pending}
+                        onValueChange={(value) =>
+                            setReason((value ?? '') as CancellationReason | '')
+                        }
+                        items={reasonItems}
+                    >
+                        <SelectTrigger id={`${id}-reason`} className="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {reasonItems.map((item) => (
+                                <SelectItem key={item.value} value={item.value}>
+                                    {item.label}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                    <label htmlFor={`${id}-comment`} className="text-[13px] font-semibold">
+                        Anything else?{' '}
+                        <span className="font-normal text-muted-foreground">· optional</span>
+                    </label>
+                    <Textarea
+                        id={`${id}-comment`}
+                        maxLength={500}
+                        disabled={pending}
+                        value={comment}
+                        onChange={(event) => setComment(event.target.value)}
+                        className="min-h-20 text-[15px]"
+                    />
+                </div>
+                {error && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        {error}
+                    </p>
+                )}
+                <DialogFooter>
+                    <Button
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => onOpenChange(false)}
+                    >
+                        Keep the plan
+                    </Button>
+                    <Button variant="destructive" disabled={pending} onClick={() => void submit()}>
+                        {pending ? 'Cancelling…' : 'Cancel plan'}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 }
 
