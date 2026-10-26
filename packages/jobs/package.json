@@ -18,6 +18,7 @@
         "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/drive": "workspace:*",
+        "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
         "pg-boss": "^12.30.0"

@@ -27,7 +27,7 @@ COPY packages/env ./packages/env
 COPY packages/logging ./packages/logging
 COPY packages/db ./packages/db
 COPY packages/billing ./packages/billing
-# Billing sends a dissolved family's payer their plan-ending mail; bundled, not external.
+# Billing mails a dissolved family's payer, and the groups job its last member and invitees; bundled.
 COPY packages/emails ./packages/emails
 COPY packages/crypto ./packages/crypto
 COPY packages/drive ./packages/drive

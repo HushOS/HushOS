@@ -8,9 +8,10 @@ import { LATEST_MIGRATION, missingTablePrivileges, schemaState } from '@hushos/d
 import { initProcessLogger, log } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 import { createBoss, ensureQueues, queues, type JobPayloads } from './client';
+import { groupsEnv } from '@hushos/env/groups';
 import { evidenceConfigured, replicaConfigured } from '@hushos/env/storage';
 import { cleanupExpired } from './jobs/cleanup-expired';
-import { groupsPurgeDissolved } from './jobs/groups';
+import { groupsDissolveNotices, groupsPurgeDissolved } from './jobs/groups';
 import {
     driveAuditObjects,
     driveAuditReplica,
@@ -100,6 +101,23 @@ await boss.work<JobPayloads[typeof queues.groupsPurgeDissolved]>(
         if (job) await groupsPurgeDissolved(job);
     },
 );
+
+/*
+ * Every minute, and once now, while families are served: the emails a dissolved family
+ * owes its last member and whoever was still joining it. With GROUPS_ENABLED=false
+ * (hushos.com until families launch) nobody is emailed about a family.
+ */
+if (groupsEnv.GROUPS_ENABLED) {
+    await boss.schedule(queues.groupsDissolveNotices, '* * * * *', {}, { tz: 'UTC' });
+    await boss.send(queues.groupsDissolveNotices, {});
+    await boss.work<JobPayloads[typeof queues.groupsDissolveNotices]>(
+        queues.groupsDissolveNotices,
+        { batchSize: 1, pollingIntervalSeconds: 10 },
+        async ([job]) => {
+            if (job) await groupsDissolveNotices(job);
+        },
+    );
+} else await boss.unschedule(queues.groupsDissolveNotices);
 
 // Once a day, and once now: a delivery missed during downtime is caught before its grace ends.
 if (billingEnabled()) {

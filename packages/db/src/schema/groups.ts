@@ -411,6 +411,46 @@ export const groupHolds = pgTable(
 );
 
 /*
+ * Who a family's dissolving is owed an email to (docs/groups-design.md 3.3):
+ * `dissolved` to the last member, whose leaving ended it; `accepted` to someone
+ * who accepted and was not let in; `invited` to the address of an invitation
+ * still open. Written in the transaction that dissolves the family, so a leave
+ * rolled back owes nothing; one row per person, at most one per address. A row
+ * names an account or an invitation, never an address, and goes with either.
+ * `sent_at` is the claim, set before the mail is handed over and given back
+ * only when sending failed, so no run or retry sends one twice.
+ */
+export type DissolveNoticeKind = 'dissolved' | 'accepted' | 'invited';
+export const groupDissolveNotices = pgTable(
+    'group_dissolve_notices',
+    {
+        id: uuid().defaultRandom().primaryKey(),
+        groupId: uuid('group_id')
+            .notNull()
+            .references(() => groups.id, { onDelete: 'cascade' }),
+        kind: text().$type<DissolveNoticeKind>().notNull(),
+        userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+        invitationId: uuid('invitation_id').references(() => groupInvitations.id, {
+            onDelete: 'cascade',
+        }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        sentAt: timestamp('sent_at', { withTimezone: true }),
+    },
+    (table) => [
+        uniqueIndex('group_dissolve_notices_user_idx').on(table.userId, table.groupId),
+        uniqueIndex('group_dissolve_notices_invitation_idx').on(table.invitationId),
+        index('group_dissolve_notices_due_idx')
+            .on(table.createdAt)
+            .where(sql`${table.sentAt} is null`),
+        index('group_dissolve_notices_group_idx').on(table.groupId),
+        check(
+            'group_dissolve_notices_valid',
+            sql`${table.kind} in ('dissolved', 'accepted', 'invited') and (${table.userId} is null) = (${table.invitationId} is not null) and (${table.kind} = 'invited') = (${table.invitationId} is not null)`,
+        ),
+    ],
+);
+
+/*
  * What the server's own acceptance of the stored chain produced (the
  * GroupChainCache), so a write checks one statement instead of the whole
  * chain. Derived data: missing, or at another revision than the group's, it is

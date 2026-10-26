@@ -26,6 +26,7 @@ export const queues = {
     reportsEvidence: 'reports.evidence',
     reportsRequests: 'reports.requests',
     groupsPurgeDissolved: 'groups.purge-dissolved',
+    groupsDissolveNotices: 'groups.dissolve-notices',
 } as const;
 
 export type QueueName = (typeof queues)[keyof typeof queues];
@@ -55,6 +56,7 @@ export type JobPayloads = {
     [queues.reportsEvidence]: Record<string, never>;
     [queues.reportsRequests]: Record<string, never>;
     [queues.groupsPurgeDissolved]: { batchSize?: number };
+    [queues.groupsDissolveNotices]: Record<string, never>;
 };
 
 export const SCHEMA = 'pgboss';
@@ -150,6 +152,18 @@ export async function ensureQueues(boss: PgBoss) {
         retryDelay: 60,
         retryBackoff: true,
         expireInSeconds: 30 * 60,
+        retentionSeconds: 7 * 24 * 60 * 60,
+    });
+    /*
+     * The emails a dissolved family owes, every minute: each is claimed before it is sent,
+     * so a retry, or a run beside another, never sends one twice. One at a time is enough.
+     */
+    await boss.createQueue(queues.groupsDissolveNotices, {
+        policy: 'singleton',
+        retryLimit: 3,
+        retryDelay: 30,
+        retryBackoff: true,
+        expireInSeconds: 5 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
     });
     /*

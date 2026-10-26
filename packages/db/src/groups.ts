@@ -12,6 +12,7 @@ import {
     type Tx,
 } from './drive';
 import { ENDED_SUBSCRIPTION_STATUSES } from './billing';
+import { recordDissolveNotices } from './dissolve-notices';
 import { madeFor } from './ids';
 import { admissionFits, lockPool } from './pool';
 import { pgCode } from './readiness';
@@ -1950,6 +1951,8 @@ async function depart(tx: Tx, groupId: string, userId: string): Promise<LeaveRes
         // Its folders go as deleted family folders do: Drive's purge takes them after the trash's
         // retention (purgeDissolvedFamilies then deletes the family's own records).
         await retireAllAreas(tx, groupId, now);
+        // Whoever was still joining is turned away, and they and this member are owed an email.
+        await recordDissolveNotices(tx, groupId, userId, now);
         return { status: 'dissolved' };
     }
     const blocked = blocker(membership.roles, others);
@@ -3421,6 +3424,8 @@ export async function purgeDeletedAreas(days: number, limit = 20) {
  * dissolve made by mistake. Nothing reopens a dissolved family in the meantime.
  */
 export const DISSOLVED_FAMILY_RETENTION_DAYS = 30;
+
+export { deliverDissolveNotices, type DissolveNotice } from './dissolve-notices';
 
 /* The purge's advisory lock, keyed by the family: a second run skips a family the first is on. */
 const PURGE_LOCK_SPACE = 0x70757267;

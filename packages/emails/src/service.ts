@@ -3,6 +3,7 @@ import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import { familyDissolved } from './rendered/family-dissolved';
 import { familyPlanEnding } from './rendered/family-plan-ending';
 import { groupInvitation } from './rendered/group-invitation';
 import { securityNotice } from './rendered/security-notice';
@@ -280,4 +281,35 @@ export function composeFamilyPlanEnding(to: string, input: { endsOn: string; app
 
 export async function sendFamilyPlanEnding(to: string, input: { endsOn: string; appUrl: string }) {
     await deliver(composeFamilyPlanEnding(to, input));
+}
+
+export type FamilyDissolvedKind = keyof typeof familyDissolved;
+
+type FamilyDissolvedInput =
+    /* The last member: `deletesOn` is the day its folders are deleted, written by the caller in UTC. */
+    | { kind: 'dissolved'; groupName: string; deletesOn: string; appUrl: string }
+    /* Someone still joining it: accepted and not let in, or invited. */
+    | { kind: 'accepted' | 'invited'; groupName: string; appUrl: string };
+
+const dissolvedSubjects: Record<FamilyDissolvedKind, string> = {
+    dissolved: 'Your family was dissolved · HushOS',
+    accepted: 'The family you were joining no longer exists · HushOS',
+    invited: 'The family you were invited to no longer exists · HushOS',
+};
+
+/*
+ * A family was dissolved (its last member left): to that member, when its folders are
+ * deleted; to whoever was still joining it, that it no longer exists. The family's name is
+ * the organiser's text, escaped like every value and never in the subject.
+ */
+export function composeFamilyDissolved(to: string, input: FamilyDissolvedInput) {
+    return compose(to, dissolvedSubjects[input.kind], familyDissolved[input.kind], {
+        groupName: input.groupName,
+        ...(input.kind === 'dissolved' ? { deletesOn: input.deletesOn } : {}),
+        logoUrl: logoUrl(input.appUrl),
+    });
+}
+
+export async function sendFamilyDissolved(to: string, input: FamilyDissolvedInput) {
+    await deliver(composeFamilyDissolved(to, input));
 }
