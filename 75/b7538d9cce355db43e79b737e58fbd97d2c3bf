@@ -1,0 +1,34 @@
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_8b5a1c0dc36c1b 113-123,130-136,153,155-164,178-193,195-210,212-223,226,1081,1089
+  s_566b8e0c4467a4::t_ed1544df15adac 103
+  s_566b8e0c4467a4::t_649610b43aa2bf 350-352,354
+  s_566b8e0c4467a4::t_f47efc25064892 7,9,224-225,227-239,308-310,327,355-361,363-369,372,440,457,472,489,502,538,551-558,566,590,629,733,938-944,946-957,976-979,982-986,988-1032,1080,1082-1088,1090-1091,1095,1147
+apps/web/src/components/ui/button.tsx
+  s_566b8e0c4467a4::t_b1a48784f8e40e 22-23
+DESIGN.md
+  s_566b8e0c4467a4::t_0b6d55f0bd16f5 298,336,447,476,479-480
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_9ff83107131d20 15,131,209-281,295-349,353-354,356,358-413,420-428,430-442,444-452,454-456
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_c87e279a7e078a 8,65,68-70,81,90,92-93,107,112-115,338-339,650-652
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_a039e72ffe4d9c 48,54-55,58
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_7f5d82ec747989 92-100,459,464,469,893,1199,1220,1427-1428,1524-1526,1639,1641,1643-1644,1685-1689,1693,1708-1710,1712-1716,2349
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75b7538d9cce355db43e79b737e58fbd97d2c3bf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
