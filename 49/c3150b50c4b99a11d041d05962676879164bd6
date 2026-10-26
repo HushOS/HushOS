@@ -1,0 +1,33 @@
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_20a0a1b7b66bad 280-282,284,768,1202-1204,2214,2223-2230,2305-2306,2315,2576,2587,2600,2606,2629,2693-2694
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_8fd528ea51e561 9452-9503
+packages/db/drizzle/20261026151404_reconcile_order/migration.sql
+  s_566b8e0c4467a4::t_f83e6565da6d2e 1-8,10-13,15-19
+packages/db/drizzle/20261026151404_reconcile_order/snapshot.json
+  s_566b8e0c4467a4::t_44064d983ea3a1 4,2258,5677,5690,6209-6221,13693-13703
+packages/db/src/billing.groups.test.ts
+  s_566b8e0c4467a4::t_38127d91174045 891-917
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_62d4d2238275b4 31-35,40-42,200,206,996,999,1052-1054,1056-1058,1064,1066,1075-1088,1093-1094,1096-1097,1103-1112,1221-1227,1230,1311-1312
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_2f4e64f13956ab 14
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_409ea403eff416 9,18-25,35-36,38,122-123,125,127-129,131,275-280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "49c3150b50c4b99a11d041d05962676879164bd6",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
