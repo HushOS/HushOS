@@ -1,0 +1,50 @@
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_cd38666a6c2958 1184-1192,1382-1383,1852-1855,1859,1861-1866,1877
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_62369b6b867721 3523-3526,3530
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_0074a5259a0ff9 1470-1479,1542,1701-1711
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_024f80fad4d262 4990-4991,4993,5187-5469
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_249c1a4c16cd2d 731-732,745-746
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_bcb80bff0c3557 383-407
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_4050fe0496098f 1052
+  s_566b8e0c4467a4::t_3a405df3ea109b 1053
+  s_566b8e0c4467a4::t_8b8950e0224775 1050
+  s_566b8e0c4467a4::t_5f05e99f004ad4 1051
+  s_566b8e0c4467a4::t_b32ec67f2ae6c2 1044-1049,1054
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_289f16c928a3a7 14
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_38fb842a815cd1 566
+  s_566b8e0c4467a4::t_08b99fae95506d 571
+  s_566b8e0c4467a4::t_6c7e4037e545f2 591-595,597-605,626-630,652-665
+  s_566b8e0c4467a4::t_a94aa86b7077bc 567-568,673
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_33f90f485b2191 250-259
+packages/db/src/groups.purge-none.test.ts
+  s_566b8e0c4467a4::t_ff792f05a2fb57 71-109
+packages/db/drizzle/20261026095529_family_orphan_paid_after/migration.sql
+  s_566b8e0c4467a4::t_8c6c5cf64e853b 1-5,7-17,19-25
+packages/db/drizzle/20261026095529_family_orphan_paid_after/snapshot.json
+  s_566b8e0c4467a4::t_4397c8b8605aa8 4-5,5650-5662,6157-6182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b457c303a42317d20000478e2d582a02849c88a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
