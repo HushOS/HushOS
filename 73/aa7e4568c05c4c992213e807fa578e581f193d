@@ -1,0 +1,23 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_cef9d12728dfd7 585
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_5392528bea8e67 2012-2019,2032
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_7f879455ef7808 5794-5830
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "73aa7e4568c05c4c992213e807fa578e581f193d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
