@@ -63,12 +63,11 @@ const ANCHOR_SITES = [
     // creating call seals and grants against (design 3.1).
     "packages/crypto/src/session-groups.ts › create: 'created'",
     // The worker's acceptance run (acceptRun, which accept, a join's joinRun and a first use's
-    // firstUseRun call): a join where nothing marks the family, carrying the compared join code
-    // (`join`) or a first use's joins record (`first-use`: acceptance then also needs the head to
-    // let this account in, and the run needs the chain through the record's roster); and the
-    // creating device's committed creation over served first keys equal to the seed it still
-    // holds; then the variable is passed on.
-    "packages/crypto/src/session-groups.ts › acceptRun: joinMark ? 'join' : 'first-use'",
+    // firstUseRun call): a join carrying the compared join code where nothing marks the family
+    // (a first use's commit passes none: its record's pin is a mark), and the creating device's
+    // committed creation over served first keys equal to the seed it still holds; then the
+    // variable is passed on.
+    "packages/crypto/src/session-groups.ts › acceptRun: 'join'",
     "packages/crypto/src/session-groups.ts › acceptRun: 'created'",
     'packages/crypto/src/session-groups.ts › acceptRun: (shorthand)',
     // The join's admission (preview, check, first use, and each join's own re-check): verifies

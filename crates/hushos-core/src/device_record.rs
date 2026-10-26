@@ -47,8 +47,8 @@ use crate::envelope::{open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::group_trust::{
     accept_rosters_joining, check_time, group_pin_check, pin_after, AcceptedRosters, CachedSuccession,
-    ForkOf, GroupAnchor, GroupChainCache, GroupPin, JoinMark, KeySet, MarkSide, MarkSource, OwnIdentities,
-    PairMark, RosterChain,
+    ForkOf, GroupAnchor, GroupChainCache, GroupPin, JoinMark, KeySet, MarkSide, OwnIdentities, PairMark,
+    RosterChain,
 };
 use crate::groups::{parse_roster, GroupPublicKey, SignedGroupStatement};
 use hkdf::Hkdf;
@@ -534,6 +534,8 @@ pub struct ServedChain {
 }
 
 /// What [`AreaLedger::accept_served`] found.
+// Returned once per acceptance and handed across the FFI, which takes no Box: its size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ServedAcceptance {
@@ -541,7 +543,11 @@ pub enum ServedAcceptance {
     /// version, which says where the next fetch continues; never over a stored
     /// record at a later version) and settle `pin` into settings ([`merge_pin`],
     /// [`pin_ahead`]). `pin` is the only pin an app may pass `merge_pin` as `next`.
-    Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin },
+    /// `guard`, when some, is the family guard to store (2.8): the held one
+    /// moved on to this acceptance with the folders opened here, never lower;
+    /// write it right after the record, without waiting for the settings save.
+    /// None: nothing new to write.
+    Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin, guard: Option<GroupPin> },
     /// The person's marks disagree with each other or with the chain served:
     /// the hard warning. Nothing is kept and the family's folders are not
     /// written.
@@ -564,10 +570,11 @@ pub enum ServedAcceptance {
 /// This device's family guard (docs/optional-verification.md 2.8), as the
 /// app's own store held it when it was read: kept apart from the chain record,
 /// never cleared by a `not-member` wipe nor by anything the server answers.
-/// It holds the pin of the first acceptance that kept the family on this
-/// device ([`ServedAcceptance::Accepted`]'s `pin`, stored when none is held),
-/// and acceptance takes it as a mark like any pin, so a family that once was
-/// here is never taken on first use again.
+/// It holds the latest pin this device accepted, advanced on every acceptance
+/// ([`ServedAcceptance::Accepted`]'s `guard`) and never lowered, and
+/// acceptance takes it as a mark like any pin, so a family that once was here
+/// is never taken on first use again, nor replayed below what this device
+/// accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FamilyGuard {
@@ -596,47 +603,29 @@ impl FamilyGuard {
     }
 }
 
-/* The roster a first use's joins record holds: the chain must pass through it. */
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FirstUseMark {
-    pub(crate) roster_version: u64,
-    pub(crate) roster_digest: String,
-}
-
-/* How a run joins: not at all (a sync), with a compared join code, or on first use through a record's roster. */
+/* How a run joins: not at all (a sync), with a compared join code, or on first use with its record's pin. */
 #[derive(Clone, Copy)]
 pub(crate) enum JoinWith<'a> {
     None,
     Code(&'a JoinMark),
-    FirstUse(&'a FirstUseMark),
+    FirstUse(&'a GroupPin),
 }
 
-/*
- * An accepted chain held against a first use's joins record (the worker's throughFirstUse): short
- * of its roster, a rollback (refused); another roster there, the fork, with the record's side
- * `Join` and the served one named by its signer when it is the head.
- */
-pub(crate) fn through_first_use(
-    chain: &AcceptedRosters,
-    at: &FirstUseMark,
-) -> CoreResult<Option<(u64, Vec<MarkSide>)>> {
-    if (chain.roster_digests.len() as u64) < at.roster_version {
-        return Err(input("This is an older member list than this device has seen."));
-    }
-    let digest = &chain.roster_digests[(at.roster_version - 1) as usize];
-    if *digest == at.roster_digest {
-        return Ok(None);
-    }
-    let mut sides = vec![
-        MarkSide { digest: at.roster_digest.clone(), from: vec![MarkSource::Join], signer_user_id: None },
-        MarkSide {
-            digest: digest.clone(),
-            from: vec![MarkSource::Served],
-            signer_user_id: (*digest == chain.roster_digest).then(|| chain.roster.signer_user_id.clone()),
-        },
-    ];
-    sides.sort_by(|x, y| x.digest.cmp(&y.digest));
-    Ok(Some((at.roster_version, sides)))
+/// The family guard after an acceptance (docs/optional-verification.md 2.8):
+/// the held guard merged with the accepted `pin` and the folders opened on
+/// this device ([`merge_pin`]), only when that records anything new
+/// ([`pin_ahead`]); none when it is behind, conflicts or adds nothing, so a
+/// guard never goes down. The twin of the web's `guardAfter`.
+pub(crate) fn guard_after(
+    group_id: &str,
+    guard: Option<&GroupPin>,
+    pin: &GroupPin,
+    opened: Vec<Arc<OpenedArea>>,
+) -> CoreResult<Option<GroupPin>> {
+    Ok(match merge_pin(group_id.into(), guard.cloned(), pin.clone(), opened)? {
+        PinMerge::Merged { pin: merged } if pin_ahead(guard.cloned(), merged.clone()) => Some(merged),
+        _ => None,
+    })
 }
 
 /* What the web's sync says after three overtaken runs (sync.ts, SERVED_OLDER and SERVED_SPLIT). */
@@ -764,8 +753,18 @@ impl AreaLedger {
             Ok(pin) => pin.clone(),
             Err(error) => return refuse(error.clone()),
         };
-        let pins: Vec<GroupPin> =
-            settings_pin.into_iter().chain(record_pin).chain(reader.guard.cloned()).collect();
+        // A first use's commit holds its record's pin as one more (the worker's acceptRun): the
+        // acceptance groupJoinFirstUse made on first use, so no anchor is needed to commit it.
+        let first_use = match join {
+            JoinWith::FirstUse(pin) => Some(pin.clone()),
+            _ => None,
+        };
+        let pins: Vec<GroupPin> = settings_pin
+            .into_iter()
+            .chain(record_pin)
+            .chain(reader.guard.cloned())
+            .chain(first_use)
+            .collect();
         let pins = pins.as_slice();
         let cache = match cache {
             RecordCache::None => None,
@@ -777,13 +776,11 @@ impl AreaLedger {
             Err(error) => return refuse(error.clone()),
         };
         // A join vouches for the first keys only where nothing marks the family (the worker's
-        // accept): through its join mark, or on first use through nothing, the head admitting this
-        // account. With marks (a rejoin, which keeps the settings pin and the guard) they decide,
-        // and the join mark adds to them. A family check is a mark too.
+        // accept), through its join mark. With marks (a rejoin, which keeps the settings pin and
+        // the guard) they decide, and the join mark adds to them. A family check is a mark too.
         let marked = !pins.is_empty() || cache.is_some() || checked || self.holds_family(group_id);
         let anchor = match join {
             JoinWith::Code(_) if !marked => Some(GroupAnchor::Join),
-            JoinWith::FirstUse(_) if !marked => Some(GroupAnchor::FirstUse),
             _ => None,
         };
         let join_mark = match join {
@@ -805,19 +802,6 @@ impl AreaLedger {
             join_mark,
             pair_marks,
         );
-        // A first use passes through the roster its joins record holds, or is refused or the fork.
-        let accepted = match (accepted, join) {
-            (Ok(RosterChain::Accepted { chain }), JoinWith::FirstUse(mark)) => {
-                match through_first_use(&chain, mark) {
-                    Err(error) => Err(error),
-                    Ok(Some((version, sides))) => {
-                        Ok(RosterChain::Fork { of: ForkOf::Roster, version, sides })
-                    }
-                    Ok(None) => Ok(RosterChain::Accepted { chain }),
-                }
-            }
-            (other, _) => other,
-        };
         match accepted {
             Err(error) => refuse(error),
             Ok(RosterChain::Fork { of, version, sides }) => {
@@ -829,7 +813,10 @@ impl AreaLedger {
                 let pin = pin_after(pins.to_vec(), Arc::clone(&chain), reader.checked_at.into())?;
                 let record =
                     chain_record_seal(&store_key, &reader.account.user_id, group_id, &chain.cache(), &pin)?;
-                Ok(ServedAcceptance::Accepted { chain, record, pin })
+                // The family guard moves on with every acceptance, never down (2.8): the held one
+                // merged with this pin and the folders opened here, when that records anything new.
+                let guard = guard_after(group_id, reader.guard, &pin, self.opened_areas(group_id))?;
+                Ok(ServedAcceptance::Accepted { chain, record, pin, guard })
             }
         }
     }
@@ -1576,7 +1563,7 @@ mod tests {
         // Nothing but the record: its cache and its pin are the marks.
         let outcome = f.accept(&ledger, Some(&record), f.served(2, 3)).unwrap();
         assert_eq!(version_of(&outcome), Some(3));
-        let ServedAcceptance::Accepted { record: next, pin, chain } = outcome else { unreachable!() };
+        let ServedAcceptance::Accepted { record: next, pin, chain, .. } = outcome else { unreachable!() };
         assert_eq!(ledger.held_chain(GROUP).unwrap().roster_digest, chain.roster_digest);
         // The new record holds the chain's cache and the pin after it, the earliest check kept.
         let value = record_value(&next, &f.p1.user_id);
@@ -2006,6 +1993,34 @@ mod tests {
 
     fn here(workspace_id: &str, version: u64) -> Arc<OpenedArea> {
         opened_area(GROUP.into(), workspace_id.into(), version)
+    }
+
+    #[test]
+    fn the_guard_moves_on_with_each_acceptance_and_the_folders_opened_and_never_goes_back() {
+        const AT: &str = "2026-10-15T00:00:00.000Z";
+        let after = |guard: Option<GroupPin>, next: GroupPin, opened: Vec<Arc<OpenedArea>>| {
+            guard_after(GROUP, guard.as_ref(), &next, opened).unwrap()
+        };
+        // None held: the accepted pin, with what this device opened.
+        assert_eq!(after(None, pin(3, 1, AT, &[]), vec![here("a", 1)]), Some(pin(3, 1, AT, &[("a", 1)])));
+        // A later roster and key: the guard moves there, keeping its own floors.
+        assert_eq!(
+            after(Some(pin(3, 1, AT, &[("a", 2)])), pin(5, 2, AT, &[]), vec![]),
+            Some(pin(5, 2, AT, &[("a", 2)]))
+        );
+        // The same chain, and a folder opened at a later version: only the floor rises.
+        assert_eq!(
+            after(Some(pin(5, 2, AT, &[("a", 1)])), pin(5, 2, AT, &[]), vec![here("a", 2)]),
+            Some(pin(5, 2, AT, &[("a", 2)]))
+        );
+        // Nothing new: nothing to write.
+        assert_eq!(after(Some(pin(5, 2, AT, &[("a", 2)])), pin(5, 2, AT, &[]), vec![]), None);
+        // An older pin never lowers it, and one that disagrees never replaces it.
+        assert_eq!(after(Some(pin(5, 2, AT, &[])), pin(3, 1, AT, &[]), vec![]), None);
+        let other = GroupPin { roster_digest: "elsewhere".into(), ..pin(5, 2, AT, &[]) };
+        assert_eq!(after(Some(pin(5, 2, AT, &[])), other, vec![]), None);
+        let keys = GroupPin { first_ed25519_public_key: "other".into(), ..pin(6, 2, AT, &[]) };
+        assert_eq!(after(Some(pin(5, 2, AT, &[])), keys, vec![]), None);
     }
 
     #[test]

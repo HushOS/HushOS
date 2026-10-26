@@ -2,7 +2,7 @@ import { encryptKey, decryptKey } from './aead';
 import { OLDER_CHAIN, SPLIT_CHAIN, type AreaLedger } from './area-ledger';
 import { NOT_THIS_ACCOUNT, OPEN_SETTINGS } from './protocol';
 import { areaKeyCommitment } from './area-keys';
-import { digestOf, encodeStatement, sameBytes, uuid } from './canonical';
+import { encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
 import {
     contactPinOf,
@@ -57,11 +57,10 @@ import {
     type AcceptedRosters,
     type GroupChainCache,
     type GroupIntegrity,
+    type FamilyChecked,
     type GroupAnchor,
     type GroupReading,
     type JoinMark,
-    type MarkSide,
-    type RosterChain,
     type RosterFork,
     type ServedIdentity,
     type WriterPin,
@@ -107,7 +106,9 @@ import {
 import { checkId, newId } from './ids';
 import { decode, encode } from './keys';
 import {
+    checkGroupPin,
     checkTime,
+    guardAfter,
     keyCommitment,
     pinVerified,
     type GroupPin,
@@ -463,12 +464,13 @@ export type GroupRequests = {
         /*
          * This device's family guard (docs/optional-verification.md 2.8, kept
          * apart from the record and never cleared by a `not-member` wipe nor
-         * by anything the server answers): the pin of the first acceptance
-         * that kept the family here, a mark like any pin, so a family that
-         * once was here is never taken on first use again; 'unreadable' when
-         * the guard's store could not be read, which refuses the acceptance
-         * (GUARD_UNREADABLE: never first use, and nothing taken on it). Keep
-         * the accepted `pin` as the guard when none is held.
+         * by anything the server answers): the latest pin this device
+         * accepted, advanced on every acceptance (the result's `guard`) and
+         * never lowered, a mark like any pin, so a family that once was here is
+         * never taken on first use again, nor replayed below what this device
+         * accepted; 'unreadable' when the guard's store could not be read,
+         * which refuses the acceptance (GUARD_UNREADABLE: never first use, and
+         * nothing taken on it).
          */
         guard?: GroupPin | 'unreadable' | null;
         /*
@@ -514,7 +516,7 @@ export type GroupRequests = {
      * with none, from version 1 over the served first keys, only with
      * settings this worker opened and only when this account's entry is
      * active at the head. Nothing is committed: the version 4 joins record of
-     * the head roster is sealed for the data layer to keep, then groupAccept
+     * the head's pin is sealed for the data layer to keep, then groupAccept
      * with it as `joining` commits, and the data layer deletes the record once
      * the record and pin are written. With marks (a rejoin) the marks decide.
      */
@@ -777,6 +779,15 @@ export type GroupResults = {
               record: string | null;
               /* The pin after this acceptance, for the settings document. */
               pin: GroupPin | null;
+              /*
+               * The family guard to keep (docs/optional-verification.md 2.8): the held one moved on
+               * to this acceptance (mergePin with the folders opened here), only when it records
+               * anything new; null otherwise (nothing to write). Never lower than the one held.
+               * Write it right after the record, without waiting for the settings save.
+               */
+              guard: GroupPin | null;
+              /* What vouched for the family in this acceptance (AcceptedRosters.checked). */
+              checked: FamilyChecked | null;
               /* Outbox ids of this device's staged calls the served chain holds: they landed. */
               dropped: string[];
           }
@@ -1614,33 +1625,6 @@ function sameEntryKeys(a: RosterMember, b: RosterMember) {
     );
 }
 
-/*
- * An accepted chain held against a first use's joins record: it must pass
- * through the roster the record holds. Short of it, a rollback (refused);
- * another roster there, the fork, with the record's side `join` and the
- * served one named by its signer when it is the head.
- */
-function throughFirstUse(
-    chain: AcceptedRosters,
-    at: { rosterVersion: number; rosterDigest: string },
-): RosterChain {
-    if (chain.rosterDigests.length < at.rosterVersion) throw new CryptoError(OLDER_LIST);
-    const digest = chain.rosterDigests[at.rosterVersion - 1]!;
-    if (digest === at.rosterDigest) return chain;
-    const sides: MarkSide[] = [
-        { digest: at.rosterDigest, from: ['join'], signerUserId: null },
-        {
-            digest,
-            from: ['served'],
-            signerUserId: digest === chain.rosterDigest ? chain.roster.signerUserId : null,
-        },
-    ];
-    sides.sort((x, y) => (x.digest < y.digest ? -1 : 1));
-    return { status: 'fork', of: 'roster', version: at.rosterVersion, sides };
-}
-/* Acceptance's words for a chain short of a mark (group-trust.ts OLDER). */
-const OLDER_LIST = 'This is an older member list than this device has seen.';
-
 const USED_JOIN = 'This join code was already used to join. Compare it again.';
 /* A device whose family guard could not be read (2.8): never first use, and no join on it. */
 export const GUARD_UNREADABLE = 'HushOS couldn’t check this right now.';
@@ -1659,41 +1643,36 @@ async function recordDigest(record: string) {
  * - version 4 with a join mark, `{v:4, groupId, joinMark, checkedAt}`, as
  *   groupJoinCheck seals it after a match, and version 3 of the same shape (a
  *   join in flight on an earlier release), read as before;
- * - version 4 with a first use, `{v:4, groupId, firstUse: {rosterVersion,
- *   rosterDigest}, at}`, as groupJoinFirstUse seals it: the roster the first
- *   acceptance took, so a reload before the pin is written finishes against
- *   it rather than taking first use again over whatever is served then.
+ * - version 4 with a first use, `{v:4, groupId, firstUse: <pin>}`, as
+ *   groupJoinFirstUse seals it: the pin of the head the first acceptance
+ *   took (pinAfter's: its first keys, roster version and digest, group key
+ *   version and digest, areas and check time), held as one more pin when the
+ *   join commits, so a reload before the pin is written finishes against that
+ *   very history (its version 1 keys and group keys included) rather than
+ *   taking first use again over whatever is served then.
  * Version 2 was sealed through the data layer (the earlier join.ts) and is
  * refused: a join in flight compares the code once more.
  */
 type JoinsRecord =
     | { kind: 'code'; mark: JoinMark; checkedAt: string }
-    | { kind: 'first-use'; rosterVersion: number; rosterDigest: string; checkedAt: string };
+    | { kind: 'first-use'; pin: GroupPin; checkedAt: string };
 const rosterVersionOf = (value: unknown): value is number =>
     Number.isSafeInteger(value) && (value as number) >= 1;
-function canonicalDigest(value: unknown): value is string {
-    try {
-        digestOf(value, 'roster digest');
-        return true;
-    } catch {
-        return false;
-    }
-}
 function joinsRead(groupId: string, value: unknown): JoinsRecord | null {
     if (typeof value !== 'object' || value === null) return null;
     const record = value as Record<string, unknown>;
     if ((record.v !== 3 && record.v !== 4) || record.groupId !== groupId) return null;
     const first = record.firstUse as Record<string, unknown> | null | undefined;
-    if (record.v === 4 && typeof first === 'object' && first !== null) {
-        const { rosterVersion, rosterDigest } = first;
-        if (
-            !rosterVersionOf(rosterVersion) ||
-            !canonicalDigest(rosterDigest) ||
-            typeof record.at !== 'string' ||
-            record.joinMark !== undefined
-        )
+    // An object, as the core reads it (an array is none: the record is then read for its join mark).
+    if (record.v === 4 && typeof first === 'object' && first !== null && !Array.isArray(first)) {
+        if (record.joinMark !== undefined) return null;
+        let pin: GroupPin;
+        try {
+            pin = checkGroupPin(groupId, first);
+        } catch {
             return null;
-        return { kind: 'first-use', rosterVersion, rosterDigest, checkedAt: record.at };
+        }
+        return { kind: 'first-use', pin, checkedAt: pin.checkedAt };
     }
     const mark = record.joinMark as Record<string, unknown> | null | undefined;
     if (typeof mark !== 'object' || mark === null) return null;
@@ -2486,25 +2465,26 @@ export function createGroupSession(host: GroupHost) {
     /*
      * A first use after its record's checks: the admission again (this
      * account's entry active at the head, else 'not-admitted' and nothing
-     * kept), then the acceptance, which must pass through the roster the
-     * record holds: another roster there is the fork, a chain short of it a
-     * rollback, so a reload before the pin is written never takes first use
-     * again over whatever is served then.
+     * kept), then the acceptance with the record's pin as one more mark: the
+     * chain must pass through its roster, under its version 1 keys and its
+     * group key there (another of any of them is the fork or a refusal, a
+     * chain short of it a rollback), so a reload before the pin is written
+     * never takes first use again over whatever is served then.
      */
     async function firstUseRun(
         input: GroupRequests['groupAccept'],
-        opened: { rosterVersion: number; rosterDigest: string; checkedAt: string },
+        opened: { pin: GroupPin; checkedAt: string },
     ): Promise<GroupResults['groupAccept']> {
         const now = await admission(input);
         if (now.status !== 'code') return now;
-        return acceptRun(input, null, opened.checkedAt, opened);
+        return acceptRun(input, null, opened.checkedAt, opened.pin);
     }
 
     async function acceptRun(
         input: GroupRequests['groupAccept'],
         joinMark: JoinMark | null,
         checkedAt: string,
-        firstUse: { rosterVersion: number; rosterDigest: string } | null,
+        firstUse: GroupPin | null,
     ): Promise<GroupResults['groupAccept']> {
         // The session this run begins in: a lock or another account before it ends keeps nothing.
         const began = generation;
@@ -2515,12 +2495,14 @@ export function createGroupSession(host: GroupHost) {
         // Creation vouches for the first keys only where nothing marks the family (F1).
         if (input.creating && marks)
             throw new CryptoError('This device has already checked this family.');
-        // Joining vouches for them only where nothing does either: through its join mark, which
-        // the chain must pass through (a made-up history gives another code), or on first use,
-        // through nothing, the head admitting this account (acceptance checks it). With marks (a
-        // rejoin after a not-member wipe, which keeps the settings pin and the guard) the marks
-        // decide the first keys and the history, and the join mark only adds to them.
-        if (input.joining && !marks) anchor = joinMark ? 'join' : 'first-use';
+        // Joining vouches for them only where nothing does either, through its join mark, which
+        // the chain must pass through (a made-up history gives another code). A first use's
+        // commit needs no anchor: its record's pin, from the acceptance groupJoinFirstUse made on
+        // first use, is a mark. With marks (a rejoin after a not-member wipe, which keeps the
+        // settings pin and the guard) the marks decide the first keys and the history, and the
+        // join mark only adds to them.
+        if (input.joining && !marks && joinMark) anchor = 'join';
+        const marking = firstUse ? [...pins, firstUse] : pins;
         if (input.creating) {
             const { root } = host.unlocked();
             try {
@@ -2575,7 +2557,7 @@ export function createGroupSession(host: GroupHost) {
                 groupId,
                 firstKeys: input.served.firstKeys,
                 anchor,
-                pins: sessionPin ? [...pins, sessionPin] : pins,
+                pins: sessionPin ? [...marking, sessionPin] : marking,
                 rosters: input.served.rosters.map(unwire),
                 successions: input.served.successions.map(unwire),
                 mlDsaKeys: { ...input.served.signerKeys },
@@ -2584,7 +2566,6 @@ export function createGroupSession(host: GroupHost) {
                 joinMark,
                 pairMarks,
             });
-            if (firstUse && chain.status === 'accepted') chain = throughFirstUse(chain, firstUse);
         } catch (error) {
             // Only under the session the run began in; a refusal on a forked group keeps the fork:
             // it is still the person's own marks' conflict.
@@ -2628,7 +2609,22 @@ export function createGroupSession(host: GroupHost) {
                 dropped.push(outboxId);
         for (const outboxId of dropped) dropStaged(outboxId);
         commit(chain);
-        const pin = await pinAfter(pins, chain, checkedAt);
+        const pin = await pinAfter(marking, chain, checkedAt);
+        // The family guard moves on with every acceptance, never down (docs/optional-verification.md
+        // 2.8): the held one merged with this pin and the folders opened here, only when that
+        // records anything new.
+        const guard = guardAfter(
+            groupId,
+            input.guard && input.guard !== 'unreadable'
+                ? checkGroupPin(groupId, input.guard)
+                : null,
+            pin,
+            [...areasOf(groupId)].map(([workspaceId, area]) => ({
+                groupId,
+                workspaceId,
+                version: area.version,
+            })),
+        );
         const unlocked = host.unlocked();
         try {
             return {
@@ -2640,6 +2636,8 @@ export function createGroupSession(host: GroupHost) {
                     pin,
                 }),
                 pin,
+                guard,
+                checked: chain.checked,
                 dropped,
             };
         } finally {
@@ -2810,9 +2808,10 @@ export function createGroupSession(host: GroupHost) {
     /*
      * The join on first use (groupJoinFirstUse): the admission (this account
      * let in at the head, verified against the marks and the guard, or on
-     * first use with none), then the version 4 joins record of the head
-     * roster, checked at the settings pin's time when the account has one (a
-     * rejoin keeps its first acceptance), else `now`. Nothing is committed.
+     * first use with none), then the version 4 joins record of the head's
+     * pin (pinAfter: first keys, roster, group key, checked at the settings
+     * pin's time when the account has one, a rejoin keeping its first
+     * acceptance, else `now`). Nothing is committed.
      */
     async function joinFirstUse(
         input: GroupRequests['groupJoinFirstUse'],
@@ -2826,11 +2825,7 @@ export function createGroupSession(host: GroupHost) {
             const joinsRecord = await sealDeviceRecord(root, userId, groupId, 'joins', {
                 v: 4,
                 groupId,
-                firstUse: {
-                    rosterVersion: now.chain.roster.rosterVersion,
-                    rosterDigest: now.chain.rosterDigest,
-                },
-                at: checkedAt,
+                firstUse: await pinAfter([], now.chain, checkedAt),
             });
             return {
                 status: 'first-use',

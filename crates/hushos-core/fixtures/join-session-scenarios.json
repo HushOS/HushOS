@@ -1736,6 +1736,248 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "the-guard-advances-and-a-replay-below-it-is-refused",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 5
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-record-binds-its-first-keys",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checked": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-record-binds-its-group-key",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checked": null
+                    }
+                }
+            ]
         }
     ]
 }

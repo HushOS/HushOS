@@ -1,6 +1,7 @@
 import { createAreaLedger } from './area-ledger';
 import { areaKeyCommitment, areaRootCommitment } from './area-keys';
 import { ROOT } from './device-record-testkit';
+import { CryptoError } from './errors';
 import {
     CHECKED,
     groupKeyAt,
@@ -929,24 +930,36 @@ export async function pairSpecs(doc: Json): Promise<Json[]> {
     return specs;
 }
 
-/* A pair code as `spec.me` works it out over the doc's chain, accepted as their own. */
+/*
+ * A pair code as `spec.me` works it out over the doc's chain, accepted as their own: holding the
+ * keys of person `spec.as` (their own when absent; the fuzz kind pair_code holds another's).
+ * `not-accepted` when the chain is not, `refused` when either call refuses.
+ */
 export async function pairRunOver(doc: Json, spec: Json): Promise<Json> {
     const f = await family();
     const reader = f.p[spec.me - 1]!;
-    const me = { userId: reader.userId, identities: [servedKeysOf(reader)] };
-    const accepted = await acceptRosters({
-        groupId: doc.family.groupId,
-        firstKeys: firstKeysOf(doc),
-        anchor: 'created',
-        pins: [],
-        rosters: historyOf(doc),
-        successions: [],
-        mlDsaKeys: await mlDsaKeys(),
-        me,
-        cache: null,
-    });
-    if (accepted.status !== 'accepted') throw new Error('expected an accepted chain');
-    return pairCode(accepted, me, f.p[spec.other - 1]!.userId, doc.family.rosters);
+    const me = {
+        userId: reader.userId,
+        identities: [servedKeysOf(f.p[(spec.as ?? spec.me) - 1]!)],
+    };
+    try {
+        const accepted = await acceptRosters({
+            groupId: doc.family.groupId,
+            firstKeys: firstKeysOf(doc),
+            anchor: 'created',
+            pins: [],
+            rosters: historyOf(doc),
+            successions: [],
+            mlDsaKeys: await mlDsaKeys(),
+            me,
+            cache: null,
+        });
+        if (accepted.status !== 'accepted') return { status: 'not-accepted' };
+        return await pairCode(accepted, me, f.p[spec.other - 1]!.userId, doc.family.rosters);
+    } catch (error) {
+        if (!(error instanceof CryptoError)) throw error;
+        return { status: 'refused' };
+    }
 }
 
 export async function joinRunOver(doc: Json, spec: Json) {

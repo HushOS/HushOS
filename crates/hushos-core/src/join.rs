@@ -43,8 +43,8 @@ use crate::area_ledger::{AreaLedger, ServedAccount, NOT_THIS_ACCOUNT, NO_ACCOUNT
 use crate::canonical::uuid;
 use crate::contacts::{digest_hex, key_commitment, PinKeys};
 use crate::device_record::{
-    lost_race, open_bytes, overtaken, seal_bytes, ChainRecord, FamilyGuard, FirstUseMark, JoinWith, Marks,
-    Reader, RecordCache, ServedAcceptance, ServedChain, BAD_CACHE,
+    lost_race, open_bytes, overtaken, seal_bytes, ChainRecord, FamilyGuard, JoinWith, Marks, Reader,
+    RecordCache, ServedAcceptance, ServedChain, BAD_CACHE,
 };
 use crate::error::{input, CoreError, CoreResult};
 use crate::first_seen::GuardState;
@@ -224,18 +224,18 @@ pub struct JoinMatched {
     record: String,
 }
 
-/* What a joins record holds: the join code compared, or the roster a first use took. */
+/* What a joins record holds: the join code compared, or the pin of the head a first use took. */
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Joined {
     Code(JoinMark),
-    FirstUse(FirstUseMark),
+    FirstUse(GroupPin),
 }
 
 impl Joined {
     fn roster_version(&self) -> u64 {
         match self {
             Joined::Code(mark) => mark.roster_version,
-            Joined::FirstUse(mark) => mark.roster_version,
+            Joined::FirstUse(pin) => pin.roster_version,
         }
     }
 }
@@ -320,7 +320,7 @@ pub enum JoinCheck {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FirstUseJoin {
     /// This account is let in at the head: keep `matched.record()` as the
-    /// joins record (version 4, the head roster at `roster_version`), then
+    /// joins record (version 4, the pin of the head at `roster_version`), then
     /// [`AreaLedger::accept_joining`] with it; delete it once the record and
     /// pin are written.
     Ready { matched: Arc<JoinMatched>, roster_version: u64 },
@@ -335,12 +335,14 @@ pub enum FirstUseJoin {
 
 /// What [`AreaLedger::accept_joining`] found: [`ServedAcceptance`]'s shapes,
 /// and the join's own two.
+// Returned once per acceptance and handed across the FFI, which takes no Box: its size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum JoinAcceptance {
-    /// Committed: keep `record` and settle `pin` as for [`ServedAcceptance::Accepted`],
-    /// then delete the joins record.
-    Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin },
+    /// Committed: keep `record`, store `guard` when some and settle `pin` as for
+    /// [`ServedAcceptance::Accepted`], then delete the joins record.
+    Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin, guard: Option<GroupPin> },
     /// This account was let in again at a later roster, and the chain still
     /// passes through the roster compared with its code: delete the joins
     /// record and compare this code. Nothing was kept. (Another code at the
@@ -689,8 +691,9 @@ pub enum JoinWords {
 /*
  * A joins record's value (docs/optional-verification.md 3.3), as the worker
  * seals it: `{v:4, groupId, joinMark, checkedAt}` after a match, `{v:4,
- * groupId, firstUse: {rosterVersion, rosterDigest}, at}` for a first use;
- * only this core and the worker seal one. Version 3 (`joinMark`, a join in
+ * groupId, firstUse: <pin>}` for a first use (the pin of the head that first
+ * acceptance took, `pin_after`'s, read as a group pin is, and held as one
+ * more pin when the join commits); only this core and the worker seal one. Version 3 (`joinMark`, a join in
  * flight on an earlier release) is read as before. Version 2 was sealed
  * through the data layer (the earlier join.ts) and is refused: a join in
  * flight compares the code once more.
@@ -703,11 +706,10 @@ fn joins_value(group_id: &str, mark: &Joined, checked_at: &str) -> Value {
             "joinMark": { "rosterVersion": mark.roster_version, "code": mark.code },
             "checkedAt": checked_at,
         }),
-        Joined::FirstUse(mark) => json!({
+        Joined::FirstUse(pin) => json!({
             "v": 4,
             "groupId": group_id,
-            "firstUse": { "rosterVersion": mark.roster_version, "rosterDigest": mark.roster_digest },
-            "at": checked_at,
+            "firstUse": crate::device_record::pin_json(pin),
         }),
     }
 }
@@ -727,17 +729,12 @@ fn joins_read(group_id: &str, value: &Value) -> Option<(Joined, String)> {
     }
     if version == 4.0 {
         if let Some(first) = record.get("firstUse").filter(|first| first.is_object()) {
-            let roster_version = roster_version_of(first.get("rosterVersion"))?;
-            let roster_digest = first.get("rosterDigest")?.as_str()?;
-            crate::canonical::digest_of(roster_digest, "roster digest").ok()?;
             if record.contains_key("joinMark") {
                 return None;
             }
-            let at = record.get("at")?.as_str()?.to_string();
-            return Some((
-                Joined::FirstUse(FirstUseMark { roster_version, roster_digest: roster_digest.into() }),
-                at,
-            ));
+            let pin = crate::device_record::pin_of(group_id, first).ok()?;
+            let at = pin.checked_at.clone();
+            return Some((Joined::FirstUse(pin), at));
         }
     }
     let mark = record.get("joinMark")?.as_object()?;
@@ -933,8 +930,8 @@ impl AreaLedger {
                 other => other?,
             };
         Ok(match outcome {
-            ServedAcceptance::Accepted { chain, record, pin } => {
-                JoinAcceptance::Accepted { chain, record, pin }
+            ServedAcceptance::Accepted { chain, record, pin, guard } => {
+                JoinAcceptance::Accepted { chain, record, pin, guard }
             }
             ServedAcceptance::Fork { of, version, sides } => JoinAcceptance::Fork { of, version, sides },
             ServedAcceptance::RecordUnreadable => JoinAcceptance::RecordUnreadable,
@@ -1295,12 +1292,13 @@ impl AreaLedger {
     /// served version 1 keys, only with settings this ledger opened and only
     /// when this account's entry is active at the head
     /// ([`FirstUseJoin::NotAdmitted`] otherwise). Nothing is committed: the
-    /// version 4 joins record of the head roster is sealed (checked at the
-    /// settings pin's time when the account has one, a rejoin keeping its
-    /// first acceptance, else `now`). Keep it, then [`AreaLedger::accept_joining`]
-    /// with it; that acceptance must pass through the record's roster, so a
-    /// relaunch before the pin is written never takes first use again over
-    /// whatever is served then. With marks (a rejoin) the marks decide.
+    /// version 4 joins record of the head's pin is sealed (`pin_after`'s,
+    /// checked at the settings pin's time when the account has one, a rejoin
+    /// keeping its first acceptance, else `now`). Keep it, then
+    /// [`AreaLedger::accept_joining`] with it; that acceptance holds the pin as
+    /// one more mark (its version 1 keys, roster and group key), so a relaunch
+    /// before the pin is written never takes first use again over whatever is
+    /// served then. With marks (a rejoin) the marks decide.
     /// A guard that could not be read is refused ([`crate::GUARD_UNREADABLE`]).
     pub fn join_first_use(
         &self,
@@ -1327,10 +1325,8 @@ impl AreaLedger {
             .ok()
             .and_then(Option::as_ref)
             .map_or(now, |pin| pin.checked_at.clone());
-        let mark = Joined::FirstUse(FirstUseMark {
-            roster_version: chain.roster.roster_version,
-            roster_digest: chain.roster_digest.clone(),
-        });
+        let mark =
+            Joined::FirstUse(crate::group_trust::pin_after(vec![], Arc::clone(&chain), checked_at.clone())?);
         let account = marks.account;
         let plaintext = Zeroizing::new(joins_value(&group_id, &mark, &checked_at).to_string().into_bytes());
         let record = seal_bytes(&account.store_key, &account.user_id, &group_id, JOINS, &plaintext)?;

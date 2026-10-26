@@ -4754,26 +4754,6 @@ describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', (
         await f.sync(f.alice, f.marks.alice);
         return { ...f, carol };
     }
-    /* The same roster bytes and members' signatures, group-signed again by a key the server made. */
-    async function madeUpOf(served: ServedChain): Promise<ServedChain> {
-        const made = await groupKeyPair(newGroupSeed());
-        return {
-            ...served,
-            firstKeys: made.publicKey,
-            rosters: await Promise.all(
-                served.rosters.map(async (at) => {
-                    const signature = await signGroup(decode(at.statement), made);
-                    return {
-                        ...at,
-                        signature: {
-                            ed25519: encode(signature.ed25519),
-                            mlDsa: encode(signature.mlDsa),
-                        },
-                    };
-                }),
-            ),
-        };
-    }
     const firstUse = (
         who: Device,
         groupId: string,
@@ -4805,43 +4785,52 @@ describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', (
             guard,
         });
 
-    test('a newcomer joins with no words and the chain is unchecked; a guard then keeps a wipe and replaced settings from starting over', async () => {
-        const { carol, groupId, server } = await withCarol();
-        const shown = await firstUse(carol, groupId, server.served());
-        if (shown.status !== 'first-use') throw new Error(shown.status);
-        expect(shown.rosterVersion).toBe(3);
-        const joined = await joinWith(carol, groupId, server.served(), shown.joinsRecord);
-        if (joined.status !== 'accepted') throw new Error(joined.status);
-        expect(joined.pin).toMatchObject({ rosterVersion: 3, checkedAt: CHECKED });
-        // The data layer keeps the first accepted pin as the family's guard, apart from the record.
-        const guard = joined.pin!;
-        carol.settings.groups[groupId] = guard;
-        await saveSettings(carol);
-        // Not a member any more (the not-member wipe: the worker forgets the family, the record
-        // goes), and a newer copy of the settings without the family's pin is served.
-        await carol.call('groupForget', { groupId });
-        delete carol.settings.groups[groupId];
-        await saveSettings(carol);
-        await loadSettings(carol);
-        // A fresh invitation onto a made-up family: without the guard this device would take it on
-        // first use; the guard is a mark, so its version 1 keys are refused.
-        const madeUp = await madeUpOf(server.served());
-        await expect(firstUse(carol, groupId, madeUp)).resolves.toMatchObject({
-            status: 'first-use',
+    test('the guard follows each acceptance with the folders opened here, and never goes back', async () => {
+        const f = await family();
+        const { alice, groupId, ws, area, server } = f;
+        const sync = (guard: GroupPin | null, served = server.served()) =>
+            alice.call('groupAccept', {
+                userId: ALICE,
+                groupId,
+                served,
+                record: f.marks.alice.record,
+                checkedAt: CHECKED,
+                guard,
+            });
+        // None held: the accepted pin, with the folder this device opened at version 1.
+        const first = await sync(null);
+        if (first.status !== 'accepted') throw new Error(first.status);
+        expect(first.guard).toMatchObject({ rosterVersion: 2, keyVersion: 1, areas: { [ws]: 1 } });
+        // Nothing new: nothing to write.
+        await expect(sync(first.guard)).resolves.toMatchObject({ guard: null });
+        // The rotation's roster moves it on; the folder's floor rises once it is opened at 2.
+        const r = await rotated(f);
+        const moved = await sync(first.guard);
+        if (moved.status !== 'accepted') throw new Error(moved.status);
+        expect(moved.guard).toMatchObject({ rosterVersion: 3, areas: { [ws]: 1 } });
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: r.rotation.selfGrant,
         });
-        await expect(firstUse(carol, groupId, madeUp, guard)).rejects.toThrow(
-            /not the group keys this person checked/,
-        );
-        // An unreadable guard is never first use, and nothing is taken on it.
-        await expect(firstUse(carol, groupId, server.served(), 'unreadable')).rejects.toThrow(
-            /couldn’t check this right now/,
-        );
-        // The genuine rejoin passes: the same chain from version 1, through the guard's roster.
-        const again = await firstUse(carol, groupId, server.served(), guard);
-        if (again.status !== 'first-use') throw new Error(again.status);
+        const raised = await sync(moved.guard);
+        if (raised.status !== 'accepted') throw new Error(raised.status);
+        expect(raised.guard).toMatchObject({ rosterVersion: 3, areas: { [ws]: 2 } });
+        // A chain short of it is refused, never a lower guard.
+        const short = { ...server.served(), rosters: server.served().rosters.slice(0, 2) };
         await expect(
-            joinWith(carol, groupId, server.served(), again.joinsRecord, guard),
-        ).resolves.toMatchObject({ status: 'accepted', view: { rosterVersion: 3 } });
+            alice.call('groupAccept', {
+                userId: ALICE,
+                groupId,
+                served: short,
+                record: null,
+                checkedAt: CHECKED,
+                guard: raised.guard,
+            }),
+        ).rejects.toThrow();
     });
 
     test('a family check that lands between the first use and its acceptance is a mark: the record then vouches for nothing', async () => {

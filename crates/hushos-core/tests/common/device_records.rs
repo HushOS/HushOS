@@ -512,7 +512,7 @@ pub fn run(c: &Value) -> (Value, Option<String>) {
         outcome = accept(record, served_of(c, 0));
     }
     let mut out = match outcome {
-        Ok(ServedAcceptance::Accepted { chain, record, pin }) => {
+        Ok(ServedAcceptance::Accepted { chain, record, pin, .. }) => {
             let out = json!({ "status": "accepted", "rosterVersion": chain.roster().roster_version, "pin": pin_json(&pin) });
             return (with_fetch(out, from_version_one), Some(record));
         }

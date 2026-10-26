@@ -308,6 +308,24 @@ export function mergePin(
     };
 }
 
+/*
+ * The family guard after an acceptance (docs/optional-verification.md 2.8):
+ * the held guard merged with the accepted `pin` and the folders opened on
+ * this device (mergePin), only when that records anything new (pinAhead);
+ * null when it is behind, conflicts, or adds nothing, so a guard never goes
+ * down. The Rust core's `guard_after` is its twin.
+ */
+export function guardAfter(
+    groupId: string,
+    guard: GroupPin | null,
+    pin: GroupPin,
+    opened: readonly OpenedArea[] = [],
+): GroupPin | null {
+    const merged = mergePin(groupId, guard, pin, opened);
+    if (merged === null || merged === 'conflict') return null;
+    return pinAhead(guard, merged) ? merged : null;
+}
+
 /* Whether saving `next` over `current` records anything new (the core's `pin_ahead`). */
 export function pinAhead(current: GroupPin | null, next: GroupPin) {
     if (!current) return true;

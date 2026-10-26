@@ -368,7 +368,7 @@ extension FamilySync {
                 return .waiting
             case .fork(let of, let version, let sides):
                 return .fork(Self.fork(of: of, version: version, sides: sides))
-            case .accepted(let chain, let record, let pin):
+            case .accepted(let chain, let record, let pin, _):  // The guard (docs/optional-verification.md 2.8) is stored from PR 5.
                 do {
                     try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion,
                                                                                         areas: Array(chain.areaKeys().keys).sorted()))

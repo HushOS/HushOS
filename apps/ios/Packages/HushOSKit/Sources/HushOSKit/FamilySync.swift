@@ -422,7 +422,7 @@ public actor FamilySync: FamilyJudge {
                 answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
             }
             switch answer {
-            case .accepted(let chain, let record, let pin):
+            case .accepted(let chain, let record, let pin, _):  // The guard (docs/optional-verification.md 2.8) is stored from PR 5.
                 let areas = Array(chain.areaKeys().keys).sorted()
                 try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
                 return .accepted(chain, pin)

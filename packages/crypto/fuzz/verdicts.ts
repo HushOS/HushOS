@@ -9,7 +9,14 @@ import {
     fingerprintOfKeys,
     sameKeyDigest,
 } from '../src/fingerprint';
-import type { GroupAnchor, GroupChainCache, PairMark, ServedIdentity } from '../src/group-trust';
+import {
+    checkPairMark,
+    pairCodeOf,
+    type GroupAnchor,
+    type GroupChainCache,
+    type PairMark,
+    type ServedIdentity,
+} from '../src/group-trust';
 import { GROUP, verdictOf, type RecordProbe, type RootProbe } from '../src/group-testkit';
 import {
     areaGrantStatement,
@@ -96,7 +103,7 @@ import { drawPositions } from '../src/join-session';
 import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
 import { readOutboxEntry } from '../src/outbox';
 import { readSettingsDocument } from '../src/contacts';
-import { contactPinOf, settingsMarks, settingsPinOf } from '../src/settings-marks';
+import { contactPinOf, familyCheckOf, settingsMarks, settingsPinOf } from '../src/settings-marks';
 import { runArea } from '../src/settings-areas-testkit';
 import {
     JUNK,
@@ -104,6 +111,7 @@ import {
     familyJson,
     family as rosterFamily,
     joinCodeWith,
+    pairRunOver,
     run as runRosterCall,
     sessionRun,
     sessionStep as rosterSessionStep,
@@ -1111,6 +1119,10 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
             return settingsKind(value);
         case 'area_open':
             return areaOpenKind(value);
+        case 'pair_code':
+            return pairCodeKind(value);
+        case 'joins_record':
+            return joinsRecordKind(value);
         default:
             return undefined;
     }
@@ -1288,7 +1300,17 @@ async function joinDrawsKind(value: Doc): Promise<Verdict | undefined> {
     return ok(positions);
 }
 
-const SESSION_HISTORIES = ['main', 'other', 'succ', 'madeUp'];
+const SESSION_HISTORIES = [
+    'main',
+    'other',
+    'succ',
+    'madeUp',
+    'removal',
+    'removalFork',
+    'succOther',
+];
+const SESSION_SETTINGS = ['none', 'pin-main-2', 'not-open', 'checked-before', 'checked-malformed'];
+const GUARDS = ['none', 'pin-main-2', 'unreadable', 'held'];
 const FORGED = ['outbox', 'other-family', 'earlier-version', 'newer-version'];
 
 /* One step of a `join_session` input, with only the fields its op reads; undefined when it does not fit. */
@@ -1312,13 +1334,25 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
         const n = number(step, key);
         return n !== undefined && n < at ? n : undefined;
     };
+    // The family guard a step hands the worker (none when absent); one of GUARDS, else no fit.
+    const guard = (): Doc | undefined => {
+        if (step.guard === undefined) return {};
+        return typeof step.guard === 'string' && GUARDS.includes(step.guard)
+            ? { guard: step.guard }
+            : undefined;
+    };
     const op = text(step, 'op');
     const need = (...parts: unknown[]) => parts.every((part) => part !== undefined);
     switch (op) {
-        case 'show':
-        case 'sync': {
+        case 'show': {
             const where = served();
             return need(where) ? { op, served: where } : undefined;
+        }
+        case 'sync':
+        case 'first-use': {
+            const where = served();
+            const held = guard();
+            return need(where, held) ? { op, served: where, ...held } : undefined;
         }
         case 'check': {
             const words = text(step, 'words');
@@ -1331,17 +1365,22 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
         case 'accept': {
             const record = text(step, 'record');
             const where = served();
+            const held = guard();
             if (step.matched !== undefined && record === undefined) {
                 const matched = earlier('matched');
-                return need(where, matched) ? { op, matched, served: where } : undefined;
+                return need(where, matched, held)
+                    ? { op, matched, served: where, ...held }
+                    : undefined;
             }
             if (step.matched !== undefined || record === undefined) return undefined;
             const own = /^own:(0|[1-9][0-9]*)$/.exec(record);
             const fits = own ? Number(own[1]) < at : FORGED.includes(record);
-            return fits && need(where) ? { op, record, served: where } : undefined;
+            return fits && need(where, held) ? { op, record, served: where, ...held } : undefined;
         }
         case 'relaunch':
         case 'lock':
+            // No `restore` restores nothing, as the shared scenarios write it.
+            if (step.restore === undefined) return { op, restore: false };
             return typeof step.restore === 'boolean' ? { op, restore: step.restore } : undefined;
         case 'restore': {
             const from = earlier('from');
@@ -1349,6 +1388,7 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
         }
         case 'holds':
         case 'forget':
+        case 'guard':
             return { op };
         default:
             return undefined;
@@ -1356,28 +1396,43 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
 }
 
 /*
- * A session of joining as the web drives it: `settings` (`none` or
- * `pin-main-2`) and up to sixteen `steps` (the shared session scenarios'
- * ops) over the core's join histories, positions from the fixtures' draws:
- * every step's outcome, which the core must match. Invariants
- * (sessionRules): held positions never move until a match, after a restore
- * too, which only ever holds more; the first wrong pair is calm and every
- * later one the alarm until a match; a check of a showing from before a lock
- * is refused; the escalation is kept exactly while something is held;
- * nothing joins without a match, and a match joins once per unlock.
+ * A session of joining as the web drives it: `settings` (SESSION_SETTINGS)
+ * and up to sixteen `steps` (the shared session scenarios' ops, first use and
+ * the guard op too, a `guard` on each sync, first use and accept) over the
+ * core's join histories, positions from the fixtures' draws: every step's
+ * outcome, which the core must match. Invariants (sessionRules): held
+ * positions never move until a match, after a restore too, which only ever
+ * holds more; the first wrong pair is calm and every later one the alarm
+ * until a match; a check of a showing from before a lock is refused; the
+ * escalation is kept exactly while something is held; nothing joins without
+ * a match or a first use, and each joins once per unlock; a first use only
+ * with no mark at all; an unreadable guard never accepts; a first use
+ * commits only through its record's rosters; the guard handed back never
+ * falls below the one held.
  */
 async function joinSessionKind(value: Doc): Promise<Verdict | undefined> {
     const base = coreJoin().joinPreviews;
     const settings = text(value, 'settings');
-    if (settings === undefined || !['none', 'pin-main-2'].includes(settings)) return undefined;
+    if (settings === undefined || !SESSION_SETTINGS.includes(settings)) return undefined;
     const lengths = SESSION_HISTORIES.map((h) => base.histories[h].rosters.length as number);
     const list = value.steps;
     if (!Array.isArray(list) || list.length === 0 || list.length > 16) return undefined;
     const steps = list.map((step, at) => sessionStep(step, at, lengths));
     if (steps.includes(undefined)) return undefined;
     const run = await runSession(base, { name: 'fuzz', settings, steps });
-    sessionRules(settings, steps as Json[], run.outcomes);
+    sessionRules(base, settings, steps as Json[], run.outcomes);
     return ok(run.outcomes);
+}
+
+/* Whether guard `next` holds at least what `held` holds: roster, group key, every folder's floor. */
+function guardCovers(next: Json, held: Json) {
+    return (
+        next.rosterVersion >= held.rosterVersion &&
+        next.keyVersion >= held.keyVersion &&
+        Object.entries(held.areas as Record<string, number>).every(
+            ([area, floor]) => (next.areas[area] ?? 0) >= floor,
+        )
+    );
 }
 
 /*
@@ -1386,7 +1441,7 @@ async function joinSessionKind(value: Doc): Promise<Verdict | undefined> {
  * what the page last stored (each check's escalation), which a lock or a
  * relaunch restores, and `after` what was stored after each step.
  */
-function sessionRules(settings: string, steps: Json[], outcomes: Json[]) {
+function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Json[]) {
     type Book = { held: Map<string, string>; tried: boolean };
     const empty = (): Book => ({ held: new Map(), tried: false });
     const copy = (b: Book): Book => ({ held: new Map(b.held), tried: b.tried });
@@ -1400,9 +1455,76 @@ function sessionRules(settings: string, steps: Json[], outcomes: Json[]) {
     const shownIn = new Map<number, number>();
     let joined = false;
     const used = new Set<number>();
+    // The marks with keys this device holds, each a history and the roster it reaches: the
+    // settings pin, a guard handed (pin-main-2, or the held one from the step that handed it
+    // back), the chain committed in this unlock, a first use's joins record.
+    type Mark = { served: Json; version: number };
+    const main2: Mark = { served: { history: 'main', cut: null }, version: 2 };
+    let guard: Json = null;
+    let guardFrom: Mark | null = null;
+    let committed: Mark | null = null;
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    // Whether a chain served holds a mark: through it, over its first keys and rosters (a cut chain is not compared).
+    const holdsMark = (served: Json, mark: Mark) => {
+        if (served.cut !== null || mark.served.cut !== null) return true;
+        const here = base.histories[served.history];
+        const there = base.histories[mark.served.history];
+        return (
+            served.through >= mark.version &&
+            same(here.firstKeys, there.firstKeys) &&
+            same(here.rosters.slice(0, mark.version), there.rosters.slice(0, mark.version))
+        );
+    };
     for (const [at, step] of steps.entries()) {
         const outcome = outcomes[at]!;
         const status = outcome.status;
+        const handed =
+            step.guard === 'held'
+                ? guard
+                : step.guard === undefined || step.guard === 'none'
+                  ? null
+                  : step.guard;
+        const from =
+            step.op !== 'accept'
+                ? undefined
+                : typeof step.matched === 'number'
+                  ? step.matched
+                  : step.record.startsWith('own:')
+                    ? Number(step.record.slice(4))
+                    : undefined;
+        const marks: Mark[] = [];
+        if (settings === 'pin-main-2') marks.push(main2);
+        if (step.guard === 'pin-main-2') marks.push(main2);
+        if (step.guard === 'held' && guardFrom) marks.push(guardFrom);
+        if (committed) marks.push(committed);
+        if (from !== undefined && outcomes[from]!.status === 'first-use')
+            marks.push({ served: steps[from]!.served, version: outcomes[from]!.rosterVersion });
+        if (step.guard === 'unreadable')
+            invariant(
+                status !== 'accepted' && status !== 'first-use',
+                `step ${at}: an unreadable guard accepted`,
+            );
+        if (status === 'accepted' || status === 'first-use') {
+            for (const mark of marks)
+                invariant(holdsMark(step.served, mark), `step ${at}: accepted past a mark`);
+        }
+        if (step.op === 'first-use' && status === 'first-use') {
+            invariant(
+                settings !== 'not-open' && settings !== 'checked-malformed',
+                `step ${at}: a first use without settings that hold`,
+            );
+            // A family check fixes no keys: with nothing else, it leaves no first use either.
+            if (settings === 'checked-before')
+                invariant(marks.length > 0, `step ${at}: a first use over a family check`);
+        }
+        if (outcome.guard) {
+            if (step.guard === 'held' && guard)
+                invariant(guardCovers(outcome.guard, guard), `step ${at}: the guard went back`);
+            guard = outcome.guard;
+            guardFrom = { served: step.served, version: outcome.guard.rosterVersion };
+        }
+        if ((step.op === 'accept' || step.op === 'sync') && status === 'accepted')
+            committed = { served: step.served, version: outcome.rosterVersion };
         // A restore folds in only what is not held here: only ever more held.
         if (step.op === 'show' || (step.op === 'check' && status !== 'skipped')) {
             if (pending) {
@@ -1445,29 +1567,38 @@ function sessionRules(settings: string, steps: Json[], outcomes: Json[]) {
                 kept = copy(book);
             }
         } else if (step.op === 'accept' && status === 'accepted') {
-            const from =
-                typeof step.matched === 'number' ? step.matched : Number(step.record.slice(4));
             invariant(
                 typeof step.matched === 'number' || step.record.startsWith('own:'),
                 `step ${at}: a forged joins record joined`,
             );
-            invariant(outcomes[from]!.status === 'matched', `step ${at}: a join without a match`);
-            invariant(!used.has(from), `step ${at}: a match joined twice in one unlock`);
-            used.add(from);
+            const joinedFrom = outcomes[from!]!;
+            invariant(
+                joinedFrom.status === 'matched' || joinedFrom.status === 'first-use',
+                `step ${at}: a join without a match`,
+            );
+            invariant(!used.has(from!), `step ${at}: a match joined twice in one unlock`);
+            used.add(from!);
             joined = true;
-        } else if (step.op === 'sync' && status === 'accepted' && settings === 'none') {
-            // Without a settings pin, only a join gives this device a mark.
+        } else if (
+            step.op === 'sync' &&
+            status === 'accepted' &&
+            settings !== 'pin-main-2' &&
+            handed === null
+        ) {
+            // Without a settings pin or a guard, only a join gives this device a mark.
             invariant(joined, `step ${at}: a family accepted before any join`);
         } else if (step.op === 'relaunch' || step.op === 'lock') {
             life += 1;
             pending = step.restore === true ? copy(kept) : null;
             book = empty();
             joined = false;
+            committed = null;
             used.clear();
         } else if (step.op === 'restore' && status !== 'skipped') {
             pending = copy(after[step.from]!);
         } else if (step.op === 'forget') {
             joined = false;
+            committed = null;
             used.clear();
         }
         after.push(copy(kept));
@@ -2064,7 +2195,7 @@ export function settingsFits(text: string) {
     return numberOk(token) && brackets <= 64;
 }
 
-/* A settings document's plaintext read as the worker reads it, probed (the core's settings kind). */
+/* A settings document's plaintext read as the worker reads it, probed for contact pins, group pins and family check records (the core's settings kind). */
 async function settingsKind(value: Doc): Promise<Verdict | undefined> {
     const text = value.text;
     const users = stringsOf(value, 'users');
@@ -2122,7 +2253,21 @@ async function settingsKind(value: Doc): Promise<Verdict | undefined> {
             groupVerdicts[group] = { refused: true };
         }
     }
-    return ok({ status: 'read', contacts, groups: groupVerdicts });
+    // Each family's check record as acceptance would hold it: none, a mark, a pair mark, or refused.
+    const checks: Json = {};
+    for (const group of groups) {
+        const check = familyCheckOf(marks, group);
+        if (!check.checked) checks[group] = null;
+        else if (check.pairMarks.length === 0) checks[group] = { pairMark: null };
+        else
+            try {
+                checks[group] = { pairMark: checkPairMark(check.pairMarks[0]!) };
+            } catch (error) {
+                if (!(error instanceof CryptoError)) throw error;
+                checks[group] = { refused: true };
+            }
+    }
+    return ok({ status: 'read', contacts, groups: groupVerdicts, checks });
 }
 
 /* A family folder of the roster-call family opened by person 2 (the core's area_open kind). */
@@ -2177,6 +2322,122 @@ async function areaOpenKind(value: Doc): Promise<Verdict | undefined> {
             stored.workspaceKeyVersion === latest && served === latest,
             'a self-grant of a key not current',
         );
+    }
+    return ok(outcome);
+}
+
+/*
+ * A pair code (docs/optional-verification.md 3.4): with `rosterDigest`, as
+ * pairCodeOf works it out over any `rosterDigest`, `groupKey`,
+ * `groupKeyVersion`, `userId` and `otherUserId`; else as person `me` (1 to 5)
+ * of the roster-call family works it out with person `other` over the
+ * family's chain, holding the keys of person `as` (`me` when absent).
+ * Invariants: two equal ids are refused; the code is the same with the ids
+ * swapped (over the chain: the same code and roster when the other person
+ * works it out); a device holding keys other than its own entry's gets no
+ * code.
+ */
+async function pairCodeKind(value: Doc): Promise<Verdict | undefined> {
+    if (value.rosterDigest !== undefined) {
+        const rosterDigest = text(value, 'rosterDigest');
+        const groupKey = groupKeyOf(value.groupKey);
+        const groupKeyVersion = number(value, 'groupKeyVersion');
+        const userId = text(value, 'userId');
+        const otherUserId = text(value, 'otherUserId');
+        if (
+            rosterDigest === undefined ||
+            !groupKey ||
+            groupKeyVersion === undefined ||
+            userId === undefined ||
+            otherUserId === undefined
+        )
+            return undefined;
+        return either(
+            () => pairCodeOf(rosterDigest, groupKey, groupKeyVersion, userId, otherUserId),
+            async (code) => {
+                invariant(userId !== otherUserId, 'a pair code of one member with themselves');
+                const swapped = await pairCodeOf(
+                    rosterDigest,
+                    groupKey,
+                    groupKeyVersion,
+                    otherUserId,
+                    userId,
+                );
+                invariant(isDeepStrictEqual(code, swapped), 'a pair code that hangs on the order');
+                return code;
+            },
+        );
+    }
+    const person = (key: string) => {
+        const n = unsigned(key === 'as' && value.as === undefined ? value.me : value[key]);
+        return n !== undefined && n >= 1 && n <= 5 ? n : undefined;
+    };
+    const spec = { me: person('me'), other: person('other'), as: person('as') };
+    if (Object.values(spec).includes(undefined)) return undefined;
+    const doc = coreRosterCalls();
+    const outcome = await pairRunOver(doc, spec);
+    if (outcome.status === 'refused') return refused;
+    invariant(spec.me !== spec.other, 'a pair code of one member with themselves');
+    if (spec.as !== spec.me)
+        invariant(outcome.status !== 'code', 'a pair code over keys this device does not hold');
+    if (outcome.status === 'code' && spec.as === spec.me) {
+        const theirs = await pairRunOver(doc, { me: spec.other, other: spec.me, as: spec.other });
+        invariant(
+            theirs.status === 'code' &&
+                theirs.rosterVersion === outcome.rosterVersion &&
+                isDeepStrictEqual(theirs.code, outcome.code),
+            'two members shown different pair codes',
+        );
+    }
+    return ok(outcome);
+}
+
+/*
+ * Any JSON `record`, sealed as person 2's joins record of the join family
+ * through the fixtures-only sealer and read back by an acceptance joining
+ * over `served` (`history`, `through`), settings none, no guard: the
+ * outcome, which the core must match. Invariants: only a record of this
+ * family at version 3 or 4 joins, with a join mark or (at 4) a first-use pin;
+ * a first use joins only over the roster and first keys its pin names, at or
+ * above its roster, and is never reported checked; a join mark always is.
+ */
+async function joinsRecordKind(value: Doc): Promise<Verdict | undefined> {
+    const base = coreJoin().joinPreviews;
+    const record = value.record;
+    const served = value.served;
+    if (record === undefined || !isObject(served)) return undefined;
+    const history = text(served, 'history');
+    const through = number(served, 'through');
+    if (history === undefined || !SESSION_HISTORIES.includes(history) || through === undefined)
+        return undefined;
+    const rosters = base.histories[history].rosters as Json[];
+    if (through < 1 || through > rosters.length) return undefined;
+    const where = { history, through, cut: null };
+    const run = await runSession(base, {
+        name: 'fuzz',
+        settings: 'none',
+        steps: [{ op: 'accept', record: 'value', value: record, served: where }],
+    });
+    const outcome = run.outcomes[0]!;
+    if (outcome.status === 'refused') return refused;
+    if (outcome.status === 'accepted') {
+        invariant(
+            isObject(record) && (record.v === 3 || record.v === 4) && record.groupId === GROUP,
+            'a joins record of no version or family joined',
+        );
+        const first = record.v === 4 && isObject(record.firstUse) ? record.firstUse : null;
+        if (first) {
+            invariant(!('joinMark' in record), 'a record with a join mark and a first use joined');
+            invariant(outcome.checked === null, 'a first use reported checked');
+            const at = first.rosterVersion as number;
+            invariant(outcome.rosterVersion >= at, 'a first use joined short of its pin');
+            invariant(
+                (await rosterDigest(decode(rosters[at - 1]!.statement))) === first.rosterDigest &&
+                    base.histories[history].firstKeys.ed25519PublicKey ===
+                        first.firstEd25519PublicKey,
+                'a first use joined over another history than its pin’s',
+            );
+        } else invariant(outcome.checked !== null, 'a join mark joined unchecked');
     }
     return ok(outcome);
 }

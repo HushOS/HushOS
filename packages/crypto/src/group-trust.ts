@@ -596,7 +596,8 @@ function checkJoinMark(mark: JoinMark) {
     return { rosterVersion: integer(mark.rosterVersion, 'join mark'), code: [...mark.code] };
 }
 
-function checkPairMark(mark: PairMark) {
+/* A pair mark as acceptance takes it (the user id a uuid, the code twelve words), or refused; the fuzz kind `settings` reads check records through it. */
+export function checkPairMark(mark: PairMark) {
     if (
         typeof mark !== 'object' ||
         mark === null ||

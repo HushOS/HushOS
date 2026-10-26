@@ -94,8 +94,9 @@ export function contactPinOf(
  * The family's check record as filed: whether there is one (any value but
  * none or a JSON null), and the pair mark acceptance holds it as. A record
  * without a `code` (the migration's `before` record, docs/optional-verification.md
- * 7.2) is a mark but no pair mark; anything else is handed to acceptance as a
- * pair mark, which refuses that family alone when it is malformed.
+ * 7.2) is a mark but no pair mark; anything else (an array too, as the core
+ * reads it) is handed to acceptance as a pair mark, which refuses that family
+ * alone when it is malformed.
  */
 export function familyCheckOf(
     marks: SettingsMarks,
@@ -103,7 +104,7 @@ export function familyCheckOf(
 ): { checked: boolean; pairMarks: PairMark[] } {
     const record = Object.hasOwn(marks.checks, groupId) ? marks.checks[groupId] : null;
     if (record === null || record === undefined) return { checked: false, pairMarks: [] };
-    if (typeof record === 'object' && !Object.hasOwn(record, 'code'))
+    if (typeof record === 'object' && !Array.isArray(record) && !Object.hasOwn(record, 'code'))
         return { checked: true, pairMarks: [] };
     const { rosterVersion, with: other, code } = record as Record<string, unknown>;
     return {

@@ -1125,12 +1125,18 @@ pub fn pair_specs(doc: &Value) -> Vec<Value> {
     specs
 }
 
-/* A pair code as `spec.me` works it out over the doc's chain, accepted as their own (the web's pairRunOver). */
+/*
+ * A pair code as `spec.me` works it out over the doc's chain, accepted as their own (the web's
+ * pairRunOver): holding the keys of person `spec.as` (their own when absent; the fuzz kind
+ * pair_code holds another's). `not-accepted` when the chain is not, `refused` when either call
+ * refuses.
+ */
 pub fn pair_run_over(doc: &Value, spec: &Value) -> Value {
     let f = family();
-    let reader = &f.p[spec["me"].as_u64().unwrap() as usize - 1];
-    let me = OwnIdentities { user_id: reader.user_id.clone(), identities: vec![served_keys(reader)] };
-    let Ok(RosterChain::Accepted { chain }) = accept_rosters(
+    let person = |key: &str| &f.p[spec[key].as_u64().unwrap() as usize - 1];
+    let holding = if spec["as"].is_u64() { person("as") } else { person("me") };
+    let me = OwnIdentities { user_id: person("me").user_id.clone(), identities: vec![served_keys(holding)] };
+    let chain = match accept_rosters(
         s(&doc["family"], "groupId"),
         first_keys_of(doc),
         Some(GroupAnchor::Created),
@@ -1140,18 +1146,20 @@ pub fn pair_run_over(doc: &Value, spec: &Value) -> Value {
         ml_dsa_keys(),
         me.clone(),
         None,
-    ) else {
-        panic!("an accepted chain");
+    ) {
+        Ok(RosterChain::Accepted { chain }) => chain,
+        Ok(_) => return json!({ "status": "not-accepted" }),
+        Err(_) => return json!({ "status": "refused" }),
     };
-    let other = &f.p[spec["other"].as_u64().unwrap() as usize - 1];
-    match pair_code(chain, me, other.user_id.clone(), history_of(doc)).unwrap() {
-        PairCode::Code { roster_version, code } => {
+    match pair_code(chain, me, person("other").user_id.clone(), history_of(doc)) {
+        Ok(PairCode::Code { roster_version, code }) => {
             json!({ "status": "code", "rosterVersion": roster_version, "code": code })
         }
-        PairCode::OwnEntryWrong { roster_version } => {
+        Ok(PairCode::OwnEntryWrong { roster_version }) => {
             json!({ "status": "own-entry-wrong", "rosterVersion": roster_version })
         }
-        PairCode::NotAdmitted => json!({ "status": "not-admitted" }),
+        Ok(PairCode::NotAdmitted) => json!({ "status": "not-admitted" }),
+        Err(_) => json!({ "status": "refused" }),
     }
 }
 

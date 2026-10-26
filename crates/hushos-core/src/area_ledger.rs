@@ -2082,6 +2082,27 @@ impl AreaLedger {
         Arc::new(AreaLedger { state: Mutex::new(fresh_state()), draws: Some(Mutex::new(draws.into())) })
     }
 
+    /* The areas this session opened for the family, at the versions opened: what a guard folds in. */
+    pub(crate) fn opened_areas(&self, group_id: &str) -> Vec<Arc<crate::device_record::OpenedArea>> {
+        let state = self.lock();
+        state
+            .opened
+            .get(group_id)
+            .map(|areas| {
+                areas
+                    .iter()
+                    .map(|(workspace_id, area)| {
+                        crate::device_record::OpenedArea::new(
+                            group_id.into(),
+                            workspace_id.clone(),
+                            area.version,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /* Whether this session holds the family: a committed chain, or a fork (the worker's `marks` counts both). */
     pub(crate) fn holds_family(&self, group_id: &str) -> bool {
         let state = self.lock();
@@ -2141,14 +2162,7 @@ impl AreaLedger {
             .as_ref()
             .filter(|held| held.user_id.eq_ignore_ascii_case(user_id))
             .ok_or_else(|| refused(OPEN_SETTINGS))?;
-        let record = match settings.checks.get(group_id) {
-            None | Some(serde_json::Value::Null) => return Ok(Ok((false, vec![]))),
-            Some(record) => record,
-        };
-        if record.as_object().is_some_and(|object| !object.contains_key("code")) {
-            return Ok(Ok((true, vec![])));
-        }
-        Ok(crate::group_trust::pair_mark_of(record).map(|mark| (true, vec![mark])))
+        Ok(crate::ledger_settings::family_check_of(&settings.checks, group_id))
     }
 
     /*
