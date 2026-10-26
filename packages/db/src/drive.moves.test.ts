@@ -127,6 +127,7 @@ async function family(quota: bigint | null) {
     await hold(areaId, ben.userId);
     if (quota !== null)
         await billing.applyGroupState({
+            readingFrom: await billing.readingStamp(),
             groupId,
             provider: 'polar',
             customerId: 'cus_family',
@@ -484,6 +485,7 @@ describe('a move racing its mover’s account deletion', () => {
         });
         await db.insert(workspaceStorage).values({ workspaceId: areaId, baseQuotaBytes: 0n });
         await billing.applyGroupState({
+            readingFrom: await billing.readingStamp(),
             groupId,
             provider: 'polar',
             customerId: 'cus_family',
@@ -723,6 +725,7 @@ describe('a move whose source changed', () => {
         // Within one pool: nothing reserved, the original's bytes stand in for the copy's.
         expect(await uploadRow(moved.result.uploadId)).toMatchObject({ reservedBytes: 0n });
         await billing.applyGroupState({
+            readingFrom: await billing.readingStamp(),
             groupId,
             provider: 'polar',
             customerId: 'cus_family',
@@ -843,6 +846,7 @@ describe('moves across two pools are charged in full, and still atomic', () => {
         // The plan lapses (past its period and the grace days): Ana is back on her own
         // allowance, with room to spare, and the folder reads an empty pool.
         await billing.applyGroupState({
+            readingFrom: await billing.readingStamp(),
             groupId,
             provider: 'polar',
             customerId: 'cus_family',

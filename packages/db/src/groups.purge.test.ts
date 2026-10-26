@@ -557,6 +557,7 @@ describe('purging a dissolved family', () => {
         const family = await dissolvedFamily();
         expect(
             await billing.applyGroupState({
+                readingFrom: await billing.readingStamp(),
                 groupId: family.groupId,
                 provider: 'polar',
                 customerId: 'cus_family',
@@ -584,7 +585,7 @@ describe('purging a dissolved family', () => {
                 ],
                 graceMs: 3 * 86_400_000,
             }),
-        ).toBe(true);
+        ).toBe('applied');
         // A member's personal plan ended when they were pooled, and its refund: by ids only.
         await db.insert(s.personalPlanEndings).values({
             subscriptionId: 'sub_personal',
@@ -645,8 +646,9 @@ describe('purging a dissolved family', () => {
             endedAt,
         });
         // One subscription as a webhook delivers it (not a full reconcile, which ends what it omits).
-        const apply = (subscription: ReturnType<typeof plan>) =>
+        const apply = async (subscription: ReturnType<typeof plan>) =>
             billing.applyGroupState({
+                readingFrom: await billing.readingStamp(),
                 groupId: family.groupId,
                 provider: 'polar',
                 customerId: 'cus_family',
@@ -654,7 +656,7 @@ describe('purging a dissolved family', () => {
                 graceMs: 3 * 86_400_000,
                 complete: false,
             });
-        expect(await apply(plan(null, 'active'))).toBe(true);
+        expect(await apply(plan(null, 'active'))).toBe('applied');
         await dissolvedAgo(family.groupId, DAYS + 1);
 
         // The folder goes on time; the group's row, which billing still writes, waits.
@@ -664,11 +666,11 @@ describe('purging a dissolved family', () => {
         expect(await outbox(family.shared.objectId)).not.toBeNull();
         // Any state the plan can still become active from keeps them too.
         for (const status of ['past_due', 'unpaid', 'incomplete', 'trialing']) {
-            expect(await apply(plan(null, status))).toBe(true);
+            expect(await apply(plan(null, status))).toBe('applied');
             expect([status, await purge()]).toEqual([status, NOTHING]);
         }
 
-        expect(await apply(plan(new Date(), 'canceled'))).toBe(true);
+        expect(await apply(plan(new Date(), 'canceled'))).toBe('applied');
         expect(await purge()).toEqual({ ...NOTHING, families: 1 });
         expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(0);
     });
@@ -815,13 +817,14 @@ describe('a dissolved family during its retention', () => {
         const family = await dissolvedFamily({ commitments: false });
         expect(
             await billing.applyGroupState({
+                readingFrom: await billing.readingStamp(),
                 groupId: family.groupId,
                 provider: 'polar',
                 customerId: 'cus_family',
                 subscriptions: [],
                 graceMs: 3 * 86_400_000,
             }),
-        ).toBe(true);
+        ).toBe('applied');
         await dissolvedAgo(family.groupId, DAYS + 1);
         expect((await purge()).families).toBe(1);
         expect(

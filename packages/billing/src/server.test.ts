@@ -9307,3 +9307,240 @@ describe('a dissolved family’s plan', () => {
         expect(await row(subscription.id)).toMatchObject({ groupId, status: 'canceled' });
     });
 });
+
+describe('reconciles that overlap', () => {
+    /*
+     * The next call of `method` is answered by Polar, then held with a copy of that answer, so
+     * the reconcile it belongs to keeps an older reading while another runs and commits.
+     */
+    function holdNextAnswer<T extends object>(target: T, method: keyof T & string) {
+        const original = (target[method] as (...args: unknown[]) => Promise<unknown>).bind(target);
+        let reached!: () => void;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (reached = resolve));
+        const released = new Promise<void>((resolve) => (release = resolve));
+        const spy = vi.spyOn(target, method as never).mockImplementationOnce((async (
+            ...args: unknown[]
+        ) => {
+            const answer = structuredClone(await original(...args));
+            reached();
+            await released;
+            return answer;
+        }) as never);
+        return { held, release, restore: () => spy.mockRestore() };
+    }
+    const pool = async (groupId: string) =>
+        (await billingRepository.getGroupPool(groupId))?.quotaBytes ?? null;
+    const allowance = async (userId: string) =>
+        (await authRepository.getStorageAllowance(userId))?.quotaBytes;
+    const quietly = async <T>(run: () => Promise<T>) => {
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        try {
+            return await run();
+        } finally {
+            warn.mockRestore();
+        }
+    };
+
+    test('a family’s reconcile that read the plan unpaid, committing after one that read it paid, leaves the pool', async () => {
+        const { groupId, subscription } = await familyOnPlan();
+        subscription.status = 'unpaid';
+        await billing.reconcileGroup(groupId);
+        expect(await pool(groupId)).toBe(0n);
+        // A reads it unpaid; the payment lands; B reads it active and writes the pool.
+        const hold = holdNextAnswer(fakeClient.subscriptions, 'get');
+        try {
+            const older = billing.reconcileGroup(groupId);
+            await hold.held;
+            subscription.status = 'active';
+            await billing.reconcileGroup(groupId);
+            expect(await pool(groupId)).toBe(FAMILY_POOL);
+            hold.release();
+            await older;
+        } finally {
+            hold.restore();
+        }
+        expect(await pool(groupId)).toBe(FAMILY_POOL);
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+
+    test('a family’s reconcile that read the plan active, committing after one that read it unpaid, gives no pool', async () => {
+        const { groupId, subscription } = await familyOnPlan();
+        expect(await pool(groupId)).toBe(FAMILY_POOL);
+        const hold = holdNextAnswer(fakeClient.subscriptions, 'get');
+        try {
+            const older = billing.reconcileGroup(groupId);
+            await hold.held;
+            subscription.status = 'unpaid';
+            await billing.reconcileGroup(groupId);
+            expect(await pool(groupId)).toBe(0n);
+            hold.release();
+            await older;
+        } finally {
+            hold.restore();
+        }
+        expect(await pool(groupId)).toBe(0n);
+        expect(await seatLimit(groupId)).toBeNull();
+    });
+
+    test('a person’s reconcile that read the plan unpaid, committing after one that read it paid, leaves the allowance', async () => {
+        const { userId } = await createTestAccount();
+        const sub = subscribe(userId, { id: 'sub_overlap_paid' });
+        await billing.reconcileCustomer(userId);
+        sub.status = 'unpaid';
+        await billing.reconcileCustomer(userId);
+        expect(await allowance(userId)).toBe(GIB.toString());
+        // A reads it unpaid (its own read: the state omits it); paid; B reads it active.
+        const hold = holdNextAnswer(fakeClient.subscriptions, 'get');
+        try {
+            const older = billing.reconcileCustomer(userId);
+            await hold.held;
+            sub.status = 'active';
+            await billing.reconcileCustomer(userId);
+            expect(await allowance(userId)).toBe((501n * GIB).toString());
+            hold.release();
+            await older;
+        } finally {
+            hold.restore();
+        }
+        expect(await allowance(userId)).toBe((501n * GIB).toString());
+    });
+
+    test('a person’s reconcile that read the plan active, committing after one that read it ended, gives no allowance', async () => {
+        const { userId } = await createTestAccount();
+        const sub = subscribe(userId, { id: 'sub_overlap_ended' });
+        await billing.reconcileCustomer(userId);
+        expect(await allowance(userId)).toBe((501n * GIB).toString());
+        // A reads the state with the plan active; it is revoked; B reads it ended.
+        const hold = holdNextAnswer(fakeClient.customers, 'getStateExternal');
+        try {
+            const older = billing.reconcileCustomer(userId);
+            await hold.held;
+            sub.status = 'canceled';
+            sub.ended_at = new Date().toISOString();
+            await billing.reconcileCustomer(userId);
+            expect(await allowance(userId)).toBe(GIB.toString());
+            hold.release();
+            await older;
+        } finally {
+            hold.restore();
+        }
+        expect(await allowance(userId)).toBe(GIB.toString());
+    });
+
+    test('a family’s reconcile that began before a raise was answered reads Polar again, and keeps the raise', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan();
+        const hold = holdNextAnswer(fakeClient.subscriptions, 'get');
+        try {
+            const older = billing.reconcileGroup(groupId);
+            await hold.held;
+            await billing.setGroupUnits(payer, groupId, 9);
+            expect(await seatLimit(groupId)).toBe(9);
+            polar.calls = [];
+            hold.release();
+            await older;
+        } finally {
+            hold.restore();
+        }
+        expect(subscription.units).toBe(9);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.units).toBe(9);
+        expect(await seatLimit(groupId)).toBe(9);
+        // Read again from the start.
+        expect(polar.calls).toContain(`customers.getStateExternal:group:${groupId}`);
+    });
+
+    test('an upgrade answered before a revocation, its bookkeeping held, writes nothing once a reconcile has read the revocation', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
+        const waiting = async (count: number) => {
+            for (let tries = 0; tries < 500; tries++) {
+                const { rows } = await rawSql(
+                    "select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+                );
+                if ((rows[0] as { n: number }).n >= count) return;
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            throw new Error('Nothing waited on the plan’s row');
+        };
+        // Polar answers the upgrade; the plan's row is then held (a slow write elsewhere), so the
+        // upgrade's bookkeeping waits with Polar's answer in hand.
+        const holder = await db.$client.connect();
+        const original = fakeClient.subscriptions.update.bind(fakeClient.subscriptions);
+        const spy = vi.spyOn(fakeClient.subscriptions, 'update').mockImplementationOnce((async (
+            ...args: Parameters<typeof original>
+        ) => {
+            const answer = structuredClone(await original(...args));
+            await holder.query('begin');
+            await holder.query(
+                'select id from group_billing_subscriptions where id = $1 for update',
+                [subscription.id],
+            );
+            return answer;
+        }) as typeof original);
+        let upgrade: Promise<unknown> | undefined;
+        let revoked: Promise<unknown> | undefined;
+        try {
+            upgrade = billing
+                .changeGroupPlan(payer, groupId, MAX_FAMILY)
+                .catch((error: unknown) => error);
+            await waiting(1);
+            // Polar's staff revoke the plan; its delivery reads that and waits for the row too.
+            subscription.status = 'canceled';
+            subscription.ended_at = new Date().toISOString();
+            revoked = billing.reconcileGroup(groupId);
+            await waiting(2);
+        } finally {
+            await holder.query('commit');
+            holder.release();
+            spy.mockRestore();
+        }
+        await Promise.all([upgrade, revoked]);
+        expect(
+            (await billingRepository.getGroupSubscription(subscription.id))?.endedAt,
+        ).toBeTruthy();
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        expect(await pool(groupId)).toBe(0n);
+    });
+
+    test('a plan whose product can’t be read, ended at Polar, is not brought back by a reconcile that read it earlier', async () => {
+        const { groupId } = await familyOnPlan();
+        const unread = familySubscription(groupId, {
+            id: 'sub_overlap_unread',
+            product_id: 'prod_archived',
+        });
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(await billingRepository.getGroupSubscription(unread.id)).toMatchObject({
+            productUnread: true,
+            endedAt: null,
+        });
+        const original = fakeClient.subscriptions.get.bind(fakeClient.subscriptions);
+        let reached!: () => void;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (reached = resolve));
+        const released = new Promise<void>((resolve) => (release = resolve));
+        let first = true;
+        const spy = vi
+            .spyOn(fakeClient.subscriptions, 'get')
+            .mockImplementation(async (id: string) => {
+                const answer = structuredClone(await original(id));
+                if (id === unread.id && first) {
+                    first = false;
+                    reached();
+                    await released;
+                }
+                return answer;
+            });
+        try {
+            const older = quietly(() => billing.reconcileGroup(groupId));
+            await held;
+            unread.status = 'canceled';
+            unread.ended_at = new Date().toISOString();
+            await quietly(() => billing.reconcileGroup(groupId));
+            expect((await billingRepository.getGroupSubscription(unread.id))?.endedAt).toBeTruthy();
+            release();
+            await older;
+        } finally {
+            spy.mockRestore();
+        }
+        expect((await billingRepository.getGroupSubscription(unread.id))?.endedAt).toBeTruthy();
+    });
+});
