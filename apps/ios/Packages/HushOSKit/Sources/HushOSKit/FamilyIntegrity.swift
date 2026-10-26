@@ -80,7 +80,8 @@ public struct FamilyMark: Sendable, Equatable, Hashable {
 
 enum FamilyLines {
     /* The re-keyer verdicts that leave the record unmarked: said in Info, never as a mark (decision D5). */
-    static let infoOnly: [GroupVerdict] = [.verified, .savedFromLink, .retiredKey, .unknownSigner, .unchecked, .formerMember, .resealed]
+    // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (`seen`) reads as one nobody checked until PR 5/6 design its own UI; this app never asks for `seen` yet.
+    static let infoOnly: [GroupVerdict] = [.verified, .savedFromLink, .retiredKey, .unknownSigner, .seen, .unchecked, .formerMember, .resealed]
 
     static func trusted(_ verdict: GroupVerdict) -> Bool { verdict == .verified || verdict == .savedFromLink }
 
@@ -115,7 +116,7 @@ enum FamilyLines {
             case .badSignature: 1
             case .retiredKey: 2
             case .formerMember: 3
-            case .unknownSigner: 4
+            case .unknownSigner, .seen: 4
             case .unsigned: 5
             case .resealed: 6
             case .unchecked: 7
@@ -221,7 +222,7 @@ enum FamilyLines {
             return Line(text: couldntCheck, retry: true)
         case .unsigned:
             return Line(text: plain)
-        case .unknownSigner:
+        case .unknownSigner, .seen:
             return Line(text: "\(plain) It was \(version ? "added" : "added or last changed") by someone you haven’t checked.",
                         check: issue.signer != nil && named == .unknown ? issue.signer : nil)
         case .badSignature:
@@ -327,7 +328,7 @@ enum FamilyLines {
             case .verified: phrase = by.map { "Keys replaced by \($0)" }
             case .retiredKey: phrase = "Keys replaced by \(by ?? "someone you haven’t checked"), with keys since replaced"
             case .formerMember: phrase = "Keys replaced by \(by ?? "someone you haven’t checked"), who has left \(names.family)"
-            case .unknownSigner: phrase = "Keys replaced by someone you haven’t checked"
+            case .unknownSigner, .seen: phrase = "Keys replaced by someone you haven’t checked"
             case .unchecked: phrase = "HushOS couldn’t check who replaced its keys"
             default: phrase = nil
             }
