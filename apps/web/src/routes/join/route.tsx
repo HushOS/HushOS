@@ -164,7 +164,7 @@ function OpenInvitation({
     const storage = useQuery({ ...storageQueryOptions, enabled: billing });
     const personal = useQuery({ ...billingQueryOptions, enabled: billing });
     const opened = useQuery({
-        queryKey: ['invitations', 'open', token],
+        queryKey: ['invitations', 'open', token, email],
         queryFn: () =>
             groupsApi.openInvitation(token).catch((cause: unknown) => {
                 // Used, cancelled or expired: nothing to come back to.
