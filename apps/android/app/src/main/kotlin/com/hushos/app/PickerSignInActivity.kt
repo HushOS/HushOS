@@ -17,7 +17,7 @@ import com.hushos.app.ui.PickerSignIn
  * result, inside the picker's own task: once the account is open it answers RESULT_OK and finishes, so the picker
  * comes back and lists HushOS. Recovery isn't done here: its emailed link opens the app's own screen, which shows the
  * new words; "Recover your account in the HushOS app" goes there, and coming back here finds the account open once
- * the words are confirmed as saved. A launch from the home screen goes to MainActivity as before.
+ * the words are confirmed as saved. Sign-up the same: "Create an account in the HushOS app". A launch from the home screen goes to MainActivity as before.
  */
 class PickerSignInActivity : ComponentActivity() {
     private val model: DriveViewModel by viewModels()
@@ -34,6 +34,9 @@ class PickerSignInActivity : ComponentActivity() {
                     model,
                     recoverInApp = {
                         startActivity(Intent(this, MainActivity::class.java).setAction(MainActivity.RECOVER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
+                    signUpInApp = {
+                        startActivity(Intent(this, MainActivity::class.java).setAction(MainActivity.SIGN_UP).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     },
                     showWords = {
                         startActivity(Intent(this, MainActivity::class.java).setAction(MainActivity.SHOW_WORDS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

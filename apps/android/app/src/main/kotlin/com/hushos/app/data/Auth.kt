@@ -372,6 +372,43 @@ object Auth {
         return Recovered(userId, next.phrase)
     }
 
+    /*
+     * Sign-up, as the web's /register: the server emails a link; the link proves the address and
+     * leaves an enrollment token (kept in memory only); the password registers with OPAQUE; every
+     * key is made here by the core (account_create) and only sealed halves and public keys are
+     * sent. The caller then signs in with the password, as the web does, and reads the phrase back.
+     */
+    fun requestSignupEmail(origin: String, email: String): String =
+        post(origin, "/api/auth/register/email", JSONObject().put("email", email)).body.optString("message")
+
+    /* A sign-up link's enrollment: the address it confirmed and the token the next steps need. */
+    data class SignupEnrollment(val email: String, val token: String)
+
+    fun verifySignupLink(origin: String, verifyToken: String): SignupEnrollment {
+        val reply = post(origin, "/api/auth/register/verify", JSONObject().put("token", verifyToken))
+        val enrollment = reply.body.optJSONObject("enrollment") ?: throw AuthFailure("This link didn’t work.")
+        if (enrollment.optString("purpose") != "register") throw AuthFailure("This link belongs to a different account flow. Request a new link.")
+        return SignupEnrollment(enrollment.getString("email"), reply.enrollment ?: throw AuthFailure("This link didn’t work."))
+    }
+
+    /* Creates the account; returns its user id. Nothing is stored here: the caller signs in next. */
+    fun register(origin: String, enrollment: SignupEnrollment, name: String, password: String): String {
+        val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
+        val registration = opaqueStartRegistration(password)
+        val challenge = post(origin, "/api/auth/register/start", JSONObject().put("registrationRequest", registration.request), cookie).body
+        val userId = challenge.optString("userId").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
+        val registered = opaqueFinishRegistration(password, registration.state, challenge.getString("registrationResponse"))
+        val made = com.hushos.core.accountCreate(userId, registered.exportKey)
+        val sealed = made.envelope
+        post(origin, "/api/auth/register/finish", JSONObject().put("name", name).put("registrationRecord", registered.record)
+            .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
+                .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
+                .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
+            .put("recovery", json(made.recovery)).put("identity", json(made.identity))
+            .put("workspace", JSONObject().put("id", made.workspaceId).put("grant", json(made.grant))), cookie)
+        return userId
+    }
+
     /* Under SessionGuard: a removal wipe never runs while a sign-in stores its session, in any screen of the app. */
     fun signIn(context: Context, origin: String, email: String, password: String): SessionUser =
         SessionGuard.signingIn { signInNow(context, origin, email, password) }

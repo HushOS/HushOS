@@ -42,7 +42,7 @@ struct RecoveryView: View {
                 case .checking: checking
                 case let .linkFailed(why): linkFailed(why)
                 case let .kit(enrollment): RecoverKitStep(enrollment: enrollment) { step = .done($0) }
-                case let .done(account): NewPhraseStep(account: account) { model.recoveryDone() }
+                case let .done(account): NewPhraseStep(account: account) { model.wordsChecked(); model.recoveryDone() }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)

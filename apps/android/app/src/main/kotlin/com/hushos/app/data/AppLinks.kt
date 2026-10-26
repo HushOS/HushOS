@@ -27,6 +27,8 @@ sealed interface AppLink {
     data class Join(val token: String) : AppLink
     /* An invitation link whose token was cut off: "This invitation link is incomplete". */
     data object IncompleteInvite : AppLink
+    /* The emailed sign-up link, /register/complete#verify=<token>: creating the account carries on in the app. */
+    data class Register(val verify: String) : AppLink
 }
 
 sealed interface AppLinkRefusal {
@@ -94,11 +96,15 @@ object AppLinks {
                 if (!isKey(token) || !isKey(secret)) return refuse(AppLinkRefusal.Malformed)
                 open(AppLink.Share("${server.trimEnd('/')}/s/$token#$secret"))
             }
-            "recover" -> {
+            "recover", "register" -> {
                 if (path.size != 2 || path[1] != "complete") return refuse(AppLinkRefusal.WebOnly)
                 // The token rides in the fragment, as the web reads it, so it never reaches a server log.
                 val verify = uri.rawFragment.orEmpty().split('&').firstOrNull { it.startsWith("verify=") }?.removePrefix("verify=")
-                if (verify == null || !TOKEN.matches(verify)) refuse(AppLinkRefusal.Malformed) else open(AppLink.Recover(verify))
+                when {
+                    verify == null || !TOKEN.matches(verify) -> refuse(AppLinkRefusal.Malformed)
+                    path[0] == "recover" -> open(AppLink.Recover(verify))
+                    else -> open(AppLink.Register(verify))
+                }
             }
             "join" -> {
                 if (path.size != 1) return refuse(AppLinkRefusal.WebOnly)
