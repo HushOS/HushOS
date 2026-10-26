@@ -545,7 +545,10 @@ pub enum ServedAcceptance {
     /// [`pin_ahead`]). `pin` is the only pin an app may pass `merge_pin` as `next`.
     /// `guard`, when some, is the family guard to store (2.8): the held one
     /// moved on to this acceptance with the folders opened here, never lower;
-    /// write it right after the record, without waiting for the settings save.
+    /// write it before the record, without waiting for the settings save (a
+    /// crash then leaves it at or above the record, never below), and run a
+    /// not-member wipe only once it is stored: a guard not stored is handed
+    /// back again by the next acceptance while the held one is behind.
     /// None: nothing new to write.
     Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin, guard: Option<GroupPin> },
     /// The person's marks disagree with each other or with the chain served:

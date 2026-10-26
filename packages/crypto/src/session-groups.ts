@@ -783,7 +783,10 @@ export type GroupResults = {
                * The family guard to keep (docs/optional-verification.md 2.8): the held one moved on
                * to this acceptance (mergePin with the folders opened here), only when it records
                * anything new; null otherwise (nothing to write). Never lower than the one held.
-               * Write it right after the record, without waiting for the settings save.
+               * Write it before the record, without waiting for the settings save (a crash
+               * then leaves it at or above the record, never below), and run a not-member
+               * wipe only once it is stored: a guard not stored is handed back again by the
+               * next acceptance while the held one is behind.
                */
               guard: GroupPin | null;
               /* What vouched for the family in this acceptance (AcceptedRosters.checked). */

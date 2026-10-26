@@ -949,6 +949,37 @@ fn join_session_kind(value: &Value) -> Option<Value> {
     Some(ok(json!(run.outcomes)))
 }
 
+/*
+ * Whether a chain served (`history`, `through`, `cut`) of the join histories `base` holds a mark
+ * (`from` the chain it came from, `version` the roster it reaches): through it, over the same
+ * first keys, the same roster statements through its version and the same succession statements
+ * tied below it (a cut chain is not compared). Statements, not signatures: ML-DSA signs at
+ * random, so one roster re-signed is the same roster to acceptance. The oracle session_rules holds
+ * every acceptance to; the web's sessionHoldsMark.
+ */
+pub fn session_holds_mark(base: &Value, served: &Value, from: &Value, version: u64) -> bool {
+    if !served["cut"].is_null() || !from["cut"].is_null() {
+        return true;
+    }
+    let of = |history: &str| {
+        let history = &base["histories"][history];
+        let statements = |key: &str| {
+            history[key].as_array().unwrap().iter().map(|s| s["statement"].as_str().unwrap().to_string())
+        };
+        let rosters: Vec<String> = statements("rosters").take(version as usize).collect();
+        let mut successions: Vec<String> = statements("successions")
+            .filter(|statement| {
+                let bytes = base64url_decode(statement.clone()).unwrap();
+                group_succession_parse(bytes).unwrap().last_roster_version < version
+            })
+            .collect();
+        successions.sort();
+        (history["firstKeys"].clone(), rosters, successions)
+    };
+    served["through"].as_u64().unwrap() >= version
+        && of(served["history"].as_str().unwrap()) == of(from["history"].as_str().unwrap())
+}
+
 /* Whether guard `next` holds at least what `held` holds: roster, group key, every folder's floor. */
 fn guard_covers(next: &Value, held: &Value) -> bool {
     let at = |guard: &Value, key: &str| guard[key].as_u64().unwrap_or(0);
@@ -990,20 +1021,8 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
     let mut guard: Option<Value> = None;
     let mut guard_from: Option<Mark> = None;
     let mut committed: Option<Mark> = None;
-    // Whether a chain served holds a mark: through it, over its first keys and rosters (a cut chain is not compared).
-    let holds_mark = |served: &Value, (from, version): &Mark| -> bool {
-        if !served["cut"].is_null() || !from["cut"].is_null() {
-            return true;
-        }
-        let here = &base["histories"][served["history"].as_str().unwrap()];
-        let there = &base["histories"][from["history"].as_str().unwrap()];
-        let first = |h: &Value| {
-            h["rosters"].as_array().unwrap().iter().take(*version as usize).cloned().collect::<Vec<_>>()
-        };
-        served["through"].as_u64().unwrap() >= *version
-            && here["firstKeys"] == there["firstKeys"]
-            && first(here) == first(there)
-    };
+    let holds_mark =
+        |served: &Value, (from, version): &Mark| session_holds_mark(base, served, from, *version);
     for (at, (step, outcome)) in steps.iter().zip(outcomes).enumerate() {
         let status = &outcome["status"];
         let op = step["op"].as_str().unwrap();
@@ -1759,6 +1778,17 @@ fn settings_kind(value: &Value) -> Option<Value> {
     if users.len() > 8 || groups.len() > 8 || text.len() > 65_536 || !settings_fits(&text) {
         return None;
     }
+    // Probes are account and family ids as the apps hold them: canonical lowercase UUIDs.
+    let probe_id = |id: &String| {
+        id.len() == 36
+            && id.bytes().enumerate().all(|(at, b)| match at {
+                8 | 13 | 18 | 23 => b == b'-',
+                _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+            })
+    };
+    if !users.iter().chain(&groups).all(probe_id) {
+        return None;
+    }
     let mut verdict = settings_document_verdict(text.as_bytes(), &users, &groups);
     if verdict["status"] == "refused" {
         return Some(refused());
@@ -1968,4 +1998,25 @@ fn joins_record_kind(value: &Value) -> Option<Value> {
         }
     }
     Some(ok(outcome.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* The session oracle over the join histories: statements decide, never their signatures. */
+    #[test]
+    fn a_mark_is_held_by_its_statements_and_the_successions_below_it() {
+        let base = &fixtures::core_join()["joinPreviews"];
+        let chain =
+            |history: &str, through: u64| json!({ "history": history, "through": through, "cut": null });
+        // removalFork re-signs removal's first three rosters (ML-DSA signs at random): the same chain through 3.
+        assert!(session_holds_mark(base, &chain("removalFork", 4), &chain("removal", 3), 3));
+        // succOther has succ's rosters through 3 but another succession below 3: not that chain.
+        assert!(!session_holds_mark(base, &chain("succOther", 3), &chain("succ", 3), 3));
+        // Made-up first keys, and a chain short of the mark, never hold it.
+        assert!(!session_holds_mark(base, &chain("madeUp", 3), &chain("main", 2), 2));
+        assert!(!session_holds_mark(base, &chain("main", 1), &chain("main", 2), 2));
+        assert!(session_holds_mark(base, &chain("main", 5), &chain("main", 2), 2));
+    }
 }

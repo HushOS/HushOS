@@ -343,7 +343,8 @@ export function documents(target: Target): Uint8Array[] {
                     const familyPin = g.cases.flatMap((k: Json) => k.input.pins)[0];
                     const pairWords = coreRosterCalls().pairCodes[0].outcome.code;
                     const probe = {
-                        users: [user, user.toUpperCase(), other],
+                        // Canonical ids only (the documents file them in any case).
+                        users: [user, other],
                         groups: [GROUP, other],
                     };
                     const text = (doc: Json) => JSON.stringify(doc);
@@ -560,6 +561,33 @@ export function documents(target: Target): Uint8Array[] {
                             ),
                         }),
                     ),
+                // Marks across histories that share statements but not signatures (ML-DSA signs at
+                // random): removal's first three rosters continue as removalFork's (accepted, no
+                // mark passed), succ's three as succOther's (another succession below 3: the fork).
+                ...(
+                    [
+                        ['removal', 3, 'removalFork', 4],
+                        ['succ', 3, 'succOther', 3],
+                    ] as const
+                ).flatMap(([took, at, then, through]) => [
+                    json({
+                        kind: 'join_session',
+                        settings: 'none',
+                        steps: [
+                            { op: 'first-use', served: { history: took, through: at } },
+                            { op: 'accept', matched: 0, served: { history: then, through } },
+                        ],
+                    }),
+                    json({
+                        kind: 'join_session',
+                        settings: 'none',
+                        steps: [
+                            { op: 'first-use', served: { history: took, through: at } },
+                            { op: 'accept', matched: 0, served: { history: took, through: at } },
+                            { op: 'sync', served: { history: then, through }, guard: 'held' },
+                        ],
+                    }),
+                ]),
                 // "They match" and the join on the same served chain, right and misheard.
                 ...(
                     [

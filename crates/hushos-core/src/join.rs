@@ -340,8 +340,8 @@ pub enum FirstUseJoin {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum JoinAcceptance {
-    /// Committed: keep `record`, store `guard` when some and settle `pin` as for
-    /// [`ServedAcceptance::Accepted`], then delete the joins record.
+    /// Committed: store `guard` when some, then keep `record` and settle `pin`
+    /// as for [`ServedAcceptance::Accepted`], then delete the joins record.
     Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin, guard: Option<GroupPin> },
     /// This account was let in again at a later roster, and the chain still
     /// passes through the roster compared with its code: delete the joins

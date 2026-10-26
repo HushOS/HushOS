@@ -1023,7 +1023,7 @@ function acceptanceJson(result: GroupResults['groupAccept']): Json {
 /*
  * The family guard a step names (docs/optional-verification.md 2.8): none, the pin at main's
  * roster 2, unreadable, or the one this device holds (`held`: the latest an acceptance returned,
- * as the app stores it right after the record).
+ * as the app stores it before the record).
  */
 function guardOf(doc: Json, which: unknown, held: GroupPin | null): GroupPin | 'unreadable' | null {
     if (which === undefined || which === 'none') return null;

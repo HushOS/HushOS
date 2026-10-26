@@ -1424,6 +1424,39 @@ async function joinSessionKind(value: Doc): Promise<Verdict | undefined> {
     return ok(run.outcomes);
 }
 
+/*
+ * Whether a chain served (`history`, `through`, `cut`) of the join histories
+ * `base` holds a mark (`served` it came from, `version` it reaches): through
+ * it, over the same first keys, the same roster statements through its
+ * version and the same succession statements tied below it (a cut chain is
+ * not compared). Statements, not signatures: ML-DSA signs at random, so one
+ * roster re-signed is the same roster to acceptance. The oracle sessionRules
+ * holds every acceptance to; the core's session_holds_mark.
+ */
+export function sessionHoldsMark(
+    base: Json,
+    served: Json,
+    mark: { served: Json; version: number },
+) {
+    if (served.cut !== null || mark.served.cut !== null) return true;
+    const at = mark.version;
+    const of = (history: Json) => ({
+        firstKeys: history.firstKeys,
+        rosters: (history.rosters as Json[]).slice(0, at).map((roster) => roster.statement),
+        successions: (history.successions as Json[])
+            .map((succession) => succession.statement as string)
+            .filter((statement) => parseGroupSuccession(decode(statement)).lastRosterVersion < at)
+            .sort(),
+    });
+    return (
+        served.through >= at &&
+        isDeepStrictEqual(
+            of(base.histories[served.history]),
+            of(base.histories[mark.served.history]),
+        )
+    );
+}
+
 /* Whether guard `next` holds at least what `held` holds: roster, group key, every folder's floor. */
 function guardCovers(next: Json, held: Json) {
     return (
@@ -1463,18 +1496,7 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
     let guard: Json = null;
     let guardFrom: Mark | null = null;
     let committed: Mark | null = null;
-    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-    // Whether a chain served holds a mark: through it, over its first keys and rosters (a cut chain is not compared).
-    const holdsMark = (served: Json, mark: Mark) => {
-        if (served.cut !== null || mark.served.cut !== null) return true;
-        const here = base.histories[served.history];
-        const there = base.histories[mark.served.history];
-        return (
-            served.through >= mark.version &&
-            same(here.firstKeys, there.firstKeys) &&
-            same(here.rosters.slice(0, mark.version), there.rosters.slice(0, mark.version))
-        );
-    };
+    const holdsMark = (served: Json, mark: Mark) => sessionHoldsMark(base, served, mark);
     for (const [at, step] of steps.entries()) {
         const outcome = outcomes[at]!;
         const status = outcome.status;
@@ -2195,6 +2217,8 @@ export function settingsFits(text: string) {
     return numberOk(token) && brackets <= 64;
 }
 
+const PROBE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /* A settings document's plaintext read as the worker reads it, probed for contact pins, group pins and family check records (the core's settings kind). */
 async function settingsKind(value: Doc): Promise<Verdict | undefined> {
     const text = value.text;
@@ -2203,6 +2227,8 @@ async function settingsKind(value: Doc): Promise<Verdict | undefined> {
     if (typeof text !== 'string' || !users || !groups) return undefined;
     if (users.length > 8 || groups.length > 8 || new TextEncoder().encode(text).length > 65_536)
         return undefined;
+    // Probes are account and family ids as the apps hold them: canonical lowercase UUIDs.
+    if (![...users, ...groups].every((id) => PROBE_ID.test(id))) return undefined;
     if (!settingsFits(text)) return undefined;
     let settings;
     try {

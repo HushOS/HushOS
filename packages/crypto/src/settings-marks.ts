@@ -18,12 +18,12 @@ export const OLDER_SETTINGS =
 
 export type SettingsMarks = {
     userId: string;
-    /* `{ ...settings.groups }`: each family's pin as filed, checked (checkGroupPin) only when acceptance reads it. */
+    /* `{ ...settings.groups }` when it is an object: each family's pin as filed, checked (checkGroupPin) only when acceptance reads it. */
     pins: Record<string, GroupPin>;
     /* `{ ...settings.contacts }`: the only pins an admission or a join code reads. */
     contacts: Record<string, ContactPin>;
     /*
-     * `{ ...settings.familyChecks }`: each family's check record as filed
+     * `{ ...settings.familyChecks }` when it is an object: each family's check record as filed
      * (docs/optional-verification.md 3.4), read only when acceptance takes
      * that family's marks (familyCheckOf).
      */
@@ -45,6 +45,17 @@ export function refuseDowngrade(held: SettingsMarks | null, userId: string) {
 }
 
 /*
+ * A member read as the core reads `groups` and `familyChecks`: an object's own
+ * members, and nothing from anything else (spreading an array or a string would
+ * file its items under "0", "1", …).
+ */
+function plainObject(value: unknown): Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+}
+
+/*
  * The marks after `settings` (null: none stored) opened at `settingsVersion`,
  * or refused as a downgrade: none after settings that opened, or a document
  * older than the highest one opened in this unlock (a server serving 6, then
@@ -61,9 +72,9 @@ export function settingsMarks(
         throw new CryptoError(OLDER_SETTINGS);
     return {
         userId,
-        pins: { ...(settings?.groups as Record<string, GroupPin> | undefined) },
+        pins: { ...(plainObject(settings?.groups) as Record<string, GroupPin>) },
         contacts: { ...(settings?.contacts as Record<string, ContactPin> | undefined) },
-        checks: { ...(settings?.familyChecks as Record<string, unknown> | undefined) },
+        checks: { ...plainObject(settings?.familyChecks) },
         opened: settings !== null,
         settingsVersion: settings === null ? 0 : settingsVersion,
     };
