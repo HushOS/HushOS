@@ -1803,6 +1803,19 @@ mod tests {
     }
 
     #[test]
+    fn a_showing_from_another_ledger_is_never_this_one_s_even_at_the_same_positions() {
+        let j = join();
+        // Two ledgers drawing the same positions: the same code shown with the same words hidden.
+        let here = drawn(&j, vec![30, 31]);
+        let there = drawn(&j, vec![30, 31]);
+        let mine = showing(&j, &here, j.served(2));
+        let theirs = showing(&j, &there, j.served(2));
+        assert_eq!(theirs.hidden(), mine.hidden());
+        assert_eq!(j.check(&here, j.served(2), &theirs, read_out(&theirs)).unwrap_err(), input(NOT_SHOWN));
+        assert_eq!(j.check(&here, j.served(2), &mine, read_out(&mine)).unwrap().kind(), "matched");
+    }
+
+    #[test]
     fn typed_words_and_the_showing_are_checked_before_anything_is_verified() {
         let j = join();
         let ledger = j.ledger(None);
