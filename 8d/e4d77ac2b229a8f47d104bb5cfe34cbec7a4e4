@@ -1,0 +1,45 @@
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_5c9d78dc057008 189,191
+crates/hushos-core/fuzz/src/targets.rs
+  s_566b8e0c4467a4::t_f8a16fda8e82b4 952-982,1024-1025,1781-1791,2002-2022
+crates/hushos-core/src/device_record.rs
+  s_566b8e0c4467a4::t_791b8b03e24c77 548-551
+crates/hushos-core/src/join.rs
+  s_566b8e0c4467a4::t_857742a4913614 343-344
+docs/groups-design.md
+  s_566b8e0c4467a4::t_73f411f1f636f3 209
+docs/groups-invariants.md
+  s_566b8e0c4467a4::t_1479a8c266db74 112
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_74b8932692f5e5 121,123,125,127,168,185,497,503,507-508
+packages/crypto/fuzz/oracles.test.ts
+  s_566b8e0c4467a4::t_91c23076a0ea9f 1-30
+packages/crypto/fuzz/seeds.ts
+  s_566b8e0c4467a4::t_6e9c1b9c9dca59 346-347,564-590
+packages/crypto/fuzz/verdicts.ts
+  s_566b8e0c4467a4::t_5b2bc9a10b5d01 1427-1459,1499,2220-2221,2230-2231
+packages/crypto/src/join-testkit.ts
+  s_566b8e0c4467a4::t_83dae79318559b 1026
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_fcb20c17dafb74 786-789
+packages/crypto/src/settings-marks.test.ts
+  s_566b8e0c4467a4::t_ce0a3ec90d28cb 1-44
+packages/crypto/src/settings-marks.ts
+  s_566b8e0c4467a4::t_0a6b6ba84c5f8c 21,26,47-57,75,77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8de4d77ac2b229a8f47d104bb5cfe34cbec7a4e4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
