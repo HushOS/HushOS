@@ -7,6 +7,7 @@ import { useDrive } from '@/components/drive/drive-shell';
 import { CheckingLine, ForkAlert, NoticeList } from '@/components/families/family-alerts';
 import { FamilyPlan, FamilyStorage, useFamilyPlanGate } from '@/components/families/family-billing';
 import { InviteDialog } from '@/components/families/invite-dialog';
+import { RenameFamilyDialog } from '@/components/families/rename-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
 import { InvitationList, MemberList, PendingList } from '@/components/families/members';
 import { ServerKnowsLine } from '@/components/families/server-knows';
@@ -129,6 +130,7 @@ export function FamilyPage({
     const [inviting, setInviting] = useState(false);
     const [leaving, setLeaving] = useState(false);
     const [technical, setTechnical] = useState(false);
+    const [renaming, setRenaming] = useState(false);
     // Inviting waits for a plan where plans are sold: nobody could be let in without one.
     const plan = useFamilyPlanGate(userId, groupId, summary?.state === 'active');
 
@@ -181,6 +183,13 @@ export function FamilyPage({
             <PageHeader
                 back={<Link to="/app/account">Account</Link>}
                 title={family}
+                titleAction={
+                    manager && (
+                        <Button variant="ghost" onClick={() => setRenaming(true)}>
+                            Rename
+                        </Button>
+                    )
+                }
                 description={
                     // One source with Billing (placesOf); without a plan, "Choose a plan" says it.
                     seats && !plan.waiting
@@ -455,6 +464,15 @@ export function FamilyPage({
             </div>
             <ServerKnowsLine className="mt-auto max-w-3xl" />
 
+            {manager && renaming && (
+                <RenameFamilyDialog
+                    userId={userId}
+                    groupId={groupId}
+                    family={family}
+                    open
+                    onOpenChange={setRenaming}
+                />
+            )}
             {manager && (
                 <InviteDialog
                     userId={userId}
