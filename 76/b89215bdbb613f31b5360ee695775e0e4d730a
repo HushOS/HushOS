@@ -1,0 +1,62 @@
+packages/db/src/schema/groups.ts
+  s_566b8e0c4467a4::t_6e9db010bc0da0 414-452
+  s_566b8e0c4467a4::t_db43623543504a 413
+packages/db/src/groups.dissolve-notices-off.test.ts
+  s_566b8e0c4467a4::t_86a68cda9f2c87 1-54
+packages/db/src/groups.dissolve-notices.test.ts
+  s_566b8e0c4467a4::t_fd7eae656d6eaa 1-462
+  s_566b8e0c4467a4::t_f59cb39a15a613 463-491
+packages/db/src/dissolve-notices.ts
+  s_566b8e0c4467a4::t_731c2eb2986f0d 1-164
+  s_566b8e0c4467a4::t_6a189fac24c8a2 165-170
+bun.lock
+  s_566b8e0c4467a4::t_ca5d2a16f0498c 284
+compose.yaml
+  s_566b8e0c4467a4::t_dc20e83b13834d 163-165
+docs/groups-design.md
+  s_566b8e0c4467a4::t_a4ce36a98594d4 334-335
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_12cfa5526e0c18 77,87,214,726
+packages/db/drizzle/20261026132009_group_dissolve_notices/migration.sql
+  s_566b8e0c4467a4::t_3f12f3edf55ecf 1-25
+packages/db/drizzle/20261026132009_group_dissolve_notices/snapshot.json
+  s_566b8e0c4467a4::t_bb6c5e1a0510e9 1-13860
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_7517fdfbfef363 15,1954-1955,3428-3429
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_1e2b0baa4f8437 14
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_58dd52680dfac2 2,215-258
+packages/emails/src/rendered/family-dissolved.ts
+  s_566b8e0c4467a4::t_f66ccc61dea1ee 1-15
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_19e5cfb8bc54ba 6,285-315
+packages/emails/src/templates/family-dissolved.tsx
+  s_566b8e0c4467a4::t_b96e7b25b79889 1-294
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_0982906a099774 30
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_305a73ef50285d 21
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_3b7e4b1fd1ac22 29,59,157-168
+packages/jobs/src/jobs/groups.ts
+  s_566b8e0c4467a4::t_07dc00d1a0f5ad 2-3,48-112
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_10bbaddc22745f 11,14,105-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "76b89215bdbb613f31b5360ee695775e0e4d730a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
