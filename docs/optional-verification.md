@@ -28,8 +28,9 @@ The cost is real and named in section 4: whoever runs the server can, for people
 | An unsigned key change                   | New shares to them, re-sealing to them and opening new things from them pause until the person sees one calm notice and taps Continue (or checks). Nothing is ever sealed to new keys before that. Links are unaffected.               |
 | Family join                              | Invite, accept, Let them in. No words on either side. The admin's device builds the newcomer's entry from the keys the server serves (a first-seen pin); the newcomer's device accepts the family on first use and pins it.            |
 | Checking a family later                  | One comparison between any two members ("Check it's Sam"): twelve words, the same on both screens, over the member list that let the later of the two in. It verifies each one's keys for the other and each one's view of the family. |
-| Who needs a check first                  | Managers (the `members` role) and, when they exist, guardians and child accounts. Recommended; open question 1 and 2.                                                                                                                  |
+| Who needs a check first                  | Managers (the `members` role): a twelve-word check before the role is given. Guardians and child accounts, when they exist. Decided 2026-10-26 (section 9).                                                                            |
 | `firstKeysChecked`                       | Becomes an anchor: `created`, `join` (a code compared), or `first-use`. First use is allowed only on the join path, with no marks.                                                                                                     |
+| A member's unsigned change               | One calm Continue by a manager puts them back in the family folders, rotating every folder; no forced check. A manager's role waits for a check.                                                                                       |
 | "Trust as family does"                   | Retired from the UI. Existing pins it wrote keep working.                                                                                                                                                                              |
 | Server                                   | No change. No new route, column or migration.                                                                                                                                                                                          |
 | Versions                                 | Settings stay document version 2; group pins and rosters unchanged; the device's joins record becomes version 4.                                                                                                                       |
@@ -88,7 +89,7 @@ This is Signal's "safety number changed", for HushOS. In practice it is rare: a 
 - **Paused, for that person only:** new shares to them, re-sealing what was shared with them (rotation, upgrade passes), and opening anything signed by keys the pin does not hold. Everything else keeps working, including what they shared before, which still verifies under the pinned keys. Links are not tied to anyone's keys and never pause.
 - **One notice**, the same wherever it is met (6.7). Continue replaces the pin with a first-seen pin of the new keys, keeps the old signing key in `previousSigningKeys` (so what they signed before reads as theirs with earlier keys, `retired-key`, as after a followed succession), sets `resealShares`, and lets the paused work run. A verified pin loses its verified state on Continue; Check it's Maya restores it over the new keys.
 - **Never silent:** no client seals to keys the person has not either pinned, followed along a chain signed by pinned keys, or accepted with Continue. This is the rule that makes first use worth anything.
-- For a contact who was verified, the notice leads with Check it's Maya; for one who was not, with Continue (open question 6).
+- For a contact who was verified, the notice leads with Check it's Maya (the blue button); for one who was not, with Continue (decided 2026-10-26).
 
 ### 2.5 Legacy pins become first-seen
 
@@ -99,12 +100,12 @@ A legacy pin whose X25519 and Ed25519 keys are the served ones, under an identit
 A new value, `seen`, beside `verified` in `Integrity` / `GroupIntegrity` (TS `packages/crypto`, `packages/drive/src/trust.ts`; Rust `group_verdicts.rs`, `drive.rs`): the signature holds under keys this person's devices first saw for the writer and nobody checked. `DriveSigners` gains a level per signer, so `driveVerify` can say which. Every exhaustive switch over verdicts must then handle it; old code paths that do not know it are not affected, since verdicts are computed on the reading device.
 
 - Drawn: no row mark. Info and the viewer: "Added by Maya" with "Not verified · Check it's Maya". The amber Unverified mark stays for what is actually wrong or unknown (`unknown-signer`, `bad-signature`, `key-conflict`, `unchecked`), with its copy made calm (section 5).
-- `signatureFormFor('seen')` is `ordinary`: a copy, rename or move of a first-seen person's file is re-signed as the copier's own, as uploading a file they downloaded would be. Open question 8.
+- `signatureFormFor('seen')` is `ordinary`: a copy, rename or move of a first-seen person's file is re-signed as the copier's own, as uploading a file they downloaded would be (decided 2026-10-26).
 - Inside a family's folders: a writer active on the member list reads `verified` (`via: groupId`) when this person's family is checked, and `seen` (`via: groupId`) when it is first-use. A verified personal pin that agrees with the entry reads `verified` either way. A personal pin, first-seen or verified, that disagrees with the entry with no chain joining them is `key-conflict`, as today, with calm copy.
 
 ### 2.7 Room in the settings
 
-Pins live in the settings document, capped at 64 KiB with the sharing ledger and family pins. A first-seen pin is about 500 bytes of JSON, so a document has room for roughly 100 people. Pinning everyone who shares with you raises the odds of reaching it. At the cap, adding someone or opening something from someone new says "Your contacts are full. Remove someone you no longer share with." and pins nothing. That is a limit, not a design: moving pins to their own sealed document is follow-up work (open question 7). Dropping old first-seen pins automatically is not proposed, since a dropped pin lets the server start that person over.
+Pins live in the settings document, capped at 64 KiB with the sharing ledger and family pins. A first-seen pin is about 500 bytes of JSON, so a document has room for roughly 100 people. Pinning everyone who shares with you raises the odds of reaching it. At the cap, adding someone or opening something from someone new says "Your contacts are full. Remove someone you no longer share with." and pins nothing. That is a limit, not a design: moving pins to their own sealed document is follow-up work; the cap is accepted for now (decided 2026-10-26). Dropping old first-seen pins automatically is not proposed, since a dropped pin lets the server start that person over.
 
 ## 3. Families
 
@@ -139,7 +140,7 @@ Roles asked for at invitation that need a check (3.6) are applied once the check
 - **The sealed joins record**, version 4: `{ v: 4, groupId, firstUse: { rosterVersion, rosterDigest }, at }` or `{ v: 4, groupId, joinMark, checkedAt }`. It exists only between the first acceptance and the first pin write, so a reload in that window finishes the join against the same roster rather than taking first use again over whatever is served then. Version 3 records (a join in flight on an older release) are read as today. Version 2 stays refused.
 - **`groupJoinPreview`** is no longer on the default path. It stays, unchanged, for "Check it's Sam first" before admission and for a newcomer on an older app (7.3); the check after joining works over the committed chain (`groupJoinCode`, 3.4).
 - **`roster_entry_new` / `newRosterEntry`** accept a pin whose `pinTrust` is `verified` or `seen`, still only with a served identity whose four keys are the pinned ones and whose keys statement holds, and still never from a `trustedVia` pin. The server's own rule (an entry's keys must be an identity the member has had, `checkNextRoster` with identities) is unchanged.
-- **Folding in changes** (`foldInEntry`): a member's signed succession is folded in as today. An unsigned change cannot be folded in from a first-seen pin: the manager's device needs a check of the member (3.6).
+- **Folding in changes** (`foldInEntry`): a member's signed succession is folded in as today. An unsigned change is folded in after one manager's Continue (3.6): the manager's device pins the new keys as first-seen and signs a roster that writes them into the entry and rotates every family folder in the same statement, as a removal does, since the keys the member left behind may be in someone else's hands.
 
 ### 3.4 Checking later: one comparison for both directions
 
@@ -154,7 +155,7 @@ A match with the person who created the family anchors the family to the creator
 
 **The check record**, synced in the settings document: `familyChecks: { [groupId]: { rosterVersion, code, checkedAt, with } }` (`with` is the other member's user id, for Technical details). A new top-level field, which every shipped client keeps when it saves. Passed to acceptance as a join mark, so the verified chain must pass through it (else the hard warning), and a chain short of it is a rollback.
 
-**The flow**: both people open the family, each picks the other in the member list, Check it's Sam / Check it's Maya; both screens show the same twelve words; They match on each side writes that side's records. No hidden words to type: the two hidden words made sure a newcomer could not finish the join alone; a check nobody requires does not need that (open question 10). Before showing the words a device syncs, so both are at the server's head; the code itself does not depend on the head.
+**The flow**: both people open the family, each picks the other in the member list, Check it's Sam / Check it's Maya; both screens show the same twelve words; They match on each side writes that side's records. No hidden words to type: the two hidden words made sure a newcomer could not finish the join alone; a check nobody requires does not need that (decided 2026-10-26: dropped). Before showing the words a device syncs, so both are at the server's head; the code itself does not depend on the head.
 
 **When they don't match**, nothing is written, on either side. The screen says to reload and compare again, and if they still don't match, to ask the organizer for help (6.10). A real mismatch means one of the two is being shown a different family; nothing resolves that automatically (design D5).
 
@@ -180,13 +181,13 @@ A match with the person who created the family anchors the family to the creator
 Some roles hand over more than family folders, so they wait for a check of that person by whoever grants them (a verified pin whose keys are the entry's, or a family check with them):
 
 - **Managing the family** (`members`): a manager holds the family's signing key, so can let anyone in, put keys of their choosing in anyone's entry, and remove people. A newcomer invited as a manager joins as a member and becomes a manager once checked ("Sam can manage the family once you've checked it's Sam"). Making someone a manager or the organizer later asks for the check first. This is enforced in the clients that sign the roster (`nextRoster` callers), not the server, which cannot tell.
-- **Guardians and child accounts** (3.6 of the groups design, not built): a guardian's device opens the child's whole account. The child's sign-up keeps today's order with the check required: the guardian checks the child's words before admitting them, and the child's device compares the join code (ten compared, two typed) before it seals its root to the guardians. Nothing in this design relaxes that. Open question 1.
-- **A member whose keys changed without a signed chain**: folding them back into the family hands every family folder to the new keys, so it needs a check by the manager doing it (6.9). Open question 3.
+- **Guardians and child accounts** (3.6 of the groups design, not built): a guardian's device opens the child's whole account. The child's sign-up keeps today's order with the check required: the guardian checks the child's words before admitting them, and the child's device compares the join code (ten compared, two typed) before it seals its root to the guardians. Nothing in this design relaxes that (decided 2026-10-26; children are not built yet).
+- **A member whose keys changed without a signed chain** does not need a check (decided 2026-10-26): one calm Continue by a manager puts them back into the family folders (6.9), with every folder rotated in the same roster (3.3). What it costs is in 4.2. A manager whose account changed this way gets the folders back on Continue, but not the manager role: the family's signing key is sealed to their new keys only after a check, as for a new manager.
 - **Billing** carries no keys and needs no check.
 
 ### 3.7 "Trust as family does"
 
-Retired from the UI. It wrote a personal pin on the family's word so a family member's personal shares would open; with first-seen pins they open anyway, and on a first-use family it would only copy the server's word into a pin. Pins it already wrote keep `trustedVia` and their meaning (`docs/groups-design.md` 2.8); `trustAsGroupDoes` and `groupTrustAs` stay in the core for them and are no longer called by the apps. A family check (3.4) is now the way to vouch for a member through the family. Open question 4.
+Retired from the UI. It wrote a personal pin on the family's word so a family member's personal shares would open; with first-seen pins they open anyway, and on a first-use family it would only copy the server's word into a pin. Pins it already wrote keep `trustedVia` and their meaning (`docs/groups-design.md` 2.8); `trustAsGroupDoes` and `groupTrustAs` stay in the core for them and are no longer called by the apps. A family check (3.4) is now the way to vouch for a member through the family (decided 2026-10-26).
 
 ### 3.8 Who is shown as checked
 
@@ -206,7 +207,8 @@ Written for people who look for it. None of this goes in default screens.
 
 - **Planted keys at admission.** When a manager lets Sam in without a check, the server can serve keys of its own as Sam's. The manager's device writes them into Sam's entry and seals every family folder's current keys to them: the server can then open the family folders. The real Sam's device sees its entry is not its own and shows the hard warning, and cannot open the folders, so this is noticed, but after the keys were handed over.
 - **A made-up family for the newcomer.** With no marks, a newcomer's device takes the version 1 keys the server serves. The server can show a newcomer a family it made up, with its own family key and members, and read whatever the newcomer puts in its folders. Combined with the planted entry above, it can sit between the newcomer and the real family, passing folder contents both ways.
-- **Becoming a manager.** If the newcomer were a manager, planted keys would hold the family's signing key, so the server could let people in, change entries and remove people. Section 3.6 closes this by requiring a check before the role; without that rule, this would be the largest cost.
+- **Becoming a manager.** If the newcomer were a manager, planted keys would hold the family's signing key, so the server could let people in, change entries and remove people. Section 3.6 closes this by requiring a twelve-word check before the role is given, including to a manager whose account changed; without that rule, this would be the largest cost.
+- **One tap through a member's change.** A manager's Continue on an account change the server made writes the server's keys into that member's entry and seals every family folder's new keys to them. The rotation in the same roster keeps the member's old keys out, not the server's. The real member's device sees its entry is not its own and shows the hard warning, so it is noticed, after the keys were handed over.
 - **A new device with no settings.** First use runs only on the join path and only with settings that opened. A server that hides the settings from a brand-new device of an existing member, answers that they are not in the family, and sends them a fresh invitation they accept, can start that device on a made-up family. The person's other devices see the settings that device then saves as a rollback, so it does not go unnoticed, but it is wider than today, where that device would have needed a compared code.
 
 ### 4.3 What still holds, checked or not
@@ -345,7 +347,7 @@ Web: the family page. iOS: the family page (iOS has join today; invite and let i
 - Row: avatar, name, role ("Organizer", "Manages the family", or nothing), and at the right "Verified" or "Not verified" (muted). Own row: "You", no label.
 - Row menu: **Check it's Sam** (or Check again), then the manager actions. "Let them manage the family" and "Make them the organizer" on someone not checked open: title "Check it's Sam first", body "Managers can let people in and change the family, so check it's Sam before they manage it. It takes a minute on a call or in person.", buttons **Check it's Sam** (primary), Cancel. Once checked, the role change goes ahead.
 - Invited as a manager, not checked yet: role line "Will manage the family once checked".
-- An account that changed without a signed chain: second line "Account changed", menu Check it's Sam; for a manager, a notice on the page: "Sam's account changed. Check it's Sam to give them the family folders again." with **Check it's Sam**.
+- An account that changed without a signed chain: second line "Account changed". For a manager, a notice on the page: "Sam's account changed. This happens when someone starts their HushOS account over. Continue to give Sam the family folders again." with **Continue** (primary) and Check it's Sam (outline). Continue: toast "Sam has the family folders again". If Sam managed the family, the role line reads "Will manage the family once checked" until a check.
 
 ### 6.10 Check it's Sam (in a family)
 
@@ -425,7 +427,7 @@ Each PR is one change, squash-merged, signed off, reviewed independently and run
 **PR 4. `feat(web): let people into a family without comparing words`** (`apps/web`)
 
 - Let them in without words, Check it's Sam first, the newcomer's join without words, Check it's Sam in a family, the manager rule, member list labels, the changed-member notice, Trust as family removed, the rewritten ForkAlert, the `familyChecks` migration (6.8 to 6.11), and the family claims of section 5 (security page families paragraph, the family-plans draft, roadmap item and `updated`, no-family copy, DESIGN.md Families words).
-- Tests (Vitest): letting someone in builds the entry from a first-seen pin and seals only to its keys; making someone a manager without a check is refused before anything is signed, and goes ahead after one; a family check writes a verified pin of the other member from the entry and a check record, and a mismatch writes neither; the migration writes check records for every existing pin in one save and never for a pin made after `familyChecksSince`; a member's unsigned change cannot be folded in without a check. Playwright e2e: invite, accept, let in, the newcomer's folder opens, no words anywhere; then the two check each other and both rows read Verified; an admission meeting a stale answer still signs again over the new head (the existing F7 case, without words).
+- Tests (Vitest): letting someone in builds the entry from a first-seen pin and seals only to its keys; making someone a manager without a check is refused before anything is signed, and goes ahead after one; a family check writes a verified pin of the other member from the entry and a check record, and a mismatch writes neither; the migration writes check records for every existing pin in one save and never for a pin made after `familyChecksSince`; a member's unsigned change is folded in only after Continue, never on its own, and that roster rotates every family folder and seals the new keys to the new entry only; a manager folded in that way gets no seal of the family's signing key until a check. Playwright e2e: invite, accept, let in, the newcomer's folder opens, no words anywhere; then the two check each other and both rows read Verified; an admission meeting a stale answer still signs again over the new head (the existing F7 case, without words).
 
 **PR 5. `feat(ios): share and join a family without comparing words`** (`apps/ios`)
 
@@ -439,17 +441,21 @@ Each PR is one change, squash-merged, signed off, reviewed independently and run
 
 **Before the families launch** (families are off on hushos.com): PRs 1, 2, 3 and 4, merged, reviewed and run live, since the join, the claims and the security page must agree. PR 5 is strongly recommended first, because a 0.10.0 iPhone newcomer otherwise needs the manager to know to open Check it's Sam; if it is not out, support copy says so. PR 6 is not a launch blocker (Android has no families), but should follow PR 3 within one Android release.
 
-## 9. Open questions for the owner
+## 9. Decided
 
-1. **Child accounts keep the check.** Recommended: yes, the child's sign-up still compares (3.6), since a guardian opens the child's whole account. The alternative is a child joining on first use, which would let a server collect a child's account with planted guardian keys.
-2. **Managers need a check first.** Recommended: yes (3.6). It is one comparison per manager and closes the largest cost (4.2). Without it, a server could become a family manager the first time anyone is invited as one.
-3. **A member whose account changed without a signed chain.** Recommended: a check before they get the family folders again. The alternative is a Continue like contacts, which hands every family folder to the new keys on one manager's tap.
-4. **Retire "Trust as family does".** Recommended: yes (3.7).
-5. **Where "Not verified" shows.** Proposed: Contacts, the member list and Info, never on file rows or in the share sheet. Signal shows less (only Verified).
-6. **A verified contact's change:** Check it's Maya as the blue button (proposed), or Continue as for everyone.
-7. **Room for contacts.** About 100 pins fit in the settings today. Accept the cap with its message for now (proposed), or move pins to their own sealed document before launch.
-8. **Copies of a not-verified person's file** are re-signed as the copier's own (proposed), or kept as re-sealed (today's rule for anything not verified, which would put the amber mark on the copier's own copy).
-9. **"Check it's Sam first" before letting someone in.** Proposed: kept in the row menu for cautious managers. Dropping it removes the only way to check before folder keys are handed over.
-10. **No typed words in the later check.** Proposed: both screens show twelve words, They match (3.4). The two typed words stay only where a check is required (child accounts).
-11. **A QR code** for checking in person, later, on all three clients. Out of scope here.
-12. **Pinning on first open.** Proposed: opening something from someone new adds them. The alternative, opening without remembering, leaves the server free to swap that person's keys every time.
+The owner's answers, 2026-10-26:
+
+1. **Child accounts keep the up-front check** (3.6). Not built yet.
+2. **Managers need a twelve-word check before they get the role** (3.6), including a manager whose account changed without a signed handover.
+3. **A member whose account changed without a signed handover** goes back into the family folders after one calm Continue by a manager, with no forced check (3.3, 3.6, 6.9). The cost is in 4.2.
+4. **"Trust as family does" is removed** from the UI (3.7).
+5. **"Not verified" shows only** on Contacts, the member list and file Info; never on file rows or in the share sheet (2.6, 6.1).
+6. **A verified contact whose account changed:** the blue button is Check it's Maya (2.4, 6.7).
+7. **About 100 contacts fit** in the settings; the cap is accepted for now (2.7).
+8. **A copy of a not-verified person's file** is signed as the copier's own (2.6).
+9. **"Check it's Sam first"** stays as an option before letting someone in (3.2, 6.8).
+10. **No typed hidden words** in the later family check (3.4).
+11. **A QR code** for checking in person comes later.
+12. **Opening something from someone new adds them** (2.3).
+
+No open questions remain from this design; an independent review is pending.
