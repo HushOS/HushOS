@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.10.0](https://github.com/HushOS/HushOS/compare/v0.9.0...v0.10.0) (2026-10-26)
+
+
+### Features
+
+* **android,ios:** name a device after its phone model ([#142](https://github.com/HushOS/HushOS/issues/142)) ([9ec85c6](https://github.com/HushOS/HushOS/commit/9ec85c6a9d7639ad7013f373d3c0ea27a678de78))
+* **android:** show where a family member's storage comes from ([#154](https://github.com/HushOS/HushOS/issues/154)) ([12df5f2](https://github.com/HushOS/HushOS/commit/12df5f25871a24410505c901ce38a7990d8be729))
+* call the people you check before sharing Contacts, at /app/contacts ([#192](https://github.com/HushOS/HushOS/issues/192)) ([28f3ec7](https://github.com/HushOS/HushOS/commit/28f3ec72c5aa7db5257e9b549b4a133d355888a1))
+* **db:** purge a dissolved family's records after 30 days ([#164](https://github.com/HushOS/HushOS/issues/164)) ([054d290](https://github.com/HushOS/HushOS/commit/054d290f2ac59479749fbc7f8f9715f600b7ed17))
+* **drive:** delete a Trash selection forever in one request ([#173](https://github.com/HushOS/HushOS/issues/173)) ([0264843](https://github.com/HushOS/HushOS/commit/026484345ac2dfeb82f2a78a375987acfab60360))
+* **drive:** move files between My files and family folders without spending storage ([#140](https://github.com/HushOS/HushOS/issues/140)) ([0564b38](https://github.com/HushOS/HushOS/commit/0564b388b3d6355f69f5a3fed90b3d5015d3c2f6))
+* **drive:** trash and restore a selection in one request ([#162](https://github.com/HushOS/HushOS/issues/162)) ([125b101](https://github.com/HushOS/HushOS/commit/125b101073558ddca06890091c8fec484c8985ab))
+* **ios:** show where a family member's storage comes from ([#153](https://github.com/HushOS/HushOS/issues/153)) ([59ccc33](https://github.com/HushOS/HushOS/commit/59ccc33dd891a076387378a6a5139593df21dd40))
+* **web:** give a family member one view ([#159](https://github.com/HushOS/HushOS/issues/159)) ([7eec97e](https://github.com/HushOS/HushOS/commit/7eec97e01dffb23b2f4beab240c9bec06d6996fc))
+
+
+### Bug fixes
+
+* **android:** fix what the first samsung test found ([#148](https://github.com/HushOS/HushOS/issues/148)) ([5fc802f](https://github.com/HushOS/HushOS/commit/5fc802f14af65d9354b932ccb3610dd5c587861c))
+* **auth:** never sign in as a new device because device storage was busy ([#163](https://github.com/HushOS/HushOS/issues/163)) ([a5e2811](https://github.com/HushOS/HushOS/commit/a5e2811167eb9a2df22fe3cff0874a4071ee4700))
+* **billing:** end a dissolved family's plan at its period's end ([#168](https://github.com/HushOS/HushOS/issues/168)) ([ae1f4fe](https://github.com/HushOS/HushOS/commit/ae1f4fefe6ef02fc53f96afd55b85fbbe29fac23))
+* **billing:** keep unpaid and incomplete family plans until Polar ends them ([#183](https://github.com/HushOS/HushOS/issues/183)) ([d322806](https://github.com/HushOS/HushOS/commit/d3228069025c11bde5ffd9a0ab15672cca9eabcd))
+* **billing:** keep unpaid and paused personal plans until Polar ends them ([#186](https://github.com/HushOS/HushOS/issues/186)) ([68c9fe0](https://github.com/HushOS/HushOS/commit/68c9fe01ceb846463809b222efec6a2be1566d7e))
+* **billing:** read every page of a person's plans before deleting their account ([#193](https://github.com/HushOS/HushOS/issues/193)) ([4ffa53f](https://github.com/HushOS/HushOS/commit/4ffa53f0639d15eb3708aca83ceeedfe0bcab38c))
+* **db:** give each folder in a batch its own change number ([#177](https://github.com/HushOS/HushOS/issues/177)) ([6a5e25b](https://github.com/HushOS/HushOS/commit/6a5e25bfbc6921b2f534b3c4822623c2901340ec))
+* **db:** make the change number index unique ([#179](https://github.com/HushOS/HushOS/issues/179)) ([cd314ca](https://github.com/HushOS/HushOS/commit/cd314cabcd6b3a4328448a8e99f9499d8a5cbcc1))
+* **db:** refuse database tests that share another checkout's databases ([#152](https://github.com/HushOS/HushOS/issues/152)) ([1f94874](https://github.com/HushOS/HushOS/commit/1f948741b7a52e40e39d76fe153889a74fc8a8e6))
+* **drive:** drop deleted items from every tab's Recent and search ([#170](https://github.com/HushOS/HushOS/issues/170)) ([01bc105](https://github.com/HushOS/HushOS/commit/01bc10577fc84d56ead01a3b0e0e744419b90830))
+* **emails:** fill a template in one pass, and refuse a token nothing fills ([#176](https://github.com/HushOS/HushOS/issues/176)) ([cc4c77d](https://github.com/HushOS/HushOS/commit/cc4c77d81245aeb95a4296a8a0bacc7c7c93eff9))
+* **emails:** keep placeholders in the plain-text headings fillable ([#174](https://github.com/HushOS/HushOS/issues/174)) ([4870a94](https://github.com/HushOS/HushOS/commit/4870a94e02f7a02f0562e1c17822a8da5b5c630a))
+* **emails:** keep the button out of gmail's folded tail ([#143](https://github.com/HushOS/HushOS/issues/143)) ([83aca0c](https://github.com/HushOS/HushOS/commit/83aca0cbc10494c4a865c5f24c8de78ed1c9dbe3))
+* **ios:** fix what the first device test found on android, on iphone too ([#149](https://github.com/HushOS/HushOS/issues/149)) ([7500284](https://github.com/HushOS/HushOS/commit/7500284d179f6f135be33b25df23303d9fd56164))
+* **ios:** leave nothing of the last session behind when switching ([#150](https://github.com/HushOS/HushOS/issues/150)) ([d31aade](https://github.com/HushOS/HushOS/commit/d31aadefacaf681644e803a4695258a6dfc1f9ad))
+* **ios:** let the notice's Undo take taps again ([#158](https://github.com/HushOS/HushOS/issues/158)) ([4c7f7cf](https://github.com/HushOS/HushOS/commit/4c7f7cfadfd5be599e4ee59640732b3db0b3af6e))
+* **mobile:** refresh what you share after a restore and after own changes ([#180](https://github.com/HushOS/HushOS/issues/180)) ([db97bb0](https://github.com/HushOS/HushOS/commit/db97bb0206e59efac80c46f7006cead560dd8643))
+* **mobile:** stop showing an ended or lapsed plan as the current plan ([#187](https://github.com/HushOS/HushOS/issues/187)) ([ff0abe7](https://github.com/HushOS/HushOS/commit/ff0abe706abd84350f872acf88a953e9b086f1df))
+* **mobile:** trash a selection with one refresh and an honest count ([#157](https://github.com/HushOS/HushOS/issues/157)) ([a907850](https://github.com/HushOS/HushOS/commit/a9078509b8603298abdd9efab20bee75c70ba18d))
+* **mobile:** trash and restore a selection through the batch routes ([#172](https://github.com/HushOS/HushOS/issues/172)) ([5cf2032](https://github.com/HushOS/HushOS/commit/5cf20323030d43d03a10e92edf80ee692d0d8a14))
+* **web:** check a family tier before making the family, and come back from checkout to it ([#165](https://github.com/HushOS/HushOS/issues/165)) ([0cbb785](https://github.com/HushOS/HushOS/commit/0cbb7858101bf467bbcc5c266c8d9cd7c513ec16))
+* **web:** hold the screen still while signing in and out ([#147](https://github.com/HushOS/HushOS/issues/147)) ([0bcf6da](https://github.com/HushOS/HushOS/commit/0bcf6daee610875882446686cd93f9e6b056c4cc))
+* **web:** keep safari from freezing on page load in the ssr query stream ([#156](https://github.com/HushOS/HushOS/issues/156)) ([cd36267](https://github.com/HushOS/HushOS/commit/cd362671a039743cab0b172e9fe4cd2f25821b48))
+* **web:** let browser storage recover from closed, deleted and late connections ([#160](https://github.com/HushOS/HushOS/issues/160)) ([ea6aa8a](https://github.com/HushOS/HushOS/commit/ea6aa8a3422626e160a07123d476b39d421a0211))
+* **web:** open the drive in one step, with no marks on empty states ([#151](https://github.com/HushOS/HushOS/issues/151)) ([b682c67](https://github.com/HushOS/HushOS/commit/b682c67a023cbe28ff86b5a5696f15f623ee61ea))
+* **web:** preload the rupee sign's font where prices are in rupees ([#182](https://github.com/HushOS/HushOS/issues/182)) ([5c3c36a](https://github.com/HushOS/HushOS/commit/5c3c36a58ee5b976d3e41ed5c8b422891926cc99))
+* **web:** put a roadmap item's link after its title, clear of the rail ([#191](https://github.com/HushOS/HushOS/issues/191)) ([d62b78d](https://github.com/HushOS/HushOS/commit/d62b78d379b172faab800027003155a564dcdbd8))
+* **web:** refresh what you share after a trash or restore ([#178](https://github.com/HushOS/HushOS/issues/178)) ([35ee208](https://github.com/HushOS/HushOS/commit/35ee20809a147e90cbefd44b9abf375b516ea910))
+* **web:** retry a stopped key-change walk on a schedule renders can't move ([#171](https://github.com/HushOS/HushOS/issues/171)) ([f9e89f6](https://github.com/HushOS/HushOS/commit/f9e89f672bb2d2f037d68eb8f41a3e99bb49078e))
+* **web:** show trashing as it happens and stop reopening each node ([#155](https://github.com/HushOS/HushOS/issues/155)) ([a709b4c](https://github.com/HushOS/HushOS/commit/a709b4c230843b8673f109b0e01aab5d6acee11a))
+
 ## 0.9.0 (2026-10-19)
 
 
