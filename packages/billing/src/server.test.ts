@@ -6718,6 +6718,70 @@ describe('one plan per family', () => {
         expect(refundsMade()).toEqual([['order_x', 999]]);
     });
 
+    test('a delivery that names a plan, its reading older than one written meanwhile, reads Polar again: the plan is recorded and the one bought second refunded', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
+        const t0 = Date.now() - 60_000;
+        const a = familySubscription(groupId, {
+            id: 'sub_a',
+            product_id: PRO_FAMILY,
+            created_at: new Date(t0).toISOString(),
+        });
+        const b = familySubscription(groupId, {
+            id: 'sub_b',
+            product_id: PRO_FAMILY,
+            created_at: new Date(t0 + 10_000).toISOString(),
+        });
+        polar.checkoutOrders = polar.checkoutOrders.filter(
+            (order) => order.subscription_id !== 'sub_a' && order.subscription_id !== 'sub_b',
+        );
+        addPaidOrder(a, 'order_a', new Date(t0).toISOString());
+        addPaidOrder(b, 'order_b', new Date(t0 + 10_000).toISOString());
+        // Polar's state lags: it lists neither yet.
+        polar.customers.get(`group:${groupId}`)!.subscriptions = [];
+        // B's delivery begins reading first and is held reading its plan; A's begins after, reads
+        // and writes; then B's goes on, its reading the older of the two.
+        const original = fakeClient.subscriptions.get.bind(fakeClient.subscriptions);
+        let bHeld!: () => void;
+        const bIsHeld = new Promise<void>((resolve) => (bHeld = resolve));
+        let aWritten!: () => void;
+        const aHasWritten = new Promise<void>((resolve) => (aWritten = resolve));
+        let gated = false;
+        const spy = vi
+            .spyOn(fakeClient.subscriptions, 'get')
+            .mockImplementation(async (id: string) => {
+                if (id === 'sub_b' && !gated) {
+                    gated = true;
+                    bHeld();
+                    await aHasWritten;
+                }
+                return original(id);
+            });
+        endingJobs.length = 0;
+        try {
+            await quietly(async () => {
+                const second = billing.reconcileGroup(groupId, {
+                    subscriptionId: 'sub_b',
+                    fromDelivery: true,
+                });
+                await bIsHeld;
+                await billing
+                    .reconcileGroup(groupId, { subscriptionId: 'sub_a', fromDelivery: true })
+                    .finally(aWritten);
+                await second;
+                await runQueued(0);
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        // B's plan was recorded after all, and cured: A stays the family's, B is refunded whole.
+        expect(await billingRepository.getGroupSubscription('sub_b')).not.toBeNull();
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_a');
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_b']);
+        expect(refundsMade()).toEqual([['order_b', 999]]);
+    });
+
     test('two deliveries at once, for two plans Polar’s state doesn’t list yet: neither sweeps the other, and the one bought second is refunded whole', async () => {
         const organizer = await createTestAccount();
         const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
@@ -6765,20 +6829,33 @@ describe('one plan per family', () => {
                 }
                 return original(id);
             });
+        // A begins reading first (its reading is drawn before it asks Polar for the state), then B.
+        const stateOriginal = fakeClient.customers.getStateExternal.bind(fakeClient.customers);
+        let aBegan!: () => void;
+        const aHasBegun = new Promise<void>((resolve) => (aBegan = resolve));
+        const state = vi
+            .spyOn(fakeClient.customers, 'getStateExternal')
+            .mockImplementationOnce(async (externalId: string) => {
+                aBegan();
+                return stateOriginal(externalId);
+            });
         try {
-            await quietly(() =>
-                Promise.all([
-                    billing
-                        .reconcileGroup(groupId, { subscriptionId: 'sub_a', fromDelivery: true })
-                        .finally(aWritten),
+            await quietly(async () => {
+                const first = billing
+                    .reconcileGroup(groupId, { subscriptionId: 'sub_a', fromDelivery: true })
+                    .finally(aWritten);
+                await aHasBegun;
+                await Promise.all([
+                    first,
                     billing.reconcileGroup(groupId, {
                         subscriptionId: 'sub_b',
                         fromDelivery: true,
                     }),
-                ]),
-            );
+                ]);
+            });
         } finally {
             spy.mockRestore();
+            state.mockRestore();
         }
         // B's write didn't sweep A; and A, written first, is the family's plan though B runs longer.
         expect((await billingRepository.getGroupSubscription('sub_a'))?.endedAt).toBeNull();

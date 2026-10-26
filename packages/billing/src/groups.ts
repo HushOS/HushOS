@@ -500,7 +500,10 @@ async function reconcileGroupOnce(
         sweepIds: mirrored,
         ...(cure ? { cure } : {}),
     });
-    // Stale, or behind a newer change: this write did nothing, marked nothing superseded.
+    // Stale, or behind a newer change: this write did nothing, marked nothing superseded. A
+    // delivery's reconcile that named a plan Polar's state doesn't list reads Polar again rather
+    // than stop: the newer reconcile may never have read that plan, and it can be charging.
+    if (result.outcome === 'stale' && options.subscriptionId) return 'rerun';
     if (result.outcome === 'stale' || result.outcome === 'rerun') return result.outcome;
     // The family was purged between the read above and the write (applyGroupState found no row):
     // its plans are a deleted family's, ended as any other's would be.
