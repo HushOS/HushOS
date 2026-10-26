@@ -719,7 +719,7 @@ struct FamiliesSection: View {
                         .alpineRow()
                 }
             } header: {
-                Text("Families").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                SectionTitle("Families")
             }
         }
     }
@@ -1062,7 +1062,7 @@ struct FamilyPage: View {
                 }
             }
         } header: {
-            Text("Family folders").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+            SectionTitle("Family folders")
         }
     }
 
@@ -1125,7 +1125,7 @@ struct FamilyPage: View {
                 }
             }
         } header: {
-            Text("Members").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+            SectionTitle("Members")
         }
         // Both organizers after a handover's last step didn't land: the web's words, and Finish handing over.
         if store.manages(groupId), let other = FamilySync.handoverToFinish(view, me: me), let who = served(other) {

@@ -146,7 +146,7 @@ struct BackgroundAccessSection: View {
                 Button("Open Settings") { access.openSettings() }.foregroundStyle(Alpine.primary).alpineRow()
             }
         } header: {
-            Text("While you’re away").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+            SectionTitle("While you’re away")
         } footer: {
             Text("Uploads and kept files finish while HushOS is in the background when these are on.")
         }

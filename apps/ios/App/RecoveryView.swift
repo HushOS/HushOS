@@ -85,7 +85,7 @@ struct RecoveryView: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .onSubmit(send).alpineRow()
             } header: {
-                Text("Email").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                FieldLabel("Email")
             }
             Section {
                 Button(action: send) { Text(pending ? "Sending…" : "Send link").frame(maxWidth: .infinity) }
@@ -299,9 +299,9 @@ private struct RecoverKitStep: View {
             Button("Use your recovery kit instead") { source = nil }.foregroundStyle(Alpine.primary).alpineRow()
         } header: {
             HStack {
-                Text("Recovery phrase").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                FieldLabel("Recovery phrase")
                 Spacer()
-                Text("\(typedWords.count) of \(Recovery.words) words").font(Theme.Text.label.monospacedDigit())
+                Text("\(typedWords.count) of \(Recovery.words) words").font(Theme.Text.footnote.monospacedDigit())
                     .foregroundStyle(typedWords.count == Recovery.words ? Alpine.success : Alpine.inkMuted)
             }
             .textCase(nil)
