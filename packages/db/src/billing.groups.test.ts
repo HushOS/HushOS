@@ -836,28 +836,32 @@ describe('readings of Polar that overlap', () => {
         subscription: GroupSubscriptionSnapshot,
         readingFrom: ReadingStamp,
     ) =>
-        billing.applyGroupState({
-            groupId,
-            provider: 'polar',
-            customerId: null,
-            subscriptions: [subscription],
-            graceMs: GRACE,
-            complete: false,
-            readingFrom,
-        });
+        billing
+            .applyGroupState({
+                groupId,
+                provider: 'polar',
+                customerId: null,
+                subscriptions: [subscription],
+                graceMs: GRACE,
+                complete: false,
+                readingFrom,
+            })
+            .then((result) => result.outcome);
     const reconcile = (
         groupId: string,
         subscriptions: GroupSubscriptionSnapshot[],
         readingFrom: ReadingStamp,
     ) =>
-        billing.applyGroupState({
-            groupId,
-            provider: 'polar',
-            customerId: 'cus_team',
-            subscriptions,
-            graceMs: GRACE,
-            readingFrom,
-        });
+        billing
+            .applyGroupState({
+                groupId,
+                provider: 'polar',
+                customerId: 'cus_team',
+                subscriptions,
+                graceMs: GRACE,
+                readingFrom,
+            })
+            .then((result) => result.outcome);
 
     test('a change answered before the newest reconcile began writes nothing; one answered after it does', async () => {
         const groupId = await family();

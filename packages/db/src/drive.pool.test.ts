@@ -952,7 +952,7 @@ describe('races', () => {
                 return { writing, uploading };
             },
         );
-        expect(await writing).toBe('applied');
+        expect(await writing).toMatchObject({ outcome: 'applied', superseded: [] });
         // Checked against the 100-byte pool the plan wrote, not the folder's old 10 GiB.
         expect(await uploading).toBe('over-quota');
     });
@@ -1050,7 +1050,7 @@ describe('races', () => {
             // A leave that lands first makes the admission wait for its marking; never a deadlock.
             expect(['ok', 'left-due']).toContain(admitted.status);
             expect(left).toEqual({ status: 'left' });
-            expect(written).toBe('applied');
+            expect(written).toMatchObject({ outcome: 'applied', superseded: [] });
             expect(uploads).toEqual(['ok', 'ok', 'ok']);
         }
     }, 180_000);
