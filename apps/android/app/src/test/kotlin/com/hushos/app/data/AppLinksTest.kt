@@ -114,4 +114,23 @@ class AppLinksTest {
         // The email step itself stays on the web.
         assertEquals(refused(AppLinkRefusal.WebOnly), parse("https://hushos.com/recover"))
     }
+    @Test
+    fun theSignUpLinkOpensSignUpWithItsToken() {
+        assertEquals(opens(AppLink.Register(token)), parse("https://hushos.com/register/complete#verify=$token"))
+        assertEquals(opens(AppLink.Register(token)), parse("hushos://register/complete#verify=$token"))
+        // A sign-up link is never read as a recovery one, nor the other way round: each flow checks its own.
+        assertEquals(opens(AppLink.Recover(token)), parse("https://hushos.com/recover/complete#verify=$token"))
+    }
+
+    @Test
+    fun aSignUpLinkWithoutAWholeTokenOrFromAnotherServerIsNotOpened() {
+        assertEquals(refused(AppLinkRefusal.Malformed), parse("https://hushos.com/register/complete"))
+        assertEquals(refused(AppLinkRefusal.Malformed), parse("https://hushos.com/register/complete#verify=${token.dropLast(1)}"))
+        assertEquals(refused(AppLinkRefusal.Malformed), parse("https://hushos.com/register/complete?verify=$token"))
+        assertEquals(refused(AppLinkRefusal.OtherServer("evil.example")), parse("https://evil.example/register/complete#verify=$token"))
+        // The web's own sign-up pages (and any plan or code they carry) stay on the web.
+        assertEquals(refused(AppLinkRefusal.WebOnly), parse("https://hushos.com/register"))
+        assertEquals(refused(AppLinkRefusal.WebOnly), parse("https://hushos.com/register?plan=pro"))
+        assertEquals(refused(AppLinkRefusal.WebOnly), parse("https://hushos.com/register/check-email"))
+    }
 }

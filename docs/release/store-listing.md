@@ -74,7 +74,7 @@ All of HushOS is open source under the AGPL: the apps and the server. Anyone can
 
 The service at hushos.com keeps its servers and your files in the European Union.
 
-You need a HushOS account to use the app. You can make one for free at hushos.com.
+Make your HushOS account in the app, free, or sign in with the one you have.
 ```
 
 **What's New** (not asked for the first version; for 1.0.1 onwards, 4000 max):
@@ -141,10 +141,10 @@ All of HushOS is open source under the AGPL: the apps and the server. Anyone can
 
 The service at hushos.com keeps its servers and your files in the European Union.
 
-You need a HushOS account to use the app. Make one at hushos.com.
+Make your HushOS account in the app, or sign in with the one you have.
 ```
 
-"Encrypted", "cloud storage", "share files securely", "private" and "open source" each appear once or twice, in sentences. "Free" appears nowhere: Google's best-practice page puts price and promotional words out of every listing field, and the payments section below keeps plans out of the app. "For free" was dropped from the last line for that reason.
+"Encrypted", "cloud storage", "share files securely", "private" and "open source" each appear once or twice, in sentences. "Free" appears nowhere: Google's best-practice page puts price and promotional words out of every listing field, and the payments section below keeps plans out of the app. "Free" was kept out of the last line for that reason.
 
 **Release notes** for 0.9.0, the first internal, closed and production release (500 max per language), 386:
 
@@ -213,13 +213,12 @@ What the apps did, and the change each needed. All of them were made on 2026-10-
 | Storage full sheet, "Get more room / Plans are on the web"                  | Opens `/app/billing` (`StorageFullSheet` in `AccountView.swift`; `RoomOption` in `HushOSApp.kt` ~line 515) | **Remove the option**; keep Empty trash and Remove earlier versions.                | Keep the words if you like, but **no link**: make it text, not a button. |
 | Plan name and renewal date ("Renews 12 Oct")                                | Shown                                                                                                      | Fine: it is account information, not a call to action.                              | Fine.                                                                    |
 
-**Store text:** say "free" and "free to start" only, and on Google Play not even that: its best-practice page keeps price and promotional words out of every field, so the Google text above never says "free". Never mention prices, plan names, "upgrade", or that plans are bought on the web, in any listing field or screenshot. The description's last line ("You can make one for free at hushos.com") points to a free account, not a purchase; if Apple objects, drop the "at hushos.com".
+**Store text:** say "free" and "free to start" only, and on Google Play not even that: its best-practice page keeps price and promotional words out of every field, so the Google text above never says "free". Never mention prices, plan names, "upgrade", or that plans are bought on the web, in any listing field or screenshot. The description's last line ("Make your HushOS account in the app, free") names a free account, not a purchase; if Apple objects to "free", drop it.
 
 **Review notes:** say plainly that the app sells nothing and plans are bought on the web (apple.md has the text). Reviewers ask; telling them up front avoids a round trip.
 
 ## Deliberately not claimed
 
-- **Sign-up in the app.** Not built; accounts are made at hushos.com.
 - **Photos backup or automatic camera upload.** Not built and not planned.
 - **Home Screen widgets.** The widget extension holds only the transfer Live Activity, and that was never checked on a real phone.
 - **Team plans, invites by email, desktop apps.** Not built.

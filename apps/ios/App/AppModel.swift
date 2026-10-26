@@ -161,6 +161,8 @@ final class AppModel {
         owner = AccountOwner.signedIn
         // Decrypted copies this process kept for another account go before this one opens anything.
         TemporaryCopies.claim(owner)
+        // A new account (or a recovery) whose words this phone made and nobody checked yet: they come before the drive.
+        wordsWaiting = WordsWaiting.isWaiting(for: user.id)
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
     }
@@ -321,13 +323,28 @@ final class AppModel {
 
     /* Universal links, hushos:// links, and hushos://node/<id>: kept until the drive can open them. */
     func open(_ url: URL) {
+        switch AppLinks.parse(url, server: origin) {
         // The emailed reset link opens the reset here, signed in or not.
-        if case let .success(.recover(token)) = AppLinks.parse(url, server: origin) {
+        case let .success(.recover(token)):
+            signingUp = false
+            signupLink = nil
             recoveryLink = token
             recovering = true
-            return
+        // The emailed sign-up link carries sign-up on here, wherever it began. Signed in, it isn't used (the web asks to
+        // sign out first), so the link stays good for later.
+        case let .success(.register(token)):
+            if state == .signedIn {
+                let who = user.map { $0.email.isEmpty ? "" : " as \($0.email)" } ?? ""
+                NoticeCenter.shared.show("You’re signed in\(who). To create another account, sign out, then open the link again.")
+                return
+            }
+            recovering = false
+            recoveryLink = nil
+            signupLink = token
+            signingUp = true
+        default:
+            pendingLink = url
         }
-        pendingLink = url
     }
 
     /* A family invitation's link waits for sign-in (it carries its token only in memory, never to disk). */
@@ -351,12 +368,57 @@ final class AppModel {
         recoveryLink = nil
     }
 
+    /* Create an account, in the app: shown over sign-in (or opened by the emailed link). Never over a signed-in drive. */
+    var signingUp = false
+    /* The emailed sign-up link's token, until the sign-up screen trades it for the enrollment. */
+    var signupLink: String?
+    /* Signed in with words this phone made that wait to be checked (WordsWaiting): the kit shows before the drive. */
+    private(set) var wordsWaiting = false
+
+    func startSignup() { signingUp = true }
+
+    func signupDone() {
+        signingUp = false
+        signupLink = nil
+    }
+
+    /*
+     * The account, then a sign-in with its password as the web does. The words wait from before any session exists, so
+     * a sign-in that fails here, or an app stopped before the check, still shows them first next time. Returns false
+     * when the account exists but the sign-in didn't happen.
+     */
+    func createAccount(_ enrollment: SignupEnrollment, name: String, password: String) async throws -> Bool {
+        signInGeneration += 1
+        await wiping?.value
+        let previous = AccountStore.shared.owner()
+        let userId = try await Auth.register(enrollment, name: name, password: password)
+        WordsWaiting.set(userId: userId)
+        let user: SessionUser
+        do {
+            user = try await Auth.signIn(origin: origin, email: enrollment.email, password: password)
+        } catch {
+            return false
+        }
+        await anotherAccount(since: previous)
+        signupDone()
+        signedIn(user)
+        return true
+    }
+
+    /* The words were checked (here or, as the server says, anywhere): the drive opens. */
+    func wordsChecked() {
+        WordsWaiting.clear()
+        wordsWaiting = false
+    }
+
     /* The reset, then the app signed in under the new password, as a sign-in leaves it. */
     func recover(_ enrollment: RecoveryEnrollment, password: String, phrase: [String]) async throws -> RecoveredAccount {
         signInGeneration += 1
         await wiping?.value
         let previous = AccountStore.shared.owner()
         let account = try await Auth.recover(enrollment, password: password, phrase: phrase)
+        // The new words wait to be checked even if the app is stopped before they are (the drive shows them first).
+        WordsWaiting.set(userId: account.user.id)
         await anotherAccount(since: previous)
         signedIn(account.user)
         return account

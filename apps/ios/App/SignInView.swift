@@ -120,10 +120,14 @@ struct SignInView: View {
                         }
                     }
 
-                    // Where accounts come from: hushos.com, or the self-hosted server's own address (as Android says it).
-                    Text("New to HushOS? Create an account at \(model.selfHostedName ?? "hushos.com").")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
-                        .padding(.horizontal, Alpine.Space.s4)
+                    // Sign-up runs here in the app, against the server above (SignupView); nothing on the way names plans or prices.
+                    HStack(spacing: Alpine.Space.s1) {
+                        Text("New to HushOS?").foregroundStyle(Alpine.inkMuted)
+                        Button("Create an account") { model.startSignup() }
+                            .fontWeight(.semibold).foregroundStyle(Alpine.primary).frame(minHeight: Theme.control)
+                    }
+                    .font(Theme.Text.callout)
+                    .padding(.horizontal, Alpine.Space.s4)
                 }
                 .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
             }

@@ -77,8 +77,9 @@
                 <data android:pathPrefix="/app/drive" />
                 <data android:pathPrefix="/app/shared" />
                 <data android:pathPrefix="/app/trash" />
-                <!-- The emailed recovery link: recovery carries on in the app. -->
+                <!-- The emailed recovery and sign-up links: both carry on in the app. -->
                 <data android:path="/recover/complete" />
+                <data android:path="/register/complete" />
             </intent-filter>
         </activity>
 

@@ -201,6 +201,38 @@ fn main() {
         "accountKey": e(&account_key),
     });
 
+    // A whole sign-up made here (account_create), which the web must open as the server stores it.
+    let signup_user = uuid();
+    let signup_export = random_bytes(64).unwrap();
+    let new_account = account_create(signup_user.clone(), signup_export.clone()).unwrap();
+    let signup_root =
+        account_unlock(signup_user.clone(), signup_export.clone(), new_account.envelope.clone()).unwrap();
+    let (n, r, g) = (&new_account.envelope, &new_account.recovery, &new_account.grant);
+    let signup = json!({
+        "userId": signup_user,
+        "exportKey": e(&signup_export),
+        "accountKey": e(&signup_root),
+        "phrase": recovery_phrase(signup_user.clone(), signup_root.clone(), r.clone()).unwrap(),
+        "workspaceKey": e(&workspace_open(signup_user.clone(), signup_root.clone(), g.clone()).unwrap()),
+        "envelope": {
+            "envelopeVersion": n.envelope_version, "keyVersion": n.key_version, "credentialVersion": n.credential_version,
+            "wrappingSalt": n.wrapping_salt, "wrappingNonce": n.wrapping_nonce, "encryptedKey": n.encrypted_key,
+        },
+        "recovery": {
+            "version": r.version, "keyVersion": r.key_version, "recoveryVersion": r.recovery_version,
+            "wrappingSalt": r.wrapping_salt, "wrappingNonce": r.wrapping_nonce, "encryptedKey": r.encrypted_key,
+            "backupNonce": r.backup_nonce, "encryptedRecoveryKey": r.encrypted_recovery_key, "publicKey": r.public_key,
+        },
+        "identity": envelope_json(&new_account.identity),
+        "workspace": {
+            "id": new_account.workspace_id,
+            "grant": {
+                "version": g.version, "workspaceId": g.workspace_id, "keyVersion": g.key_version, "workspaceKeyVersion": g.workspace_key_version,
+                "wrappingSalt": g.wrapping_salt, "wrappingNonce": g.wrapping_nonce, "encryptedKey": g.encrypted_key,
+            },
+        },
+    });
+
     let registry = format!(
         r#"{{"version":2,"tags":[{{"id":"{}","name":"Tax","colour":"blue"}}],"items":{{}}}}"#,
         uuid()
@@ -692,6 +724,7 @@ fn main() {
         "ids": ids,
         "document": document,
         "account": account,
+        "signup": signup,
         "device": device,
         "node": {
             "ctx": { "workspaceId": node_ctx.workspace_id, "nodeId": node_ctx.node_id, "parentId": node_ctx.parent_id, "parentKeyEpoch": node_ctx.parent_key_epoch, "keyEpoch": node_ctx.key_epoch },

@@ -18,6 +18,8 @@ class MainActivity : ComponentActivity() {
         const val RECOVER = "com.hushos.app.RECOVER"
         /* The picker's "Save your recovery words": the words and their check, unless a recovery is showing them already. */
         const val SHOW_WORDS = "com.hushos.app.SHOW_WORDS"
+        /* "Create an account in the HushOS app" from a file picker's sign-in screen: sign-up starts here, signed out. */
+        const val SIGN_UP = "com.hushos.app.SIGN_UP"
     }
 
     private val model: DriveViewModel by viewModels()
@@ -68,7 +70,8 @@ class MainActivity : ComponentActivity() {
         if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         when (intent.action) {
             RECOVER -> { model.recoverWhenSignedOut(); return }
-            SHOW_WORDS -> { if (model.recovery == null) model.openRequest("words"); return }
+            SIGN_UP -> { model.signUpWhenSignedOut(); return }
+            SHOW_WORDS -> { if (model.recovery == null && model.signup == null) model.openRequest("words"); return }
         }
         // A launcher shortcut: the + menu's action (or Search), signed in or once signed in.
         intent.action?.takeIf { it.startsWith(SHORTCUT) }?.let { model.shortcut(it.removePrefix(SHORTCUT)) }

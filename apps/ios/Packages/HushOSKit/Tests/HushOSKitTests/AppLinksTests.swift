@@ -91,4 +91,21 @@ struct AppLinksTests {
         #expect(parse("ftp://hushos.com/app") == .failure(.unsupported))
         #expect(parse("javascript:alert(1)") == .failure(.unsupported))
     }
+    @Test func theSignUpLinkOpensSignUpWithItsTokenAndNeverRecovery() {
+        #expect(parse("https://hushos.com/register/complete#verify=\(token)") == .success(.register(token: token)))
+        #expect(parse("hushos://register/complete#verify=\(token)") == .success(.register(token: token)))
+        #expect(parse("https://hushos.com/recover/complete#verify=\(token)") == .success(.recover(token: token)))
+    }
+
+    @Test func aSignUpLinkWithoutAWholeTokenOrFromAnotherServerIsNotOpened() {
+        #expect(parse("https://hushos.com/register/complete") == .failure(.malformed))
+        #expect(parse("https://hushos.com/register/complete#verify=\(token.dropLast(1))") == .failure(.malformed))
+        // In the query a server would log it: not accepted.
+        #expect(parse("https://hushos.com/register/complete?verify=\(token)") == .failure(.malformed))
+        #expect(parse("https://evil.example/register/complete#verify=\(token)") == .failure(.otherServer(host: "evil.example")))
+        // The web's own sign-up pages, with any plan or code they carry, stay on the web.
+        #expect(parse("https://hushos.com/register") == .failure(.webOnly))
+        #expect(parse("https://hushos.com/register?plan=pro") == .failure(.webOnly))
+        #expect(parse("https://hushos.com/register/check-email") == .failure(.webOnly))
+    }
 }

@@ -39,6 +39,7 @@ mod roster_calls;
 mod rotation_records;
 mod shares;
 mod signatures;
+mod signup;
 mod succession_path;
 
 pub use account::*;
@@ -66,6 +67,7 @@ pub use roster_calls::*;
 pub use rotation_records::*;
 pub use shares::*;
 pub use signatures::*;
+pub use signup::*;
 
 /// The statement grammar's parser and encoder, for the fuzz targets in
 /// `fuzz/` only: what every group statement is checked against, which the

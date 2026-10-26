@@ -482,9 +482,10 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
  * web's kit file, through the share sheet), Copy, and, while the phrase isn't
  * confirmed as saved, the web's check: say it's saved, then pick three words back.
  * `fresh`: the phrase was just made (Rotate account key, recovery), read back from the account here; no way out but "I’ve saved it".
+ * `firstKit`: a new account's first phrase (sign-up, or words this phone still waits on), in the web's setup words.
  */
 @Composable
-fun PhraseScreen(model: DriveViewModel, fresh: Boolean, onDone: () -> Unit) {
+fun PhraseScreen(model: DriveViewModel, fresh: Boolean, firstKit: Boolean = false, onDone: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -499,6 +500,7 @@ fun PhraseScreen(model: DriveViewModel, fresh: Boolean, onDone: () -> Unit) {
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { File(context.cacheDir, "kit").deleteRecursively() } }
     val current = kit
     if (checking && current != null) {
+        BackHandler { checking = false }
         CheckWordsScreen(current.phrase, onBack = { checking = false }) {
             scope.launch {
                 if (model.confirmRecovery(current)) { model.notify("Recovery phrase saved"); onDone() }
@@ -507,10 +509,11 @@ fun PhraseScreen(model: DriveViewModel, fresh: Boolean, onDone: () -> Unit) {
         }
         return
     }
-    AccountPage(if (fresh) "Your new recovery phrase" else "Recovery phrase", onBack = if (fresh) null else onDone) {
+    AccountPage(if (firstKit) "Save your recovery kit" else if (fresh) "Your new recovery phrase" else "Recovery phrase", onBack = if (fresh) null else onDone) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
             Text(
-                if (fresh) "Your old phrase and any printed kit no longer work. Save these 24 words instead."
+                if (firstKit) "If you forget your password, these words are the only way back into your account."
+                else if (fresh) "Your old phrase and any printed kit no longer work. Save these 24 words instead."
                 else "These 24 words get you back in if you forget your password. Keep them somewhere private and offline.",
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
             )
@@ -522,21 +525,27 @@ fun PhraseScreen(model: DriveViewModel, fresh: Boolean, onDone: () -> Unit) {
                 current == null -> Box(Modifier.fillMaxWidth().padding(AlpineSpace.S8), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 else -> {
                     PhraseWords(current.phrase)
+                    // One filled button a screen: while the check below is offered, it is that one.
+                    val checkOffered = fresh || !current.confirmed
                     Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                        Button(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
+                        if (checkOffered) OutlinedButton(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
+                        else Button(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
                         OutlinedButton(onClick = {
                             SensitiveClipboard.copy(context, "Recovery phrase", current.phrase)
                             model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
                         }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
                     }
-                    Text("Keep it somewhere private and offline. Anyone with these words and your email can get into your account.",
+                    Text(if (firstKit) "Save it to your files, print it, or write the words down, and keep it somewhere safe."
+                        else "Keep it somewhere private and offline. Anyone with these words and your email can get into your account.",
                         style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
-                    if (fresh || !current.confirmed) {
+                    if (checkOffered) {
                         Row(Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox) { saved = it }, verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(checked = saved, onCheckedChange = null)
                             Text("I’ve saved my kit or written the words down, somewhere private.", modifier = Modifier.padding(start = AlpineSpace.S3))
                         }
-                        Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (fresh) "I’ve saved it" else "Check three words") }
+                        Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                            Text(if (firstKit) "Continue" else if (fresh) "I’ve saved it" else "Check three words")
+                        }
                     }
                 }
             }

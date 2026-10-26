@@ -415,6 +415,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun signOut() {
         showingOwnWords = false
+        signup = null
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
@@ -430,6 +431,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun sessionLost() {
         showingOwnWords = false
+        signup = null
         val ended = Shared.session(context)
         Shared.clearSession(context)
         vault = null
@@ -840,6 +842,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         // The emailed recovery link picks up recovery, signed in or not; it never waits for a sign-in.
         (com.hushos.app.data.AppLinks.parse(link, state.value.origin) as? com.hushos.app.data.AppLinkResult.Open)?.link?.let { target ->
             if (target is com.hushos.app.data.AppLink.Recover) { openRecoveryLink(target.verify); return }
+            // The emailed sign-up link carries sign-up on here, whether it began here or on the web.
+            if (target is com.hushos.app.data.AppLink.Register) { openSignupLink(target.verify); return }
         }
         if (state.value.gate != Gate.SIGNED_IN) {
             pendingLink = link
@@ -862,7 +866,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     // No key after the #: the link browser says the link is incomplete and asks for the whole one.
                     com.hushos.app.data.AppLink.IncompleteShare -> "link:${origin.trimEnd('/')}/s/"
                     is com.hushos.app.data.AppLink.Node -> "node:${target.id}"
-                    is com.hushos.app.data.AppLink.Recover -> null
+                    is com.hushos.app.data.AppLink.Recover, is com.hushos.app.data.AppLink.Register -> null
                 })
             }
             is com.hushos.app.data.AppLinkResult.Refused -> when (val reason = result.reason) {
@@ -944,6 +948,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     /* The emailed link: the address is confirmed and the kit comes next, or the link says why it can't be used. */
     fun openRecoveryLink(verify: String) {
+        signup = null
         recovery = RecoveryFlow(RecoveryStep.CHECKING, email = recovery?.email.orEmpty())
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { Auth.verifyRecoveryLink(state.value.origin, verify) } }
@@ -990,6 +995,116 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             // Cancelled (the view model went) or failed: no new words are on screen, so nothing waits for them.
             if (recovery?.step != RecoveryStep.NEW_PHRASE) com.hushos.app.data.RecoveryWords.settled()
           }
+        }
+    }
+
+    /*
+     * Sign-up in the app, the web's /register: email, the emailed link (which opens the app),
+     * name and password, then the recovery phrase, shown and checked before Drive opens. Keys
+     * are made on the phone by the core; the enrollment token stays in memory, as recovery's.
+     * Nothing on the way mentions plans or prices (store payment rules).
+     */
+    enum class SignupStep { EMAIL, SENT, CHECKING, LINK_FAILED, DETAILS, CREATED, PHRASE }
+
+    data class SignupFlow(
+        val step: SignupStep, val email: String = "", val enrollment: Auth.SignupEnrollment? = null,
+        val pending: Boolean = false, val error: String? = null, val resent: Boolean = false,
+    )
+
+    internal var signup by mutableStateOf<SignupFlow?>(null)
+        private set
+
+    fun startSignup() { signup = SignupFlow(SignupStep.EMAIL) }
+
+    /* Sent from a file picker's sign-in screen: sign-up starts once the gate says signed out (not over one under way). */
+    fun signUpWhenSignedOut() = viewModelScope.launch {
+        val gate = state.first { it.gate != Gate.CHECKING }.gate
+        if (gate == Gate.SIGNED_OUT && signup == null && recovery == null) startSignup()
+    }
+    fun leaveSignup() {
+        // Only once the words are confirmed (or nothing was made): a marker left for a new account keeps its words up.
+        if (signup?.step == SignupStep.PHRASE) com.hushos.app.data.RecoveryWords.settled()
+        signup = null
+    }
+    fun clearSignupError() { signup = signup?.takeIf { it.error != null }?.copy(error = null) ?: signup }
+    fun signupBack() {
+        val flow = signup ?: return
+        if (flow.pending) return
+        when (flow.step) {
+            SignupStep.SENT, SignupStep.LINK_FAILED -> signupEmailAgain()
+            SignupStep.CHECKING, SignupStep.PHRASE -> {}
+            else -> leaveSignup()
+        }
+    }
+    fun signupEmailAgain() { signup = SignupFlow(SignupStep.EMAIL, email = signup?.email.orEmpty()) }
+
+    fun sendSignupEmail(email: String, again: Boolean = false) {
+        val address = email.trim()
+        signup = (signup ?: SignupFlow(SignupStep.EMAIL)).copy(pending = true, error = null, email = address)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Auth.requestSignupEmail(state.value.origin, address) } }
+            signup = signup?.let { flow ->
+                result.fold(
+                    { flow.copy(step = SignupStep.SENT, pending = false, resent = again) },
+                    { flow.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER)) },
+                )
+            }
+        }
+    }
+
+    /*
+     * The emailed link. Signed in, it isn't used (the web asks to sign out first): the link stays good for after.
+     * Otherwise the address is confirmed and the name and password come next, or the link says why it can't be used.
+     */
+    fun openSignupLink(verify: String) {
+        if (state.value.gate == Gate.SIGNED_IN) {
+            val who = state.value.user?.email?.ifEmpty { null }
+            notifyUntilRead("You’re signed in${who?.let { " as $it" }.orEmpty()}. To create another account, sign out, then open the link again.")
+            return
+        }
+        recovery = null
+        signup = SignupFlow(SignupStep.CHECKING, email = signup?.email.orEmpty())
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Auth.verifySignupLink(state.value.origin, verify) } }
+            signup = result.fold(
+                { SignupFlow(SignupStep.DETAILS, email = it.email, enrollment = it) },
+                { SignupFlow(SignupStep.LINK_FAILED, error = com.hushos.app.data.Problems.say(it, "This link didn’t work.")) },
+            )
+        }
+    }
+
+    /* Name and password: the account, then a sign-in with the password (as the web does), then the phrase to save. */
+    fun createAccount(name: String, password: String) {
+        val flow = signup ?: return
+        val enrollment = flow.enrollment ?: return
+        if (flow.pending) return
+        signup = flow.copy(pending = true, error = null)
+        viewModelScope.launch {
+            val origin = state.value.origin
+            var created = false
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val userId = Auth.register(origin, enrollment, name, password)
+                    created = true
+                    // Before any session is stored: the account's words wait to be seen and checked, here and in a picker.
+                    com.hushos.app.data.RecoveryWords.begun(userId)
+                    try {
+                        Auth.signIn(context, origin, enrollment.email, password)
+                    } catch (error: Exception) {
+                        android.util.Log.w("HushOS", "sign-in after sign-up failed", error)
+                        null
+                    }
+                }
+            }
+            result.fold(
+                { user ->
+                    if (user == null) signup = SignupFlow(SignupStep.CREATED, email = enrollment.email)
+                    else { signup = SignupFlow(SignupStep.PHRASE, email = enrollment.email); signedIn(user) }
+                },
+                {
+                    if (!created) signup = signup?.copy(pending = false, error = com.hushos.app.data.Problems.say(it, com.hushos.app.data.Problems.SERVER))
+                },
+            )
         }
     }
 

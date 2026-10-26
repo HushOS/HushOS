@@ -116,29 +116,91 @@ pub fn workspace_grant_rewrap(
     key_version: u64,
 ) -> CoreResult<WorkspaceGrant> {
     let workspace_key = Zeroizing::new(workspace_open(user_id.clone(), old_root, grant.clone())?);
-    expect_len("new account key", &new_root, KEY_BYTES)?;
+    seal_grant(
+        &user_id,
+        &new_root,
+        grant.workspace_id,
+        key_version,
+        grant.workspace_key_version,
+        &workspace_key,
+    )
+}
+
+/// A new workspace key, sealed to the account at `key_version` as its first
+/// grant (workspace key version 1): what sign-up sends as `workspace.grant`,
+/// as the web's `createWorkspaceGrant` makes it. The key itself never leaves
+/// the core; [`workspace_open`] opens it again from the grant.
+///
+/// ```
+/// use hushos_core::{random_bytes, workspace_grant_create, workspace_open};
+/// let root = random_bytes(32)?;
+/// let workspace = "0c6f1d2e-3a4b-4c5d-8e6f-7a8b9c0d1e2f";
+/// let grant = workspace_grant_create("user-1".into(), root.clone(), workspace.into(), 1)?;
+/// assert_eq!((grant.workspace_id.as_str(), grant.workspace_key_version), (workspace, 1));
+/// assert_eq!(workspace_open("user-1".into(), root, grant)?.len(), 32);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn workspace_grant_create(
+    user_id: String,
+    account_key: Vec<u8>,
+    workspace_id: String,
+    key_version: u64,
+) -> CoreResult<WorkspaceGrant> {
+    let account_key = Zeroizing::new(account_key);
+    if !is_workspace_id(&workspace_id) {
+        return Err(input("Invalid workspace id."));
+    }
+    if key_version < 1 {
+        return Err(input("keyVersion starts at 1"));
+    }
+    let workspace_key = Zeroizing::new(random(KEY_BYTES));
+    seal_grant(&user_id, &account_key, workspace_id, key_version, 1, &workspace_key)
+}
+
+/* A workspace id as the server and the web take it: a UUID in lowercase hex (WORKSPACE_ID_PATTERN). */
+pub(crate) fn is_workspace_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, &byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte),
+        })
+}
+
+/* The workspace key under `root`: a fresh salt and nonce, bound to the account, the workspace and both versions. */
+fn seal_grant(
+    user_id: &str,
+    root: &[u8],
+    workspace_id: String,
+    key_version: u64,
+    workspace_key_version: u64,
+    workspace_key: &[u8],
+) -> CoreResult<WorkspaceGrant> {
+    expect_len("account key", root, KEY_BYTES)?;
+    expect_len("workspace key", workspace_key, KEY_BYTES)?;
     let salt = random(32);
     let nonce = random(NONCE_BYTES);
     let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
-    Hkdf::<Sha256>::new(Some(&salt), &new_root)
+    Hkdf::<Sha256>::new(Some(&salt), root)
         .expand(b"hushos/workspace/grant-wrap/v1", wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let aad = context(&[
         json!("hushos/workspace/grant"),
         json!(1),
         json!(user_id.to_lowercase()),
-        json!(grant.workspace_id.to_lowercase()),
+        json!(workspace_id.to_lowercase()),
         json!(key_version),
-        json!(grant.workspace_key_version),
+        json!(workspace_key_version),
     ]);
     Ok(WorkspaceGrant {
         version: 1,
-        workspace_id: grant.workspace_id,
+        workspace_id,
         key_version,
-        workspace_key_version: grant.workspace_key_version,
+        workspace_key_version,
         wrapping_salt: encode(&salt),
         wrapping_nonce: encode(&nonce),
-        encrypted_key: encode(&seal_with_nonce(wrap.as_slice(), &nonce, &workspace_key, &aad)?),
+        encrypted_key: encode(&seal_with_nonce(wrap.as_slice(), &nonce, workspace_key, &aad)?),
     })
 }
 
