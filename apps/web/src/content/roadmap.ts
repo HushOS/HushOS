@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-21';
+export const updated = '2026-10-26';
 
 export const sections: RoadmapSection[] = [
     {
@@ -56,6 +56,14 @@ export const sections: RoadmapSection[] = [
         title: 'Shipped',
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
+            {
+                id: 'android-app',
+                status: 'shipped',
+                month: 'October 2026',
+                area: 'Apps',
+                title: 'The Android app on Google Play',
+                body: 'Your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. It’s on Google Play, and its APK is also on each GitHub release. You make your account on the web.',
+            },
             {
                 id: 'devices',
                 status: 'shipped',
@@ -162,8 +170,8 @@ export const sections: RoadmapSection[] = [
                 id: 'phone-apps',
                 status: 'now',
                 area: 'Apps',
-                title: 'The iPhone and Android apps in the stores',
-                body: 'The apps are built: your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. The Android app is with Google Play for review, and its APK is on each GitHub release; the iPhone app follows on the App Store. You make your account on the web.',
+                title: 'The iPhone app on the App Store',
+                body: 'Built, with the same folders, sharing, links, offline files and Files app as the Android app, and being prepared for the App Store.',
             },
             {
                 id: 'families-on-phones',
