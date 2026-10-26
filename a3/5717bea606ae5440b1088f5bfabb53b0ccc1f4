@@ -1,0 +1,19 @@
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_a8eb11cf3c80e2 118,123-125,130-132,140,192,274-275,471,476,481
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a35717bea606ae5440b1088f5bfabb53b0ccc1f4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
