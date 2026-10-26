@@ -128,7 +128,7 @@ DOWNLOAD=https://github.com/$GH_REPO/releases/download/$TAG
 cat > "$WORK/section.md" << EOF
 ## Android
 
-- **Google Play:** [HushOS on Google Play]($PLAY_URL), once approved.
+- **Google Play:** [HushOS on Google Play]($PLAY_URL).
 - **APK**, for phones without Google Play: [$NAME]($DOWNLOAD/$NAME), version $VERSION (build $BUILD).
     - SHA-256: \`$DIGEST\` ([$NAME.sha256]($DOWNLOAD/$NAME.sha256))
     - Signing certificate SHA-256: \`$UPLOAD_CERT_SHA256\`
