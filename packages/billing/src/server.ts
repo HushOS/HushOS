@@ -723,11 +723,10 @@ export async function revokeForDeletion(userId: string) {
         // past due (in dunning), unpaid, incomplete or paused (which resumes on its date).
         const ids = new Set((state?.active_subscriptions ?? []).map((s) => s.id));
         if (state) {
-            const page = await polar().subscriptions.list({
+            for await (const subscription of polar().subscriptions.iterList({
                 external_customer_id: userId,
                 limit: 100,
-            });
-            for (const subscription of page.items)
+            }))
                 if (!subscription.ended_at && !ENDED_STATUSES.has(subscription.status))
                     ids.add(subscription.id);
         }
