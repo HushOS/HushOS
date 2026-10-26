@@ -1904,13 +1904,14 @@ async function areaLedger(value: Doc): Promise<Verdict | undefined> {
  */
 function outboxEntryKind(value: Doc): Verdict | undefined {
     if (value.entry === undefined) return undefined;
-    let pin: { userId: string; fingerprint: string } | null = null;
+    // The pin by its key commitment (`keys`); seeds from before name it `fingerprint`.
+    let pin: { userId: string; keys: string } | null = null;
     if (value.pin !== undefined && value.pin !== null) {
         if (!isObject(value.pin)) return undefined;
         const userId = text(value.pin, 'userId');
-        const fingerprint = text(value.pin, 'fingerprint');
-        if (userId === undefined || fingerprint === undefined) return undefined;
-        pin = { userId, fingerprint };
+        const keys = text(value.pin, 'keys') ?? text(value.pin, 'fingerprint');
+        if (userId === undefined || keys === undefined) return undefined;
+        pin = { userId, keys };
     }
     const id = optionalText(value, 'id');
     if (id === undefined) return undefined;

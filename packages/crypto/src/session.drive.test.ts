@@ -1383,7 +1383,7 @@ describe('writer signatures', () => {
         );
         const verify = async (
             nodes: unknown[],
-            signers: Record<string, { current: string; retired: string[] }> = {},
+            signers: Record<string, { current: string; retired: string[]; seen?: boolean }> = {},
         ) =>
             (
                 (await call('driveVerify', {
@@ -1459,6 +1459,32 @@ describe('writer signatures', () => {
             },
         );
         expect(retired!.metadata).toBe('retired-key');
+        // Under a first-seen pin's key (docs/optional-verification.md 2.6): the signature holds,
+        // and the record reads as seen, never as verified; under a verified pin's, verified;
+        // under neither, as above, unknown-signer.
+        const intruderRecord = {
+            ...file,
+            metadataSigner: INTRUDER,
+            metadataSignature: planted,
+            versions: [],
+        };
+        const [seen] = await verify([intruderRecord], {
+            [INTRUDER]: { current: encode(intruder.publicKey), retired: [], seen: true },
+        });
+        expect(seen!.metadata).toBe('seen');
+        const [checked] = await verify([intruderRecord], {
+            [INTRUDER]: { current: encode(intruder.publicKey), retired: [], seen: false },
+        });
+        expect(checked!.metadata).toBe('verified');
+        // Seen never covers a bad signature or a retired key.
+        const [seenRetired] = await verify([intruderRecord], {
+            [INTRUDER]: {
+                current: encode(sodium.crypto_sign_keypair().publicKey),
+                retired: [encode(intruder.publicKey)],
+                seen: true,
+            },
+        });
+        expect(seenRetired!.metadata).toBe('retired-key');
         // Without a trust set, or with one that does not read, nothing is checked at all.
         await expect(
             call('driveVerify', { workspaceId: WS, signers: null as never, nodes: [file] }),

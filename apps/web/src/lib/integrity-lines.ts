@@ -609,6 +609,7 @@ export function rekeyTechnical(note: RekeyNote) {
               : 'Contents not confirmed';
     const signature: Record<RekeyNote['integrity'], string> = {
         verified: 'key change signed',
+        seen: 'key change signed',
         'saved-from-link': 'key change signed',
         resealed: 'key change signed',
         'retired-key': 'key change signed with keys since replaced',

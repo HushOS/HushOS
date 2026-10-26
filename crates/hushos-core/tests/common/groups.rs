@@ -550,6 +550,7 @@ pub struct RecordProbe {
 fn verdict_name(verdict: GroupVerdict) -> &'static str {
     match verdict {
         GroupVerdict::Verified => "verified",
+        GroupVerdict::Seen => "seen",
         GroupVerdict::SavedFromLink => "saved-from-link",
         GroupVerdict::Resealed => "resealed",
         GroupVerdict::RetiredKey => "retired-key",

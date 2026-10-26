@@ -37,6 +37,7 @@ import {
 import { deriveId } from './ids';
 import { decode, encode } from './keys';
 import { outboxStep, readOutboxEntry } from './outbox';
+import { keyCommitment } from './pins';
 import type { ContactPin } from './contacts';
 import { fingerprintOfKeys, keyDigest } from './fingerprint';
 import {
@@ -1053,7 +1054,7 @@ export async function entryRead(doc: Json, spec: Json, id: string, envelope: str
     const read = readOutboxEntry(
         value,
         doc.family.groupId,
-        pinned ? { userId: pinned.userId, fingerprint: pinned.fingerprint } : null,
+        pinned ? { userId: pinned.userId, keys: await keyCommitment(pinned) } : null,
         { id, head: await headOf(doc, spec.head) },
     );
     if (read === null) return { status: 'lost' };
@@ -1436,7 +1437,7 @@ export async function sessionRun(steps: Json[]): Promise<string[]> {
                 const read = readOutboxEntry(
                     value,
                     f.groupId,
-                    pinned ? { userId: pinned.userId, fingerprint: pinned.fingerprint } : null,
+                    pinned ? { userId: pinned.userId, keys: await keyCommitment(pinned) } : null,
                     { id: entry.id, head: committed ? [...committed.rosterDigests] : null },
                 );
                 if (read === null) outcome = 'lost';

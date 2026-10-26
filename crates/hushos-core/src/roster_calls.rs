@@ -37,7 +37,7 @@ use crate::contacts::same_key_digest;
 use crate::device_record::{open_bytes, seal_bytes, OPEN_IDENTITY, RECORD_UNREADABLE};
 use crate::error::{input, CoreError, CoreResult};
 use crate::group_trust::{
-    accept_rosters, roster_entry_new, roster_next, AcceptedRosters, OwnIdentities, RosterChain, VerifiedPin,
+    accept_rosters, roster_entry_new, roster_next, AcceptedRosters, OwnIdentities, RosterChain,
 };
 use crate::groups::{
     area_grant_seal, group_key_open, group_key_seal, group_public_key, group_succession_sign, parse_roster,
@@ -377,7 +377,7 @@ fn entry_json(
     group_id: &str,
     route: &ChainRoute,
     body: &str,
-    admits: Option<&VerifiedPin>,
+    admits: Option<(&str, &str)>,
     digests: (&str, &str),
 ) -> Value {
     let mut entry = json!({
@@ -393,10 +393,36 @@ fn entry_json(
         "attempts": 0,
         "joinCode": null,
     });
-    if let Some(pin) = admits {
-        entry["admits"] = json!({ "userId": pin.user_id, "fingerprint": pin.fingerprint });
+    if let Some((user_id, keys)) = admits {
+        entry["admits"] = json!({ "userId": user_id, "keys": keys });
     }
     entry
+}
+
+/*
+ * The keys a kept admission was staged over, as its `admits` names them
+ * (packages/crypto's admittedKeys): `keys`, their key commitment, when the
+ * entry carries it; else an older entry's `fingerprint`, which is the key
+ * commitment exactly when the pin it came from held them. `keys` present but
+ * not a string is none, never a fall back to `fingerprint`.
+ */
+fn admitted_keys(admits: &serde_json::Map<String, Value>) -> Option<&str> {
+    match admits.get("keys") {
+        Some(keys) => keys.as_str(),
+        None => admits.get("fingerprint")?.as_str(),
+    }
+}
+
+/* A contact pin's key commitment ([`crate::key_commitment`]), from the fields the ledger reads. */
+fn pin_commitment(pin: &crate::ledger_settings::ContactPin) -> Option<String> {
+    crate::key_commitment(crate::PinKeys {
+        key_version: None,
+        encryption_public_key: pin.encryption_public_key.clone()?,
+        signing_public_key: pin.signing_public_key.clone()?,
+        ml_dsa_public_key_hash: pin.ml_dsa_public_key_hash.clone(),
+        kem_public_key_hash: pin.kem_public_key_hash.clone(),
+        fingerprint: String::new(),
+    })
 }
 
 /* What the reader is given beside the entry: its id, the admin's pin of an admission's person, the committed head. */
@@ -411,7 +437,7 @@ struct Reading<'a> {
 /// the fuzz targets: what [`AreaLedger::outbox_open`] answers for `value`
 /// (opened from the device store) in `group_id`, kept under `id` (none: any),
 /// with the admin's pin of an admission's person (`pin`: their user id and
-/// fingerprint) and the committed chain's roster digests (`head`). `None`:
+/// its key commitment) and the committed chain's roster digests (`head`). `None`:
 /// not an entry (deleted, and counted as lost).
 #[cfg(feature = "fixtures")]
 #[doc(hidden)]
@@ -493,14 +519,14 @@ fn entry_read(value: &Value, group_id: &str, reading: &Reading<'_>) -> Option<Ou
             return Some(OutboxCall::Superseded { outbox_id, route });
         }
     }
-    // An admission goes only to the keys the admin's pin of the person holds now.
+    // An admission goes only to the keys the admin's pin of the person holds now, told by their
+    // key commitment: every first-seen pin's fingerprint is "".
     if let ChainRoute::Admit { user_id } = &route {
         let admits = entry.get("admits").and_then(Value::as_object);
-        let kept =
-            admits.and_then(|at| Some((at.get("userId")?.as_str()?, at.get("fingerprint")?.as_str()?)));
+        let kept = admits.and_then(|at| Some((at.get("userId")?.as_str()?, admitted_keys(at)?)));
         let pin = (reading.pin)(user_id);
-        let same = matches!((kept, pin.as_ref()), (Some((kept_user, kept_print)), Some((user, print)))
-            if kept_user == user_id && user == user_id && kept_print == print);
+        let same = matches!((kept, pin.as_ref()), (Some((kept_user, kept_keys)), Some((user, keys)))
+            if kept_user == user_id && user == user_id && !keys.is_empty() && kept_keys == keys);
         if !same {
             return hold(OutboxHold::OtherKeys);
         }
@@ -675,7 +701,9 @@ impl AreaLedger {
                 }
                 let user_id = entry.user_id.clone();
                 put(&mut members, entry);
-                (ChainRoute::Admit { user_id }, Some(pin))
+                // Kept by the keys it is built from, never by the pin's fingerprint.
+                let keys = pin_commitment(&found).ok_or_else(|| input(NOT_THE_PINNED_KEYS))?;
+                (ChainRoute::Admit { user_id }, Some(keys))
             }
             Change::Roles { user_id, roles } => {
                 let before = chain
@@ -788,7 +816,11 @@ impl AreaLedger {
         };
         let outbox_id = new_outbox_id();
         let digests = (chain.roster_digest.as_str(), staged.roster_digest.as_str());
-        let entry = entry_json(&outbox_id, &chain.group_id, &route, &body, admits.as_ref(), digests);
+        let admits = match (&route, &admits) {
+            (ChainRoute::Admit { user_id }, Some(keys)) => Some((user_id.as_str(), keys.as_str())),
+            _ => None,
+        };
+        let entry = entry_json(&outbox_id, &chain.group_id, &route, &body, admits, digests);
         let plaintext = Zeroizing::new(entry.to_string().into_bytes());
         let entry = seal_bytes(&store_key, &user_id, &chain.group_id, OUTBOX, &plaintext)?;
         Ok(RosterCall::Staged { call: StagedCall { outbox_id, route, body, entry } })
@@ -1347,8 +1379,9 @@ impl AreaLedger {
     /// holds the call's roster, [`OutboxCall::Superseded`] when it moved off
     /// the head the call was built on, [`OutboxCall::Hold`] when it is never
     /// sent (an admission is sent only while this account's contact pin of the
-    /// person, from the settings it last opened, has the fingerprint the entry
-    /// was built from), and only otherwise [`OutboxCall::Send`] with the very
+    /// person, from the settings it last opened, holds the keys the entry was
+    /// built from, by key commitment; an app asks again before every attempt,
+    /// after each wait and fix, since the pin can move between them), and only otherwise [`OutboxCall::Send`] with the very
     /// bytes the call was signed as. `CoreError::Sealed`: the entry did not
     /// open (another account root, after a master-key rotation; another
     /// family) or is not an entry, or not the one kept under `outbox_id`:
@@ -1388,7 +1421,7 @@ impl AreaLedger {
         let head = self.call_state(&group_id).chain.map(|chain| chain.roster_digests.clone());
         let lookup = |user: &str| {
             let pin = self.contact_pin(user)?;
-            Some((pin.user_id.to_lowercase(), pin.fingerprint?))
+            Some((pin.user_id.to_lowercase(), pin_commitment(&pin)?))
         };
         let reading = Reading { id: Some(&outbox_id), pin: &lookup, head: head.as_deref() };
         entry_read(&value, &group_id, &reading).ok_or_else(|| CoreError::Sealed(NOT_AN_ENTRY.into()))

@@ -1,4 +1,5 @@
 import {
+    admittedKeys,
     outboxStep,
     readOutboxEntry,
     type CreateGroupBody,
@@ -7,6 +8,7 @@ import {
     type GroupWriter,
     type RosterCallBody,
 } from '@hushos/crypto';
+import { keyCommitment, type PinKeys } from '@hushos/crypto/pins';
 import { MAX_GRANTS_PER_CALL } from '@hushos/groups/protocol';
 import { GroupApiError, isNotMember, isRefusal, type ChainHead } from './api';
 import type { GroupContext, GroupNotice } from './context';
@@ -88,12 +90,14 @@ export type OutboxEntry = {
     /* What the person should hear once the call lands (documents that went on empty). */
     notices?: GroupNotice[];
     /*
-     * An admission's newcomer keys as the admin checked them: the fingerprint
-     * (over all four keys) of the contact pin the entry was built from. A kept
-     * admission is resent by "Let them in" only while the admin's pin still
-     * has this fingerprint. Absent on entries from before it was kept.
+     * An admission's newcomer keys as the admin held them: `keys`, the key
+     * commitment (keyCommitment in @hushos/crypto/pins) of the contact pin the
+     * entry was built from. A kept admission is resent only while the admin's
+     * pin still holds those keys. Entries from before it was kept carry
+     * `fingerprint` instead (the pin's fingerprint then), read by
+     * admittedKeys; absent on entries older still.
      */
-    admits?: { userId: string; fingerprint: string };
+    admits?: { userId: string; keys: string } | { userId: string; fingerprint: string };
     /* The head the call was built on and its own roster, by digest (the core's outbox entry has them too). */
     previousRosterDigest?: string;
     rosterDigest?: string;
@@ -466,6 +470,25 @@ async function finishCreation(ctx: GroupContext, entry: OutboxEntry): Promise<Se
  */
 type SendMode = { inSync?: boolean; walking?: (running: boolean) => void };
 
+/*
+ * The admin's pin of an admission's person as the shared reader takes it: their user id and
+ * the key commitment of the settings pin read now, never its fingerprint (every first-seen
+ * pin's is ""). Null for any other entry, or with no pin of them.
+ */
+async function admissionPin(ctx: GroupContext, entry: OutboxEntry) {
+    if (entry.route.kind !== 'admit' || entry.state === 'awaiting-check') return null;
+    const { settings } = await ctx.settings.read();
+    const contact = settings.contacts?.[entry.route.userId];
+    return contact ? { userId: entry.route.userId, keys: await keyCommitment(contact) } : null;
+}
+
+/* Whether an admission must be held now: the pin read again no longer holds the keys it was staged over. */
+async function heldBack(ctx: GroupContext, entry: OutboxEntry) {
+    if (entry.route.kind !== 'admit') return false;
+    const read = readOutboxEntry(entry, entry.groupId, await admissionPin(ctx, entry));
+    return read?.status === 'hold' && read.reason === 'other-keys';
+}
+
 async function sendLocked(
     ctx: GroupContext,
     entry: OutboxEntry,
@@ -473,14 +496,9 @@ async function sendLocked(
 ): Promise<SendOutcome> {
     // An admission goes only to the keys the admin's pin of the person holds now: resent after
     // their account changed and was checked again, it would grant the family's folders to the
-    // old keys. Checked here, so a page open, a sync and "Let them in" all obey it.
-    let pin: { userId: string; fingerprint: string } | null = null;
-    if (entry.route.kind === 'admit' && entry.state !== 'awaiting-check') {
-        const { settings } = await ctx.settings.read();
-        const contact = settings.contacts?.[entry.route.userId];
-        pin = contact ? { userId: entry.route.userId, fingerprint: contact.fingerprint } : null;
-    }
-    const read = readOutboxEntry(entry, entry.groupId, pin);
+    // old keys. Checked here, so a page open, a sync and "Let them in" all obey it, and again
+    // before every later attempt (heldBack).
+    const read = readOutboxEntry(entry, entry.groupId, await admissionPin(ctx, entry));
     // Not an entry the shared reader takes: never sent (fail closed), dropped and counted lost.
     if (!read) {
         await discard(ctx, entry);
@@ -500,6 +518,9 @@ async function sendLocked(
     let resends = 0;
     let fixes = 0;
     for (;;) {
+        // The pin may have moved during a wait or a fix (a Continue in another tab): held, never
+        // sent to the keys it was staged over.
+        if (await heldBack(ctx, entry)) return { status: 'other-keys' };
         let head: ChainHead | null;
         try {
             head = await send(ctx, entry);
@@ -519,6 +540,10 @@ async function sendLocked(
                 await ctx.sleep(delay);
                 continue;
             }
+            // A fix (grants, a rebuild) leads to sending again: only while the pin still holds
+            // those keys. Final, stale and membership answers drop the entry as ever.
+            if ((step === 'send-grants' || step === 'rebuild') && (await heldBack(ctx, entry)))
+                return { status: 'other-keys' };
             const answer = await refused(ctx, entry, error, fixes++, mode);
             if (answer) return answer;
             continue;
@@ -837,10 +862,11 @@ export function letIn(
     ctx: GroupContext,
     groupId: string,
     op: Extract<GroupStageOp, { kind: 'admit' }>,
-    /* The fingerprint of the admin's contact pin of them now, to tell a kept admission's keys. */
-    fingerprint: string,
+    /* The admin's contact pin of them now, to tell a kept admission's keys by their commitment. */
+    pin: PinKeys,
 ): Promise<StageOutcome> {
     return ctx.lock(groupId, async () => {
+        const keys = await keyCommitment(pin);
         const kept = (await loadOutbox(ctx, groupId)).entries.filter(
             (entry) => entry.route.kind === 'admit' && entry.route.userId === op.userId,
         );
@@ -851,7 +877,7 @@ export function letIn(
             }
             // Sealed to keys the admin no longer holds as checked: resending would grant the
             // family's folders to them. The admin drops it first, knowingly.
-            if (entry.admits?.fingerprint !== fingerprint)
+            if (keys === null || admittedKeys(entry.admits) !== keys)
                 return { status: 'kept-other-keys' as const, entry };
             return {
                 status: 'sent' as const,

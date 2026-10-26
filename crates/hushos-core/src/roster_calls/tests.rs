@@ -1,7 +1,7 @@
 use super::*;
 use crate::contacts::{identity_fingerprint_of_keys, key_digest};
 use crate::device_record::{ServedAcceptance, ServedChain};
-use crate::group_trust::{accept_rosters, pin_after, roster_check_next, GroupPin, RosterChain};
+use crate::group_trust::{accept_rosters, pin_after, roster_check_next, GroupPin, RosterChain, VerifiedPin};
 use crate::groups::tests::{
     accepted_of, area_key_at, group_seed_at, ml_dsa_keys, reader, History, Person, AREA, AREA_KEY, AREA_SEED,
     GROUP,
@@ -863,7 +863,7 @@ fn the_outbox_entry_reads_back_as_the_same_bytes_after_a_relaunch_and_only_as_ke
     relaunched.use_settings(p1.user_id.clone(), Some(HashMap::new()), f.contacts()).unwrap();
     assert_eq!(f.open(&relaunched, &call).unwrap(), expected);
     // The admin's pin of them changed (re-checked keys), or there is none: held, never sent.
-    let changed = VerifiedPin { fingerprint: "0000".into(), ..pin_of(&f.p[3]) };
+    let changed = VerifiedPin { user_id: f.p[3].user_id.clone(), ..pin_of(&f.p[4]) };
     let rechecked = f.ledger_of(1, [(f.p[3].user_id.clone(), changed)].into(), true, true);
     let held = OutboxCall::Hold {
         outbox_id: call.outbox_id.clone(),
@@ -1230,4 +1230,100 @@ fn owed_grants_are_made_once_whatever_the_case_of_their_ids() {
     assert_eq!(requests[0].workspace_id, AREA);
     let body: Value = serde_json::from_str(&requests[0].body).unwrap();
     assert_eq!(body["grants"].as_array().unwrap().len(), 1);
+}
+
+/*
+ * First-seen pins all hold "" as their fingerprint, so an admission is told by
+ * the key commitment it was staged over (docs/optional-verification.md 2.2):
+ * a Continue between staging and sending moves the pin to other keys, and the
+ * grants sealed to the old ones must never go, here or after a relaunch.
+ */
+#[test]
+fn a_kept_admission_goes_only_to_the_keys_it_was_staged_over_by_their_commitment() {
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let call = staged(f.admit(&ledger, 4, vec![])).unwrap();
+    let p1 = &f.p[0];
+    let staged_pin = pin_of(&f.p[3]);
+    let commitment = |pin: &VerifiedPin| {
+        crate::key_commitment(crate::PinKeys {
+            key_version: Some(pin.key_version),
+            encryption_public_key: pin.encryption_public_key.clone(),
+            signing_public_key: pin.signing_public_key.clone(),
+            ml_dsa_public_key_hash: Some(pin.ml_dsa_public_key_hash.clone()),
+            kem_public_key_hash: Some(pin.kem_public_key_hash.clone()),
+            fingerprint: String::new(),
+        })
+        .unwrap()
+    };
+    // The entry names the keys by their commitment, and not by the pin's fingerprint.
+    let entry =
+        crate::device_record::device_store_open_value(&p1.root, &p1.user_id, GROUP, OUTBOX, &call.entry)
+            .unwrap();
+    assert_eq!(entry["admits"], json!({ "userId": f.p[3].user_id, "keys": commitment(&staged_pin) }));
+    let send = OutboxCall::Send {
+        outbox_id: call.outbox_id.clone(),
+        route: call.route.clone(),
+        body: call.body.clone(),
+    };
+    let held = OutboxCall::Hold {
+        outbox_id: call.outbox_id.clone(),
+        route: call.route.clone(),
+        reason: OutboxHold::OtherKeys,
+    };
+    // After a relaunch with the admin's pin of them first-seen over other keys: held, never sent.
+    let other = pin_of(&f.p[4]);
+    let first_seen = VerifiedPin { fingerprint: String::new(), ..staged_pin.clone() };
+    let moved = [
+        (
+            "their X25519 and Ed25519 keys",
+            VerifiedPin {
+                encryption_public_key: other.encryption_public_key.clone(),
+                signing_public_key: other.signing_public_key.clone(),
+                ..first_seen.clone()
+            },
+        ),
+        (
+            "only their ML-DSA and ML-KEM keys",
+            VerifiedPin {
+                ml_dsa_public_key_hash: other.ml_dsa_public_key_hash.clone(),
+                kem_public_key_hash: other.kem_public_key_hash.clone(),
+                ..first_seen.clone()
+            },
+        ),
+        (
+            "only their ML-KEM key",
+            VerifiedPin { kem_public_key_hash: other.kem_public_key_hash.clone(), ..first_seen.clone() },
+        ),
+    ];
+    for (what, pin) in moved {
+        let relaunched = f.ledger_of(1, [(f.p[3].user_id.clone(), pin)].into(), true, true);
+        assert_eq!(f.open(&relaunched, &call).unwrap(), held, "{what}");
+    }
+    // The same keys, first-seen now: still the keys it was staged over.
+    let same = f.ledger_of(1, [(f.p[3].user_id.clone(), first_seen)].into(), true, true);
+    assert_eq!(f.open(&same, &call).unwrap(), send);
+
+    // Entries as other versions kept them, read with the admin's pin by its commitment.
+    let user = f.p[3].user_id.as_str();
+    let read = |admits: Value, keys: &str| {
+        let mut kept = entry.clone();
+        kept["admits"] = admits;
+        outbox_entry_read(&kept, GROUP, Some(&call.outbox_id), Some((user, keys)), None)
+    };
+    let (theirs, others) = (commitment(&staged_pin), commitment(&other));
+    // From before: only `fingerprint`, sent exactly when the pin's key commitment is it.
+    let older = json!({ "userId": user, "fingerprint": staged_pin.fingerprint });
+    assert_eq!(read(older.clone(), &theirs), Some(send.clone()));
+    assert_eq!(read(older, &others), Some(held.clone()));
+    // A first-seen pin's "" matches nothing, not even another "".
+    let blank = json!({ "userId": user, "fingerprint": "" });
+    assert_eq!(read(blank.clone(), ""), Some(held.clone()));
+    assert_eq!(read(blank, &theirs), Some(held.clone()));
+    // Both fields: `keys` decides, `fingerprint` is ignored; `keys` not a string holds.
+    let both = json!({ "userId": user, "keys": others, "fingerprint": staged_pin.fingerprint });
+    assert_eq!(read(both.clone(), &theirs), Some(held.clone()));
+    assert_eq!(read(both, &others), Some(send.clone()));
+    let broken = json!({ "userId": user, "keys": null, "fingerprint": staged_pin.fingerprint });
+    assert_eq!(read(broken, &theirs), Some(held));
 }

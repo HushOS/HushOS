@@ -58,6 +58,7 @@ export type { ContactPin, Settings, SettingsEnvelope, SettingsKeyEnvelope } from
 export type { PinnedKeys, ServedKeys, SuccessionLink } from './identity';
 export { fingerprint, keyDigest, publicKeyBytes } from './fingerprint';
 export {
+    admittedKeys,
     outboxStep,
     readOutboxEntry,
     type OutboxHold,

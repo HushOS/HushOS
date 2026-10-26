@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test } from 'vitest';
+import { keyCommitment, pinKeysOfServed } from '@hushos/crypto/pins';
 import {
     createFamily,
     dropHeldBack,
@@ -356,10 +357,42 @@ describe('admissions', () => {
         served: {} as never,
         roles: [],
     };
-    /* Synced, with the admin's contact pin of the newcomer at `fingerprint`. */
-    async function checked(h: ReturnType<typeof harness>, fingerprint = 'fp-checked') {
+    const b64 = (length: number, fill: number) =>
+        Buffer.from(new Uint8Array(length).fill(fill)).toString('base64url');
+    /*
+     * The admin's contact pin of the newcomer over keys made of the four fill
+     * bytes (X25519, Ed25519, ML-DSA, ML-KEM): verified, as a words check
+     * writes it, or first-seen, `fingerprint` "".
+     */
+    async function pinOf(form: 'verified' | 'seen', [x, ed, mlDsa, kem]: number[]) {
+        return {
+            userId: NEWCOMER,
+            email: 'sam@example.com',
+            name: 'Sam',
+            pinnedAt: '2026-10-26T10:00:00.000Z',
+            ...(await pinKeysOfServed(
+                {
+                    keyVersion: 1,
+                    encryptionPublicKey: b64(32, x!),
+                    signingPublicKey: b64(32, ed!),
+                    mlDsaPublicKey: b64(1952, mlDsa!),
+                    kemPublicKey: b64(1184, kem!),
+                },
+                form,
+            )),
+        };
+    }
+    type NewcomerPin = Awaited<ReturnType<typeof pinOf>>;
+    let CHECKED: NewcomerPin;
+    let RECHECKED: NewcomerPin;
+    beforeAll(async () => {
+        CHECKED = await pinOf('verified', [1, 2, 3, 4]);
+        RECHECKED = await pinOf('verified', [5, 6, 7, 8]);
+    });
+    /* Synced, with the admin's contact pin of the newcomer. */
+    async function checked(h: ReturnType<typeof harness>, pin: NewcomerPin = CHECKED) {
         await synced(h);
-        h.settings.doc.contacts = { [NEWCOMER]: { fingerprint } as never };
+        h.settings.doc.contacts = { [NEWCOMER]: pin as never };
     }
     /* An earlier version's admission, held back until its join code was typed, as it kept them. */
     async function heldBack(h: ReturnType<typeof harness>, id = 'held-1') {
@@ -381,7 +414,7 @@ describe('admissions', () => {
     test('“Let them in” signs the admission and sends it there and then, holding the lock', async () => {
         const h = harness();
         await checked(h);
-        const outcome = await letIn(h.ctx, GROUP, admit, 'fp-checked');
+        const outcome = await letIn(h.ctx, GROUP, admit, CHECKED);
         if (outcome.status !== 'sent') throw new Error(outcome.status);
         expect(outcome.outcome.status).toBe('landed');
         expect(h.server.sent).toEqual([
@@ -396,12 +429,12 @@ describe('admissions', () => {
         const first = harness({ store });
         await checked(first);
         first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
-        const kept = await letIn(first.ctx, GROUP, admit, 'fp-checked');
+        const kept = await letIn(first.ctx, GROUP, admit, CHECKED);
         if (kept.status !== 'sent') throw new Error(kept.status);
         expect(kept.outcome.status).toBe('pending');
         const again = harness({ store });
         await checked(again);
-        const resent = await letIn(again.ctx, GROUP, admit, 'fp-checked');
+        const resent = await letIn(again.ctx, GROUP, admit, CHECKED);
         expect(resent).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
         expect(again.calls('groupStage')).toEqual([]);
         expect(again.server.sent.map((at) => at.body)).toEqual([JSON.stringify(kept.entry.body)]);
@@ -412,23 +445,23 @@ describe('admissions', () => {
         const first = harness({ store });
         await checked(first);
         first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
-        const kept = await letIn(first.ctx, GROUP, admit, 'fp-checked');
+        const kept = await letIn(first.ctx, GROUP, admit, CHECKED);
         if (kept.status !== 'sent') throw new Error(kept.status);
-        expect(kept.entry.admits).toEqual({ userId: NEWCOMER, fingerprint: 'fp-checked' });
+        expect(kept.entry.admits).toEqual({ userId: NEWCOMER, keys: await keyCommitment(CHECKED) });
         // The newcomer's account changed; the admin checked their new words.
         const again = harness({ store });
-        await checked(again, 'fp-new');
+        await checked(again, RECHECKED);
         const rechecked = admit;
-        const refused = await letIn(again.ctx, GROUP, rechecked, 'fp-new');
+        const refused = await letIn(again.ctx, GROUP, rechecked, RECHECKED);
         expect(refused).toEqual({ status: 'kept-other-keys', entry: kept.entry });
         expect(again.server.sent).toEqual([]);
         expect(again.calls('groupStage')).toEqual([]);
         await dropKeptAdmission(again.ctx, kept.entry);
         expect(await store.outbox(USER, GROUP)).toEqual([]);
-        const fresh = await letIn(again.ctx, GROUP, rechecked, 'fp-new');
+        const fresh = await letIn(again.ctx, GROUP, rechecked, RECHECKED);
         expect(fresh).toMatchObject({
             status: 'sent',
-            entry: { admits: { fingerprint: 'fp-new' } },
+            entry: { admits: { keys: await keyCommitment(RECHECKED) } },
             outcome: { status: 'landed' },
         });
         expect(again.calls('groupStage')).toHaveLength(1);
@@ -444,7 +477,7 @@ describe('admissions', () => {
             groupId: GROUP,
             envelope: `sealed:${JSON.stringify(old)}`,
         });
-        expect(await letIn(h.ctx, GROUP, admit, 'fp-checked')).toMatchObject({
+        expect(await letIn(h.ctx, GROUP, admit, CHECKED)).toMatchObject({
             status: 'kept-other-keys',
         });
         expect(h.server.sent).toEqual([]);
@@ -455,13 +488,13 @@ describe('admissions', () => {
         const first = harness({ store });
         await checked(first);
         first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
-        const kept = await letIn(first.ctx, GROUP, admit, 'fp-checked');
+        const kept = await letIn(first.ctx, GROUP, admit, CHECKED);
         if (kept.status !== 'sent') throw new Error(kept.status);
         expect(kept.outcome.status).toBe('pending');
         const sentBefore = first.server.sent.length;
         // The newcomer's account changed and the admin checked the new words, in another tab.
         const reopened = harness({ store });
-        await checked(reopened, 'fp-new');
+        await checked(reopened, RECHECKED);
         expect((await resumeOutbox(reopened.ctx)).outcomes.get(kept.entry.id)).toEqual({
             status: 'other-keys',
         });
@@ -476,17 +509,175 @@ describe('admissions', () => {
         expect(reopened.server.sent).toEqual([]);
     });
 
+    /*
+     * First-seen pins all hold "" as their fingerprint, so an admission is
+     * told by the key commitment it was staged over
+     * (docs/optional-verification.md 2.2): a Continue between staging and
+     * sending moves the pin to other keys, and the grants sealed to the old
+     * ones must never go.
+     */
+    test.each([
+        ['their X25519 and Ed25519 keys', [9, 10, 3, 4]],
+        ['only their ML-DSA and ML-KEM keys', [1, 2, 11, 12]],
+        ['only their ML-KEM key', [1, 2, 3, 12]],
+    ])(
+        'a kept admission staged over first-seen keys is never sent once the pin moved to other first-seen keys (%s), in this tab or after a relaunch',
+        async (_, moved) => {
+            const store = createMemoryGroupStore();
+            const first = harness({ store });
+            const before = await pinOf('seen', [1, 2, 3, 4]);
+            const after = await pinOf('seen', moved);
+            await checked(first, before);
+            first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+            const kept = await letIn(first.ctx, GROUP, admit, before);
+            if (kept.status !== 'sent') throw new Error(kept.status);
+            expect(kept.outcome.status).toBe('pending');
+            expect(kept.entry.admits).toEqual({
+                userId: NEWCOMER,
+                keys: await keyCommitment(before),
+            });
+            const sentBefore = first.server.sent.length;
+            // A Continue in this tab: the pin now holds other first-seen keys.
+            first.settings.doc.contacts = { [NEWCOMER]: after as never };
+            expect(await sendChainCall(first.ctx, kept.entry)).toEqual({ status: 'other-keys' });
+            expect(first.server.sent).toHaveLength(sentBefore);
+            // A relaunch with the moved pin: neither a page open, a sync nor "Let them in" sends it.
+            const reopened = harness({ store });
+            await checked(reopened, after);
+            expect((await resumeOutbox(reopened.ctx)).outcomes.get(kept.entry.id)).toEqual({
+                status: 'other-keys',
+            });
+            await syncGroup(reopened.ctx, GROUP);
+            expect(await letIn(reopened.ctx, GROUP, admit, after)).toEqual({
+                status: 'kept-other-keys',
+                entry: kept.entry,
+            });
+            expect(reopened.server.sent).toEqual([]);
+            expect(reopened.calls('groupStage')).toEqual([]);
+        },
+    );
+
+    /*
+     * The pin can move while one send is still retrying (a Continue in another tab during a
+     * wait, or between a refusal and its fix): every attempt checks it again, never only the
+     * first (Codex review of #206, P1).
+     */
+    test.each([
+        ['only their ML-KEM key', [1, 2, 3, 12]],
+        ['their X25519 and Ed25519 keys', [9, 10, 3, 4]],
+    ])(
+        'an admission whose pin moves (%s) while it waits to be sent again is never sent again',
+        async (_, moved) => {
+            const before = await pinOf('seen', [1, 2, 3, 4]);
+            const after = await pinOf('seen', moved);
+            // During the wait after an answer that never came.
+            const waiting = harness();
+            await checked(waiting, before);
+            waiting.server.script.push(noAnswer());
+            waiting.ctx.sleep = async () => {
+                waiting.settings.doc.contacts = { [NEWCOMER]: after as never };
+            };
+            const waited = await letIn(waiting.ctx, GROUP, admit, before);
+            expect(waited).toMatchObject({ status: 'sent', outcome: { status: 'other-keys' } });
+            expect(waiting.server.sent).toHaveLength(1);
+            // Kept, held: never dropped unseen.
+            expect(await waiting.store.outbox(USER, GROUP)).toHaveLength(1);
+            // Between a refusal and the fix that would send the same bytes again.
+            const fixing = harness();
+            await checked(fixing, before);
+            fixing.server.script.push(
+                refusal(409, 'grants-due', {
+                    missing: [
+                        { workspaceId: AREA_2, userId: 'b0b0b0b0-0000-4000-8000-000000000003' },
+                    ],
+                }),
+            );
+            const admitOnce = fixing.ctx.api.admit;
+            fixing.ctx.api.admit = async (...args) => {
+                fixing.settings.doc.contacts = { [NEWCOMER]: after as never };
+                return admitOnce(...args);
+            };
+            const fixed = await letIn(fixing.ctx, GROUP, admit, before);
+            expect(fixed).toMatchObject({ status: 'sent', outcome: { status: 'other-keys' } });
+            expect(fixing.server.sent).toHaveLength(1);
+            expect(fixing.server.grants).toEqual([]);
+        },
+    );
+
+    test('a final refusal after the pin moved still drops the admission rather than holding it forever', async () => {
+        const before = await pinOf('seen', [1, 2, 3, 4]);
+        const after = await pinOf('seen', [1, 2, 3, 12]);
+        const h = harness();
+        await checked(h, before);
+        // The person stopped waiting to join while the pin moved: nothing can ever land now.
+        h.server.script.push(refusal(409, 'not-pending'));
+        const admitOnce = h.ctx.api.admit;
+        h.ctx.api.admit = async (...args) => {
+            h.settings.doc.contacts = { [NEWCOMER]: after as never };
+            return admitOnce(...args);
+        };
+        const outcome = await letIn(h.ctx, GROUP, admit, before);
+        expect(outcome).toMatchObject({
+            status: 'sent',
+            outcome: { status: 'refused', code: 'not-pending' },
+        });
+        expect(h.server.sent).toHaveLength(1);
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
+    test('a kept admission from before keys were recorded, with only its fingerprint, is sent exactly when the pin holds those keys', async () => {
+        const kept = (admits: unknown) =>
+            entry({
+                id: 'older-admit',
+                route: { kind: 'admit', userId: NEWCOMER },
+                body: rosterBody('older'),
+                admits: admits as never,
+            });
+        const send = async (pin: NewcomerPin, admits: unknown) => {
+            const h = harness();
+            await checked(h, pin);
+            return { outcome: await sendChainCall(h.ctx, kept(admits)), sent: h.server.sent };
+        };
+        // Written over a verified pin, whose fingerprint is its key commitment.
+        const older = { userId: NEWCOMER, fingerprint: CHECKED.fingerprint };
+        const same = await send(CHECKED, older);
+        expect(same.outcome).toMatchObject({ status: 'landed' });
+        expect(same.sent).toHaveLength(1);
+        expect(await send(RECHECKED, older)).toEqual({
+            outcome: { status: 'other-keys' },
+            sent: [],
+        });
+        // The same keys, first-seen now: still those keys.
+        expect((await send(await pinOf('seen', [1, 2, 3, 4]), older)).outcome).toMatchObject({
+            status: 'landed',
+        });
+        // A first-seen pin's "" matches nothing, not even another "".
+        const blank = await pinOf('seen', [9, 10, 3, 4]);
+        expect(await send(blank, { userId: NEWCOMER, fingerprint: '' })).toEqual({
+            outcome: { status: 'other-keys' },
+            sent: [],
+        });
+        // Both fields: `keys` decides, `fingerprint` is ignored.
+        const both = {
+            userId: NEWCOMER,
+            keys: await keyCommitment(RECHECKED),
+            fingerprint: CHECKED.fingerprint,
+        };
+        expect(await send(CHECKED, both)).toEqual({ outcome: { status: 'other-keys' }, sent: [] });
+        expect((await send(RECHECKED, both)).outcome).toMatchObject({ status: 'landed' });
+    });
+
     test('a stale answer drops the admission and syncs, and the next “Let them in” signs it over the new head', async () => {
         const h = harness();
         await checked(h);
         h.server.script.push(refusal(409, 'stale'));
-        const lost = await letIn(h.ctx, GROUP, admit, 'fp-checked');
+        const lost = await letIn(h.ctx, GROUP, admit, CHECKED);
         expect(lost).toMatchObject({ status: 'sent', outcome: { status: 'stale' } });
         expect(h.server.sent).toHaveLength(1);
         expect((await loadOutbox(h.ctx, GROUP)).entries).toEqual([]);
         h.server.head = 6;
         await checked(h);
-        const resigned = await letIn(h.ctx, GROUP, admit, 'fp-checked');
+        const resigned = await letIn(h.ctx, GROUP, admit, CHECKED);
         expect(resigned).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
         expect(h.calls('groupStage')).toHaveLength(2);
         expect(h.server.sent).toHaveLength(2);
@@ -528,7 +719,7 @@ describe('admissions', () => {
         const h = harness();
         await checked(h);
         const held = await heldBack(h);
-        const outcome = await letIn(h.ctx, GROUP, admit, 'fp-checked');
+        const outcome = await letIn(h.ctx, GROUP, admit, CHECKED);
         if (outcome.status !== 'sent') throw new Error(outcome.status);
         expect(outcome.outcome.status).toBe('landed');
         expect(h.server.sent.map((at) => at.body)).not.toContain(JSON.stringify(held.body));

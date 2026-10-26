@@ -223,7 +223,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                         served: fresh.identity,
                         roles: fresh.roles,
                     },
-                    pin.fingerprint,
+                    pin,
                 );
                 if (staged.status === 'kept-other-keys') {
                     setKeptOther(staged.entry);

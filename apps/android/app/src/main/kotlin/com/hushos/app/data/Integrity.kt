@@ -90,7 +90,8 @@ internal fun severity(integrity: Integrity) = when (integrity) {
     Integrity.RESEALED -> 2
     Integrity.UNSIGNED -> 3
     Integrity.RETIRED_KEY -> 4
-    Integrity.UNKNOWN_SIGNER -> 5
+    // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (SEEN) reads as one nobody checked until PR 6 designs its own UI; this app never asks for SEEN yet.
+    Integrity.UNKNOWN_SIGNER, Integrity.SEEN -> 5
     Integrity.UNCHECKED -> 6
     Integrity.BAD_SIGNATURE -> 7
 }
@@ -189,7 +190,8 @@ private fun possessive(name: String) = if (name.endsWith("s")) "$name’" else "
 fun Unverified.explanation(): String = when (integrity) {
     Integrity.UNCHECKED -> "HushOS couldn’t check who wrote this. Try again later."
     Integrity.UNSIGNED -> "HushOS can’t confirm who wrote this."
-    Integrity.UNKNOWN_SIGNER -> "HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked."
+    // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (SEEN) reads as one nobody checked until PR 6 designs its own UI; this app never asks for SEEN yet.
+    Integrity.UNKNOWN_SIGNER, Integrity.SEEN -> "HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked."
     Integrity.BAD_SIGNATURE -> when (val who = writer) {
         Writer.You -> "The signature doesn’t match your keys. Don’t trust this item."
         is Writer.Contact -> "The signature doesn’t match ${possessive(who.name)} keys. Don’t trust this item."
@@ -210,7 +212,7 @@ fun Unverified.explanation(): String = when (integrity) {
 }
 
 /* Where "Check their words" makes sense: an unknown writer with an address to look up. */
-val Unverified.checkEmail: String? get() = if (integrity == Integrity.UNKNOWN_SIGNER) (writer as? Writer.Unknown)?.email else null
+val Unverified.checkEmail: String? get() = if (integrity == Integrity.UNKNOWN_SIGNER || integrity == Integrity.SEEN) (writer as? Writer.Unknown)?.email else null
 
 /*
  * Whom this person trusts, as the screens hold it: not asked yet, loaded, or failed to load. Failed is never treated as

@@ -224,7 +224,8 @@ public struct TrustedSigners: Sendable, Equatable {
     func provenance(_ integrity: Integrity, signer: Signer?) -> Provenance? {
         switch integrity {
         case .verified: nil
-        case .unknownSigner: .unknownSigner(signerId: signer?.id)
+        // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (`seen`) reads as one nobody checked until PR 5/6 design its own UI; this app never asks for `seen` yet.
+        case .unknownSigner, .seen: .unknownSigner(signerId: signer?.id)
         case .badSignature: .badSignature(writer(signer))
         case .unsigned: .unsigned
         case .resealed: .resealed(writer(signer))
