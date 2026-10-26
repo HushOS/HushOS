@@ -1,0 +1,33 @@
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_8f11712f2979bc 492-493,500,1120-1121,1205-1276,1302-1305,1307,1324-1344,1456-1458,1504
+packages/db/src/groups.purge.test.ts
+  s_566b8e0c4467a4::t_d48d1fead24f03 657,667,671
+  s_566b8e0c4467a4::t_8afcf7d451b2d4 587,824
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_ba594e7e2e41e0 310-321,326,328,337,443,453,462-464,467,722-723,2001-2006,2010-2016,2018,2026-2030,2054,2056-2057,2060-2061,2099-2107,2117-2118,2120
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_f0bb171d1985c3 859-871
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_ac34c1b1338295 675-676,5748,5794-5798,5800-5806,5808-5816,6124-6227,6428,6431-6456,6458,6462-6471,6473,6477,6557,6561-6576
+  s_566b8e0c4467a4::t_6acfd516c1466d 6472,6474-6476
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_6d78839dc51b84 585
+packages/db/src/drive.pool.test.ts
+  s_566b8e0c4467a4::t_6271eff4e75d65 954,1052
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f6e55a47bf90451f3c39504e0cfd6e231e45e870",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
