@@ -1545,32 +1545,26 @@ export async function endUnwantedFamilyPlan(
         ).items;
         const paid = orders.filter((order) => order.paid);
         const after = (order: models.Order) => Date.parse(order.created_at) >= since;
-        await billingRepository.notePaidBeforeRevoke(
-            paid
-                .filter((order) => !after(order))
-                .map((order) => ({
-                    orderId: order.id,
-                    subscriptionId,
-                    refundKey: refundKey(ending, order.id),
-                    currency: order.currency,
-                })),
-            { keepOwed: true },
-        );
-        for (const order of paid.filter(after)) {
-            await billingRepository.notePaidOnLapsed({
-                orderId: order.id,
-                subscriptionId,
-                refundKey: refundKey(ending, order.id),
-                currency: order.currency,
-            });
-            // Refunded whole: it earns no commission. One its delivery already recorded is taken
-            // back while unpaid; one already paid out is said, for an operator.
+        const noted = (order: models.Order) => ({
+            orderId: order.id,
+            refundKey: refundKey(ending, order.id),
+            currency: order.currency,
+        });
+        // Every order noted, and the ending marked as noted, in one write: a run that stops before
+        // it leaves the ending unfinished (no `orders_noted_at`), so the next run notes them.
+        await billingRepository.noteEndingOrders({
+            subscriptionId,
+            before: paid.filter((order) => !after(order)).map(noted),
+            after: paid.filter(after).map(noted),
+        });
+        // Refunded whole: they earn no commission. One a delivery already recorded is taken back
+        // while unpaid; one already paid out is said, for an operator.
+        for (const order of paid.filter(after))
             if ((await growthRepository.withdrawEarning(order.id)) === 'paid')
                 log.error({
                     message: 'An affiliate was paid commission on an order HushOS refunds whole',
                     billing: { group: groupId, subscription: subscriptionId, order: order.id },
                 });
-        }
         try {
             const revoked = await polar().subscriptions.revoke(subscriptionId);
             await billingRepository.recordPlanRevoked(subscriptionId, {

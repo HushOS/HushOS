@@ -1430,30 +1430,39 @@ async function supersedeOthers(
 /*
  * Every plan of the family marked superseded that HushOS hasn't seen end: the ones a write just
  * marked, and any an earlier run marked but never ended (its revoke threw, or the run stopped),
- * each with the refund cutoff stored when it was marked, and whether its ending has its revoke
- * already. reconcileGroup ends each one not yet revoked, or revoked but live again at Polar.
+ * each with the refund cutoff stored when it was marked, whether its ending has its revoke
+ * already, and whether that ending's orders were ever noted. Also one Polar shows ended whose
+ * ending's orders were never noted. reconcileGroup ends each one not yet revoked, revoked but
+ * live again at Polar, or never noted.
  */
 export async function listSupersededToEnd(groupId: string) {
+    const ending = personalPlanEndings;
     const rows = await db
         .select({
             id: groupBillingSubscriptions.id,
             paidAfter: groupBillingSubscriptions.supersededPaidAfter,
+            ended: sql<boolean>`${groupBillingSubscriptions.endedAt} is not null`,
             // Its ending has its revoke already (the job then refunds): asked again only if Polar
-            // shows the plan live again.
-            revoked: sql<boolean>`exists (select 1 from ${personalPlanEndings} where ${personalPlanEndings.subscriptionId} = ${groupBillingSubscriptions.id} and ${personalPlanEndings.revokedAt} is not null)`,
+            // shows the plan live again, or its orders were never noted.
+            revoked: sql<boolean>`exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.revokedAt} is not null)`,
+            // An ending written whose orders were never noted (the run stopped between the two):
+            // unfinished, even once Polar shows the plan ended.
+            unnoted: sql<boolean>`exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.paidAfter} is not null and ${ending.ordersNotedAt} is null)`,
         })
         .from(groupBillingSubscriptions)
         .where(
             and(
                 eq(groupBillingSubscriptions.groupId, groupId),
                 isNotNull(groupBillingSubscriptions.supersededAt),
-                isNull(groupBillingSubscriptions.endedAt),
+                sql`(${groupBillingSubscriptions.endedAt} is null or exists (select 1 from ${ending} where ${ending.subscriptionId} = ${groupBillingSubscriptions.id} and ${ending.paidAfter} is not null and ${ending.ordersNotedAt} is null))`,
             ),
         );
     return rows.map((row) => ({
         id: row.id,
         paidAfter: row.paidAfter ?? new Date(0),
+        ended: row.ended,
         revoked: row.revoked,
+        unnoted: row.unnoted,
     }));
 }
 
@@ -2361,9 +2370,12 @@ export async function rekeyUnattemptedRefunds(rows: { orderId: string; refundKey
 export async function notePaidBeforeRevoke(
     rows: { orderId: string; subscriptionId: string; refundKey: string; currency: string }[],
     options: { keepOwed?: boolean } = {},
+    executor: Tx | typeof db = db,
 ) {
     for (const row of rows) {
-        const insert = db.insert(personalPlanRefunds).values({ ...row, amount: 0, status: 'none' });
+        const insert = executor
+            .insert(personalPlanRefunds)
+            .values({ ...row, amount: 0, status: 'none' });
         if (options.keepOwed)
             await insert.onConflictDoNothing({ target: personalPlanRefunds.orderId });
         else
@@ -2394,34 +2406,82 @@ export async function notePaidOnLapsed(input: {
     refundKey: string;
     currency: string;
 }): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
+    return db.transaction((tx) => notePaidOnLapsedIn(tx, input));
+}
+
+async function notePaidOnLapsedIn(
+    tx: Tx,
+    input: { orderId: string; subscriptionId: string; refundKey: string; currency: string },
+): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
+    const [ending] = await tx
+        .select()
+        .from(personalPlanEndings)
+        .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+        .for('update');
+    if (!ending || ending.groupId !== null || ending.outcome === 'dropped') return 'none';
+    const [row] = await tx
+        .select()
+        .from(personalPlanRefunds)
+        .where(eq(personalPlanRefunds.orderId, input.orderId));
+    if (row?.status === 'none') return 'paid-before';
+    if (row && (row.status !== 'requested' || row.firstAttemptedAt)) return 'worked';
+    if (!row)
+        await tx.insert(personalPlanRefunds).values({ ...input, amount: 0, status: 'requested' });
+    await tx
+        .update(personalPlanEndings)
+        .set({ outcome: null, updatedAt: new Date() })
+        .where(
+            and(
+                eq(personalPlanEndings.subscriptionId, input.subscriptionId),
+                eq(personalPlanEndings.outcome, 'settled'),
+            ),
+        );
+    return 'noted';
+}
+
+/*
+ * A plan HushOS ends because nothing could be given for it (endUnwantedFamilyPlan): every paid
+ * order of it noted on its ending in one transaction, those made before its cutoff as used
+ * (notePaidBeforeRevoke, `keepOwed`) and those at or after it for a refund (notePaidOnLapsed),
+ * with `orders_noted_at` set in the same write. Until then the ending is unfinished.
+ */
+export async function noteEndingOrders(input: {
+    subscriptionId: string;
+    before: { orderId: string; refundKey: string; currency: string }[];
+    after: { orderId: string; refundKey: string; currency: string }[];
+}) {
     return db.transaction(async (tx) => {
-        const [ending] = await tx
-            .select()
-            .from(personalPlanEndings)
-            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
-            .for('update');
-        if (!ending || ending.groupId !== null || ending.outcome === 'dropped') return 'none';
-        const [row] = await tx
-            .select()
-            .from(personalPlanRefunds)
-            .where(eq(personalPlanRefunds.orderId, input.orderId));
-        if (row?.status === 'none') return 'paid-before';
-        if (row && (row.status !== 'requested' || row.firstAttemptedAt)) return 'worked';
-        if (!row)
-            await tx
-                .insert(personalPlanRefunds)
-                .values({ ...input, amount: 0, status: 'requested' });
+        await notePaidBeforeRevoke(
+            input.before.map((row) => ({ ...row, subscriptionId: input.subscriptionId })),
+            { keepOwed: true },
+            tx,
+        );
+        for (const row of input.after)
+            await notePaidOnLapsedIn(tx, { ...row, subscriptionId: input.subscriptionId });
         await tx
             .update(personalPlanEndings)
-            .set({ outcome: null, updatedAt: new Date() })
-            .where(
-                and(
-                    eq(personalPlanEndings.subscriptionId, input.subscriptionId),
-                    eq(personalPlanEndings.outcome, 'settled'),
-                ),
-            );
-        return 'noted';
+            .set({ ordersNotedAt: sql`now()`, updatedAt: new Date() })
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId));
     });
+}
+
+/*
+ * A family's endings of plans nothing could be given for (`paid_after`) whose orders were never
+ * noted (noteEndingOrders): revokeOrphanedPlans reads each plan again and notes them, whatever
+ * the ending's outcome or whether Polar shows the plan ended.
+ */
+export async function listUnnotedFamilyEndings(groupId: string) {
+    const rows = await db
+        .select({ subscriptionId: personalPlanEndings.subscriptionId })
+        .from(personalPlanEndings)
+        .where(
+            and(
+                eq(personalPlanEndings.userId, groupId),
+                isNotNull(personalPlanEndings.paidAfter),
+                isNull(personalPlanEndings.ordersNotedAt),
+            ),
+        );
+    return rows.map((row) => row.subscriptionId);
 }
 
 /* Endings with work left for this person, oldest first. */

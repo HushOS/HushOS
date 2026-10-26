@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "a792dcbb-129a-438c-ab9e-83d77418058a",
+    "id": "3e3c4d5d-0e64-41ec-ae85-67c03dac3b5d",
     "prevIds": ["7f7e99b2-90c5-4308-896b-9dbf1557b6b1"],
     "ddl": [
         {
@@ -8067,6 +8067,19 @@
             "generated": null,
             "identity": null,
             "name": "paid_after",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_endings"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "orders_noted_at",
             "entityType": "columns",
             "schema": "public",
             "table": "personal_plan_endings"

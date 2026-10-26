@@ -515,11 +515,16 @@ async function reconcileGroupOnce(
     // marked whose revoke or ending never happened (it threw, or the run stopped), each from the
     // cutoff stored with its mark. Every one is tried; the first failure is rethrown after, so the
     // delivery or job is retried and the next reconcile asks again.
-    // One whose revoke landed is the job's (it refunds), unless Polar shows it live again now.
+    // One whose revoke landed is the job's (it refunds), unless Polar shows it live again now, or
+    // its ending's orders were never noted (asked again even once ended: the revoke then finds it
+    // ended, and the orders are noted for the job to refund).
     const toEnd =
         result.outcome === 'applied' && !options.afterCure
             ? (await billingRepository.listSupersededToEnd(groupId)).filter(
-                  (plan) => !plan.revoked || liveSeen.some((seen) => seen.id === plan.id),
+                  (plan) =>
+                      plan.unnoted ||
+                      (!plan.ended &&
+                          (!plan.revoked || liveSeen.some((seen) => seen.id === plan.id))),
               )
             : [];
     if (toEnd.length) {
@@ -701,6 +706,9 @@ async function revokeOrphanedPlans(
     // One HushOS set out to revoke and hasn't seen end, even once it left the customer state
     // (past due, unpaid): asked about again until Polar shows it ended.
     for (const id of await billingRepository.listUnrevokedLapsedEndings(groupId)) ids.add(id);
+    // One whose ending was written but its orders never noted (the run stopped between the two):
+    // read again, whatever Polar shows, so its charges are noted for the job to refund.
+    for (const id of await billingRepository.listUnnotedFamilyEndings(groupId)) ids.add(id);
     const customer = await billingRepository.getGroupCustomer(groupId);
     // Best effort, every page (listFamilySubscriptions): a listing Polar refuses or can't answer
     // (429, a 5xx) is logged and owed (the daily reconcile lists it again), and the plans already
@@ -773,10 +781,12 @@ async function revokeOrphanedPlans(
         if (subscription.ended_at || ENDED.has(subscription.status)) {
             // Ended again before HushOS saw it bill (reinstated, charged, ended between reads).
             // With no ending yet, its charges since the cutoff are refunded through an ending
-            // written now. With one (HushOS revoked it before), each charge's own `order.paid`
-            // delivery notes it on that ending (notePaidAfterRevoke) for the job to refund: the
-            // only guard there, since nothing else lists that plan's orders again.
-            if (!(await recordOrphanEnded(id, subscription.ended_at ?? null)))
+            // written now. With one whose orders were noted (HushOS revoked it before), each
+            // charge's own `order.paid` delivery notes it on that ending (notePaidAfterRevoke)
+            // for the job to refund. With one whose orders were never noted (a run that stopped
+            // between writing it and noting them), they are read and noted now.
+            const closed = await recordOrphanEnded(id, subscription.ended_at ?? null);
+            if (!closed || !(await billingRepository.getPlanEnding(id))?.ordersNotedAt)
                 await endUnwantedFamilyPlan(groupId, id, paidAfter, { onlyIfPaidSince: true });
             continue;
         }

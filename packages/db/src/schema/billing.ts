@@ -396,6 +396,13 @@ export const personalPlanEndings = pgTable(
          * ending, and never recomputed; null on every other ending.
          */
         paidAfter: timestamp('paid_after', { withTimezone: true }),
+        /*
+         * When the plan's paid orders were noted on this ending (noteEndingOrders), in the same
+         * transaction as the notes. An ending with `paid_after` and none is unfinished, whatever
+         * its outcome: its plan's orders are read and noted again (a run that stopped between
+         * writing the ending and noting them would otherwise leave every charge unrefunded).
+         */
+        ordersNotedAt: timestamp('orders_noted_at', { withTimezone: true }),
         periodStart: timestamp('period_start', { withTimezone: true }),
         periodEnd: timestamp('period_end', { withTimezone: true }),
         /*

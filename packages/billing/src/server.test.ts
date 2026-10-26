@@ -5649,6 +5649,57 @@ describe('a deleted family’s plan billing again', () => {
         expect(refundsMade().map(([order]) => order)).toEqual(['order_reinstated']);
     });
 
+    test('a deleted family’s ending written but its orders never noted, the plan then ended at Polar, is finished by the next reconcile', async () => {
+        // Once `message` is logged at error level, the next orders read for `subscriptionId` fails:
+        // after the ending is written, before its orders are noted.
+        const failOrdersAfter = (message: string, subscriptionId: string) => {
+            let armed = false;
+            const error = vi.spyOn(log, 'error').mockImplementation((entry) => {
+                if ((entry as { message: string }).message === message) armed = true;
+            });
+            const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+            const original = fakeClient.orders.list.bind(fakeClient.orders);
+            const orders = vi
+                .spyOn(fakeClient.orders, 'list')
+                .mockImplementation(async (query: Parameters<typeof original>[0]) => {
+                    if (armed && query.subscription_id === subscriptionId) {
+                        armed = false;
+                        throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+                    }
+                    return original(query);
+                });
+            return () => {
+                error.mockRestore();
+                warn.mockRestore();
+                orders.mockRestore();
+            };
+        };
+        const { groupId, subscription } = await purgedFamily();
+        reinstate(subscription);
+        const restore = failOrdersAfter(
+            'A deleted family’s plan is billing again: revoked, and what it took refunded',
+            subscription.id,
+        );
+        try {
+            await expect(
+                billing.reconcileGroup(groupId, { fromDelivery: true }),
+            ).rejects.toBeTruthy();
+        } finally {
+            restore();
+        }
+        expect((await billingRepository.getPlanEnding(subscription.id))?.paidAfter).toBeTruthy();
+        expect(await billingRepository.getPlanRefund('order_reinstated')).toBeNull();
+        // Polar ends it meanwhile; the daily reconcile reads the family.
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        endingJobs.length = 0;
+        await quietly(async () => {
+            await billing.reconcileGroup(groupId);
+            await runQueued(0);
+        });
+        expect(refundsMade()).toEqual([['order_reinstated', 999]]);
+    });
+
     test('a plan HushOS revoked, reinstated, charged and ended again between reads: its own order.paid has the charge refunded', async () => {
         const { groupId, subscription } = await purgedFamily();
         subscription.status = 'active';
@@ -6135,6 +6186,60 @@ describe('one plan per family', () => {
         expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe(
             subscription.id,
         );
+    });
+
+    test('a cure whose ending is written but its orders never noted, the plan then ended at Polar, is finished by the next reconcile', async () => {
+        // Once `message` is logged at error level, the next orders read for `subscriptionId` fails:
+        // after the ending is written, before its orders are noted.
+        const failOrdersAfter = (message: string, subscriptionId: string) => {
+            let armed = false;
+            const error = vi.spyOn(log, 'error').mockImplementation((entry) => {
+                if ((entry as { message: string }).message === message) armed = true;
+            });
+            const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+            const original = fakeClient.orders.list.bind(fakeClient.orders);
+            const orders = vi
+                .spyOn(fakeClient.orders, 'list')
+                .mockImplementation(async (query: Parameters<typeof original>[0]) => {
+                    if (armed && query.subscription_id === subscriptionId) {
+                        armed = false;
+                        throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+                    }
+                    return original(query);
+                });
+            return () => {
+                error.mockRestore();
+                warn.mockRestore();
+                orders.mockRestore();
+            };
+        };
+        const { groupId, newer } = await twoPlans();
+        // Its order.paid came and went before any reconcile saw two plans: only the cure reads it.
+        const restore = failOrdersAfter(
+            'A family had two live plans: one is revoked and its overlap refunded',
+            newer.id,
+        );
+        try {
+            await expect(billing.reconcileGroup(groupId)).rejects.toBeTruthy();
+        } finally {
+            restore();
+        }
+        expect((await billingRepository.getPlanEnding(newer.id))?.paidAfter).toBeTruthy();
+        expect(await billingRepository.getPlanRefund('order_newer')).toBeNull();
+        expect(endingJobs).toEqual([]);
+        // Polar ends it meanwhile (the payer cancelled it).
+        newer.status = 'canceled';
+        newer.ended_at = new Date().toISOString();
+        await quietly(async () => {
+            await billing.reconcileGroup(groupId);
+            await runQueued(0);
+        });
+        expect((await billingRepository.getPlanRefund('order_newer'))?.status).not.toBe('none');
+        expect(refundsMade()).toEqual([['order_newer', 999]]);
+        // Finished: the next reconcile asks Polar nothing more about it.
+        polar.calls = [];
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
     });
 
     test('one second plan’s ending failing doesn’t stop the others; the run still fails, to be retried', async () => {
