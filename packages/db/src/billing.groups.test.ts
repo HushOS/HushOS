@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import type { GroupSubscriptionSnapshot } from './billing';
@@ -11,7 +12,8 @@ const billing = await import('./billing');
 const { db } = await import('./client');
 const { getStorage } = await import('./drive');
 const { deletionBlockers, purgeDeletedAreas } = await import('./groups');
-const { groupBillingCustomers, groups, workspaceStorage, workspaces } = await import('./schema');
+const { groupBillingCustomers, groupBillingSubscriptions, groups, workspaceStorage, workspaces } =
+    await import('./schema');
 
 /*
  * A family's plan as billing writes it, and the pool Drive reads from it: the
@@ -529,4 +531,196 @@ describe('the payer', () => {
         expect(await billing.setGroupPayer(groupId, null, second.userId)).toBe(true);
         expect((await billing.getGroupCustomer(groupId))?.payerUserId).toBe(second.userId);
     });
+});
+
+describe('lapsed family plans and double charges', () => {
+    const personal = (id: string, status: string, endedAt: Date | null = null) => ({
+        id,
+        productId: 'prod_pro',
+        productName: 'Pro (monthly)',
+        status,
+        recurringInterval: 'month',
+        amount: 1000,
+        currency: 'usd',
+        quotaBytes: 500n * GIB,
+        currentPeriodEnd: new Date(Date.now() + 29 * DAY),
+        cancelAtPeriodEnd: false,
+        endedAt,
+    });
+
+    test('a checkout finds every unpaid, incomplete or paused plan of the family, never a live or ended one', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [
+            plan({ id: 'sub_unpaid', status: 'unpaid' }),
+            plan({ id: 'sub_incomplete', status: 'incomplete' }),
+            plan({ id: 'sub_paused', status: 'paused' }),
+            plan({ id: 'sub_due', status: 'past_due' }),
+            plan({ id: 'sub_gone', status: 'unpaid', endedAt: new Date() }),
+        ]);
+        expect((await billing.listLapsedGroupSubscriptionIds(groupId)).sort()).toEqual([
+            'sub_incomplete',
+            'sub_paused',
+            'sub_unpaid',
+        ]);
+        // The page names the newest of them while nothing is live.
+        await apply(groupId, [
+            plan({ id: 'sub_old', status: 'unpaid', currentPeriodEnd: new Date(Date.now() + DAY) }),
+            plan({ id: 'sub_new', status: 'paused' }),
+        ]);
+        expect(await billing.getLapsedGroupSubscription(groupId)).toMatchObject({
+            id: 'sub_new',
+            status: 'paused',
+        });
+        await apply(groupId, [plan({ id: 'sub_new', status: 'canceled' })]);
+        expect(await billing.getLapsedGroupSubscription(groupId)).toBeNull();
+    });
+
+    test('a family’s plan and its ending’s owner are told from a person’s by one rule, a purged family’s too', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan()]);
+        expect(await billing.familyPlanOf('sub_family')).toEqual({ groupId });
+        expect(await billing.familyPlanOf('sub_personal')).toBeNull();
+        expect(await billing.isFamilyOwner(groupId)).toBe(true);
+        expect(await billing.isFamilyOwner(userId)).toBe(false);
+        // Operators' lists name the family behind a family's own ending.
+        await billing.beginLapsedRevoke({
+            subscriptionId: 'sub_family',
+            userId: groupId,
+            at: new Date(),
+            owner: 'run',
+            leaseMs: 60_000,
+        });
+        await billing.setPlanUnrefundable('sub_family', 300, 'usd');
+        expect(await billing.listUnrefundable()).toEqual([
+            expect.objectContaining({ subscriptionId: 'sub_family', planOfGroupId: groupId }),
+        ]);
+        // Billing rows outlive the family's own (no foreign key): still a family's.
+        const purged = randomUUID();
+        await db.insert(groupBillingSubscriptions).values({
+            id: 'sub_purged',
+            groupId: purged,
+            provider: 'polar',
+            productId: 'prod_family',
+            productName: 'Family (monthly)',
+            status: 'canceled',
+            recurringInterval: 'month',
+            units: 6,
+            includedMembers: 6,
+            quotaBytes: 100n,
+            currentPeriodStart: new Date(Date.now() - DAY),
+            currentPeriodEnd: new Date(Date.now() + DAY),
+            endedAt: new Date(),
+        });
+        expect(await billing.familyPlanOf('sub_purged')).toEqual({ groupId: purged });
+        expect(await billing.isFamilyOwner(purged)).toBe(true);
+    });
+
+    test('a family or a person with two plans that can still charge is listed for operators; one, or an ended second, is not', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        const listed = async () => billing.listDoubleCharging();
+        await apply(groupId, [plan({ id: 'sub_a' })]);
+        await billing.applyCustomerState({
+            userId,
+            provider: 'polar',
+            customerId: 'cus_person',
+            subscriptions: [personal('sub_p1', 'active')],
+            graceMs: GRACE,
+        });
+        expect(await listed()).toEqual([]);
+        // An unpaid plan Polar still holds beside a live one: it can charge again.
+        await apply(groupId, [plan({ id: 'sub_a' }), plan({ id: 'sub_b', status: 'unpaid' })]);
+        await billing.applyCustomerState({
+            userId,
+            provider: 'polar',
+            customerId: 'cus_person',
+            subscriptions: [personal('sub_p1', 'active'), personal('sub_p2', 'paused')],
+            graceMs: GRACE,
+        });
+        expect(await listed()).toEqual([
+            {
+                kind: 'family',
+                id: groupId,
+                subscriptions: [
+                    { id: 'sub_a', status: 'active' },
+                    { id: 'sub_b', status: 'unpaid' },
+                ],
+            },
+            {
+                kind: 'person',
+                id: userId,
+                subscriptions: [
+                    { id: 'sub_p1', status: 'active' },
+                    { id: 'sub_p2', status: 'paused' },
+                ],
+            },
+        ]);
+        // The live one set to end at its period's end charges no more: off the list.
+        await apply(groupId, [
+            plan({ id: 'sub_a', cancelAtPeriodEnd: true }),
+            plan({ id: 'sub_b', status: 'unpaid' }),
+        ]);
+        expect((await listed()).map((row) => row.kind)).toEqual(['person']);
+        // Revoked, or ended at Polar: no longer able to charge, so off the list.
+        await apply(groupId, [
+            plan({ id: 'sub_a' }),
+            plan({ id: 'sub_b', status: 'canceled', endedAt: new Date() }),
+        ]);
+        await billing.applyCustomerState({
+            userId,
+            provider: 'polar',
+            customerId: 'cus_person',
+            subscriptions: [personal('sub_p1', 'active'), personal('sub_p2', 'incomplete_expired')],
+            graceMs: GRACE,
+        });
+        expect(await listed()).toEqual([]);
+    });
+});
+
+test('the readability migration marks unread the rows an earlier build named after their product id, and nothing else', async () => {
+    const { readFileSync } = await import('node:fs');
+    const migration = readFileSync(
+        new URL(
+            '../drizzle/20261026094157_family_lapsed_revoke_refusal/migration.sql',
+            import.meta.url,
+        ),
+        'utf8',
+    );
+    const backfill = migration
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.trim())
+        .filter((statement) => statement.startsWith('UPDATE'));
+    expect(backfill).toHaveLength(1);
+    const row = (id: string, productId: string, productName: string) => ({
+        id,
+        groupId: randomUUID(),
+        provider: 'polar',
+        productId,
+        productName,
+        status: 'paused',
+        recurringInterval: 'month',
+        units: 1,
+        includedMembers: 1,
+        quotaBytes: 0n,
+        currentPeriodStart: new Date(Date.now() - DAY),
+        currentPeriodEnd: new Date(Date.now() + DAY),
+    });
+    await db
+        .insert(groupBillingSubscriptions)
+        .values([
+            row('sub_sentinel', 'prod_archived', 'prod_archived'),
+            row('sub_read', 'prod_family', 'Family (monthly)'),
+        ]);
+    await db.execute(sql.raw(backfill[0]!));
+    const unread = async (id: string) =>
+        (
+            await db
+                .select({ unread: groupBillingSubscriptions.productUnread })
+                .from(groupBillingSubscriptions)
+                .where(eq(groupBillingSubscriptions.id, id))
+        )[0]?.unread;
+    expect(await unread('sub_sentinel')).toBe(true);
+    expect(await unread('sub_read')).toBe(false);
 });

@@ -293,6 +293,28 @@ function GlanceTop({
     if (summary.hasPlan) return null;
     const who = organizersLine(members);
     const empty = summary.storage !== null && summary.storage.quotaBytes === '0';
+    const lapsed = summary.lapsedPlan;
+    if (lapsed) {
+        const name = tierName({ name: lapsed.productName });
+        const paused = lapsed.standing === 'paused';
+        return (
+            <div className="px-5 sm:px-8">
+                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
+                    <AlertTitle>
+                        {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
+                    </AlertTitle>
+                    <AlertDescription>
+                        {paused
+                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
+                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                        Nothing can be added to the family folders, nobody new can join, and your
+                        own files count against your own storage again. Nothing is deleted.{' '}
+                        {who ? `${who} can sort it out.` : 'The organizer can sort it out.'}
+                    </AlertDescription>
+                </Alert>
+            </div>
+        );
+    }
     return (
         <div className="px-5 sm:px-8">
             <Alert data-plan-notice="none">
@@ -478,6 +500,52 @@ function PlanTop(props: Inner) {
 
     // Any `billing` holder can choose a plan while none is live (the server makes them the payer).
     const ask = organizersLine(members);
+    if (state.kind === 'unpaid') {
+        const name = tierName({ name: state.productName });
+        const paused = state.standing === 'paused';
+        const payer = payerName ?? 'The person who pays for it';
+        // The way forward, for whoever is reading: a new plan ends this one first (the server
+        // revokes it before the checkout), and only the payer has a portal.
+        const next = actions.choosePlan
+            ? payerYou
+                ? paused
+                    ? `Resume it in the billing portal, or choose a plan below, which ends ${name} first.`
+                    : `Choose a plan below; that ends ${name} first. If the billing portal offers to retry the payment, that restores ${name}.`
+                : paused
+                  ? `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can resume it instead.`
+                  : `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can instead retry the payment in the billing portal, if it offers to.`
+            : payerYou
+              ? paused
+                  ? 'Resume it in the billing portal.'
+                  : 'Retry the payment in the billing portal, if it offers to.'
+              : ask
+                ? `${ask} can sort it out.`
+                : `${payer} can sort it out.`;
+        return (
+            <div className="flex flex-col gap-2 px-5 sm:px-8">
+                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
+                    <AlertTitle>
+                        {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
+                    </AlertTitle>
+                    <AlertDescription>
+                        {paused
+                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
+                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                        Nothing can be added to the family folders, nobody new can join, and
+                        everyone’s own files count against their own storage again. Nothing is
+                        deleted. {next}
+                    </AlertDescription>
+                </Alert>
+                {actions.portal && (
+                    <PortalButton
+                        groupId={props.groupId}
+                        label={paused ? 'Resume in portal' : 'Billing portal'}
+                    />
+                )}
+                {actions.choosePlan && <ChoosePlan {...props} renewing />}
+            </div>
+        );
+    }
     if (state.kind === 'lapsed')
         return (
             <div className="flex flex-col gap-2 px-5 sm:px-8">
@@ -522,6 +590,47 @@ function PlanTop(props: Inner) {
     );
 }
 
+/*
+ * The payer's portal, where Polar may retry a failed payment or resume a paused plan. Outline:
+ * choosing a plan (the one blue button) leads, since the portal may not take the payment.
+ */
+function PortalButton({ groupId, label }: { groupId: string; label: string }) {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    usePageRestored(() => setBusy(false));
+    async function open() {
+        setBusy(true);
+        setError('');
+        try {
+            const { url } = await groupBillingApi.portal(groupId);
+            window.location.assign(url);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+            setBusy(false);
+        }
+    }
+    return (
+        <div className="flex flex-col gap-1 pb-2">
+            <Button
+                variant="outline"
+                className="w-fit"
+                disabled={busy}
+                onClick={() => void open()}
+                data-family-portal
+            >
+                {busy ? 'Opening portal' : label}
+                <ArrowUpRightIcon />
+            </Button>
+            {error && (
+                <p role="alert" className="text-sm text-destructive">
+                    {error}
+                </p>
+            )}
+        </div>
+    );
+}
+
 /* The plans, monthly or yearly, in the visitor's currency as the pricing page picks it. */
 function ChoosePlan({
     userId,
@@ -553,20 +662,48 @@ function ChoosePlan({
     // Only while every tier's year is at most ten of its months, in this currency.
     const saving = twoMonthsFree(familyPairs(plans, currency));
     const shown = plans.filter((plan) => plan.interval === period);
+    const queryClient = useQueryClient();
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState('');
+    // A plan Polar still holds that gives nothing ends when another is chosen: asked first.
+    const [confirming, setConfirming] = useState<{ plan: FamilyPlan; words: string } | null>(null);
     usePageRestored(() => setBusy(null));
+    const lapsed = summary.lapsedPlan ?? null;
+    const lapsedName = lapsed ? tierName({ name: lapsed.productName }) : null;
 
-    async function choose(plan: FamilyPlan) {
+    async function choose(plan: FamilyPlan, endLapsed = false) {
+        // Ending it can't be taken back, and happens whether or not the checkout is finished.
+        if (!endLapsed && lapsed && lapsedName) {
+            setConfirming({
+                plan,
+                words: `This ends ${lapsedName} now, even if you don’t finish the checkout. ${lapsed.standing === 'paused' ? 'It is paused.' : 'Its payment didn’t go through.'} Then Polar’s checkout opens.`,
+            });
+            return;
+        }
         setBusy(plan.id);
         setError('');
         try {
-            const { url } = await groupBillingApi.checkout(groupId, plan.id, currency);
+            // Exactly the plans the page showed: the server ends them only if they are the family's.
+            const { url } = await groupBillingApi.checkout(
+                groupId,
+                plan.id,
+                currency,
+                endLapsed ? (lapsed?.ids ?? []) : undefined,
+            );
             window.location.assign(url);
         } catch (cause) {
+            setBusy(null);
+            // One the page didn't know of (its payment failed since it loaded, or another): the
+            // page reads the family's plan again and asks, with the server's words.
+            if ((cause as { code?: string }).code === 'ends-lapsed') {
+                await queryClient.invalidateQueries({
+                    queryKey: familyBillingQueryOptions(userId, groupId).queryKey,
+                });
+                setConfirming({ plan, words: (cause as Error).message });
+                return;
+            }
             cue('error');
             setError(authError(cause));
-            setBusy(null);
         }
     }
 
@@ -662,6 +799,40 @@ function ChoosePlan({
             <p className="text-[13px] text-muted-foreground">
                 {TAX_LINE} Payments are handled by Polar.
             </p>
+            <Dialog
+                open={confirming !== null}
+                onOpenChange={(open) => !open && busy === null && setConfirming(null)}
+            >
+                <DialogContent className="sm:max-w-[480px]" data-ends-lapsed>
+                    {confirming && (
+                        <>
+                            <DialogHeader>
+                                <DialogTitle>Choose {tierName(confirming.plan)}?</DialogTitle>
+                                <DialogDescription>{confirming.words}</DialogDescription>
+                            </DialogHeader>
+                            <DialogFooter>
+                                <Button
+                                    variant="outline"
+                                    disabled={busy !== null}
+                                    onClick={() => setConfirming(null)}
+                                >
+                                    Not now
+                                </Button>
+                                <Button
+                                    disabled={busy !== null}
+                                    onClick={() => {
+                                        const plan = confirming.plan;
+                                        setConfirming(null);
+                                        void choose(plan, true);
+                                    }}
+                                >
+                                    {lapsedName ? `End ${lapsedName} and continue` : 'Continue'}
+                                </Button>
+                            </DialogFooter>
+                        </>
+                    )}
+                </DialogContent>
+            </Dialog>
         </section>
     );
 }

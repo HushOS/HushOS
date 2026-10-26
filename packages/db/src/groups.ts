@@ -1402,6 +1402,11 @@ export async function appendChain(input: {
     rotations?: RotationInput[];
     /* The chain cache as of the new head, from the caller's checks. */
     cache: unknown;
+    /*
+     * Every rule run under the lock, then rolled back: what the write would answer now, with
+     * nothing written (a removal asks it before it ends a plan the write might then refuse).
+     */
+    preview?: boolean;
 }): Promise<ChainResult> {
     const { groupId, uploaderUserId: uploader, route, roster, succession } = input;
     if (route.kind === 'succession' ? roster || !succession : !roster)
@@ -1625,6 +1630,8 @@ export async function appendChain(input: {
                     })
                     .where(eq(groups.id, groupId));
                 await writeCache(tx, groupId, head.revision, input.cache);
+                // A preview's answer, with everything it wrote rolled back.
+                if (input.preview) return refuse({ status: 'ok', ...head });
                 return { status: 'ok' as const, ...head };
             }),
         () => staleResult(db, groupId, roster, succession),
@@ -1879,7 +1886,9 @@ export async function storeGrants(input: {
 
 export type LeaveResult =
     | { status: 'left' | 'dissolved' }
-    | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' };
+    | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' }
+    /* `mustDissolve`, and the leave would not dissolve the family: nothing was written. */
+    | { status: 'not-last' };
 
 /*
  * Whether the family has a plan someone is still paying for: live, and not set
@@ -2030,7 +2039,15 @@ export async function deletionBlockers(userId: string) {
  * areas they could open due for rotation, and a departure every other roster
  * waits on until one marks them left.
  */
-export async function leaveGroup(groupId: string, userId: string): Promise<LeaveResult> {
+export async function leaveGroup(
+    groupId: string,
+    userId: string,
+    /*
+     * Only a leave that dissolves the family (its last member's): the caller let a plan run on
+     * that condition (the dissolved family's job ends it). Any other is rolled back, `not-last`.
+     */
+    options: { mustDissolve?: boolean } = {},
+): Promise<LeaveResult> {
     return answering<LeaveResult>(
         () =>
             db.transaction(async (tx): Promise<LeaveResult> => {
@@ -2039,8 +2056,44 @@ export async function leaveGroup(groupId: string, userId: string): Promise<Leave
                 await lockAreas(tx, groupId);
                 // Leaving takes the member's own files out of the family's pool (3.6).
                 if (group.kind === 'family') await lockPool(tx, groupId);
-                return depart(tx, groupId, userId);
+                const result = await depart(tx, groupId, userId);
+                if (options.mustDissolve && result.status === 'left')
+                    return refuse({ status: 'not-last' });
+                return result;
             }),
+        async () => ({ status: 'unavailable' }),
+    );
+}
+
+/*
+ * What leaving would answer now, by the very rule leaveGroup applies (depart, under the same
+ * locks), with nothing kept: the transaction is always rolled back. Asked before anything
+ * outside the database changes for a leave (its payer's lapsed plan revoked at Polar), so a
+ * leave the rule refuses ends nothing. Another change between this and the leave can still
+ * refuse it.
+ */
+export async function previewLeave(groupId: string, userId: string): Promise<LeaveResult> {
+    const preview = Symbol('preview');
+    let answer: LeaveResult = { status: 'unavailable' };
+    // As leaveGroup answers: a deadlock or a lost connection is `unavailable`, not an error.
+    return answering<LeaveResult>(
+        async () => {
+            try {
+                await db.transaction(async (tx) => {
+                    const group = await lockGroup(tx, groupId);
+                    if (!group) answer = { status: 'not-member' };
+                    else {
+                        await lockAreas(tx, groupId);
+                        if (group.kind === 'family') await lockPool(tx, groupId);
+                        answer = await depart(tx, groupId, userId);
+                    }
+                    throw preview;
+                });
+            } catch (error) {
+                if (error !== preview) throw error;
+            }
+            return answer;
+        },
         async () => ({ status: 'unavailable' }),
     );
 }
@@ -3471,6 +3524,11 @@ export async function purgeDissolvedFamilies(days: number, limit = 50) {
                   ENDED_SUBSCRIPTION_STATUSES.map((status) => sql`${status}`),
                   sql`, `,
               )}))`,
+        // A family whose list of plans at Polar is still owed (a read failed): one the mirror
+        // never held may be charging, so it is kept until the list is read.
+        billingEnv.BILLING_PROVIDER === 'none'
+            ? undefined
+            : sql`not exists (select 1 from ${groupBillingCustomers} c where c.group_id = ${groups.id} and c.plans_unlisted_since is not null)`,
     );
     const due = await db
         .select({ id: groups.id })

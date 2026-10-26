@@ -48,6 +48,11 @@ export type PlanState =
     | { kind: 'none' }
     /* A plan ran out or was cancelled, and nothing has replaced it. */
     | { kind: 'lapsed'; productName: string; endedAt: string }
+    /*
+     * A plan Polar still holds whose payment didn't go through (or that is paused): the pool
+     * and the extra places give nothing meanwhile, and choosing a plan ends it first.
+     */
+    | { kind: 'unpaid'; productName: string; standing: 'payment-failed' | 'paused' }
     | {
           kind: 'live';
           subscription: FamilySubscription;
@@ -67,9 +72,70 @@ export function planState(summary: FamilyBillingFull): PlanState {
             ending: live.cancelAtPeriodEnd,
             overdue: live.status === 'past_due',
         };
+    if (summary.lapsedPlan) return { kind: 'unpaid', ...summary.lapsedPlan };
     if (summary.lastPlan) return { kind: 'lapsed', ...summary.lastPlan };
     return { kind: 'none' };
 }
+
+/*
+ * Said before a leave or a removal: the family's plan that gives nothing (its payment failed,
+ * or it is paused) ends at once when the person who pays for it goes (the server revokes it
+ * first). From a manager's summary, which names the payer; from a member's glance only for
+ * the person themselves (`youPay`), which names nobody else. Null when nothing lapsed is there
+ * to end, or the summary can't say this person pays: then the server names the plans itself
+ * (`ends-lapsed`, or the removal preview), and lapsedEndsWords says them.
+ */
+export function lapsedPlanEndsLine(
+    summary: FamilyBilling | undefined,
+    family: string,
+    goer: { userId: string; you: true } | { userId: string; you: false; name: string },
+) {
+    const shown = lapsedPlanShown(summary, goer);
+    return shown ? lapsedEndsWords(family, [shown], goer) : null;
+}
+
+/*
+ * The lapsed plan the summary shows as ending with this person's leave or removal, with the ids
+ * to confirm it by (all the family's lapsed plans, as the page knows them); null as above.
+ */
+export function lapsedPlanShown(
+    summary: FamilyBilling | undefined,
+    goer: { userId: string; you: boolean },
+) {
+    if (!summary?.enabled) return null;
+    const lapsed = summary.lapsedPlan;
+    if (!lapsed) return null;
+    if (summary.view === 'manage')
+        return summary.payer?.userId === goer.userId
+            ? { name: lapsed.productName, standing: lapsed.standing, ids: lapsed.ids }
+            : null;
+    return goer.you && 'youPay' in lapsed && lapsed.youPay
+        ? { name: lapsed.productName, standing: lapsed.standing, ids: lapsed.ids ?? [] }
+        : null;
+}
+
+/* What ends when the person who pays for these plans goes, every plan named. */
+export function lapsedEndsWords(
+    family: string,
+    plans: { name: string; standing: 'payment-failed' | 'paused' }[],
+    goer: { you: true } | { you: false; name: string },
+) {
+    const several = plans.length > 1;
+    const names = `${plans.map((plan) => planWord(plan.name)).join(' and ')} ${several ? 'plans' : 'plan'}`;
+    const how = several ? 'which give nothing now' : standingWords(plans[0]!.standing);
+    const after = several
+        ? 'Nothing of them is refunded: no part of them is in use.'
+        : 'Nothing of it is refunded: no part of it is in use.';
+    return goer.you
+        ? `${family}’s ${names}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
+        : `${goer.name} pays for ${family}’s ${names}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
+}
+
+/* "Family Pro (monthly)" → "Family Pro"; a neutral "Family plan" → "Family", as "…’s Family plan". */
+const planWord = (productName: string) =>
+    productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '').replace(/\s+plan$/i, '');
+const standingWords = (standing: 'payment-failed' | 'paused') =>
+    standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through';
 
 /*
  * A renewal the bank refused, and this person pays: then Manage payment and invoices is the

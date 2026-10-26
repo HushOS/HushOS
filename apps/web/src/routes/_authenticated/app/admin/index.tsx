@@ -95,11 +95,26 @@ const stuckReasons: Record<string, string> = {
     'dissolved-refused':
         'Its family was dissolved, and Polar refused to cancel the plan at the end of its period. Cancel it in Polar.',
     'dissolved-inactive':
-        'Its family was dissolved, and the plan isn’t active (unpaid, incomplete or paused), so it can’t be set to end and may still be paid. Revoke it in Polar.',
+        'Its family was dissolved, and the plan isn’t active (unpaid, incomplete or paused), so it can’t be set to end, and Polar refused HushOS’s revoke. It may still be paid or resume. Revoke it in Polar.',
+    'dissolved-paid-period':
+        'Its family was dissolved, and the plan is marked unpaid, but Polar shows a payment for its current period, so HushOS didn’t revoke it. Don’t revoke it now: that throws away a paid period. Check it in Polar; once Polar shows it active, HushOS sets it to end at its period’s end.',
+    'dissolved-unknown-status':
+        'Its family was dissolved, and Polar gives the plan a status HushOS doesn’t know, so nothing was asked. Look at it in Polar and decide.',
     'dissolved-failing':
         'Its family was dissolved, and HushOS has failed for over a day, or close to its renewal, to cancel the plan at the end of its period. The worker’s log has Polar’s answer; check the access token. Cancel it in Polar.',
     'revert-unavailable':
         'An upgrade unpaid for over a week, and the plan it was paid for is no longer offered, so it can’t be moved back. The family keeps the smaller storage meanwhile.',
+};
+
+/* Why a lapsed family plan wasn't revoked, by the refusal billing records. */
+const lapsedRefusals: Record<string, string> = {
+    'paid-period':
+        'Marked unpaid, but Polar shows a payment for its current period. Don’t revoke it: that throws away a paid period. Check it in Polar; it should turn active.',
+    locked: 'Polar is working on a change to it (a renewal under way). HushOS asks again when next asked; if it stays, look at it in Polar.',
+    refused:
+        'Polar refused the revoke. Check the subscription in Polar and revoke it there if it should end.',
+    unavailable:
+        'Polar couldn’t be reached, or didn’t answer. The revoke may have landed: check it in Polar before doing anything.',
 };
 
 function AdminPage() {
@@ -195,6 +210,24 @@ function AdminPage() {
                                 value: count(data.refundsOwed.length),
                                 tone: data.refundsOwed.length > 0 ? 'danger' : undefined,
                                 anchor: '#refunds-owed',
+                            },
+                            {
+                                label: 'Lapsed plans not ended',
+                                value: count(data.lapsedRevokeRefusals.length),
+                                tone: data.lapsedRevokeRefusals.length > 0 ? 'danger' : undefined,
+                                anchor: '#lapsed-not-ended',
+                            },
+                            {
+                                label: 'Family plans not listed',
+                                value: count(data.unlistedFamilies.length),
+                                tone: data.unlistedFamilies.length > 0 ? 'danger' : undefined,
+                                anchor: '#plans-not-listed',
+                            },
+                            {
+                                label: 'More than one plan',
+                                value: count(data.doubleCharges.length),
+                                tone: data.doubleCharges.length > 0 ? 'danger' : undefined,
+                                anchor: '#double-charges',
                             },
                             {
                                 label: 'On hold',
@@ -319,7 +352,7 @@ function AdminPage() {
                                 <thead>
                                     <tr>
                                         <th className={th}>Polar order</th>
-                                        <th className={th}>Account</th>
+                                        <th className={th}>Account or family</th>
                                         <th className={cn(th, 'text-right')}>Before tax</th>
                                         <th className={cn(th, 'text-right')}>Failed tries</th>
                                         <th className={th}>Since</th>
@@ -329,7 +362,9 @@ function AdminPage() {
                                     {data.refundsOwed.map((row) => (
                                         <tr key={row.orderId} className="hover:bg-muted">
                                             <td className={td}>{row.orderId}</td>
-                                            <td className={td}>{row.userId}</td>
+                                            <td className={td}>
+                                                {row.groupId ? `family ${row.groupId}` : row.userId}
+                                            </td>
                                             <td className={cn(td, 'text-right tabular-nums')}>
                                                 {formatMoney(row.amount, row.currency)}
                                             </td>
@@ -345,10 +380,133 @@ function AdminPage() {
                             </OperatorTable>
                             <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
                                 The unused part of a personal plan that ended when its owner’s files
-                                joined a family, or a payment Polar took for a lapsed plan HushOS
-                                had already revoked (refunded whole). HushOS keeps trying; to settle
-                                one now, refund the order in Polar’s dashboard for the amount shown
-                                (Polar adds the tax), and the row goes at the next try.
+                                joined a family, or a payment Polar took for a lapsed plan (a
+                                person’s or a family’s) HushOS had already revoked (refunded whole).
+                                HushOS keeps trying; to settle one now, refund the order in Polar’s
+                                dashboard for the amount shown (Polar adds the tax), and the row
+                                goes at the next try.
+                            </p>
+                        </>
+                    )}
+                    {data.lapsedRevokeRefusals.length > 0 && (
+                        <>
+                            <h2
+                                id="lapsed-not-ended"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Lapsed plans not ended
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Polar subscription</th>
+                                        <th className={th}>Why</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.lapsedRevokeRefusals.map((row) => (
+                                        <tr key={row.subscriptionId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={td}>
+                                                {row.subscriptionId} ({row.status})
+                                            </td>
+                                            <td className={cn(td, 'font-sans')}>
+                                                {lapsedRefusals[row.refusal ?? ''] ??
+                                                    row.refusal ??
+                                                    '–'}
+                                            </td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                A family plan whose payment failed, or that is paused, which HushOS
+                                set out to revoke (before a new plan, or before its payer left, was
+                                removed or deleted their account) and couldn’t. What asked for it is
+                                refused until the plan ends. The row goes once a revoke lands.
+                            </p>
+                        </>
+                    )}
+                    {data.unlistedFamilies.length > 0 && (
+                        <>
+                            <h2
+                                id="plans-not-listed"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                Family plans not listed
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family</th>
+                                        <th className={th}>Since</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.unlistedFamilies.map((row) => (
+                                        <tr key={row.groupId} className="hover:bg-muted">
+                                            <td className={td}>{row.groupId}</td>
+                                            <td className={cn(td, 'tabular-nums')}>
+                                                {row.since ? formatWhen(row.since) : '–'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                Polar’s list of these families’ plans couldn’t be read, so a plan
+                                HushOS has no record of may be charging. The daily reconcile asks
+                                again; a dissolved family is kept until it can. Check the family’s
+                                customer in Polar’s dashboard if the row stays.
+                            </p>
+                        </>
+                    )}
+                    {data.doubleCharges.length > 0 && (
+                        <>
+                            <h2
+                                id="double-charges"
+                                className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                            >
+                                More than one plan
+                            </h2>
+                            <OperatorTable>
+                                <thead>
+                                    <tr>
+                                        <th className={th}>Family or account</th>
+                                        <th className={th}>Polar subscriptions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {data.doubleCharges.map((row) => (
+                                        <tr
+                                            key={`${row.kind}:${row.id}`}
+                                            className="hover:bg-muted"
+                                        >
+                                            <td className={td}>
+                                                {row.kind === 'family'
+                                                    ? `family ${row.id}`
+                                                    : row.id}
+                                            </td>
+                                            <td className={td}>
+                                                {row.subscriptions
+                                                    .map((sub) => `${sub.id} (${sub.status})`)
+                                                    .join(', ')}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </OperatorTable>
+                            <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                                Each of these has more than one plan that can still charge: live, or
+                                unpaid, incomplete or paused and able to come back. A new plan
+                                revokes a lapsed one first, so a row here is a double charge or one
+                                waiting to happen. Check the subscriptions in Polar’s dashboard,
+                                revoke the one that shouldn’t run, and refund what it took.
                             </p>
                         </>
                     )}
@@ -364,7 +522,7 @@ function AdminPage() {
                                 <thead>
                                     <tr>
                                         <th className={th}>Polar subscription</th>
-                                        <th className={th}>Account</th>
+                                        <th className={th}>Account or family</th>
                                         <th className={cn(th, 'text-right')}>Before tax</th>
                                         <th className={th}>Seen</th>
                                     </tr>
@@ -373,7 +531,9 @@ function AdminPage() {
                                     {data.unrefundable.map((row) => (
                                         <tr key={row.subscriptionId} className="hover:bg-muted">
                                             <td className={td}>{row.subscriptionId}</td>
-                                            <td className={td}>{row.userId}</td>
+                                            <td className={td}>
+                                                {row.groupId ? `family ${row.groupId}` : row.userId}
+                                            </td>
                                             <td className={cn(td, 'text-right tabular-nums')}>
                                                 {formatMoney(row.amount, row.currency)}
                                             </td>

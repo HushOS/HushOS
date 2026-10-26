@@ -117,6 +117,38 @@ describe('removing someone: hold, finish, remove', () => {
         expect(synced.areas[0]).toMatchObject({ write: 'writable', name: 'Family' });
     });
 
+    const pro = { id: 'sub_pro', name: 'Family Pro', standing: 'paused' as const };
+
+    test('Bob pays for a plan that gives nothing: asked first, before any demotion, hold or walk; then the call carries its id', async () => {
+        const { server, ctx, groupId } = await family({ bobRoles: ['members'] });
+        server.lapsedPlans.push(pro);
+        // Even with Bob to be demoted first: nothing is changed before the question.
+        expect(await removeMember(ctx, groupId, BOB, { demoteFirst: true })).toEqual({
+            status: 'ends-lapsed',
+            plans: [pro],
+        });
+        expect(
+            server.log.map((entry) => entry.route).filter((route) => route !== 'remove-preview'),
+        ).not.toContain('hold');
+        expect(server.sent('member')).toEqual([]);
+        expect(server.sent('remove')).toEqual([]);
+        // Confirmed by id: the call carries it, and Bob is removed.
+        expect(
+            await removeMember(ctx, groupId, BOB, { demoteFirst: true, endsLapsed: [pro.id] }),
+        ).toEqual({ status: 'removed' });
+        expect(server.sent('remove').at(-1)).toMatchObject({ endsLapsed: [pro.id] });
+    });
+
+    test('a plan the server names at the removal itself (one since the question) is asked about, nothing changed', async () => {
+        const { server, ctx, groupId } = await family();
+        server.answer('remove', refusal(409, 'ends-lapsed', { plans: [pro] }));
+        expect(await removeMember(ctx, groupId, BOB)).toEqual({
+            status: 'ends-lapsed',
+            plans: [pro],
+        });
+        expect(server.sent('remove').map((call) => 'endsLapsed' in call)).toEqual([false]);
+    });
+
     test('a removal that cannot place its hold sends nothing: another manager paused us, or Bob did', async () => {
         const { server, ctx, groupId } = await family({ bobRoles: ['members'] });
         server.answer('hold', refusal(409, 'held'));

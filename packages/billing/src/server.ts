@@ -14,7 +14,13 @@ import {
     queuePlanEnding,
     revokeLapsed,
 } from './endings';
-import { groupIdOf, reconcileGroup } from './groups';
+import {
+    LapsedFamilyPlanError,
+    endLapsedPlansPaidBy,
+    groupIdOf,
+    lapsedPlanStaysRefusal,
+    reconcileGroup,
+} from './groups';
 import {
     BillingError,
     PROVIDER,
@@ -55,11 +61,19 @@ export {
     changeGroupPlan,
     createGroupPortalSession,
     DissolveCancelBusyError,
+    endLapsedFamilyPlans,
+    endLapsedPlansForDeparture,
+    endLapsedPlansPaidBy,
     ensureGroupSeat,
+    LapsedFamilyPlanError,
+    lapsedPlansPaidBy,
+    lapsedPlanStaysRefusal,
     familyHasPlan,
     getGroupBilling,
+    isFamilyPayer,
     MAX_REISSUES,
     paysForGroup,
+    relistUnlistedFamilies,
     queueDissolvedCancel,
     quoteUnitsChange,
     reconcileGroup,
@@ -500,6 +514,15 @@ export async function grantOrderRewards(
     await rewardPaidReferral(userId);
 }
 
+/*
+ * What a paid order of a family's plan earns, as its `order.paid` delivery gives it: the
+ * commission of the affiliate whose discount it used, never one found through a person (the
+ * family's customer is not one), and no referral reward.
+ */
+export async function grantFamilyOrderRewards(order: Parameters<typeof recordAffiliateEarning>[0]) {
+    await recordAffiliateEarning({ ...order, customer: null });
+}
+
 /* The inviter's storage when someone they invited pays for a plan; once per invitee, under a cap. */
 async function rewardPaidReferral(userId: string) {
     const bonus = appEnv.REFERRAL_PAID_BONUS_BYTES;
@@ -710,6 +733,9 @@ export async function revokeForDeletion(userId: string) {
             'You pay for a family plan. Hand its billing to another member, or cancel the family plan in its billing portal, then delete your account.',
             409,
         );
+    // A family plan they pay for that gives nothing (unpaid, incomplete, paused) is still on their
+    // card: a resume or a retried payment would charge it after they're gone. Ended first.
+    await endLapsedFamilyPlansFor(userId);
     if (!(await billingRepository.getCustomer(userId))) return;
     try {
         let state: models.CustomerState | null = null;
@@ -751,6 +777,26 @@ export async function revokeForDeletion(userId: string) {
             503,
             { cause: error },
         );
+    }
+}
+
+/*
+ * Before a payer goes (their account deleted): every lapsed plan of a family they pay for
+ * is revoked (endLapsedPlansPaidBy), with its ending first, so a payment taken afterwards
+ * is refunded whole. A plan that can't be ended stops the deletion with words.
+ */
+async function endLapsedFamilyPlansFor(userId: string) {
+    for (const groupId of await billingRepository.listGroupsBilledTo(userId)) {
+        try {
+            await endLapsedPlansPaidBy(groupId, userId);
+        } catch (error) {
+            if (!(error instanceof LapsedFamilyPlanError)) throw error;
+            throw new BillingError(
+                `${lapsedPlanStaysRefusal(error, 'payer')} Your account was not deleted.`,
+                409,
+                { cause: error },
+            );
+        }
     }
 }
 

@@ -57,6 +57,29 @@ export type FamilyPlan = {
 export type GroupBillingSummary = FamilyBillingDetail | FamilyPlanGlance;
 
 /*
+ * A family plan Polar still holds that gives nothing, shown while no plan is live: its
+ * payment didn't go through (`unpaid`, `incomplete`: `payment-failed`) or it is paused.
+ * The pool and the extra places are gone meanwhile (docs/groups-design.md 3.5); a new
+ * checkout ends it first. Absent from servers before this field.
+ */
+export type FamilyLapsedPlan = {
+    productName: string;
+    standing: 'payment-failed' | 'paused';
+    /* Every such plan of the family (subscription ids): what a confirmed checkout ends. */
+    ids: string[];
+};
+
+/* The lapsed plan as a member's glance carries it: no ids, and whether this person pays for it. */
+export type FamilyLapsedGlance = {
+    productName: string;
+    standing: 'payment-failed' | 'paused';
+    /* This person pays for it: it ends at once when they leave. */
+    youPay: boolean;
+    /* Only for the person who pays: every such plan's id, to confirm the leave by. */
+    ids?: string[];
+};
+
+/*
  * A member's view: the plan's name, the storage used and the pool's size,
  * and whether a plan is live at all, which is what keeps inviting, letting
  * people in and new family folders shut (the server refuses them anyway). No
@@ -67,6 +90,8 @@ export type FamilyPlanGlance = {
     view: 'member';
     hasPlan: boolean;
     planName: string | null;
+    /* While no plan is live: one Polar still holds whose payment failed, or that is paused. */
+    lapsedPlan?: FamilyLapsedGlance | null;
     storage: { usedBytes: string; quotaBytes: string } | null;
     /* Absent with billing off. */
     usage?: FamilyUsage;
@@ -129,6 +154,11 @@ export type FamilyBillingDetail = {
      * cancelled. Null while a plan is live, and for a family that never had one.
      */
     lastPlan: { productName: string; endedAt: string } | null;
+    /*
+     * While no plan is live: one Polar still holds whose payment failed, or that is paused.
+     * The page shows it in place of `lastPlan`; choosing a plan ends it first.
+     */
+    lapsedPlan?: FamilyLapsedPlan | null;
     /*
      * The family's storage pool as Drive reads it: every family folder's bytes
      * against the pool's size (zero once a plan has ended). Null for a family
@@ -283,7 +313,17 @@ export interface GrowthApi {
 export interface GroupBillingApi {
     summary(groupId: string): Promise<GroupBillingSummary>;
     /* Polar's hosted checkout; whoever starts it becomes the family's payer. */
-    checkout(groupId: string, productId: string, currency?: string): Promise<{ url: string }>;
+    /*
+     * `endLapsed`: the lapsed plans (subscription ids, `FamilyLapsedPlan.ids`) the person
+     * confirmed end now. Unless they are exactly the family's, it is refused with code
+     * `ends-lapsed` and nothing is ended.
+     */
+    checkout(
+        groupId: string,
+        productId: string,
+        currency?: string,
+        endLapsed?: string[],
+    ): Promise<{ url: string }>;
     /*
      * More places are charged at once; fewer are scheduled for the period's
      * end. `url` is the portal when the bank wants the payer to confirm.
