@@ -1709,7 +1709,9 @@ export async function notePaidAfterRevoke(order: {
                 ],
                 { keepOwed: true },
             );
-            return false;
+            // Kept as noted unless an earlier ending owes its refund: then it is the job's, and
+            // the delivery gives it no commission or reward of its own.
+            return (await billingRepository.getPlanRefund(order.id))?.status !== 'none';
         }
     }
     const result = await billingRepository.notePaidOnLapsed({

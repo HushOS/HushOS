@@ -566,11 +566,14 @@ async function revokeOrphanedPlans(
     // Best effort, every page (listFamilySubscriptions): a listing Polar refuses or can't answer
     // (429, a 5xx) is logged and owed (the daily reconcile lists it again), and the plans already
     // named are still read.
+    // Whether Polar's list was read: then, once every plan is handled below, it is no longer owed.
+    let listed = false;
     if (customer && options.listPolar) {
         try {
             for (const subscription of (await listFamilySubscriptions(groupId)) ?? [])
                 if (!subscription.ended_at && !ENDED.has(subscription.status))
                     ids.add(subscription.id);
+            listed = true;
         } catch (error) {
             log.warn({
                 message:
@@ -579,7 +582,10 @@ async function revokeOrphanedPlans(
             });
         }
     }
-    if (!ids.size) return;
+    if (!ids.size) {
+        if (listed) await billingRepository.plansListed(groupId);
+        return;
+    }
     if (!customer) {
         log.error({
             message: 'Polar bills a family customer HushOS never made; left alone',
@@ -647,6 +653,8 @@ async function revokeOrphanedPlans(
             }
         }
     }
+    // Every plan listed and named was handled without a failure: the list is no longer owed.
+    if (listed) await billingRepository.plansListed(groupId);
 }
 
 /*
@@ -1569,6 +1577,12 @@ export async function relistUnlistedFamilies() {
     let failed = 0;
     for (const { groupId } of await billingRepository.listUnlistedFamilies()) {
         try {
+            // A deleted family's: through its own path (revokeOrphanedPlans, Polar's list read),
+            // which revokes and refunds a plan found there and keeps each plan's recorded end.
+            if (!(await groupsRepository.getGroupRow(groupId))) {
+                await reconcileGroup(groupId, { fromDelivery: true });
+                continue;
+            }
             await findLapsedFamilyPlans(groupId);
             await reconcileGroup(groupId);
         } catch {
