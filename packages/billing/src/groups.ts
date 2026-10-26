@@ -622,8 +622,13 @@ const endingOrEnded = (subscription: models.Subscription) =>
 export async function cancelDissolvedPlan(groupId: string) {
     const outcome = { cancelled: 0, refused: 0, revoked: 0 };
     if (!billingEnabled() || !UUID.test(groupId)) return outcome;
-    if ((await billingRepository.listDissolvedChargeable(groupId)).length === 0) return outcome;
+    // Polar's own list of the family's plans first: one the mirror never held (an unreadable
+    // product, a delivery lost, past due so the customer state omits it) is written to it, so it
+    // is ended too, never left charging once the family is gone. A family HushOS made no
+    // customer for asks Polar nothing.
     try {
+        if (await billingRepository.getGroupCustomer(groupId)) await findLapsedFamilyPlans(groupId);
+        if ((await billingRepository.listDissolvedChargeable(groupId)).length === 0) return outcome;
         return await setDissolvedToEnd(groupId, outcome);
     } catch (error) {
         // Retried by pg-boss, but recorded: a failure Polar keeps repeating (a token without
@@ -690,10 +695,19 @@ async function setDissolvedToEnd(
                         )
                             return 'waiting' as const;
                         try {
-                            // False: Polar had ended it, no longer has it, or it is live again.
-                            return (await revokeLapsed(groupId, row.id, 'family'))
-                                ? ('revoked' as const)
-                                : ('already' as const);
+                            // False: Polar had ended it, no longer has it, or it is live again (paid
+                            // as the revoke read it). Read again: one live and not set to end is set
+                            // to end by the job's retry, never left renewing for a family that is gone.
+                            if (await revokeLapsed(groupId, row.id, 'family'))
+                                return 'revoked' as const;
+                            const after = await read();
+                            if (after && !endingOrEnded(after) && LIVE.has(after.status))
+                                throw unavailable(
+                                    new Error(
+                                        'A dissolved family’s lapsed plan went live as it was revoked',
+                                    ),
+                                );
+                            return 'already' as const;
                         } catch (error) {
                             if (error instanceof LapsedRevokeError && error.reason === 'held')
                                 return 'busy' as const;

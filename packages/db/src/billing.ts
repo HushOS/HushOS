@@ -441,11 +441,20 @@ export async function listUnendedGroupSubscriptionIds(groupId: string) {
     return rows.map((row) => row.id);
 }
 
+/*
+ * A plan whose product the catalogue could read (recordUnreadGroupSubscription marks the others
+ * with their product id for a name): only such a plan is ever the family's plan, its places and
+ * pool, or makes its payer one who pays for the family. An unread one is still a plan that can
+ * charge (a dissolved family's job ends it, operators see it).
+ */
+const readablePlan = sql`${groupBillingSubscriptions.productName} <> ${groupBillingSubscriptions.productId}`;
+
 const liveGroupSubscription = (groupId: string) =>
     and(
         eq(groupBillingSubscriptions.groupId, groupId),
         isNull(groupBillingSubscriptions.endedAt),
         inArray(groupBillingSubscriptions.status, [...LIVE_STATUSES]),
+        readablePlan,
     );
 
 /* The group's plan: its live subscription, the one running longest if there were ever two. */
@@ -488,6 +497,7 @@ export async function listGroupsPaidBy(userId: string) {
                 isNull(groupBillingSubscriptions.endedAt),
                 inArray(groupBillingSubscriptions.status, [...LIVE_STATUSES]),
                 eq(groupBillingSubscriptions.cancelAtPeriodEnd, false),
+                readablePlan,
             ),
         );
     return rows.map((row) => row.groupId);
@@ -893,10 +903,10 @@ export async function releaseDissolveMail(subscriptionId: string, periodEnd: Dat
  * (familyPlanOf). It gives no pool or places. The lookup and every reconcile write it again as
  * Polar has it, ended included, so it leaves the page once ended. Only a row of this family's
  * whose product is unread (`product_name` is its product id) is ever updated: a plan the
- * catalogue once read, whose product an operator has since edited, is left as it was. Never a
- * live state: a row with an unread product and no quota would become the family's plan with no
- * pool and one place, so a live one is left as it was (a reconcile already leaves a live plan
- * of an unread product alone, as before).
+ * catalogue once read, whose product an operator has since edited, is left as it was. A live
+ * state is written too, so a plan that can charge is never lost (a dissolved family's job ends
+ * it, purge waits for it): but such a row is never the family's plan, its places or pool, nor
+ * makes its payer one who pays for the family (readablePlan), since its tier can't be read.
  */
 export async function recordUnreadGroupSubscription(
     groupId: string,
@@ -914,7 +924,6 @@ export async function recordUnreadGroupSubscription(
         endedAt: Date | null;
     },
 ) {
-    if (LIVE_STATUSES.has(input.status) && !input.endedAt) return;
     const { id: _id, ...state } = input;
     await db
         .insert(groupBillingSubscriptions)
