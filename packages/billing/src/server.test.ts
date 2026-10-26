@@ -7749,6 +7749,64 @@ describe('a dissolved family’s plan', () => {
         expect(cancelJobs).toEqual([groupId]);
     });
 
+    test('the daily run keeps a family’s list owed until every plan it lists is recorded, and the purge waits through it', async () => {
+        const { reconcileBilling } = await import('../../jobs/src/jobs/reconcile-billing');
+        const daily = () =>
+            reconcileBilling({ id: 'daily', name: 'billing.reconcile', data: {} } as never);
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        // Paused (Polar's state omits it), never mirrored: only Polar's list finds it.
+        const hidden = familySubscription(groupId, {
+            id: 'sub_hidden_paused',
+            status: 'paused',
+            product_id: PRO_FAMILY,
+        });
+        expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        // The list reads, but that plan's own read times out: on the dissolved family's job (its
+        // retries run out), then on the daily run too.
+        const original = fakeClient.subscriptions.get.bind(fakeClient.subscriptions);
+        const spy = vi
+            .spyOn(fakeClient.subscriptions, 'get')
+            .mockImplementation(async (id: string) => {
+                if (id === hidden.id) throw new PolarClientError(503, { error: 'Timeout' });
+                return original(id);
+            });
+        try {
+            await quietly(async () => {
+                await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeTruthy();
+            });
+            expect(await billingRepository.listUnlistedFamilies()).toEqual([
+                expect.objectContaining({ groupId }),
+            ]);
+            await quietly(async () => {
+                await expect(daily()).rejects.toThrow();
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        // Still owed, nothing recorded, and the family kept.
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([
+            expect.objectContaining({ groupId }),
+        ]);
+        expect(await billingRepository.getGroupSubscription(hidden.id)).toBeNull();
+        await purgeDue(groupId);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 0 });
+        // The next day Polar answers: recorded, no longer owed, and the family's job queued.
+        cancelJobs.length = 0;
+        await quietly(() => daily());
+        expect(await billingRepository.getGroupSubscription(hidden.id)).toMatchObject({
+            status: 'paused',
+            endedAt: null,
+        });
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([]);
+        expect(cancelJobs).toContain(groupId);
+    });
+
     test('a plan whose unreadable product Polar changes for another unreadable one stays unread: never the family’s plan', async () => {
         const family = await familyOnPlan({ product: PRO_FAMILY });
         const { groupId, subscription, payer } = family;

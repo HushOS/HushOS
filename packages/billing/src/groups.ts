@@ -1354,8 +1354,10 @@ function refusedRead(groupId: string, error: unknown) {
 /*
  * Every plan Polar lists for this family's team customer, every page of it; null when Polar has
  * no such customer (404). A read that fails marks the list owed (`plans_unlisted_since`: the
- * daily reconcile asks again, operators see it, the purge waits) and throws, unavailable; one
- * read in full clears it. Every lookup of a family's plans at Polar goes through here.
+ * daily reconcile asks again, operators see it, the purge waits) and throws, unavailable. It is
+ * never cleared here: only once every plan listed has been read and recorded (plansListed, by the
+ * caller), so a failure after the list (a plan's own read timing out) leaves it owed. Every
+ * lookup of a family's plans at Polar goes through here.
  */
 export async function listFamilySubscriptions(groupId: string) {
     const all: models.Subscription[] = [];
@@ -1366,14 +1368,10 @@ export async function listFamilySubscriptions(groupId: string) {
         }))
             all.push(subscription);
     } catch (error) {
-        if (statusOf(error) === 404) {
-            await billingRepository.plansListed(groupId);
-            return null;
-        }
+        if (statusOf(error) === 404) return null;
         await billingRepository.markPlansUnlisted(groupId);
         throw refusedRead(groupId, error);
     }
-    await billingRepository.plansListed(groupId);
     return all;
 }
 
@@ -1416,40 +1414,52 @@ export async function findLapsedFamilyPlans(groupId: string, options: { payer?: 
     let liveAgain = false;
     // Live and not set to end: it charges again (a leave, a removal or a deletion would leave it so).
     let charging = false;
-    for (const id of ids) {
-        let subscription: models.Subscription;
-        try {
-            subscription = await polar().subscriptions.get(id);
-        } catch (error) {
-            if (statusOf(error) === 404) continue;
-            throw refusedRead(groupId, error);
-        }
-        const plan = await planOf(subscription.product_id);
-        const held = await billingRepository.getGroupSubscription(id);
-        // One whose product the catalogue can't read (archived, edited) is written to the mirror
-        // as it stands at Polar, ended or not, since no reconcile updates it: so the page names
-        // it, its ending is told as the family's (familyPlanOf), and it leaves once ended.
-        if (!plan) await recordUnread(groupId, subscription);
-        // Ended is nothing to do. Live (paid in the portal just now, or one the mirror missed) is
-        // the family's plan: written to the mirror if it wasn't there, so the reconcile sees it.
-        if (subscription.ended_at || !LAPSED.has(subscription.status)) {
-            if (!subscription.ended_at && LIVE.has(subscription.status)) {
-                liveAgain = true;
-                if (!subscription.cancel_at_period_end) charging = true;
-                if (!held && plan) await applyChanged(groupId, subscription, false);
-            }
-            continue;
-        }
-        // Written to the mirror if it wasn't there, so the page names it.
-        if (!held && plan) await applyChanged(groupId, subscription, false);
-        found.push({
-            id,
-            name: plan ? tierName(plan) : 'earlier',
-            status: subscription.status,
-            createdAt: Date.parse(subscription.created_at),
-        });
+    try {
+        await readListed();
+    } catch (error) {
+        // A plan listed but not yet read or recorded: the list stays owed, and the purge waits.
+        if (customer) await billingRepository.markPlansUnlisted(groupId);
+        throw error;
     }
+    // Every plan Polar listed is read and recorded in the mirror: the list is no longer owed.
+    if (customer) await billingRepository.plansListed(groupId);
     return { plans: found, liveAgain, charging };
+
+    async function readListed() {
+        for (const id of ids) {
+            let subscription: models.Subscription;
+            try {
+                subscription = await polar().subscriptions.get(id);
+            } catch (error) {
+                if (statusOf(error) === 404) continue;
+                throw refusedRead(groupId, error);
+            }
+            const plan = await planOf(subscription.product_id);
+            const held = await billingRepository.getGroupSubscription(id);
+            // One whose product the catalogue can't read (archived, edited) is written to the mirror
+            // as it stands at Polar, ended or not, since no reconcile updates it: so the page names
+            // it, its ending is told as the family's (familyPlanOf), and it leaves once ended.
+            if (!plan) await recordUnread(groupId, subscription);
+            // Ended is nothing to do. Live (paid in the portal just now, or one the mirror missed) is
+            // the family's plan: written to the mirror if it wasn't there, so the reconcile sees it.
+            if (subscription.ended_at || !LAPSED.has(subscription.status)) {
+                if (!subscription.ended_at && LIVE.has(subscription.status)) {
+                    liveAgain = true;
+                    if (!subscription.cancel_at_period_end) charging = true;
+                    if (!held && plan) await applyChanged(groupId, subscription, false);
+                }
+                continue;
+            }
+            // Written to the mirror if it wasn't there, so the page names it.
+            if (!held && plan) await applyChanged(groupId, subscription, false);
+            found.push({
+                id,
+                name: plan ? tierName(plan) : 'earlier',
+                status: subscription.status,
+                createdAt: Date.parse(subscription.created_at),
+            });
+        }
+    }
 }
 
 /*

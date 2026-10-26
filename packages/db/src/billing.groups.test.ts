@@ -678,3 +678,49 @@ describe('lapsed family plans and double charges', () => {
         expect(await listed()).toEqual([]);
     });
 });
+
+test('the readability migration marks unread the rows an earlier build named after their product id, and nothing else', async () => {
+    const { readFileSync } = await import('node:fs');
+    const migration = readFileSync(
+        new URL(
+            '../drizzle/20261026094157_family_lapsed_revoke_refusal/migration.sql',
+            import.meta.url,
+        ),
+        'utf8',
+    );
+    const backfill = migration
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.trim())
+        .filter((statement) => statement.startsWith('UPDATE'));
+    expect(backfill).toHaveLength(1);
+    const row = (id: string, productId: string, productName: string) => ({
+        id,
+        groupId: randomUUID(),
+        provider: 'polar',
+        productId,
+        productName,
+        status: 'paused',
+        recurringInterval: 'month',
+        units: 1,
+        includedMembers: 1,
+        quotaBytes: 0n,
+        currentPeriodStart: new Date(Date.now() - DAY),
+        currentPeriodEnd: new Date(Date.now() + DAY),
+    });
+    await db
+        .insert(groupBillingSubscriptions)
+        .values([
+            row('sub_sentinel', 'prod_archived', 'prod_archived'),
+            row('sub_read', 'prod_family', 'Family (monthly)'),
+        ]);
+    await db.execute(sql.raw(backfill[0]!));
+    const unread = async (id: string) =>
+        (
+            await db
+                .select({ unread: groupBillingSubscriptions.productUnread })
+                .from(groupBillingSubscriptions)
+                .where(eq(groupBillingSubscriptions.id, id))
+        )[0]?.unread;
+    expect(await unread('sub_sentinel')).toBe(true);
+    expect(await unread('sub_read')).toBe(false);
+});
