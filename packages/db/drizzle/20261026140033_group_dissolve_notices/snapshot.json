@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "fca35187-c98c-4f58-be32-a69207ef919d",
+    "id": "02cb60c9-31b0-4e99-bbd6-293424f7f278",
     "prevIds": ["6316cac2-cd13-4af6-86ae-966871e5935d"],
     "ddl": [
         {
@@ -6481,6 +6481,19 @@
             "generated": null,
             "identity": null,
             "name": "sent_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_dissolve_notices"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "retry_after",
             "entityType": "columns",
             "schema": "public",
             "table": "group_dissolve_notices"

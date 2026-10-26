@@ -13,6 +13,7 @@ CREATE TABLE "group_dissolve_notices" (
 	"invitation_id" uuid,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"sent_at" timestamp with time zone,
+	"retry_after" timestamp with time zone,
 	CONSTRAINT "group_dissolve_notices_valid" CHECK ("kind" in ('dissolved', 'accepted', 'invited') and ("user_id" is null) = ("invitation_id" is not null) and ("kind" = 'invited') = ("invitation_id" is not null))
 );
 --> statement-breakpoint

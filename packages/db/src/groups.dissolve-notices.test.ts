@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import type { GroupSubscriptionSnapshot } from './billing';
 import type { DissolveNotice } from './groups';
@@ -391,6 +391,40 @@ describe('sending what is owed', () => {
         expect((await deliver()).notices).toEqual([]);
     });
 
+    /* Fifteen minutes on: every failed email is due again. */
+    async function retryTimePasses() {
+        await db
+            .update(s.groupDissolveNotices)
+            .set({ retryAfter: sql`now() - interval '1 second'` })
+            .where(isNotNull(s.groupDissolveNotices.retryAfter));
+    }
+
+    /* Two families dissolved: the first's three emails owed an hour before the second's three. */
+    async function sixOwed() {
+        const f = await familyAboutToDissolve();
+        await groups.leaveGroup(f.groupId, f.organizer.userId);
+        await db
+            .update(s.groupDissolveNotices)
+            .set({ createdAt: sql`now() - interval '1 hour'` })
+            .where(eq(s.groupDissolveNotices.groupId, f.groupId));
+        const [neighbour] = await db
+            .select({ userId: s.groupMemberships.userId, email: s.users.email })
+            .from(s.groupMemberships)
+            .innerJoin(s.users, eq(s.users.id, s.groupMemberships.userId))
+            .where(
+                and(
+                    eq(s.groupMemberships.groupId, f.other.groupId),
+                    eq(s.groupMemberships.state, 'active'),
+                ),
+            );
+        expect(await groups.leaveGroup(f.other.groupId, neighbour!.userId)).toEqual({
+            status: 'dissolved',
+        });
+        const first = [f.organizer.email, f.waiting.email, 'sam@hushos.test'];
+        const second = [neighbour!.email, f.other.waiting.email, 'ana@hushos.test'];
+        return { f, first, second };
+    }
+
     test('an email that keeps failing is given back, and the ones after it are still sent', async () => {
         const f = await familyAboutToDissolve();
         await groups.leaveGroup(f.groupId, f.organizer.userId);
@@ -407,27 +441,33 @@ describe('sending what is owed', () => {
         expect(first.notices.map((notice) => notice.email).sort()).toEqual(
             [f.waiting.email, 'sam@hushos.test'].sort(),
         );
+        // It waits its fifteen minutes, then goes.
+        expect((await deliver()).notices).toEqual([]);
+        await retryTimePasses();
         const next = await deliver();
         expect(next.notices.map((notice) => notice.email)).toEqual([f.organizer.email]);
         expect((await deliver()).notices).toEqual([]);
     });
 
-    test('a run stops after three failed sends, and the next run sends them all', async () => {
-        const f = await familyAboutToDissolve();
-        await groups.leaveGroup(f.groupId, f.organizer.userId);
-        // The family beside it dissolves too: six emails owed in all.
-        const [neighbour] = await db
-            .select({ userId: s.groupMemberships.userId })
-            .from(s.groupMemberships)
-            .where(
-                and(
-                    eq(s.groupMemberships.groupId, f.other.groupId),
-                    eq(s.groupMemberships.state, 'active'),
-                ),
-            );
-        expect(await groups.leaveGroup(f.other.groupId, neighbour!.userId)).toEqual({
-            status: 'dissolved',
-        });
+    test('three addresses that always fail, first in line, never hold up the ones behind them', async () => {
+        const { first, second } = await sixOwed();
+        const refuse = async (notice: DissolveNotice) => {
+            if (first.includes(notice.email)) throw new Error('mailbox refused');
+        };
+        // The first run spends its three failures on them and stops.
+        const one = await deliver(refuse);
+        expect(one).toMatchObject({ sent: 0, failed: 3 });
+        // The next one, a minute later, sends everyone behind them.
+        const two = await deliver(refuse);
+        expect(two.notices.map((notice) => notice.email).sort()).toEqual([...second].sort());
+        // Every run after their wait tries them again, and still sends nothing twice.
+        await retryTimePasses();
+        const three = await deliver(refuse);
+        expect(three).toMatchObject({ sent: 0, failed: 3 });
+    });
+
+    test('a run stops after three failed sends, and later runs send them all', async () => {
+        const { first, second } = await sixOwed();
         let tried = 0;
         const down = await deliver(async () => {
             tried++;
@@ -435,7 +475,12 @@ describe('sending what is owed', () => {
         });
         expect(tried).toBe(3);
         expect(down).toMatchObject({ sent: 0, failed: 3 });
-        expect((await deliver()).notices).toHaveLength(6);
+        // The three not yet tried go next; the three that failed wait their turn.
+        const next = await deliver();
+        expect(next.notices.map((notice) => notice.email).sort()).toEqual([...second].sort());
+        await retryTimePasses();
+        const last = await deliver();
+        expect(last.notices.map((notice) => notice.email).sort()).toEqual([...first].sort());
         expect((await deliver()).notices).toEqual([]);
     });
 

@@ -102,7 +102,7 @@ export async function groupsDissolveNotices(
         });
         if (outcome.failure) {
             event.set({ failure: sanitizeFailure(outcome.failure) });
-            event.warn('Family dissolved email not sent: the next run tries again');
+            event.warn('Family dissolved email not sent: tried again in 15 minutes');
         }
         return { sent: outcome.sent, dropped: outcome.dropped };
     } catch (error) {

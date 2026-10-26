@@ -419,7 +419,8 @@ export const groupHolds = pgTable(
  * names an account or an invitation, never an address, and goes with either.
  * `sent_at` is the claim, set before the mail is handed over and given back
  * only when sending failed: two runs never both send one, though a send whose
- * provider reply was lost counts as failed and may be sent again.
+ * provider reply was lost counts as failed and may be sent again. A failed one
+ * waits until `retry_after`, behind the others.
  */
 export type DissolveNoticeKind = 'dissolved' | 'accepted' | 'invited';
 export const groupDissolveNotices = pgTable(
@@ -436,6 +437,8 @@ export const groupDissolveNotices = pgTable(
         }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         sentAt: timestamp('sent_at', { withTimezone: true }),
+        // After a failed send: not tried again before this, so it never holds up the others.
+        retryAfter: timestamp('retry_after', { withTimezone: true }),
     },
     (table) => [
         uniqueIndex('group_dissolve_notices_user_idx').on(table.userId, table.groupId),

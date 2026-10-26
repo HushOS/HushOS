@@ -91,14 +91,17 @@ export type DissolveNotice = {
 
 /* A run stops after this many failed sends: the provider is down or unconfigured. */
 const FAILURES_PER_RUN = 3;
+/* How long a failed email waits before it is tried again, behind every other one. */
+const RETRY_AFTER_MINUTES = 15;
 
 /*
  * Sends what is owed, oldest first, at most `limit` a run, through `send`. Each
  * email is read first (one whose account or address is gone is dropped), then
  * claimed by a conditional update only one run can win, then handed over: two
- * runs at once never both send one. A send that throws gives its claim back for
- * the next run, and this run goes on to the next email, stopping after
- * FAILURES_PER_RUN failures. A send that throws after the provider took the
+ * runs at once never both send one. A send that throws gives its claim back and
+ * is not tried again for RETRY_AFTER_MINUTES, so a few addresses that always
+ * fail never hold up the rest; this run goes on to the next email, stopping
+ * after FAILURES_PER_RUN failures. A send that throws after the provider took the
  * email (its reply lost to a timeout) counts as failed, so the next run may
  * send that email again; a crash between the claim and the send loses it.
  * Emails owed more than `maxAgeDays` ago are no longer news and are left
@@ -118,6 +121,7 @@ export async function deliverDissolveNotices(input: {
             and(
                 isNull(groupDissolveNotices.sentAt),
                 sql`${groupDissolveNotices.createdAt} > now() - make_interval(days => ${input.maxAgeDays ?? 7})`,
+                sql`(${groupDissolveNotices.retryAfter} is null or ${groupDissolveNotices.retryAfter} <= now())`,
             ),
         )
         .orderBy(asc(groupDissolveNotices.createdAt), asc(groupDissolveNotices.id))
@@ -147,7 +151,10 @@ export async function deliverDissolveNotices(input: {
         } catch (error) {
             await db
                 .update(groupDissolveNotices)
-                .set({ sentAt: null })
+                .set({
+                    sentAt: null,
+                    retryAfter: sql`now() + make_interval(mins => ${RETRY_AFTER_MINUTES})`,
+                })
                 .where(eq(groupDissolveNotices.id, id));
             outcome.failed++;
             outcome.failure ??= error;
