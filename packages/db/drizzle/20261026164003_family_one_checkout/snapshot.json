@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "3e3c4d5d-0e64-41ec-ae85-67c03dac3b5d",
+    "id": "d049730c-0626-4cfe-baa0-05617854d208",
     "prevIds": ["7f7e99b2-90c5-4308-896b-9dbf1557b6b1"],
     "ddl": [
         {
@@ -8080,6 +8080,19 @@
             "generated": null,
             "identity": null,
             "name": "orders_noted_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "personal_plan_endings"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "0",
+            "generated": null,
+            "identity": null,
+            "name": "attempt",
             "entityType": "columns",
             "schema": "public",
             "table": "personal_plan_endings"

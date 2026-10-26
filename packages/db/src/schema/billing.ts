@@ -403,6 +403,12 @@ export const personalPlanEndings = pgTable(
          * writing the ending and noting them would otherwise leave every charge unrefunded).
          */
         ordersNotedAt: timestamp('orders_noted_at', { withTimezone: true }),
+        /*
+         * Bumped each time a run restarts or takes the ending over (beginLapsedRevoke): a read of
+         * the plan's orders that began before stamps `orders_noted_at` only if this is unchanged
+         * (markOrdersNoted), so it never marks noted an ending another run restarted meanwhile.
+         */
+        attempt: integer().notNull().default(0),
         periodStart: timestamp('period_start', { withTimezone: true }),
         periodEnd: timestamp('period_end', { withTimezone: true }),
         /*

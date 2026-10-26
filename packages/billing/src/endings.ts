@@ -1509,6 +1509,9 @@ export async function endUnwantedFamilyPlan(
     // A plan already ended at Polar (reinstated, charged and ended between two reads): an ending
     // is written only if it took a payment since its cutoff, which the job then refunds.
     if (options.onlyIfPaidSince) {
+        // The ending as it stands before Polar is read: a run that restarts it meanwhile changes
+        // its attempt, and this read then marks nothing noted.
+        const before = await billingRepository.getPlanEnding(subscriptionId);
         const orders = await polar().orders.list({
             subscription_id: subscriptionId,
             sorting: ['-created_at'],
@@ -1519,8 +1522,9 @@ export async function endUnwantedFamilyPlan(
                 (order) => order.paid && Date.parse(order.created_at) >= paidAfter.getTime(),
             )
         ) {
-            // Nothing paid since the cutoff: an ending already written has its read done.
-            await billingRepository.markOrdersNoted(subscriptionId);
+            // Nothing paid since the cutoff: an ending already written has its read done, unless
+            // another run restarted it since this read began.
+            if (before) await billingRepository.markOrdersNoted(subscriptionId, before.attempt);
             return false;
         }
     }

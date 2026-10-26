@@ -2275,6 +2275,9 @@ export async function beginLapsedRevoke(input: {
                     periodStart: null,
                     periodEnd: null,
                     paidAfter,
+                    // Read again: Polar may have charged it since its orders were last noted.
+                    ordersNotedAt: null,
+                    attempt: sql`${personalPlanEndings.attempt} + 1`,
                     ...lease,
                     updatedAt: new Date(),
                 })
@@ -2292,7 +2295,14 @@ export async function beginLapsedRevoke(input: {
         const [row] = await tx
             .update(personalPlanEndings)
             // Its unworked notes are cleared: its orders are no longer noted until read again.
-            .set({ ...fresh, ...lease, paidAfter, ordersNotedAt: null, updatedAt: new Date() })
+            .set({
+                ...fresh,
+                ...lease,
+                paidAfter,
+                ordersNotedAt: null,
+                attempt: sql`${personalPlanEndings.attempt} + 1`,
+                updatedAt: new Date(),
+            })
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
             .returning();
         return { ending: row!, leased: true };
@@ -2485,15 +2495,18 @@ export async function noteEndingOrders(input: {
 
 /*
  * An unwanted plan's ending whose orders were read and none was paid since its cutoff: nothing to
- * note, and the read is finished (`orders_noted_at`), so it is never read again for this.
+ * note, and the read is finished (`orders_noted_at`), so it is never read again for this. Only if
+ * the ending is still at `attempt`, as it was before that read began: one another run restarted or
+ * took over meanwhile (it saw a new charge, say, and its own read failed) is left for the retry.
  */
-export async function markOrdersNoted(subscriptionId: string) {
+export async function markOrdersNoted(subscriptionId: string, attempt: number) {
     await db
         .update(personalPlanEndings)
         .set({ ordersNotedAt: sql`now()`, updatedAt: new Date() })
         .where(
             and(
                 eq(personalPlanEndings.subscriptionId, subscriptionId),
+                eq(personalPlanEndings.attempt, attempt),
                 isNotNull(personalPlanEndings.paidAfter),
                 isNull(personalPlanEndings.ordersNotedAt),
             ),

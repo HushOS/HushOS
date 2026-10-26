@@ -978,7 +978,7 @@ describe('readings of Polar that overlap', () => {
 test('the one-plan migration gives each family’s current plan served_since: a plan reinstated beside it before the first reconcile is not kept', async () => {
     const { readFileSync } = await import('node:fs');
     const migration = readFileSync(
-        new URL('../drizzle/20261026154640_family_one_checkout/migration.sql', import.meta.url),
+        new URL('../drizzle/20261026164003_family_one_checkout/migration.sql', import.meta.url),
         'utf8',
     );
     const backfill = migration

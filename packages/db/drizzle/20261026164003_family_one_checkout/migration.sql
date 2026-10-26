@@ -5,15 +5,17 @@
 -- has been the family's (so a plan bought beside it never takes its place), and an affiliate
 -- commission already paid out on an order HushOS later refunds whole marked for an operator.
 -- `orders_noted_at` on personal_plan_endings: when an unwanted plan's orders were noted on its
--- ending (an ending with `paid_after` and none is unfinished, and is noted again). Backfill: each
+-- ending (an ending with `paid_after` and none is unfinished, and is noted again), and `attempt`,
+-- bumped on each restart, so a read that began before one never marks it noted. Backfill: each
 -- family's current plan (live, readable, the longest-running) is given `served_since`, its current
 -- period's start, so a plan reinstated beside it before the first reconcile on this release is not
 -- taken for the family's (the backfill scans group_billing_subscriptions once; none on hushos.com,
 -- where families are off).
 --
 -- Runs in drizzle's one transaction. Creating the new table takes no lock on any existing table.
--- The six columns added to affiliate_earnings, group_billing_subscriptions and personal_plan_endings
--- are nullable with no default: they change only the catalog (the backfill below then rewrites one
+-- The seven columns added to affiliate_earnings, group_billing_subscriptions and personal_plan_endings
+-- are nullable with no default, or (`attempt`) NOT NULL with a constant default stored once in the
+-- catalog (PostgreSQL 11 and later): they change only the catalog (the backfill below then rewrites one
 -- row per family), but each table's ACCESS
 -- EXCLUSIVE lock blocks its reads as well as its writes until the transaction commits
 -- (milliseconds; families are off on hushos.com, and affiliate_earnings is small). Waits at most
@@ -40,4 +42,5 @@ ALTER TABLE "group_billing_subscriptions" ADD COLUMN "superseded_at" timestamp w
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "superseded_by" text;--> statement-breakpoint
 ALTER TABLE "group_billing_subscriptions" ADD COLUMN "superseded_paid_after" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "personal_plan_endings" ADD COLUMN "orders_noted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "personal_plan_endings" ADD COLUMN "attempt" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 UPDATE "group_billing_subscriptions" SET "served_since" = "current_period_start" WHERE "id" IN (SELECT DISTINCT ON ("group_id") "id" FROM "group_billing_subscriptions" WHERE "ended_at" IS NULL AND "status" IN ('active', 'trialing', 'past_due') AND "product_unread" = false ORDER BY "group_id", "current_period_end" DESC);
