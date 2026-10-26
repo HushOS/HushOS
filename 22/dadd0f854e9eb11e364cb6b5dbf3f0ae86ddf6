@@ -1,0 +1,103 @@
+apps/web/src/components/families/let-in-dialog.tsx
+  s_566b8e0c4467a4::t_89e88e90a23b95 226
+apps/web/src/lib/groups/outbox.test.ts
+  s_566b8e0c4467a4::t_acd6f885d691f7 1-2,360-393,395,417,432,437,448,450,453,455,461,464,480,491,497,512-601,606,612,654
+apps/web/src/lib/groups/outbox.ts
+  s_566b8e0c4467a4::t_2220c6f4cd535a 2,11,93-98,100,481,485-486,845-846,849,860
+apps/web/src/lib/groups/test-harness.ts
+  s_566b8e0c4467a4::t_9eac5be387089b 2,247,254-255,260-264
+apps/web/src/lib/integrity-lines.ts
+  s_566b8e0c4467a4::t_10c82c7f4469e4 612
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_d32f35de8265ee 176-183
+crates/hushos-core/fixtures/pin-cases.json
+  s_566b8e0c4467a4::t_10b4d604be554f 1-1044
+crates/hushos-core/fuzz/src/targets.rs
+  s_566b8e0c4467a4::t_0e1144e91bba98 1423-1424
+crates/hushos-core/src/area_ledger.rs
+  s_566b8e0c4467a4::t_3702f6d102736c 1617,1694,3005
+crates/hushos-core/src/contacts.rs
+  s_566b8e0c4467a4::t_e8be65493d3267 172-259
+crates/hushos-core/src/first_seen.rs
+  s_566b8e0c4467a4::t_c3981d07822148 1-320
+crates/hushos-core/src/first_seen/tests.rs
+  s_566b8e0c4467a4::t_58a054576ab63a 1-530
+crates/hushos-core/src/group_trust.rs
+  s_566b8e0c4467a4::t_10317df9b61f88 2541,2602-2603,2619,2665,2757
+crates/hushos-core/src/group_verdicts.rs
+  s_566b8e0c4467a4::t_0525cc8c143a96 270-271
+crates/hushos-core/src/lib.rs
+  s_566b8e0c4467a4::t_989c386b4483ab 26,55
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_b9e412d60ecad6 40,380,396-397,402-427,440,522-523,526,528-529,704-706,819-823,1382-1383,1423
+crates/hushos-core/src/roster_calls/tests.rs
+  s_566b8e0c4467a4::t_0d939f493eb03b 4,866,1234-1329
+crates/hushos-core/src/signatures.rs
+  s_566b8e0c4467a4::t_e4884c83ef7eac 66-69,95-97,103-104,339,380-382,615,657,703,1208,1225-1226,1245,1375,1380,1734,1742,1775,1804,1910,1927,1942,2127-2128,2195,2274
+crates/hushos-core/tests/common/groups.rs
+  s_566b8e0c4467a4::t_0a39db5959b81d 553
+crates/hushos-core/tests/common/rekeyed.rs
+  s_566b8e0c4467a4::t_db1eafbb153077 57,178,192
+crates/hushos-core/tests/common/rotations.rs
+  s_566b8e0c4467a4::t_e3a9886255303b 1063
+crates/hushos-core/tests/pin_cases.rs
+  s_566b8e0c4467a4::t_671bbc418c210c 1-204
+crates/hushos-core/tests/web_fixtures.rs
+  s_566b8e0c4467a4::t_7476023a3dd7f4 405,410,456,785
+packages/crypto/fuzz/verdicts.ts
+  s_566b8e0c4467a4::t_90d984bbed268d 1907-1908,1912-1914
+packages/crypto/package.json
+  s_566b8e0c4467a4::t_a3f13ff47b7bfa 22
+packages/crypto/scripts/pin-cases.ts
+  s_566b8e0c4467a4::t_4ac596d9e387e1 1-396
+packages/crypto/src/contacts.test.ts
+  s_566b8e0c4467a4::t_478ceaeb85504e 13,21,23,387-440
+packages/crypto/src/contacts.ts
+  s_566b8e0c4467a4::t_2c70f6b5646f9d 70-77,105-121
+packages/crypto/src/first-seen.test.ts
+  s_566b8e0c4467a4::t_5f8ca186fdeb8a 1-350
+packages/crypto/src/first-seen.ts
+  s_566b8e0c4467a4::t_6d670b8165789a 1-161
+packages/crypto/src/group-trust.ts
+  s_566b8e0c4467a4::t_c8c8d046bdfde2 2286,2354
+packages/crypto/src/index.ts
+  s_566b8e0c4467a4::t_d22af7e2772045 61
+packages/crypto/src/outbox.ts
+  s_566b8e0c4467a4::t_b3431d246e8724 136-148,157-163,168,200,204,206-207,210
+packages/crypto/src/pins.test.ts
+  s_566b8e0c4467a4::t_c9062492cadf96 4-11,101-185
+packages/crypto/src/pins.ts
+  s_566b8e0c4467a4::t_07bca7424c8e7f 3,39-144
+packages/crypto/src/roster-calls-testkit.ts
+  s_566b8e0c4467a4::t_a093044fcf7fdd 40,1057,1440
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_9a756f825bda82 100,287,641-645,2789,2804-2808
+packages/crypto/src/session.drive.test.ts
+  s_566b8e0c4467a4::t_92a1adb868fe74 1386,1462-1487
+packages/crypto/src/session.ts
+  s_566b8e0c4467a4::t_bff26783cc48fa 643-644,646,1063
+packages/crypto/src/signatures.ts
+  s_566b8e0c4467a4::t_a740b3a4793fc8 48-50,64,68,87-89,91-95,300,611-612,859-860,890-891
+packages/drive/src/pin-cases.test.ts
+  s_566b8e0c4467a4::t_45e7932bb245a2 1-105
+packages/drive/src/trust.test.ts
+  s_566b8e0c4467a4::t_f6d726068582f0 3,9,210-309
+packages/drive/src/trust.ts
+  s_566b8e0c4467a4::t_2307fef6d5aa95 3-4,34-37,44,94-97,103-104,108,117-122,124-125,138-139,141,151-152,155,169-174,178,180,212-216,218-219,232-234,237,308,313-319,323,364-369,380-381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "22dadd0f854e9eb11e364cb6b5dbf3f0ae86ddf6",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
