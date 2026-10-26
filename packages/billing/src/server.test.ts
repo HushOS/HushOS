@@ -5028,6 +5028,63 @@ describe('a deleted family’s plan billing again', () => {
         expect(callsTo('subscriptions.revoke')).toEqual([]);
     });
 
+    test('a deleted family’s owed list stays owed while another run holds its plan’s ending, and is cleared once the plan is revoked', async () => {
+        const { groupId, subscription } = await purgedFamily();
+        // Reinstated into past due and revoked by its own delivery: an ending with its revoke.
+        reinstate(subscription);
+        subscription.status = 'past_due';
+        await deliver(
+            signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_reinstated',
+                    subscription_id: subscription.id,
+                    created_at: new Date().toISOString(),
+                    currency: 'usd',
+                    net_amount: 999,
+                    customer: { external_id: `group:${groupId}` },
+                },
+            }),
+        );
+        expect((await billingRepository.getPlanEnding(subscription.id))?.revokedAt).toBeTruthy();
+        // Polar's staff bring it back into past due (the customer state omits it), and the one
+        // delivery that came found Polar's list unreadable.
+        subscription.status = 'past_due';
+        subscription.ended_at = null;
+        polar.listFailure = 503;
+        await deliver(stateChanged(groupId));
+        polar.listFailure = null;
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([
+            expect.objectContaining({ groupId }),
+        ]);
+        polar.calls = [];
+        // Another run holds the ending: the daily relist can't revoke it, so the list stays owed.
+        await rawSql(
+            `update personal_plan_endings set lease_owner = 'another-run', lease_until = now() + interval '1 hour' where subscription_id = '${subscription.id}'`,
+        );
+        let result: unknown;
+        await quietly(async () => {
+            result = await billing.relistUnlistedFamilies();
+        });
+        expect(result).toEqual({ failed: 0 });
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([
+            expect.objectContaining({ groupId }),
+        ]);
+        // Its lease released, the next relist revokes it and clears the list.
+        await rawSql(
+            `update personal_plan_endings set lease_until = now() - interval '1 second' where subscription_id = '${subscription.id}'`,
+        );
+        await quietly(async () => {
+            result = await billing.relistUnlistedFamilies();
+        });
+        expect(result).toEqual({ failed: 0 });
+        expect(callsTo('subscriptions.revoke')).toEqual([
+            `subscriptions.revoke:${subscription.id}`,
+        ]);
+        expect(await billingRepository.listUnlistedFamilies()).toEqual([]);
+    });
+
     test('an order.paid naming the plan finds it with Polar’s list unreadable', async () => {
         const { groupId, subscription } = await purgedFamily();
         reinstate(subscription);

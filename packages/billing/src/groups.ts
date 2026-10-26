@@ -568,6 +568,9 @@ async function revokeOrphanedPlans(
     // named are still read.
     // Whether Polar's list was read: then, once every plan is handled below, it is no longer owed.
     let listed = false;
+    // Whether every plan was handled: a revoke this run couldn't make (another run holds the
+    // ending's lease, or Polar refused it) leaves the list owed.
+    let handled = true;
     if (customer && options.listPolar) {
         try {
             for (const subscription of (await listFamilySubscriptions(groupId)) ?? [])
@@ -651,10 +654,10 @@ async function revokeOrphanedPlans(
             } catch (error) {
                 if (statusOf(error) !== 404) throw unavailable(error);
             }
-        }
+        } else handled = false;
     }
     // Every plan listed and named was handled without a failure: the list is no longer owed.
-    if (listed) await billingRepository.plansListed(groupId);
+    if (listed && handled) await billingRepository.plansListed(groupId);
 }
 
 /*
