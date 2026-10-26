@@ -1,4 +1,5 @@
 import { cn } from 'cn';
+import { initialsOf } from '@/lib/initials';
 
 const TONES = [
     'bg-avatar1 text-on-avatar1',
@@ -14,18 +15,12 @@ function toneOf(seed: string) {
     return TONES[Math.abs(hash) % TONES.length]!;
 }
 
-export function initialsOf(name: string) {
-    return (
-        name
-            .trim()
-            .split(/\s+/)
-            .slice(0, 2)
-            .map((part) => part[0]?.toUpperCase() ?? '')
-            .join('') || '?'
-    );
-}
-
-/* A person's initials on their own tone. `seed` is their id, so a rename keeps the colour. */
+/*
+ * A person's initials on their own tone, the one avatar for a person everywhere (the account
+ * menu, members, contacts, share sheets). `seed` is their user id, so a rename keeps the colour
+ * and the same person has the same colour in every place. `name` is the person's name alone:
+ * a suffix such as "(you)" is the caller's to show beside it.
+ */
 export function PersonAvatar({
     name,
     seed,
