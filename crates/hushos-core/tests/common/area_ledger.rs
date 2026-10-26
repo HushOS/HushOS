@@ -610,7 +610,13 @@ impl Runner {
                 json!({})
             }
             Step::Forget(group) => {
-                ledger.forget_group(group.clone());
+                ledger
+                    .forget_group(
+                        group.clone(),
+                        hushos_core::FamilyGuard::Absent,
+                        "2026-10-15T00:00:00.000Z".into(),
+                    )
+                    .unwrap();
                 if self.opened_by.remove(group) {
                     for node in NODES {
                         self.forget_pending(node);

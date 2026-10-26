@@ -546,9 +546,11 @@ pub enum ServedAcceptance {
     /// `guard`, when some, is the family guard to store (2.8): the held one
     /// moved on to this acceptance with the folders opened here, never lower;
     /// write it before the record, without waiting for the settings save (a
-    /// crash then leaves it at or above the record, never below), and run a
-    /// not-member wipe only once it is stored: a guard not stored is handed
-    /// back again by the next acceptance while the held one is behind.
+    /// crash then leaves it at or above the record, never below), and write
+    /// nothing under this acceptance until it is stored (reading may go on). A
+    /// not-member wipe stores the guard [`AreaLedger::forget_group`] returns
+    /// first: a `not-member` answer or a fork hands none back, and that one
+    /// covers what the session accepted.
     /// None: nothing new to write.
     Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin, guard: Option<GroupPin> },
     /// The person's marks disagree with each other or with the chain served:
@@ -574,7 +576,8 @@ pub enum ServedAcceptance {
 /// app's own store held it when it was read: kept apart from the chain record,
 /// never cleared by a `not-member` wipe nor by anything the server answers.
 /// It holds the latest pin this device accepted, advanced on every acceptance
-/// ([`ServedAcceptance::Accepted`]'s `guard`) and never lowered, and
+/// ([`ServedAcceptance::Accepted`]'s `guard`, and [`AreaLedger::forget_group`]'s
+/// on a wipe, stored before anything is deleted) and never lowered, and
 /// acceptance takes it as a mark like any pin, so a family that once was here
 /// is never taken on first use again, nor replayed below what this device
 /// accepted.
@@ -1719,7 +1722,13 @@ mod tests {
             ServedAcceptance::Overtaken { split: false }
         ));
         // Only forgetting the family drops the floor: then the same run is taken.
-        ledger.forget_group(GROUP.into());
+        ledger
+            .forget_group(
+                GROUP.into(),
+                crate::device_record::FamilyGuard::Absent,
+                "2026-10-15T00:00:00.000Z".into(),
+            )
+            .unwrap();
         assert_eq!(version_of(&f.accept(&ledger, Some(&record), f.served(0, 2)).unwrap()), Some(2));
         // And a lock drops it with everything else.
         ledger.clear();
@@ -1852,7 +1861,13 @@ mod tests {
         assert_eq!(ledger.commit(beside), Err(input(SPLIT_CHAIN)));
         // The same chain again, or a later one, is committed.
         assert!(ledger.commit_served(three, generation).is_ok());
-        ledger.forget_group(GROUP.into());
+        ledger
+            .forget_group(
+                GROUP.into(),
+                crate::device_record::FamilyGuard::Absent,
+                "2026-10-15T00:00:00.000Z".into(),
+            )
+            .unwrap();
         assert!(ledger.commit(two).is_ok(), "forgetting the family drops its floor");
     }
 

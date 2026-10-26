@@ -380,7 +380,8 @@ async function acceptJoin(
     } catch (error) {
         // Committed in the worker but not kept on the device: the worker lets go of it too,
         // or its chain would count as a mark this device cannot show, and a retry be refused.
-        await ctx.rpc('groupForget', { groupId });
+        // The guard it returns is stored from PR 4 (docs/optional-verification.md 8).
+        await ctx.rpc('groupForget', { groupId, checkedAt: new Date().toISOString() });
         throw error;
     }
     const sync = await afterAccept(ctx, groupId, result);

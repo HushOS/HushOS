@@ -1084,6 +1084,8 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
     let mut guard: Option<GroupPin> = None;
     for (at, step) in scenario["steps"].as_array().unwrap().iter().enumerate() {
         let index = |key: &str| step[key].as_u64().map(|i| i as usize);
+        // A step with `stored: false` is one whose guard write failed: the guard handed back is not kept.
+        let storing = step["stored"] != false;
         let outcome = match step["op"].as_str().unwrap() {
             "show" => {
                 let preview = ledger.group_join_preview(
@@ -1205,7 +1207,9 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                         if let Ok(JoinAcceptance::Changed { session }) = &acceptance {
                             showings.insert(at, std::sync::Arc::clone(session));
                         }
-                        if let Ok(JoinAcceptance::Accepted { guard: Some(next), .. }) = &acceptance {
+                        if let (true, Ok(JoinAcceptance::Accepted { guard: Some(next), .. })) =
+                            (storing, &acceptance)
+                        {
                             guard = Some(next.clone());
                         }
                         acceptance_json(acceptance)
@@ -1228,7 +1232,7 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                             "rosterVersion": chain.roster().roster_version,
                             "guard": guard_json(&next),
                         });
-                        if next.is_some() {
+                        if storing && next.is_some() {
                             guard = next;
                         }
                         outcome
@@ -1271,8 +1275,21 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                 }
             },
             "forget" => {
-                ledger.forget_group(GROUP.into());
-                json!({ "status": "forgotten" })
+                // The not-member wipe: the held guard in, the guard to store first out (2.8).
+                let held = match &guard {
+                    Some(pin) => FamilyGuard::Held { pin: pin.clone() },
+                    None => FamilyGuard::Absent,
+                };
+                match ledger.forget_group(GROUP.into(), held, SESSION_NOW.into()) {
+                    Ok(next) => {
+                        let outcome = json!({ "status": "forgotten", "guard": guard_json(&next) });
+                        if storing && next.is_some() {
+                            guard = next;
+                        }
+                        outcome
+                    }
+                    Err(error) => json!({ "status": "refused", "message": error.to_string() }),
+                }
             }
             other => panic!("an op {other}"),
         };

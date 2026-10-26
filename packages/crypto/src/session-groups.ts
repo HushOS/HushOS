@@ -667,7 +667,14 @@ export type GroupRequests = {
         old: IdentityEnvelope;
         next: IdentityEnvelope;
     };
-    groupForget: { groupId: string };
+    /*
+     * Let go of a family this session holds (a `not-member` wipe, or a join
+     * committed here and not kept on the device). `guard` is the family guard
+     * this device holds (groupAccept's), `checkedAt` the time a guard made
+     * here records: the result's `guard` is the one to store before the app
+     * deletes anything (docs/optional-verification.md 2.8).
+     */
+    groupForget: { groupId: string; guard?: GroupPin | 'unreadable' | null; checkedAt: string };
     groupStoreSeal: { userId: string; groupId: string; store: DeviceStore; value: unknown };
     groupStoreOpen: { userId: string; groupId: string; store: DeviceStore; envelope: string };
     /*
@@ -784,9 +791,10 @@ export type GroupResults = {
                * to this acceptance (mergePin with the folders opened here), only when it records
                * anything new; null otherwise (nothing to write). Never lower than the one held.
                * Write it before the record, without waiting for the settings save (a crash
-               * then leaves it at or above the record, never below), and run a not-member
-               * wipe only once it is stored: a guard not stored is handed back again by the
-               * next acceptance while the held one is behind.
+               * then leaves it at or above the record, never below); write nothing under this
+               * acceptance until it is stored (reading may go on). A not-member wipe stores
+               * the guard groupForget returns first: a `not-member` answer or a fork hands
+               * none back, and groupForget's covers what the session accepted.
                */
               guard: GroupPin | null;
               /* What vouched for the family in this acceptance (AcceptedRosters.checked). */
@@ -863,7 +871,15 @@ export type GroupResults = {
     groupJoinCode: { rosterVersion: number; code: string[]; pinMatches: boolean | null };
     groupTrustAs: { pin: ContactPin };
     identityConsent: { consent: string };
-    groupForget: { forgotten: boolean };
+    /*
+     * `guard`: the family guard to store before anything is wiped: the held
+     * one moved on to the highest chain this session accepted for the family
+     * (its floor) with the folders opened here, when that records anything
+     * new (guardAfter), so an acceptance whose guard was never stored is not
+     * lost with the session's state; null when there is nothing to store. An
+     * unreadable guard refuses (GUARD_UNREADABLE) and nothing is forgotten.
+     */
+    groupForget: { forgotten: boolean; guard: GroupPin | null };
     groupStoreSeal: { envelope: string };
     /* `unreadable`: sealed under another account root (a master-key rotation) or not this group's. */
     groupStoreOpen: { value: unknown } | { unreadable: true };
@@ -3992,10 +4008,26 @@ export function createGroupSession(host: GroupHost) {
             case 'identityConsent':
                 return consent(message.input);
             case 'groupForget': {
+                const { guard: held, checkedAt } = message.input;
                 const groupId = uuid(message.input.groupId, 'group id');
+                if (held === 'unreadable') throw new CryptoError(GUARD_UNREADABLE);
                 const known = chains.has(groupId) || opened.has(groupId) || forked.has(groupId);
+                // The guard to store first: what this session accepted, beyond the one held.
+                const floor = ledger.floor(groupId);
+                const guard = floor
+                    ? guardAfter(
+                          groupId,
+                          held ? checkGroupPin(groupId, held) : null,
+                          await pinAfter([], floor, checkedAt),
+                          [...areasOf(groupId)].map(([workspaceId, area]) => ({
+                              groupId,
+                              workspaceId,
+                              version: area.version,
+                          })),
+                      )
+                    : null;
                 forgetGroup(groupId);
-                return { forgotten: known };
+                return { forgotten: known, guard };
             }
             case 'groupStoreSeal':
                 return storeSeal(message.input);

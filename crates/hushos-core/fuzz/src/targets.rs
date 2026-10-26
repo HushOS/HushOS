@@ -868,7 +868,17 @@ fn session_step(step: &Value, at: usize, lengths: &[u64; 7]) -> Option<Value> {
     };
     let earlier = |key: &str| number(step, key).filter(|i| (*i as usize) < at);
     // The family guard a step hands the core (none when absent); one of GUARDS, else no fit.
-    let guarded = |mut out: Value| -> Option<Value> {
+    // `stored: false`: the guard write after this step failed (none kept); a boolean, else no fit.
+    let stored = |mut out: Value| -> Option<Value> {
+        match step.get("stored") {
+            None | Some(Value::Bool(true)) => {}
+            Some(Value::Bool(false)) => out["stored"] = json!(false),
+            Some(_) => return None,
+        }
+        Some(out)
+    };
+    let guarded = |out: Value| -> Option<Value> {
+        let mut out = stored(out)?;
         match step.get("guard") {
             None => {}
             Some(Value::String(guard)) if GUARDS.contains(&guard.as_str()) => {
@@ -908,7 +918,8 @@ fn session_step(step: &Value, at: usize, lengths: &[u64; 7]) -> Option<Value> {
             json!({ "op": op, "restore": step.get("restore").map_or(Some(false), Value::as_bool)? })
         }
         "restore" => json!({ "op": op, "from": earlier("from")? }),
-        "holds" | "forget" | "guard" => json!({ "op": op }),
+        "forget" => stored(json!({ "op": op }))?,
+        "holds" | "guard" => json!({ "op": op }),
         _ => return None,
     })
 }
@@ -950,17 +961,36 @@ fn join_session_kind(value: &Value) -> Option<Value> {
 }
 
 /*
+ * The group key version a pin at roster `version` of `history` is under: one above every
+ * succession tied at or below that roster (a roster that drops a holder ties its succession to
+ * itself, and a pin there records the new key). Worked out from the history, never from what an
+ * acceptance said. The web's sessionKeyVersion.
+ */
+pub fn session_key_version(history: &Value, version: u64) -> u64 {
+    1 + successions_of(history).filter(|s| s.last_roster_version <= version).count() as u64
+}
+
+/* A history's successions, parsed, with their statements. */
+fn successions_of(history: &Value) -> impl Iterator<Item = GroupKeySuccession> + '_ {
+    history["successions"].as_array().unwrap().iter().map(|s| {
+        group_succession_parse(base64url_decode(s["statement"].as_str().unwrap().into()).unwrap()).unwrap()
+    })
+}
+
+/*
  * Whether a chain served (`history`, `through`, `cut`) of the join histories `base` holds a mark
  * (`from` the chain it came from, `version` the roster it reaches): through it, over the same
  * first keys, the same roster statements through its version and the same succession statements
- * tied below it (a cut chain is not compared). Statements, not signatures: ML-DSA signs at
- * random, so one roster re-signed is the same roster to acceptance. The oracle session_rules holds
- * every acceptance to; the web's sessionHoldsMark.
+ * into every key up to the one the mark's roster is under (session_key_version of the mark's own
+ * history); later successions are the served chain's to add (a cut chain is not compared).
+ * Statements, not signatures: ML-DSA signs at random, so one roster re-signed is the same roster
+ * to acceptance. The oracle session_rules holds every acceptance to; the web's sessionHoldsMark.
  */
 pub fn session_holds_mark(base: &Value, served: &Value, from: &Value, version: u64) -> bool {
     if !served["cut"].is_null() || !from["cut"].is_null() {
         return true;
     }
+    let key = session_key_version(&base["histories"][from["history"].as_str().unwrap()], version);
     let of = |history: &str| {
         let history = &base["histories"][history];
         let statements = |key: &str| {
@@ -968,10 +998,9 @@ pub fn session_holds_mark(base: &Value, served: &Value, from: &Value, version: u
         };
         let rosters: Vec<String> = statements("rosters").take(version as usize).collect();
         let mut successions: Vec<String> = statements("successions")
-            .filter(|statement| {
-                let bytes = base64url_decode(statement.clone()).unwrap();
-                group_succession_parse(bytes).unwrap().last_roster_version < version
-            })
+            .zip(successions_of(history))
+            .filter(|(_, succession)| succession.new_version <= key)
+            .map(|(statement, _)| statement)
             .collect();
         successions.sort();
         (history["firstKeys"].clone(), rosters, successions)
@@ -1070,12 +1099,39 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
                 assert!(!marks.is_empty(), "step {at}: a first use over a family check");
             }
         }
-        if outcome.get("guard").is_some_and(|next| !next.is_null()) {
-            if let (Some("held"), Some(held)) = (step["guard"].as_str(), &guard) {
-                assert!(guard_covers(&outcome["guard"], held), "step {at}: the guard went back");
+        // A wipe hands back the guard of what this session accepted beyond the one held.
+        if let ("forget", Some((_, version))) = (op, &committed) {
+            if guard.as_ref().is_none_or(|held| held["rosterVersion"].as_u64().unwrap() < *version) {
+                assert!(
+                    outcome["guard"]["rosterVersion"].as_u64().is_some_and(|at| at >= *version),
+                    "step {at}: a wipe lost an acceptance whose guard was not stored"
+                );
             }
-            guard = Some(outcome["guard"].clone());
-            guard_from = Some((step["served"].clone(), outcome["guard"]["rosterVersion"].as_u64().unwrap()));
+        }
+        if outcome.get("guard").is_some_and(|next| !next.is_null()) {
+            if op == "forget" {
+                assert!(committed.is_some(), "step {at}: a wipe handed back a guard of nothing accepted");
+            }
+            let from =
+                if op == "forget" { committed.as_ref().unwrap().0.clone() } else { step["served"].clone() };
+            // The pin it records is under the key its roster is under, as the history says.
+            if from["cut"].is_null() {
+                let history = &base["histories"][from["history"].as_str().unwrap()];
+                let key = session_key_version(history, outcome["guard"]["rosterVersion"].as_u64().unwrap());
+                assert_eq!(
+                    outcome["guard"]["keyVersion"], key,
+                    "step {at}: a guard under another key than its roster's"
+                );
+            }
+            if step["guard"] == "held" || op == "forget" {
+                if let Some(held) = &guard {
+                    assert!(guard_covers(&outcome["guard"], held), "step {at}: the guard went back");
+                }
+            }
+            if step["stored"] != false {
+                guard = Some(outcome["guard"].clone());
+                guard_from = Some((from, outcome["guard"]["rosterVersion"].as_u64().unwrap()));
+            }
         }
         if (op == "accept" || op == "sync") && status == "accepted" {
             committed = Some((step["served"].clone(), outcome["rosterVersion"].as_u64().unwrap()));
@@ -1985,6 +2041,11 @@ fn joins_record_kind(value: &Value) -> Option<Value> {
             assert!(outcome["checked"].is_null(), "a first use reported checked");
             let at = first["rosterVersion"].as_u64().unwrap();
             assert!(outcome["rosterVersion"].as_u64().unwrap() >= at, "a first use joined short of its pin");
+            assert_eq!(
+                first["keyVersion"],
+                session_key_version(&base["histories"][&history], at),
+                "a first use joined under another key than its pin's roster is under"
+            );
             let statement =
                 base64url_decode(rosters[at as usize - 1]["statement"].as_str().unwrap().into()).unwrap();
             assert!(
@@ -2018,5 +2079,30 @@ mod tests {
         assert!(!session_holds_mark(base, &chain("madeUp", 3), &chain("main", 2), 2));
         assert!(!session_holds_mark(base, &chain("main", 1), &chain("main", 2), 2));
         assert!(session_holds_mark(base, &chain("main", 5), &chain("main", 2), 2));
+    }
+
+    /* A mark holds every group key its roster is under; a later one is allowed. */
+    #[test]
+    fn a_mark_is_held_only_with_every_group_key_its_roster_is_under() {
+        // A copy of a history with its successions taken out: the same rosters under fewer keys.
+        let mut base = fixtures::core_join()["joinPreviews"].clone();
+        for (bare, of) in [("removalBare", "removal"), ("succBare", "succ")] {
+            let mut copy = base["histories"][of].clone();
+            copy["successions"] = json!([]);
+            base["histories"][bare] = copy;
+        }
+        let chain =
+            |history: &str, through: u64| json!({ "history": history, "through": through, "cut": null });
+        let holds = |served: Value, from: Value, version| session_holds_mark(&base, &served, &from, version);
+        // removal's succession is tied at roster 5 (the roster that drops p3), so its pin at 5 is
+        // under key 2: a chain without that succession does not hold it.
+        assert!(!holds(chain("removalBare", 5), chain("removal", 5), 5));
+        // The reverse: a mark under key 1 at 5, and a chain that adds the succession after it.
+        assert!(holds(chain("removal", 5), chain("removalBare", 5), 5));
+        // succ's succession is tied at roster 2: the same at a mark there.
+        assert!(!holds(chain("succBare", 3), chain("succ", 2), 2));
+        assert!(holds(chain("succ", 3), chain("succBare", 2), 2));
+        // Below the roster a succession is tied at, it is not the mark's to hold.
+        assert!(holds(chain("removalBare", 5), chain("removal", 4), 4));
     }
 }

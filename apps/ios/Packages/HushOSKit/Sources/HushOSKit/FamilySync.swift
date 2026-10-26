@@ -640,7 +640,9 @@ public actor FamilySync: FamilyJudge {
      */
     func wipe(_ groupId: String) async {
         let areas = knownAreas(groupId)
-        ledger.forgetGroup(groupId: groupId)
+        // The guard it returns (docs/optional-verification.md 2.8) is stored from PR 5, before anything below
+        // is deleted; with `.absent` held it never throws.
+        _ = try? ledger.forgetGroup(groupId: groupId, guard: .absent, checkedAt: Self.checkTime(now()))
         records.delete(userId: userId, groupId: groupId)
         await vault.forgetWorkspaces(areas)
         identities[groupId] = nil

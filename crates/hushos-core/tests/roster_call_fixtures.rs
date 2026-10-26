@@ -103,6 +103,13 @@ fn a_folder_opened_here_raises_the_guard_an_acceptance_hands_back() {
     // Held, the same chain and folders again: nothing new to write.
     assert_eq!(accept(&ledger, FamilyGuard::Held { pin: guard.clone() }), None);
     // A guard held from before the folder opened rises to it.
-    let raised = accept(&ledger, FamilyGuard::Held { pin: plain }).expect("a raised guard");
+    let raised = accept(&ledger, FamilyGuard::Held { pin: plain.clone() }).expect("a raised guard");
     assert_eq!(raised, guard);
+    // The wipe, with that raised guard never stored: an unreadable guard refuses and forgets
+    // nothing; held at the plain one, the wipe hands back the guard to store first, folder included.
+    let forget = |held: FamilyGuard| ledger.forget_group(f.group_id.clone(), held, CHECKED.into());
+    assert!(forget(FamilyGuard::Unreadable).is_err());
+    assert_eq!(forget(FamilyGuard::Held { pin: plain }).unwrap(), Some(guard.clone()));
+    // Forgotten: nothing accepted this session any more, nothing to store.
+    assert_eq!(forget(FamilyGuard::Absent).unwrap(), None);
 }

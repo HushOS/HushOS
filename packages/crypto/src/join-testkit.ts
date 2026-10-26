@@ -1124,8 +1124,10 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
     let pending: string | null = null;
     // The family guard this device holds: the latest an acceptance returned, never cleared.
     let guard: GroupPin | null = null;
+    // A step with `stored: false` is one whose guard write failed: the guard handed back is not kept.
+    let storing = true;
     const keep = (result: GroupResults['groupAccept']) => {
-        if (result.status === 'accepted' && result.guard) guard = result.guard;
+        if (storing && result.status === 'accepted' && result.guard) guard = result.guard;
     };
     const take = () => {
         const holds = pending;
@@ -1134,6 +1136,7 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
     };
     for (const [at, step] of (scenario.steps as Json[]).entries()) {
         let outcome: Json;
+        storing = step.stored !== false;
         switch (step.op) {
             case 'show': {
                 try {
@@ -1308,8 +1311,14 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                 break;
             }
             case 'forget': {
-                await call(session, 'groupForget', { groupId: GROUP });
-                outcome = { status: 'forgotten' };
+                // The not-member wipe: the held guard in, the guard to store first out (2.8).
+                const result: GroupResults['groupForget'] = await call(session, 'groupForget', {
+                    groupId: GROUP,
+                    guard,
+                    checkedAt: SESSION_NOW,
+                });
+                if (storing && result.guard) guard = result.guard;
+                outcome = { status: 'forgotten', guard: guardJson(result.guard) };
                 break;
             }
             default:

@@ -1335,10 +1335,17 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
         return n !== undefined && n < at ? n : undefined;
     };
     // The family guard a step hands the worker (none when absent); one of GUARDS, else no fit.
+    // `stored: false`: the guard write after this step failed (none kept); a boolean, else no fit.
+    const stored = (): Doc | undefined => {
+        if (step.stored === undefined || step.stored === true) return {};
+        return step.stored === false ? { stored: false } : undefined;
+    };
     const guard = (): Doc | undefined => {
-        if (step.guard === undefined) return {};
+        const keeps = stored();
+        if (keeps === undefined) return undefined;
+        if (step.guard === undefined) return keeps;
         return typeof step.guard === 'string' && GUARDS.includes(step.guard)
-            ? { guard: step.guard }
+            ? { guard: step.guard, ...keeps }
             : undefined;
     };
     const op = text(step, 'op');
@@ -1386,8 +1393,11 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
             const from = earlier('from');
             return from === undefined ? undefined : { op, from };
         }
+        case 'forget': {
+            const keeps = stored();
+            return keeps === undefined ? undefined : { op, ...keeps };
+        }
         case 'holds':
-        case 'forget':
         case 'guard':
             return { op };
         default:
@@ -1425,11 +1435,27 @@ async function joinSessionKind(value: Doc): Promise<Verdict | undefined> {
 }
 
 /*
+ * The group key version a pin at roster `version` of history `history` is
+ * under: one above every succession tied at or below that roster (a roster that
+ * drops a holder ties its succession to itself, and a pin there records the
+ * new key). Worked out from the history, never from what an acceptance said.
+ */
+export function sessionKeyVersion(history: Json, version: number) {
+    const tied = (history.successions as Json[]).filter(
+        (succession) =>
+            parseGroupSuccession(decode(succession.statement)).lastRosterVersion <= version,
+    );
+    return 1 + tied.length;
+}
+
+/*
  * Whether a chain served (`history`, `through`, `cut`) of the join histories
  * `base` holds a mark (`served` it came from, `version` it reaches): through
  * it, over the same first keys, the same roster statements through its
- * version and the same succession statements tied below it (a cut chain is
- * not compared). Statements, not signatures: ML-DSA signs at random, so one
+ * version and the same succession statements into every key up to the one
+ * the mark's roster is under (sessionKeyVersion of the mark's own history);
+ * later successions are the served chain's to add (a cut chain is not
+ * compared). Statements, not signatures: ML-DSA signs at random, so one
  * roster re-signed is the same roster to acceptance. The oracle sessionRules
  * holds every acceptance to; the core's session_holds_mark.
  */
@@ -1440,12 +1466,13 @@ export function sessionHoldsMark(
 ) {
     if (served.cut !== null || mark.served.cut !== null) return true;
     const at = mark.version;
+    const key = sessionKeyVersion(base.histories[mark.served.history], at);
     const of = (history: Json) => ({
         firstKeys: history.firstKeys,
         rosters: (history.rosters as Json[]).slice(0, at).map((roster) => roster.statement),
         successions: (history.successions as Json[])
             .map((succession) => succession.statement as string)
-            .filter((statement) => parseGroupSuccession(decode(statement)).lastRosterVersion < at)
+            .filter((statement) => parseGroupSuccession(decode(statement)).newVersion <= key)
             .sort(),
     });
     return (
@@ -1539,11 +1566,36 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
             if (settings === 'checked-before')
                 invariant(marks.length > 0, `step ${at}: a first use over a family check`);
         }
+        // A wipe hands back the guard of what this session accepted beyond the one held.
+        if (step.op === 'forget' && committed)
+            if (!guard || guard.rosterVersion < committed.version)
+                invariant(
+                    outcome.guard && outcome.guard.rosterVersion >= committed.version,
+                    `step ${at}: a wipe lost an acceptance whose guard was not stored`,
+                );
+        if (outcome.guard && step.op === 'forget')
+            invariant(
+                committed !== null,
+                `step ${at}: a wipe handed back a guard of nothing accepted`,
+            );
         if (outcome.guard) {
-            if (step.guard === 'held' && guard)
+            const from = step.op === 'forget' ? committed!.served : step.served;
+            // The pin it records is under the key its roster is under, as the history says.
+            if (from.cut === null)
+                invariant(
+                    outcome.guard.keyVersion ===
+                        sessionKeyVersion(
+                            base.histories[from.history],
+                            outcome.guard.rosterVersion,
+                        ),
+                    `step ${at}: a guard under another key than its roster's`,
+                );
+            if ((step.guard === 'held' || step.op === 'forget') && guard)
                 invariant(guardCovers(outcome.guard, guard), `step ${at}: the guard went back`);
-            guard = outcome.guard;
-            guardFrom = { served: step.served, version: outcome.guard.rosterVersion };
+            if (step.stored !== false) {
+                guard = outcome.guard;
+                guardFrom = { served: from, version: outcome.guard.rosterVersion };
+            }
         }
         if ((step.op === 'accept' || step.op === 'sync') && status === 'accepted')
             committed = { served: step.served, version: outcome.rosterVersion };
@@ -2457,6 +2509,10 @@ async function joinsRecordKind(value: Doc): Promise<Verdict | undefined> {
             invariant(outcome.checked === null, 'a first use reported checked');
             const at = first.rosterVersion as number;
             invariant(outcome.rosterVersion >= at, 'a first use joined short of its pin');
+            invariant(
+                first.keyVersion === sessionKeyVersion(base.histories[history], at),
+                'a first use joined under another key than its pin’s roster is under',
+            );
             invariant(
                 (await rosterDigest(decode(rosters[at - 1]!.statement))) === first.rosterDigest &&
                     base.histories[history].firstKeys.ed25519PublicKey ===

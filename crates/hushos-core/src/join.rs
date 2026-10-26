@@ -2298,7 +2298,13 @@ mod tests {
         let reopened = ledger.join_matched_open(GROUP.into(), matched.record()).unwrap().unwrap();
         assert_eq!(j.accept_joining(&ledger, j.served(3), &reopened).unwrap_err(), input(USED));
         // A family forgotten (a join committed but not kept) may run its join again.
-        ledger.forget_group(GROUP.into());
+        ledger
+            .forget_group(
+                GROUP.into(),
+                crate::device_record::FamilyGuard::Absent,
+                "2026-10-15T00:00:00.000Z".into(),
+            )
+            .unwrap();
         assert!(matches!(
             j.accept_joining(&ledger, j.served(3), &reopened).unwrap(),
             JoinAcceptance::Accepted { .. }

@@ -27,4 +27,28 @@ describe('the join session oracle', () => {
         expect(holds(chain('main', 1), chain('main', 2), 2)).toBe(false);
         expect(holds(chain('main', 5), chain('main', 2), 2)).toBe(true);
     });
+
+    it('holds a mark only with every group key its roster is under, a later one allowed', () => {
+        // A copy of a history with its successions taken out: the same rosters under fewer keys.
+        const bare = (history: string) => ({ ...base.histories[history], successions: [] });
+        const withBare = {
+            ...base,
+            histories: { ...base.histories, removalBare: bare('removal'), succBare: bare('succ') },
+        };
+        const holdsIn = (
+            served: ReturnType<typeof chain>,
+            from: ReturnType<typeof chain>,
+            version: number,
+        ) => sessionHoldsMark(withBare, served, { served: from, version });
+        // removal's succession is tied at roster 5 (the roster that drops p3), so its pin at 5 is
+        // under key 2: a chain without that succession does not hold it.
+        expect(holdsIn(chain('removalBare', 5), chain('removal', 5), 5)).toBe(false);
+        // The reverse: a mark under key 1 at 5, and a chain that adds the succession after it.
+        expect(holdsIn(chain('removal', 5), chain('removalBare', 5), 5)).toBe(true);
+        // succ's succession is tied at roster 2: the same at a mark there.
+        expect(holdsIn(chain('succBare', 3), chain('succ', 2), 2)).toBe(false);
+        expect(holdsIn(chain('succ', 3), chain('succBare', 2), 2)).toBe(true);
+        // Below the roster a succession is tied at, it is not the mark's to hold.
+        expect(holdsIn(chain('removalBare', 5), chain('removal', 4), 4)).toBe(true);
+    });
 });

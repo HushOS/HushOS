@@ -373,7 +373,8 @@ extension FamilySync {
                     try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion,
                                                                                         areas: Array(chain.areaKeys().keys).sorted()))
                 } catch {
-                    ledger.forgetGroup(groupId: groupId)
+                    // The guard it returns (2.8) is stored from PR 5; with `.absent` held it never throws.
+                    _ = try? ledger.forgetGroup(groupId: groupId, guard: .absent, checkedAt: Self.checkTime(now()))
                     throw error
                 }
                 let state = try await afterAcceptance(groupId, chain: chain, pin: pin, reset: false)

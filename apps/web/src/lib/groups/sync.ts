@@ -440,7 +440,9 @@ export async function afterAccept(
  */
 export async function wipeGroup(ctx: GroupContext, groupId: string, areas: readonly string[] = []) {
     const row = await ctx.store.chain(ctx.userId, groupId);
-    await ctx.rpc('groupForget', { groupId });
+    // No family guard is kept on the web yet: PR 4 (docs/optional-verification.md 8) passes the
+    // held one and stores the guard this returns before anything below is deleted.
+    await ctx.rpc('groupForget', { groupId, checkedAt: new Date().toISOString() });
     await ctx.store.forgetGroup(ctx.userId, groupId);
     await ctx.deleteMirrors([...new Set([...(row?.areas ?? []), ...areas])]);
 }

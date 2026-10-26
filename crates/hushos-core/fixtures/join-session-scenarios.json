@@ -1877,6 +1877,136 @@
             ]
         },
         {
+            "name": "a-guard-not-stored-is-handed-back-by-the-wipe",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 3,
+                        "keyVersion": 1
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
+        },
+        {
             "name": "a-first-use-record-binds-its-first-keys",
             "settings": "none",
             "steps": [

@@ -1161,7 +1161,12 @@ fn only_the_current_group_key_s_seed_is_kept_and_a_later_key_or_a_forget_drops_i
     );
     assert!(at_two.held_seed_versions(GROUP).is_empty());
     let kept = f.ledger(true, false);
-    kept.forget_group(GROUP.into());
+    kept.forget_group(
+        GROUP.into(),
+        crate::device_record::FamilyGuard::Absent,
+        "2026-10-15T00:00:00.000Z".into(),
+    )
+    .unwrap();
     assert!(kept.held_seed_versions(GROUP).is_empty());
     let cleared = f.ledger(true, false);
     cleared.clear();

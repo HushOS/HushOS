@@ -236,7 +236,9 @@ describe('syncing a family', () => {
             await knownFamily(h);
             breakRoute(h);
             expect(await syncGroup(h.ctx, GROUP), route).toEqual({ status: 'wiped' });
-            expect(h.calls('groupForget'), route).toEqual([{ groupId: GROUP }]);
+            expect(h.calls('groupForget'), route).toEqual([
+                { groupId: GROUP, checkedAt: expect.any(String) },
+            ]);
             expect(await h.store.chain(USER, GROUP), route).toBeNull();
             expect(h.settings.doc.groups?.[GROUP], route).toEqual(pinAt(5));
         }
