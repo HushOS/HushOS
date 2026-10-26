@@ -604,6 +604,27 @@ describe('admissions', () => {
         },
     );
 
+    test('a final refusal after the pin moved still drops the admission rather than holding it forever', async () => {
+        const before = await pinOf('seen', [1, 2, 3, 4]);
+        const after = await pinOf('seen', [1, 2, 3, 12]);
+        const h = harness();
+        await checked(h, before);
+        // The person stopped waiting to join while the pin moved: nothing can ever land now.
+        h.server.script.push(refusal(409, 'not-pending'));
+        const admitOnce = h.ctx.api.admit;
+        h.ctx.api.admit = async (...args) => {
+            h.settings.doc.contacts = { [NEWCOMER]: after as never };
+            return admitOnce(...args);
+        };
+        const outcome = await letIn(h.ctx, GROUP, admit, before);
+        expect(outcome).toMatchObject({
+            status: 'sent',
+            outcome: { status: 'refused', code: 'not-pending' },
+        });
+        expect(h.server.sent).toHaveLength(1);
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
     test('a kept admission from before keys were recorded, with only its fingerprint, is sent exactly when the pin holds those keys', async () => {
         const kept = (admits: unknown) =>
             entry({

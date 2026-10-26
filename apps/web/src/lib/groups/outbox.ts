@@ -540,8 +540,10 @@ async function sendLocked(
                 await ctx.sleep(delay);
                 continue;
             }
-            // A fix may seal and send grants of its own: only while the pin still holds those keys.
-            if (await heldBack(ctx, entry)) return { status: 'other-keys' };
+            // A fix (grants, a rebuild) leads to sending again: only while the pin still holds
+            // those keys. Final, stale and membership answers drop the entry as ever.
+            if ((step === 'send-grants' || step === 'rebuild') && (await heldBack(ctx, entry)))
+                return { status: 'other-keys' };
             const answer = await refused(ctx, entry, error, fixes++, mode);
             if (answer) return answer;
             continue;
