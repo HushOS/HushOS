@@ -549,12 +549,19 @@ export function TrashView({
                     </Button>
                 </EmptyState>
             )}
-            {trash.data && rows.length === 0 && (
-                <EmptyState
-                    title="Trash is empty"
-                    body="Items you move to the Trash stay here for 30 days."
-                />
-            )}
+            {trash.data &&
+                rows.length === 0 &&
+                (section ? (
+                    // One section of two: a line, as the family folders' says it, not a page.
+                    <p className="border-t border-rule px-5 py-4 text-sm text-muted-foreground sm:px-8">
+                        Nothing in {section}’ Trash.
+                    </p>
+                ) : (
+                    <EmptyState
+                        title="Trash is empty"
+                        body="Items you move to the Trash stay here for 30 days."
+                    />
+                ))}
             {rows.length > 0 && (
                 <table
                     aria-label="Trash"
@@ -888,7 +895,7 @@ export function TrashView({
  * `whereSpan`), then Size, then the action labels (the actions widen to 256px, which "Restore to
  * My files" and Delete forever need on touch), then Trashed.
  */
-const TRASH_COLUMN = {
+export const TRASH_COLUMN = {
     where: 'hidden @min-[66rem]/list:table-cell',
     whereLine: '@min-[66rem]/list:hidden',
     whereSpan: '@min-[66rem]/list:row-span-1',
