@@ -168,7 +168,7 @@ Run `bun run core:check` (fmt, clippy with warnings denied, tests) before declar
 
 - `fuzz/` is a cargo-fuzz crate with its own workspace and `Cargo.lock`: sixteen targets (`canonical`, `roster`, `group_succession`, `roster_build`, `statements`, `identity`, `succession`, `share_open`, `key_seal_open`, `area_grant_open`, `key_seal_context`, `pins`, `accept`, `record_integrity`, `origin_open`, `area_ledger`), built with the nightly in `fuzz/rust-toolchain.toml`, their verdicts in `fuzz/src/targets.rs`, the JSON shapes in `fuzz/src/shape.rs`, structured inputs (`arbitrary`) in `fuzz/src/structured.rs`. `packages/crypto/fuzz/verdicts.ts` is the twin: same names, same inputs, same verdicts, held to each other by `bun run fuzz:diff` through `fuzz/examples/verdicts.rs`. A new parser or verifier gets a target in both, or a kind in `statements`/`pins`.
 - The `fuzzing` feature exposes `hushos_core::fuzzing::{parse_statement, encode_statement}` for the fuzz crate only; nothing else may use it.
-- Run and triage as CONTRIBUTING.md (Fuzzing) says; `bun run core:check` also lints the `fuzzing` feature and formats and lints `fuzz/`.
+- Run and triage as CONTRIBUTING.md (Fuzzing) says; `bun run core:check` also lints the `fuzzing` feature and formats and lints `fuzz/`. CI's Rust core job runs the fuzz crate's lib tests (`cargo test --manifest-path crates/hushos-core/fuzz/Cargo.toml --lib --locked`, on stable from the root): the oracles in `fuzz/src/targets.rs` held to the fixtures, so an oracle that misjudges a known chain fails there, not only in `fuzz:diff`.
 
 ## Family self-grants in a master-key rotation (2026-10-19)
 

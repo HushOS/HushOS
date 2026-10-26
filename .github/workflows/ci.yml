@@ -215,9 +215,11 @@ jobs:
                   path: web-output.tar
                   retention-days: 1
 
-    # The Rust core's own tests (units, doc examples, both fixture directions): nothing else in
-    # CI runs cargo. Stable, with the build cached, so a warm run is a minute or two. Only when
-    # the core, its bindings, or the TypeScript twin its fixtures come from changed.
+    # The Rust core's own tests (units, doc examples, both fixture directions), and the fuzz
+    # crate's lib tests (the oracles its verdicts hold both twins to, against the fixtures; run
+    # from the root, so on stable like fuzz:diff, not the nightly its fuzz targets pin). Stable,
+    # with both builds cached, so a warm run is a minute or two. Only when the core, its
+    # bindings, or the TypeScript twin its fixtures come from changed.
     rust:
         name: Rust core tests
         needs: changes
@@ -227,7 +229,12 @@ jobs:
         steps:
             - uses: actions/checkout@v7
             - uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: |
+                      . -> target
+                      crates/hushos-core/fuzz -> target
             - run: cargo test -p hushos-core --locked
+            - run: cargo test --manifest-path crates/hushos-core/fuzz/Cargo.toml --lib --locked
 
     # Chromium on Linux, against the production build from the job above, run by `bun run
     # start` (web and jobs worker) as `bun run dev` was before: no first-visit compile, and the
