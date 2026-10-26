@@ -1,0 +1,23 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_ce79fa49a4e588 476
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_6d6a4fae96cea6 133-135
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_83f59f8e174b50 1693,1708
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "78211b64e51814ef14902bcf665e71d8ebd2a996",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
