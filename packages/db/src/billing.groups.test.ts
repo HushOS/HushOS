@@ -724,3 +724,97 @@ test('the readability migration marks unread the rows an earlier build named aft
     expect(await unread('sub_sentinel')).toBe(true);
     expect(await unread('sub_read')).toBe(false);
 });
+
+describe('a deleted family’s plans', () => {
+    const orphan = (
+        overrides: Partial<Parameters<typeof billing.recordOrphanedSubscription>[1]> = {},
+    ) => ({
+        id: 'sub_orphan',
+        productId: 'prod_family',
+        productName: 'Family (monthly)',
+        status: 'active',
+        recurringInterval: 'month',
+        amount: 1500,
+        currency: 'usd',
+        units: 6,
+        includedMembers: 6,
+        quotaBytes: 100n,
+        currentPeriodStart: new Date(Date.now() - DAY),
+        currentPeriodEnd: new Date(Date.now() + 29 * DAY),
+        cancelAtPeriodEnd: false,
+        endedAt: null,
+        ...overrides,
+    });
+
+    test('a plan’s first recorded end is kept however often Polar brings it back', async () => {
+        const gone = randomUUID();
+        const ended = new Date(Date.now() - 2 * DAY);
+        await billing.recordOrphanedSubscription(
+            gone,
+            orphan({ status: 'canceled', endedAt: ended }),
+        );
+        expect((await billing.getGroupSubscription('sub_orphan'))?.endedAt).toEqual(ended);
+        // Reinstated: Polar answers it live, with no end; the end HushOS recorded stays.
+        await billing.recordOrphanedSubscription(gone, orphan());
+        expect(await billing.getGroupSubscription('sub_orphan')).toMatchObject({
+            status: 'active',
+            endedAt: ended,
+        });
+        // Another family's id on the same subscription (a stray answer) never moves the row.
+        await billing.recordOrphanedSubscription(randomUUID(), orphan({ status: 'unpaid' }));
+        expect(await billing.getGroupSubscription('sub_orphan')).toMatchObject({
+            groupId: gone,
+            status: 'active',
+        });
+        // Gone at Polar: an end it never had is now.
+        await billing.recordOrphanedSubscription(gone, orphan({ id: 'sub_other' }));
+        await billing.recordOrphanedSubscription(gone, { id: 'sub_other', ended: true });
+        expect(await billing.getGroupSubscription('sub_other')).toMatchObject({
+            status: 'canceled',
+            endedAt: expect.any(Date),
+        });
+    });
+
+    test('operators see a deleted family’s plan while it can still charge, never a living family’s, nor an old swept row', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        await apply(groupId, [plan({ id: 'sub_living' })]);
+        const gone = randomUUID();
+        await billing.recordOrphanedSubscription(
+            gone,
+            orphan({ status: 'canceled', endedAt: new Date() }),
+        );
+        await billing.recordOrphanedSubscription(
+            gone,
+            orphan({ id: 'sub_swept', status: 'unpaid', endedAt: new Date() }),
+        );
+        expect(await billing.listOrphanedPlans()).toEqual([]);
+        // Billing again, and HushOS has set out to end it (its ending, keyed by the family).
+        await billing.recordOrphanedSubscription(gone, orphan());
+        await billing.beginLapsedRevoke({
+            subscriptionId: 'sub_orphan',
+            userId: gone,
+            at: new Date(),
+            owner: 'run',
+            leaseMs: 60_000,
+        });
+        expect(await billing.listOrphanedPlans()).toEqual([
+            expect.objectContaining({
+                groupId: gone,
+                subscriptionId: 'sub_orphan',
+                revokedAt: null,
+            }),
+        ]);
+        // A plan of a family that still exists is never listed, whatever it does.
+        await billing.beginLapsedRevoke({
+            subscriptionId: 'sub_living',
+            userId: groupId,
+            at: new Date(),
+            owner: 'run',
+            leaseMs: 60_000,
+        });
+        expect((await billing.listOrphanedPlans()).map((row) => row.subscriptionId)).toEqual([
+            'sub_orphan',
+        ]);
+    });
+});

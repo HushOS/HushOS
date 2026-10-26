@@ -248,6 +248,16 @@ export const groupBillingSubscriptions = pgTable(
          */
         productUnread: boolean('product_unread').notNull().default(false),
         /*
+         * The end of the last period in which this was the family's plan while `active` or
+         * `trialing` (applyGroupState sets it when it picks the family's plan): what a payment on
+         * it bought. Null for a plan that never served the family (an incomplete checkout, one
+         * made beside the family's plan, one a deleted family's Polar customer was billed for),
+         * which bought nothing. A past-due or unpaid period never moves it, nor anything after the
+         * family is deleted: the cutoff a deleted family's plan, or a second plan, is refunded
+         * from (unwantedPlanCutoff).
+         */
+        servedUntil: timestamp('served_until', { withTimezone: true }),
+        /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
          */
@@ -302,6 +312,13 @@ export const personalPlanEndings = pgTable(
         admittedAt: timestamp('admitted_at', { withTimezone: true }).notNull(),
         pooledAt: timestamp('pooled_at', { withTimezone: true }).notNull(),
         revokedAt: timestamp('revoked_at', { withTimezone: true }),
+        /*
+         * A deleted family's plan that Polar billed again (endOrphanedFamilyPlan): every order of it
+         * paid at or after this is refunded whole. That plan's own first recorded end, or the epoch
+         * for a plan the mirror never held (HushOS gave nothing for it). Written once, with the
+         * ending, and never recomputed; null on every other ending.
+         */
+        paidAfter: timestamp('paid_after', { withTimezone: true }),
         periodStart: timestamp('period_start', { withTimezone: true }),
         periodEnd: timestamp('period_end', { withTimezone: true }),
         /*
