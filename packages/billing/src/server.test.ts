@@ -7770,6 +7770,54 @@ describe('a dissolved family’s plan', () => {
         expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 1 });
     });
 
+    /* A family's readable plan whose product goes unreadable, then ended at Polar, then reinstated. */
+    async function endedThenReinstatedUnread(dissolve: boolean) {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        const pool = await billingRepository.getGroupPool(groupId);
+        subscription.product_id = 'prod_archived';
+        await quietly(() => billing.reconcileGroup(groupId));
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(
+            (await billingRepository.getGroupSubscription(subscription.id))?.endedAt,
+        ).toBeTruthy();
+        if (dissolve)
+            expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+                status: 'dissolved',
+            });
+        // Polar's staff reinstate it while its product still can't be read.
+        subscription.status = 'active';
+        subscription.ended_at = null;
+        cancelJobs.length = 0;
+        await quietly(() => billing.reconcileGroup(groupId));
+        return { ...family, pool };
+    }
+
+    test('a readable plan that went unreadable, ended and was reinstated is the family’s plan again, with its tier and pool', async () => {
+        const { groupId, subscription, pool } = await endedThenReinstatedUnread(false);
+        expect(await billingRepository.getGroupSubscription(subscription.id)).toMatchObject({
+            status: 'active',
+            endedAt: null,
+            productUnread: false,
+            productId: PRO_FAMILY,
+        });
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe(
+            subscription.id,
+        );
+        expect((await billingRepository.getGroupPool(groupId))?.quotaBytes).toBe(pool!.quotaBytes);
+    });
+
+    test('the same plan reinstated after its family was dissolved is set to end by the family’s job', async () => {
+        const { groupId, subscription } = await endedThenReinstatedUnread(true);
+        expect(cancelJobs).toEqual([groupId]);
+        expect(await quietly(() => billing.cancelDissolvedPlan(groupId))).toMatchObject({
+            cancelled: 1,
+        });
+        expect(subscription.cancel_at_period_end).toBe(true);
+    });
+
     test('the daily run keeps a family’s list owed until every plan it lists is recorded, and the purge waits through it', async () => {
         const { reconcileBilling } = await import('../../jobs/src/jobs/reconcile-billing');
         const daily = () =>

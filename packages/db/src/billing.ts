@@ -901,12 +901,14 @@ export async function releaseDissolveMail(subscriptionId: string, periodEnd: Dat
  * drops out), as the lapsed-plan lookup found it at Polar: written so the family page names it
  * (and a checkout's confirmation can list it) and so its ending is told as the family's
  * (familyPlanOf). It gives no pool or places. The lookup and every reconcile write it again as
- * Polar has it, ended included, so it leaves the page once ended. Only a row of this family's
- * whose product is unread (`product_name` is its product id) is ever updated: a plan the
- * catalogue once read, whose product an operator has since edited, is left as it was. A live
- * state is written too, so a plan that can charge is never lost (a dissolved family's job ends
- * it, purge waits for it): but such a row is never the family's plan, its places or pool, nor
- * makes its payer one who pays for the family (readablePlan), since its tier can't be read.
+ * Polar has it, ended included, so it leaves the page once ended. Its lifecycle (status, end,
+ * period) is written on any row of this family's, so a plan the catalogue once read whose product
+ * an operator has since edited follows Polar when Polar ends or reinstates it; its product, tier
+ * and places are written only on a row that was never read (`product_unread`), so one read keeps
+ * its known tier. A live state is written too, so a plan that can charge is never lost (a
+ * dissolved family's job ends it, purge waits for it); but an unread row is never the family's
+ * plan, its places or pool, nor makes its payer one who pays for the family (readablePlan),
+ * since its tier can't be read.
  */
 export async function recordUnreadGroupSubscription(
     groupId: string,
@@ -924,28 +926,52 @@ export async function recordUnreadGroupSubscription(
         endedAt: Date | null;
     },
 ) {
-    const { id: _id, ...state } = input;
-    await db
-        .insert(groupBillingSubscriptions)
-        .values({
-            ...input,
-            groupId,
-            provider: 'polar',
-            productName: input.productId,
-            productUnread: true,
-            includedMembers: 1,
-            quotaBytes: 0n,
-            paidUnits: 0,
-            paidQuotaBytes: 0n,
-        })
-        .onConflictDoUpdate({
-            target: groupBillingSubscriptions.id,
-            set: { ...state, productName: input.productId, updatedAt: new Date() },
-            setWhere: and(
-                eq(groupBillingSubscriptions.groupId, groupId),
-                eq(groupBillingSubscriptions.productUnread, true),
-            ),
-        });
+    const where = and(
+        eq(groupBillingSubscriptions.id, input.id),
+        eq(groupBillingSubscriptions.groupId, groupId),
+    );
+    await db.transaction(async (tx) => {
+        await tx
+            .insert(groupBillingSubscriptions)
+            .values({
+                ...input,
+                groupId,
+                provider: 'polar',
+                productName: input.productId,
+                productUnread: true,
+                includedMembers: 1,
+                quotaBytes: 0n,
+                paidUnits: 0,
+                paidQuotaBytes: 0n,
+            })
+            .onConflictDoNothing({ target: groupBillingSubscriptions.id });
+        // Where it stands at Polar, on any row of this family's: a plan the catalogue once read
+        // that Polar ends, or reinstates, while its product can't be read follows Polar too.
+        await tx
+            .update(groupBillingSubscriptions)
+            .set({
+                status: input.status,
+                endedAt: input.endedAt,
+                cancelAtPeriodEnd: input.cancelAtPeriodEnd,
+                currentPeriodStart: input.currentPeriodStart,
+                currentPeriodEnd: input.currentPeriodEnd,
+                updatedAt: new Date(),
+            })
+            .where(where);
+        // What it is, only on a row that was never read: one the catalogue read keeps its known
+        // product, tier and places.
+        await tx
+            .update(groupBillingSubscriptions)
+            .set({
+                productId: input.productId,
+                productName: input.productId,
+                recurringInterval: input.recurringInterval,
+                amount: input.amount,
+                currency: input.currency,
+                units: input.units,
+            })
+            .where(and(where, eq(groupBillingSubscriptions.productUnread, true)));
+    });
 }
 
 /*
