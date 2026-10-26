@@ -1,5 +1,6 @@
 import { CryptoError } from './errors';
 import { openSettings, type ContactPin, type Settings, type SettingsEnvelope } from './contacts';
+import type { PairMark } from './group-trust';
 import type { GroupPin } from './pins';
 
 /*
@@ -21,6 +22,12 @@ export type SettingsMarks = {
     pins: Record<string, GroupPin>;
     /* `{ ...settings.contacts }`: the only pins an admission or a join code reads. */
     contacts: Record<string, ContactPin>;
+    /*
+     * `{ ...settings.familyChecks }`: each family's check record as filed
+     * (docs/optional-verification.md 3.4), read only when acceptance takes
+     * that family's marks (familyCheckOf).
+     */
+    checks: Record<string, unknown>;
     /* Whether they came from a settings document that opened, not from "none". */
     opened: boolean;
     /* The highest settings version opened in this unlock (0: none): an older copy served again is refused. */
@@ -46,7 +53,7 @@ export function refuseDowngrade(held: SettingsMarks | null, userId: string) {
 export function settingsMarks(
     held: SettingsMarks | null,
     userId: string,
-    settings: { groups?: unknown; contacts?: unknown } | null,
+    settings: { groups?: unknown; contacts?: unknown; familyChecks?: unknown } | null,
     settingsVersion = 0,
 ): SettingsMarks {
     if (settings === null) refuseDowngrade(held, userId);
@@ -56,6 +63,7 @@ export function settingsMarks(
         userId,
         pins: { ...(settings?.groups as Record<string, GroupPin> | undefined) },
         contacts: { ...(settings?.contacts as Record<string, ContactPin> | undefined) },
+        checks: { ...(settings?.familyChecks as Record<string, unknown> | undefined) },
         opened: settings !== null,
         settingsVersion: settings === null ? 0 : settingsVersion,
     };
@@ -80,6 +88,28 @@ export function contactPinOf(
         if (typeof filed === 'string' && filed.toLowerCase() === wanted) return pin as ContactPin;
     }
     return null;
+}
+
+/*
+ * The family's check record as filed: whether there is one (any value but
+ * none or a JSON null), and the pair mark acceptance holds it as. A record
+ * without a `code` (the migration's `before` record, docs/optional-verification.md
+ * 7.2) is a mark but no pair mark; anything else is handed to acceptance as a
+ * pair mark, which refuses that family alone when it is malformed.
+ */
+export function familyCheckOf(
+    marks: SettingsMarks,
+    groupId: string,
+): { checked: boolean; pairMarks: PairMark[] } {
+    const record = Object.hasOwn(marks.checks, groupId) ? marks.checks[groupId] : null;
+    if (record === null || record === undefined) return { checked: false, pairMarks: [] };
+    if (typeof record === 'object' && !Object.hasOwn(record, 'code'))
+        return { checked: true, pairMarks: [] };
+    const { rosterVersion, with: other, code } = record as Record<string, unknown>;
+    return {
+        checked: true,
+        pairMarks: [{ rosterVersion, with: other, code } as PairMark],
+    };
 }
 
 /* The family's settings pin as filed: null for none or a JSON null (acceptance filters both out). */

@@ -313,11 +313,14 @@ async function specs(): Promise<Spec[]> {
 
 let id = 0;
 type Session = ReturnType<typeof sessionOf>;
-function call<K extends 'groupAccept' | 'groupJoinPreview' | 'groupJoinCheck' | 'groupForget'>(
-    session: Session,
-    operation: K,
-    input: Json,
-) {
+function call<
+    K extends
+        | 'groupAccept'
+        | 'groupJoinPreview'
+        | 'groupJoinCheck'
+        | 'groupJoinFirstUse'
+        | 'groupForget',
+>(session: Session, operation: K, input: Json) {
     return session.handle({ id: ++id, operation, input } as GroupMessage) as Promise<
         GroupResults[K]
     >;
@@ -452,6 +455,18 @@ export function servedOf(doc: Json, served: Json): ServedChain {
 function settingsOf(session: Session, doc: Json, which: string, userId: string) {
     if (which === 'not-open') return;
     if (which === 'none') session.useSettings(userId, { groups: {} });
+    // A family check record with no code (the migration's `before`, a mark but no pair mark), or
+    // one that is no pair mark at all.
+    else if (which === 'checked-before')
+        session.useSettings(userId, {
+            groups: {},
+            familyChecks: { [GROUP]: { how: 'before', rosterVersion: 2 } },
+        });
+    else if (which === 'checked-malformed')
+        session.useSettings(userId, {
+            groups: {},
+            familyChecks: { [GROUP]: { rosterVersion: 2, with: 'someone', code: 'words' } },
+        });
     else if (which === 'pin-main-2')
         session.useSettings(userId, { groups: { [GROUP]: doc.pinMain2 as GroupPin } });
     else throw new Error(`settings ${which}`);
@@ -882,7 +897,7 @@ function typedFor(code: string[], hidden: number[], words: string) {
     throw new Error(`words ${words}`);
 }
 
-/* A joins record no match of this account's sealed: an app's (the outbox store), another family's, the data layer's version 2, a newer version's. */
+/* A joins record no match of this account's sealed: an app's (the outbox store), another family's, the data layer's version 2, a version this release does not know (5). */
 export async function forgedRecord(kind: string) {
     const f = await family();
     const mark = { rosterVersion: 2, code: await adminCode(f.main, 2, 1) };
@@ -897,7 +912,7 @@ export async function forgedRecord(kind: string) {
         'other-family': ['joins', OTHER_GROUP, record(OTHER_GROUP, 3)],
         // The data layer's version 2 (before the escalation moved here): one compare again.
         'earlier-version': ['joins', GROUP, record(GROUP, 2)],
-        'newer-version': ['joins', GROUP, record(GROUP, 4)],
+        'newer-version': ['joins', GROUP, record(GROUP, 5)],
     };
     const [store, groupId, value] = at[kind]!;
     return sealDeviceRecord(ROOT.slice(), f.p2.userId, groupId, store as 'outbox', value);
@@ -928,6 +943,36 @@ function acceptanceJson(result: GroupResults['groupAccept']): Json {
             code: result.code,
             hidden: result.hidden,
         };
+    return { status: result.status };
+}
+
+/* The family guard a step names (docs/optional-verification.md 2.8): none, the pin at main's roster 2, or unreadable. */
+function guardOf(doc: Json, which: unknown): GroupPin | 'unreadable' | null {
+    if (which === undefined || which === 'none') return null;
+    if (which === 'pin-main-2') return doc.pinMain2 as GroupPin;
+    if (which === 'unreadable') return 'unreadable';
+    throw new Error(`a guard ${JSON.stringify(which)}`);
+}
+
+/* A first use's outcome as both twins write it, with its record's check time. */
+async function firstUseJson(
+    result: GroupResults['groupJoinFirstUse'],
+    userId: string,
+): Promise<Json> {
+    if (result.status === 'first-use') {
+        const value = (await openDeviceRecord(
+            ROOT.slice(),
+            userId,
+            GROUP,
+            'joins',
+            result.joinsRecord,
+        )) as { at: string };
+        return { status: 'first-use', rosterVersion: result.rosterVersion, checkedAt: value.at };
+    }
+    if (result.status === 'fork') {
+        const { of, version, sides } = result.fork;
+        return { status: 'fork', of, version, sides };
+    }
     return { status: result.status };
 }
 
@@ -1065,6 +1110,23 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                 }
                 break;
             }
+            case 'first-use': {
+                try {
+                    const result = await call(session, 'groupJoinFirstUse', {
+                        userId,
+                        groupId: GROUP,
+                        served: sessionServed(doc, step.served),
+                        record: null,
+                        guard: guardOf(doc, step.guard),
+                        now: SESSION_NOW,
+                    });
+                    if (result.status === 'first-use') records.set(at, result.joinsRecord);
+                    outcome = await firstUseJson(result, userId);
+                } catch (error) {
+                    outcome = refusal(error);
+                }
+                break;
+            }
             case 'accept': {
                 const joinsRecord =
                     typeof step.matched === 'number'
@@ -1086,6 +1148,7 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                         record: null,
                         checkedAt: SESSION_NOW,
                         joining: { joinsRecord },
+                        guard: guardOf(doc, step.guard),
                     });
                     if (result.status === 'changed') showings.set(at, result);
                     outcome = acceptanceJson(result);
@@ -1173,6 +1236,7 @@ export async function sessionFixture(doc: Json, file: Json) {
             if (!stepSays(run.outcomes, at, step.expect))
                 throw new Error(`${scenario.name} step ${at}: ${JSON.stringify(run.outcomes[at])}`);
         if (scenario.name === 'a-match-joins-once') cross.joinsRecord = run.records.get(1);
+        if (scenario.name === 'a-first-use-joins-once') cross.firstUseRecord = run.records.get(0);
         if (scenario.name === 'the-escalation-kept-across-a-relaunch') {
             cross.holds = run.holds;
             cross.heldHidden = run.outcomes[0]!.hidden;
@@ -1197,6 +1261,18 @@ export async function openCross(doc: Json, cross: Json) {
             joining: { joinsRecord: cross.joinsRecord },
         }),
     );
+    // The other twin's first use: its record finishes the join here, against the roster it took.
+    const firstUse = await sessionFor(doc, 'none');
+    const firstJoined = acceptanceJson(
+        await call(firstUse, 'groupAccept', {
+            userId,
+            groupId: GROUP,
+            served: sessionServed(doc, { history: 'main', through: 2 }),
+            record: null,
+            checkedAt: SESSION_NOW,
+            joining: { joinsRecord: cross.firstUseRecord },
+        }),
+    );
     const relaunched = await sessionFor(doc, 'none');
     const shown = await call(relaunched, 'groupJoinPreview', {
         userId,
@@ -1205,7 +1281,7 @@ export async function openCross(doc: Json, cross: Json) {
         record: null,
         holds: cross.holds,
     });
-    return { joined, hidden: shown.status === 'code' ? shown.hidden : null };
+    return { joined, firstJoined, hidden: shown.status === 'code' ? shown.hidden : null };
 }
 
 /*

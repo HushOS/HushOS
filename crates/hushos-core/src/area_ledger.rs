@@ -342,6 +342,8 @@ pub(crate) struct Settings {
     pub(crate) pins: HashMap<String, HeldPin>,
     /* The contacts object's members in document order: the only pins a roster call or join code reads. */
     pub(crate) contacts: Vec<(String, serde_json::Value)>,
+    /* By family id, the family check records as filed (`familyChecks`): read only when acceptance takes the family's marks. */
+    pub(crate) checks: HashMap<String, serde_json::Value>,
     pub(crate) opened: bool,
     /*
      * The highest settings version opened in this unlock (0: none opened): a document below it is
@@ -349,6 +351,10 @@ pub(crate) struct Settings {
      */
     pub(crate) settings_version: u64,
 }
+
+/* What a settings document gives the ledger: the group pins, the contacts in order, the family checks. */
+pub(crate) type SettingsParts =
+    (HashMap<String, HeldPin>, Vec<(String, serde_json::Value)>, HashMap<String, serde_json::Value>);
 
 /* A family's settings pin as held: the raw JSON a document carried, or one the fixtures handed in typed. */
 #[derive(Clone)]
@@ -1915,7 +1921,27 @@ impl AreaLedger {
         filed.sort_by(|a, b| a.0.cmp(&b.0));
         let opened = pins.is_some();
         let pins = pins.unwrap_or_default().into_iter().map(|(id, pin)| (id, HeldPin::Typed(pin))).collect();
-        self.set_settings(&user_id, opened, 0, pins, filed, None)
+        self.set_settings(&user_id, opened, 0, (pins, filed, HashMap::new()), None)
+    }
+
+    /// The family check records of the settings held for `user_id`
+    /// (`familyChecks`, as a document carries it: JSON text of an object by
+    /// family id), set beside what [`AreaLedger::use_settings`] set. For the
+    /// shared fixtures only: apps hand the ledger envelopes, whose documents
+    /// carry their own.
+    #[cfg(feature = "fixtures")]
+    #[doc(hidden)]
+    pub fn use_family_checks(&self, user_id: String, checks: String) -> CoreResult<()> {
+        let checks: serde_json::Value =
+            serde_json::from_str(&checks).map_err(|_| refused("These family checks are not JSON."))?;
+        let mut state = self.lock();
+        let held = state
+            .settings
+            .as_mut()
+            .filter(|held| held.user_id.eq_ignore_ascii_case(&user_id))
+            .ok_or_else(|| refused(OPEN_SETTINGS))?;
+        held.checks = checks.as_object().map(|map| map.clone().into_iter().collect()).unwrap_or_default();
+        Ok(())
     }
 
     /*
@@ -1928,8 +1954,7 @@ impl AreaLedger {
         user_id: &str,
         opened: bool,
         settings_version: u64,
-        pins: HashMap<String, HeldPin>,
-        contacts: Vec<(String, serde_json::Value)>,
+        (pins, contacts, checks): SettingsParts,
         session: Option<(u64, &[u8])>,
     ) -> CoreResult<()> {
         let mut state = self.lock();
@@ -1947,8 +1972,14 @@ impl AreaLedger {
         if held.is_some_and(|held| held.opened && (!opened || settings_version < held.settings_version)) {
             return Err(refused(OLDER_SETTINGS));
         }
-        state.settings =
-            Some(Settings { user_id: user_id.to_lowercase(), opened, pins, contacts, settings_version });
+        state.settings = Some(Settings {
+            user_id: user_id.to_lowercase(),
+            opened,
+            pins,
+            contacts,
+            checks,
+            settings_version,
+        });
         Ok(())
     }
 
@@ -2090,6 +2121,34 @@ impl AreaLedger {
                 crate::group_trust::group_pin_check(group_id.into(), pin.clone()).map(Some)
             }
         })
+    }
+
+    /*
+     * The family's check record, from the settings the account last used (the worker's
+     * familyCheckOf): whether there is one (any value but none or a JSON null) and the pair mark
+     * acceptance holds it as. A record without a `code` (the migration's `before` record) is a mark
+     * but no pair mark; anything else is a pair mark, refused for this family alone when it is not
+     * one. Refused (OPEN_SETTINGS) before any settings.
+     */
+    pub(crate) fn family_check(
+        &self,
+        user_id: &str,
+        group_id: &str,
+    ) -> CoreResult<CoreResult<(bool, Vec<crate::group_trust::PairMark>)>> {
+        let state = self.lock();
+        let settings = state
+            .settings
+            .as_ref()
+            .filter(|held| held.user_id.eq_ignore_ascii_case(user_id))
+            .ok_or_else(|| refused(OPEN_SETTINGS))?;
+        let record = match settings.checks.get(group_id) {
+            None | Some(serde_json::Value::Null) => return Ok(Ok((false, vec![]))),
+            Some(record) => record,
+        };
+        if record.as_object().is_some_and(|object| !object.contains_key("code")) {
+            return Ok(Ok((true, vec![])));
+        }
+        Ok(crate::group_trust::pair_mark_of(record).map(|mark| (true, vec![mark])))
     }
 
     /*
@@ -2263,7 +2322,7 @@ impl AreaLedger {
 mod tests {
     use super::*;
     use crate::drive::{node_open, node_wrap, previous_root_key_wrap};
-    use crate::group_trust::{accept_rosters, RosterChain};
+    use crate::group_trust::{accept_rosters, GroupAnchor, RosterChain};
     use crate::groups::tests::{
         area_key_at, group_seed_at, ml_dsa_keys, reader, Person, AREA, AREA_SEED, GROUP, OTHER_AREA_SEED,
         OTHER_GROUP,
@@ -2348,7 +2407,7 @@ mod tests {
         match accept_rosters(
             group_id.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             signed,
             vec![],
@@ -2978,7 +3037,7 @@ mod tests {
         let chain = match accept_rosters(
             GROUP.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             signed,
             vec![],

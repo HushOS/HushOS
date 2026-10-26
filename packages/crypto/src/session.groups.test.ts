@@ -4735,3 +4735,221 @@ describe('folders a member list names that are not its family’s own (groupFore
         ).toEqual({ listings: [] });
     });
 });
+
+describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', () => {
+    /* Alice checks Carol's words and lets her in at roster 3 (Bob joined at 2). */
+    async function withCarol() {
+        const f = await family();
+        const carol = await account(CAROL);
+        await checkWords(f.alice, carol);
+        const staged = await f.alice.call('groupStage', {
+            groupId: f.groupId,
+            expectedRevision: 2,
+            op: { kind: 'admit', userId: CAROL, served: carol.served, roles: [] },
+            kems: { [BOB]: f.bob.served.kemPublicKey, [CAROL]: carol.served.kemPublicKey },
+        });
+        if (staged.outboxId === null) throw new Error('nothing staged');
+        await f.alice.call('groupDrop', { outboxId: staged.outboxId });
+        f.server.store(staged.body);
+        await f.sync(f.alice, f.marks.alice);
+        return { ...f, carol };
+    }
+    /* The same roster bytes and members' signatures, group-signed again by a key the server made. */
+    async function madeUpOf(served: ServedChain): Promise<ServedChain> {
+        const made = await groupKeyPair(newGroupSeed());
+        return {
+            ...served,
+            firstKeys: made.publicKey,
+            rosters: await Promise.all(
+                served.rosters.map(async (at) => {
+                    const signature = await signGroup(decode(at.statement), made);
+                    return {
+                        ...at,
+                        signature: {
+                            ed25519: encode(signature.ed25519),
+                            mlDsa: encode(signature.mlDsa),
+                        },
+                    };
+                }),
+            ),
+        };
+    }
+    const firstUse = (
+        who: Device,
+        groupId: string,
+        served: ServedChain,
+        guard: GroupPin | 'unreadable' | null = null,
+    ) =>
+        who.call('groupJoinFirstUse', {
+            userId: who.userId,
+            groupId,
+            served,
+            record: null,
+            guard,
+            now: CHECKED,
+        });
+    const joinWith = (
+        who: Device,
+        groupId: string,
+        served: ServedChain,
+        joinsRecord: string,
+        guard: GroupPin | 'unreadable' | null = null,
+    ) =>
+        who.call('groupAccept', {
+            userId: who.userId,
+            groupId,
+            served,
+            record: null,
+            checkedAt: CHECKED,
+            joining: { joinsRecord },
+            guard,
+        });
+
+    test('a newcomer joins with no words and the chain is unchecked; a guard then keeps a wipe and replaced settings from starting over', async () => {
+        const { carol, groupId, server } = await withCarol();
+        const shown = await firstUse(carol, groupId, server.served());
+        if (shown.status !== 'first-use') throw new Error(shown.status);
+        expect(shown.rosterVersion).toBe(3);
+        const joined = await joinWith(carol, groupId, server.served(), shown.joinsRecord);
+        if (joined.status !== 'accepted') throw new Error(joined.status);
+        expect(joined.pin).toMatchObject({ rosterVersion: 3, checkedAt: CHECKED });
+        // The data layer keeps the first accepted pin as the family's guard, apart from the record.
+        const guard = joined.pin!;
+        carol.settings.groups[groupId] = guard;
+        await saveSettings(carol);
+        // Not a member any more (the not-member wipe: the worker forgets the family, the record
+        // goes), and a newer copy of the settings without the family's pin is served.
+        await carol.call('groupForget', { groupId });
+        delete carol.settings.groups[groupId];
+        await saveSettings(carol);
+        await loadSettings(carol);
+        // A fresh invitation onto a made-up family: without the guard this device would take it on
+        // first use; the guard is a mark, so its version 1 keys are refused.
+        const madeUp = await madeUpOf(server.served());
+        await expect(firstUse(carol, groupId, madeUp)).resolves.toMatchObject({
+            status: 'first-use',
+        });
+        await expect(firstUse(carol, groupId, madeUp, guard)).rejects.toThrow(
+            /not the group keys this person checked/,
+        );
+        // An unreadable guard is never first use, and nothing is taken on it.
+        await expect(firstUse(carol, groupId, server.served(), 'unreadable')).rejects.toThrow(
+            /couldn’t check this right now/,
+        );
+        // The genuine rejoin passes: the same chain from version 1, through the guard's roster.
+        const again = await firstUse(carol, groupId, server.served(), guard);
+        if (again.status !== 'first-use') throw new Error(again.status);
+        await expect(
+            joinWith(carol, groupId, server.served(), again.joinsRecord, guard),
+        ).resolves.toMatchObject({ status: 'accepted', view: { rosterVersion: 3 } });
+    });
+
+    test('a family check that lands between the first use and its acceptance is a mark: the record then vouches for nothing', async () => {
+        const { carol, groupId, server } = await withCarol();
+        const shown = await firstUse(carol, groupId, server.served());
+        if (shown.status !== 'first-use') throw new Error(shown.status);
+        // Another of Carol's devices saved settings with a family check (the migration's record,
+        // with no code) and no pin of the family: no mark fixes the first keys, but one exists.
+        const settingsVersion = carol.settings.version + 1;
+        const { envelope } = await carol.call('settingsSeal', {
+            userId: CAROL,
+            settingsVersion,
+            settings: {
+                version: 2,
+                contacts: {},
+                groups: {},
+                familyChecks: { [groupId]: { how: 'before', rosterVersion: 3 } as never },
+            },
+        });
+        Object.assign(carol.settings, { version: settingsVersion, envelope });
+        await loadSettings(carol);
+        await expect(joinWith(carol, groupId, server.served(), shown.joinsRecord)).rejects.toThrow(
+            /compare the join code first/,
+        );
+    });
+
+    test('first use needs settings that opened, the join path, and the head to let this account in', async () => {
+        const { carol, groupId, server } = await withCarol();
+        // Never on a sync: with no mark, only a join's record vouches for anything.
+        await expect(
+            carol.call('groupAccept', {
+                userId: CAROL,
+                groupId,
+                served: server.served(),
+                record: null,
+                checkedAt: CHECKED,
+            }),
+        ).rejects.toThrow(/compare the join code first/);
+        // Not before settings open on this device.
+        const bare = await bareDevice(carol);
+        await expect(firstUse(bare, groupId, server.served())).rejects.toThrow(
+            /Open your settings first/,
+        );
+        // Before the roster that lets her in, nothing to join.
+        const before = { ...server.served(), rosters: server.served().rosters.slice(0, 2) };
+        await expect(firstUse(carol, groupId, before)).resolves.toEqual({
+            status: 'not-admitted',
+        });
+    });
+
+    test('an admission still takes a words check: a first-seen pin of the newcomer lets nobody in yet', async () => {
+        const f = await family();
+        const carol = await account(CAROL);
+        const pin = await pinOf(carol);
+        f.alice.settings.contacts = {
+            ...f.alice.settings.contacts,
+            [CAROL]: { ...pin, fingerprint: '' },
+        };
+        await saveSettings(f.alice);
+        await loadSettings(f.alice);
+        await expect(
+            f.alice.call('groupStage', {
+                groupId: f.groupId,
+                expectedRevision: 2,
+                op: { kind: 'admit', userId: CAROL, served: carol.served, roles: [] },
+                kems: { [BOB]: f.bob.served.kemPublicKey, [CAROL]: carol.served.kemPublicKey },
+            }),
+        ).rejects.toThrow(/not the keys whose words were checked/);
+    });
+
+    test('a family check over the committed chain: the pair code, and what a match writes', async () => {
+        const f = await family();
+        const rosters = f.server.served().rosters;
+        const shown = await f.alice.call('groupPairCode', {
+            groupId: f.groupId,
+            userId: BOB,
+            rosters,
+        });
+        if (shown.status !== 'code') throw new Error(shown.status);
+        expect(shown.rosterVersion).toBe(2);
+        // Bob's device works out the same words.
+        expect(
+            await f.bob.call('groupPairCode', { groupId: f.groupId, userId: ALICE, rosters }),
+        ).toEqual(shown);
+        const match = (code: string[], guard: null | 'unreadable' = null) =>
+            f.alice.call('groupPairMatch', {
+                groupId: f.groupId,
+                userId: BOB,
+                rosters,
+                rosterVersion: shown.rosterVersion,
+                code,
+                guard,
+                now: CHECKED,
+            });
+        // Alice checked Bob's words: her settings pin is his keys, so the pin is written again.
+        const matched = await match(shown.code);
+        expect(matched.check).toMatchObject({ rosterVersion: 2, with: BOB, code: shown.code });
+        expect(matched.pin).toMatchObject({
+            encryptionPublicKey: f.bob.served.encryptionPublicKey,
+        });
+        expect((await match(shown.code, 'unreadable')).pin).toBeNull();
+        const wrong = [...shown.code];
+        wrong[0] = wrong[0] === 'abandon' ? 'ability' : 'abandon';
+        expect(await match(wrong)).toEqual({ check: null, pin: null });
+        // A family with no committed chain on this device: nothing to check over.
+        const fresh = await f.alice.device();
+        await expect(
+            fresh.call('groupPairCode', { groupId: f.groupId, userId: BOB, rosters }),
+        ).rejects.toThrow(/Check the family’s member list first/);
+    });
+});

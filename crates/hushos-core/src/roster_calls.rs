@@ -692,6 +692,18 @@ impl AreaLedger {
                 // admits no one, as the worker's newRosterEntry refuses it).
                 let found = self.contact_pin(&user_id).ok_or_else(|| input(NOT_CHECKED))?;
                 let pin = found.checked().ok_or_else(|| input(NOT_THE_PINNED_KEYS))?;
+                // roster_entry_new builds from a first-seen pin too (design 3.3), but letting
+                // someone in over one waits for the manager rule beside it (3.6, the web's PR 4):
+                // until then an admission still takes a words check alone, as the worker's stage.
+                if !crate::contacts::pin_verified(
+                    pin.encryption_public_key.clone(),
+                    pin.signing_public_key.clone(),
+                    Some(pin.ml_dsa_public_key_hash.clone()),
+                    Some(pin.kem_public_key_hash.clone()),
+                    pin.fingerprint.clone(),
+                ) {
+                    return Err(input(NOT_THE_PINNED_KEYS));
+                }
                 // The newcomer's ML-KEM key is the one their entry is made from.
                 kems.insert(user_id.clone(), newcomer.kem_public_key.clone());
                 let entry = roster_entry_new(pin.clone(), newcomer, roles, next)?;
@@ -841,7 +853,7 @@ fn stage_chain(
     let accepted = accept_rosters(
         chain.group_id.clone(),
         chain.group_keys[0].clone(),
-        false,
+        None,
         vec![],
         vec![signed.clone()],
         succession.into_iter().cloned().collect(),

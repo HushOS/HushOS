@@ -98,6 +98,16 @@ export type Settings = {
      * malformed one. Only a version 2 document holds it.
      */
     groups?: Record<string, GroupPin>;
+    /*
+     * Per group, the family check this person made (docs/optional-verification.md
+     * 3.4): the pair code compared with member `with` over the roster at
+     * `rosterVersion`. Acceptance holds it as a pair mark (settings-marks.ts
+     * familyCheckOf). Every shipped client keeps it when it saves.
+     */
+    familyChecks?: Record<
+        string,
+        { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+    >;
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };

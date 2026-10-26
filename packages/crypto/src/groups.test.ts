@@ -1726,7 +1726,7 @@ describe('round 9', () => {
             acceptRosters({
                 groupId: GROUP,
                 firstKeys: h.keys[0]!.publicKey,
-                firstKeysChecked: false,
+                anchor: null,
                 pins: [],
                 rosters: [],
                 successions: [],

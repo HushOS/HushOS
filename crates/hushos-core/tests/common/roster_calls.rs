@@ -27,7 +27,7 @@
 #![allow(dead_code)]
 
 use super::device_records::root;
-use super::groups::{e, pattern, person, s, signed_json, signed_of, History, Person, CHECKED};
+use super::groups::{e, pattern, person, s, served_keys, signed_json, signed_of, History, Person, CHECKED};
 use hushos_core::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -118,7 +118,7 @@ pub fn chain_of(
     match accept_rosters(
         group_id.into(),
         first_keys,
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         rosters,
         successions,
@@ -135,7 +135,7 @@ pub fn chain_of(
 
 pub fn me(n: usize) -> OwnIdentities {
     let p = &family().p[n - 1];
-    OwnIdentities { user_id: p.user_id.clone(), identities: vec![super::groups::served_keys(p)] }
+    OwnIdentities { user_id: p.user_id.clone(), identities: vec![served_keys(p)] }
 }
 
 /* Person `n`'s identity envelope under the shared device root: what their phone opened. */
@@ -207,8 +207,14 @@ pub fn ledger_with(
     ledger
         .use_settings(p.user_id.clone(), Some([(f.group_id.clone(), pin_now)].into()), contacts(n, filed))
         .unwrap();
-    let accepted =
-        ledger.accept_served(me(n), f.group_id.clone(), None, served_of(f.h.key(1), rosters), CHECKED.into());
+    let accepted = ledger.accept_served(
+        me(n),
+        f.group_id.clone(),
+        None,
+        served_of(f.h.key(1), rosters),
+        FamilyGuard::Absent,
+        CHECKED.into(),
+    );
     assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
     if seed {
         let p1 = &f.p[0];
@@ -735,8 +741,16 @@ pub fn committed_ledger(
             contacts(1, Some(filed)),
         )
         .unwrap();
-    let accepted =
-        ledger.accept_served(me(1), group_id, None, served_of(first_keys, history), CHECKED.into()).unwrap();
+    let accepted = ledger
+        .accept_served(
+            me(1),
+            group_id,
+            None,
+            served_of(first_keys, history),
+            FamilyGuard::Absent,
+            CHECKED.into(),
+        )
+        .unwrap();
     assert!(matches!(accepted, ServedAcceptance::Accepted { .. }));
     ledger
 }
@@ -994,6 +1008,14 @@ pub fn fixture() -> Value {
         joins.push(spec);
     }
     doc["joinCodes"] = Value::Array(joins);
+    let mut pairs = vec![];
+    for mut spec in pair_specs(&doc) {
+        let outcome = pair_run_over(&doc, &spec);
+        assert_eq!(outcome, spec["expected"], "pair {}-{}", spec["me"], spec["other"]);
+        spec["outcome"] = outcome;
+        pairs.push(spec);
+    }
+    doc["pairCodes"] = Value::Array(pairs);
     let mut sealed = vec![];
     for mut spec in entry_specs(&doc) {
         let entry = &entries[spec["call"].as_str().unwrap()];
@@ -1052,9 +1074,84 @@ pub fn check(doc: &Value) {
         let outcome = join_run_over(doc, spec);
         assert_eq!(outcome, spec["outcome"], "{}", spec["name"]);
     }
+    // Every pair code the other twin worked out over its own chain, worked out here alike, and as
+    // this core's own specs declare it over those bytes.
+    let here = pair_specs(doc);
+    let theirs = doc["pairCodes"].as_array().unwrap();
+    assert_eq!(
+        theirs.iter().map(|at| (at["me"].clone(), at["other"].clone())).collect::<Vec<_>>(),
+        here.iter().map(|at| (at["me"].clone(), at["other"].clone())).collect::<Vec<_>>(),
+        "the same pairs in the same order"
+    );
+    for (theirs, spec) in theirs.iter().zip(&here) {
+        let outcome = pair_run_over(doc, theirs);
+        assert_eq!(outcome, theirs["outcome"], "pair {}-{}: their words", theirs["me"], theirs["other"]);
+        assert_eq!(outcome, spec["expected"], "pair {}-{}: as declared here", theirs["me"], theirs["other"]);
+    }
     for spec in doc["outboxEntries"].as_array().unwrap() {
         let read = entry_read(doc, spec, spec["id"].as_str().unwrap(), spec["envelope"].as_str().unwrap());
         assert!(entry_says(doc, &read, &spec["expected"]), "{}: {read}", spec["name"]);
+    }
+}
+
+/*
+ * The pair codes of every two people of the family, each worked out by `me` over the doc's own
+ * chain as `me` accepts it (docs/optional-verification.md 3.4): at the later admission of the
+ * two (1 and 2 at roster 2; 1 and 3, 2 and 3 at roster 3), the same words from either side, over
+ * that roster's digest, group key 1 and the two ids; someone not let in has none. The twin of
+ * the web's pairSpecs.
+ */
+pub fn pair_specs(doc: &Value) -> Vec<Value> {
+    let f = family();
+    let rosters = history_of(doc);
+    let words = |version: usize, a: usize, b: usize| {
+        pair_code_of(
+            &roster_digest(rosters[version - 1].statement.clone()),
+            &first_keys_of(doc),
+            1,
+            &f.p[a - 1].user_id,
+            &f.p[b - 1].user_id,
+        )
+        .unwrap()
+    };
+    let mut specs = vec![];
+    for (a, b, version) in [(1, 2, 2), (1, 3, 3), (2, 3, 3)] {
+        let code = words(version, a, b);
+        let expected = json!({ "status": "code", "rosterVersion": version, "code": code });
+        specs.push(json!({ "me": a, "other": b, "expected": expected }));
+        specs.push(json!({ "me": b, "other": a, "expected": expected }));
+    }
+    specs.push(json!({ "me": 1, "other": 4, "expected": { "status": "not-admitted" } }));
+    specs
+}
+
+/* A pair code as `spec.me` works it out over the doc's chain, accepted as their own (the web's pairRunOver). */
+pub fn pair_run_over(doc: &Value, spec: &Value) -> Value {
+    let f = family();
+    let reader = &f.p[spec["me"].as_u64().unwrap() as usize - 1];
+    let me = OwnIdentities { user_id: reader.user_id.clone(), identities: vec![served_keys(reader)] };
+    let Ok(RosterChain::Accepted { chain }) = accept_rosters(
+        s(&doc["family"], "groupId"),
+        first_keys_of(doc),
+        Some(GroupAnchor::Created),
+        vec![],
+        history_of(doc),
+        vec![],
+        ml_dsa_keys(),
+        me.clone(),
+        None,
+    ) else {
+        panic!("an accepted chain");
+    };
+    let other = &f.p[spec["other"].as_u64().unwrap() as usize - 1];
+    match pair_code(chain, me, other.user_id.clone(), history_of(doc)).unwrap() {
+        PairCode::Code { roster_version, code } => {
+            json!({ "status": "code", "rosterVersion": roster_version, "code": code })
+        }
+        PairCode::OwnEntryWrong { roster_version } => {
+            json!({ "status": "own-entry-wrong", "rosterVersion": roster_version })
+        }
+        PairCode::NotAdmitted => json!({ "status": "not-admitted" }),
     }
 }
 
@@ -1161,7 +1258,14 @@ pub fn session_run(steps: &[Value]) -> Vec<Value> {
                     successions: server.successions.clone(),
                     signer_keys: ml_dsa_keys(),
                 };
-                match ledger.accept_served(me(1), f.group_id.clone(), None, served, CHECKED.into()) {
+                match ledger.accept_served(
+                    me(1),
+                    f.group_id.clone(),
+                    None,
+                    served,
+                    FamilyGuard::Absent,
+                    CHECKED.into(),
+                ) {
                     Ok(ServedAcceptance::Accepted { chain, .. }) => {
                         json!(format!("accepted:{}", chain.roster().roster_version))
                     }

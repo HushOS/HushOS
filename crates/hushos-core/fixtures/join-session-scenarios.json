@@ -1364,6 +1364,378 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "a-first-use-joins-once",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 2,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 2,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "This join code was already used to join. Compare it again."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These group keys have not been checked: compare the join code first."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-needs-the-head-to-let-them-in",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 1
+                    },
+                    "expect": {
+                        "status": "not-admitted"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 4
+                    },
+                    "expect": {
+                        "status": "not-admitted"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 2,
+                    "served": {
+                        "history": "main",
+                        "through": 4
+                    },
+                    "expect": {
+                        "status": "not-admitted"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-finishes-against-the-roster-it-took",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "other",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-rejoin-is-decided-by-the-marks",
+            "settings": "pin-main-2",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5,
+                        "checkedAt": "2026-10-15T00:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "checkedAt": "2026-10-15T00:00:00.000Z"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "the-guard-is-a-mark-a-wipe-keeps",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "unreadable",
+                    "expect": {
+                        "status": "refused",
+                        "message": "HushOS couldn’t check this right now."
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "other",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "unreadable",
+                    "expect": {
+                        "status": "refused",
+                        "message": "HushOS couldn’t check this right now."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                }
+            ]
+        },
+        {
+            "name": "no-first-use-before-settings-open",
+            "settings": "not-open",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Open your settings first."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-family-check-is-a-mark-that-fixes-no-keys",
+            "settings": "checked-before",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These group keys have not been checked: compare the join code first."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-check-record-that-is-no-pair-mark-refuses-the-family",
+            "settings": "checked-malformed",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Invalid pair mark."
+                    }
+                }
+            ]
         }
     ]
 }

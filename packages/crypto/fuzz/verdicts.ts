@@ -9,7 +9,7 @@ import {
     fingerprintOfKeys,
     sameKeyDigest,
 } from '../src/fingerprint';
-import type { GroupChainCache, ServedIdentity } from '../src/group-trust';
+import type { GroupAnchor, GroupChainCache, PairMark, ServedIdentity } from '../src/group-trust';
 import { GROUP, verdictOf, type RecordProbe, type RootProbe } from '../src/group-testkit';
 import {
     areaGrantStatement,
@@ -1604,8 +1604,9 @@ async function accept(input: Json): Promise<Verdict> {
             mlDsaKeys: input.mlDsaKeys,
             me: input.me,
             cache: input.cache as GroupChainCache | null,
-            firstKeysChecked: input.firstKeysChecked,
+            anchor: (input.anchor ?? null) as GroupAnchor | null,
             joinMark: input.joinMark ?? null,
+            pairMarks: (input.pairMarks ?? []) as PairMark[],
         },
         (input.record as RecordProbe | null) ?? undefined,
         input.next

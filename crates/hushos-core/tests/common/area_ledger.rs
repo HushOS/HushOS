@@ -139,7 +139,7 @@ pub fn chains() -> &'static HashMap<&'static str, Arc<AcceptedRosters>> {
         let Ok(RosterChain::Accepted { chain }) = accept_rosters(
             OTHER_GROUP.into(),
             other.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             other.rosters.clone(),
             vec![],
@@ -156,7 +156,7 @@ pub fn chains() -> &'static HashMap<&'static str, Arc<AcceptedRosters>> {
         let Ok(RosterChain::Accepted { chain }) = accept_rosters(
             OTHER_GROUP.into(),
             hostile.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             hostile.rosters.clone(),
             vec![],

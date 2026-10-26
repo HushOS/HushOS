@@ -47,7 +47,8 @@ use crate::envelope::{open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::group_trust::{
     accept_rosters_joining, check_time, group_pin_check, pin_after, AcceptedRosters, CachedSuccession,
-    ForkOf, GroupChainCache, GroupPin, JoinMark, KeySet, MarkSide, OwnIdentities, RosterChain,
+    ForkOf, GroupAnchor, GroupChainCache, GroupPin, JoinMark, KeySet, MarkSide, MarkSource, OwnIdentities,
+    PairMark, RosterChain,
 };
 use crate::groups::{parse_roster, GroupPublicKey, SignedGroupStatement};
 use hkdf::Hkdf;
@@ -560,6 +561,84 @@ pub enum ServedAcceptance {
     Overtaken { split: bool },
 }
 
+/// This device's family guard (docs/optional-verification.md 2.8), as the
+/// app's own store held it when it was read: kept apart from the chain record,
+/// never cleared by a `not-member` wipe nor by anything the server answers.
+/// It holds the pin of the first acceptance that kept the family on this
+/// device ([`ServedAcceptance::Accepted`]'s `pin`, stored when none is held),
+/// and acceptance takes it as a mark like any pin, so a family that once was
+/// here is never taken on first use again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FamilyGuard {
+    /// Nothing stored for this family on this device.
+    Absent,
+    /// The store could not be read (unavailable, a read error, a corrupt
+    /// entry): never first use, and nothing is accepted on it
+    /// ([`GUARD_UNREADABLE`]).
+    Unreadable,
+    Held {
+        pin: GroupPin,
+    },
+}
+
+/// A family guard that could not be read: the words to show, with Try again.
+pub const GUARD_UNREADABLE: &str = "HushOS couldn’t check this right now.";
+
+impl FamilyGuard {
+    /* The guard's pin, a mark; refused before anything else when it could not be read. */
+    pub(crate) fn pin(&self) -> CoreResult<Option<&GroupPin>> {
+        match self {
+            FamilyGuard::Absent => Ok(None),
+            FamilyGuard::Unreadable => Err(input(GUARD_UNREADABLE)),
+            FamilyGuard::Held { pin } => Ok(Some(pin)),
+        }
+    }
+}
+
+/* The roster a first use's joins record holds: the chain must pass through it. */
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FirstUseMark {
+    pub(crate) roster_version: u64,
+    pub(crate) roster_digest: String,
+}
+
+/* How a run joins: not at all (a sync), with a compared join code, or on first use through a record's roster. */
+#[derive(Clone, Copy)]
+pub(crate) enum JoinWith<'a> {
+    None,
+    Code(&'a JoinMark),
+    FirstUse(&'a FirstUseMark),
+}
+
+/*
+ * An accepted chain held against a first use's joins record (the worker's throughFirstUse): short
+ * of its roster, a rollback (refused); another roster there, the fork, with the record's side
+ * `Join` and the served one named by its signer when it is the head.
+ */
+pub(crate) fn through_first_use(
+    chain: &AcceptedRosters,
+    at: &FirstUseMark,
+) -> CoreResult<Option<(u64, Vec<MarkSide>)>> {
+    if (chain.roster_digests.len() as u64) < at.roster_version {
+        return Err(input("This is an older member list than this device has seen."));
+    }
+    let digest = &chain.roster_digests[(at.roster_version - 1) as usize];
+    if *digest == at.roster_digest {
+        return Ok(None);
+    }
+    let mut sides = vec![
+        MarkSide { digest: at.roster_digest.clone(), from: vec![MarkSource::Join], signer_user_id: None },
+        MarkSide {
+            digest: digest.clone(),
+            from: vec![MarkSource::Served],
+            signer_user_id: (*digest == chain.roster_digest).then(|| chain.roster.signer_user_id.clone()),
+        },
+    ];
+    sides.sort_by(|x, y| x.digest.cmp(&y.digest));
+    Ok(Some((at.roster_version, sides)))
+}
+
 /* What the web's sync says after three overtaken runs (sync.ts, SERVED_OLDER and SERVED_SPLIT). */
 const SERVED_OLDER: &str =
     "HushOS sent an older member list than this device already checked. Try again later.";
@@ -625,6 +704,10 @@ pub(crate) struct Reader<'a> {
     pub(crate) me: &'a OwnIdentities,
     pub(crate) group_id: &'a str,
     pub(crate) checked_at: &'a str,
+    /* The family guard's pin, a mark beside the person's pins. */
+    pub(crate) guard: Option<&'a GroupPin>,
+    /* The family's check record: whether there is one, and its pair mark (refused when it is not one). */
+    pub(crate) check: &'a CoreResult<(bool, Vec<PairMark>)>,
 }
 
 impl AreaLedger {
@@ -647,7 +730,7 @@ impl AreaLedger {
         cache: &RecordCache,
         settings_pin: &CoreResult<Option<GroupPin>>,
         record_pin: &CoreResult<Option<GroupPin>>,
-        join_mark: Option<&JoinMark>,
+        join: JoinWith<'_>,
         retried: bool,
     ) -> CoreResult<ServedAcceptance> {
         let group_id = reader.group_id;
@@ -681,31 +764,60 @@ impl AreaLedger {
             Ok(pin) => pin.clone(),
             Err(error) => return refuse(error.clone()),
         };
-        let pins: Vec<GroupPin> = settings_pin.into_iter().chain(record_pin).collect();
+        let pins: Vec<GroupPin> =
+            settings_pin.into_iter().chain(record_pin).chain(reader.guard.cloned()).collect();
         let pins = pins.as_slice();
         let cache = match cache {
             RecordCache::None => None,
             RecordCache::Held(cache) => Some((**cache).clone()),
             RecordCache::Refused { .. } => return refuse(input(BAD_CACHE)),
         };
-        // A join vouches for the first keys, through its join mark, only where nothing marks the
-        // family (the worker's accept): with marks they decide, and the join mark adds to them.
-        let marked = !pins.is_empty() || cache.is_some() || self.holds_family(group_id);
-        let first_keys_checked = join_mark.is_some() && !marked;
+        let (checked, pair_marks) = match reader.check {
+            Ok(check) => check.clone(),
+            Err(error) => return refuse(error.clone()),
+        };
+        // A join vouches for the first keys only where nothing marks the family (the worker's
+        // accept): through its join mark, or on first use through nothing, the head admitting this
+        // account. With marks (a rejoin, which keeps the settings pin and the guard) they decide,
+        // and the join mark adds to them. A family check is a mark too.
+        let marked = !pins.is_empty() || cache.is_some() || checked || self.holds_family(group_id);
+        let anchor = match join {
+            JoinWith::Code(_) if !marked => Some(GroupAnchor::Join),
+            JoinWith::FirstUse(_) if !marked => Some(GroupAnchor::FirstUse),
+            _ => None,
+        };
+        let join_mark = match join {
+            JoinWith::Code(mark) => Some(mark.clone()),
+            _ => None,
+        };
         let mut marks = pins.to_vec();
         marks.extend(session_pin);
         let accepted = accept_rosters_joining(
             group_id.into(),
             served.first_keys.clone(),
-            first_keys_checked,
+            anchor,
             marks,
             served.rosters.clone(),
             served.successions.clone(),
             served.signer_keys.clone(),
             reader.me.clone(),
             cache,
-            join_mark.cloned(),
+            join_mark,
+            pair_marks,
         );
+        // A first use passes through the roster its joins record holds, or is refused or the fork.
+        let accepted = match (accepted, join) {
+            (Ok(RosterChain::Accepted { chain }), JoinWith::FirstUse(mark)) => {
+                match through_first_use(&chain, mark) {
+                    Err(error) => Err(error),
+                    Ok(Some((version, sides))) => {
+                        Ok(RosterChain::Fork { of: ForkOf::Roster, version, sides })
+                    }
+                    Ok(None) => Ok(RosterChain::Accepted { chain }),
+                }
+            }
+            (other, _) => other,
+        };
         match accepted {
             Err(error) => refuse(error),
             Ok(RosterChain::Fork { of, version, sides }) => {
@@ -738,7 +850,7 @@ impl AreaLedger {
         has_record: bool,
     ) -> CoreResult<ServedAcceptance> {
         // With a record a refusal here is always tried again (FetchFromVersionOne, or below).
-        match self.accept_once(reader, served, cache, settings_pin, record_pin, None, has_record) {
+        match self.accept_once(reader, served, cache, settings_pin, record_pin, JoinWith::None, has_record) {
             Ok(outcome) => return Ok(outcome),
             // A lock or another account meanwhile: the caller's, never a reason to fetch again.
             Err(error) if account_error(&error) => return Err(error),
@@ -749,7 +861,15 @@ impl AreaLedger {
             Err(_) => {}
         }
         // From version 1 with the cache left out: the record's pin is still a mark.
-        match self.accept_once(reader, served, &RecordCache::None, settings_pin, record_pin, None, false) {
+        match self.accept_once(
+            reader,
+            served,
+            &RecordCache::None,
+            settings_pin,
+            record_pin,
+            JoinWith::None,
+            false,
+        ) {
             Err(error) if lost_race(&error) => Ok(overtaken(&error)),
             other => other,
         }
@@ -788,20 +908,23 @@ impl AreaLedger {
             }
         };
         let settings_pin = self.settings_pin(&account.user_id, group_id)?;
+        let check = self.family_check(&account.user_id, group_id)?;
         let own_key = encode(&account.signing_public_key);
         if !me.identities.iter().any(|keys| keys.signing_public_key == own_key) {
             return Err(input(OPEN_IDENTITY));
         }
-        Ok(Some(Marks { account, record, settings_pin }))
+        Ok(Some(Marks { account, record, settings_pin, check }))
     }
 }
 
-/* What open_marks read: the account, the record (its cache and pin) and the settings pin. */
+/* What open_marks read: the account, the record (its cache and pin), the settings pin and the family check. */
 pub(crate) struct Marks {
     pub(crate) account: ServedAccount,
     pub(crate) record: Option<ChainRecord>,
     /* The family's settings pin, refused (with the worker's words) when it does not read. */
     pub(crate) settings_pin: CoreResult<Option<GroupPin>>,
+    /* The family's check record (familyChecks): whether there is one, and its pair mark. */
+    pub(crate) check: CoreResult<(bool, Vec<PairMark>)>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -857,10 +980,10 @@ impl AreaLedger {
     ///     signer_keys: Default::default(),
     /// };
     /// // No record, no settings pin, nothing committed: nothing vouches for the first keys.
-    /// assert!(ledger.accept_served(me.clone(), group.clone(), None, served.clone(), "2026-10-18T00:00:00.000Z".into()).is_err());
+    /// assert!(ledger.accept_served(me.clone(), group.clone(), None, served.clone(), FamilyGuard::Absent, "2026-10-18T00:00:00.000Z".into()).is_err());
     /// // A continuation without the record it continues is the app's mistake, refused before anything.
     /// let continuation = ServedChain { after: 3, ..served };
-    /// assert!(ledger.accept_served(me, group, None, continuation, "2026-10-18T00:00:00.000Z".into()).is_err());
+    /// assert!(ledger.accept_served(me, group, None, continuation, FamilyGuard::Absent, "2026-10-18T00:00:00.000Z".into()).is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -870,18 +993,28 @@ impl AreaLedger {
         group_id: String,
         record: Option<String>,
         served: ServedChain,
+        guard: FamilyGuard,
         checked_at: String,
     ) -> CoreResult<ServedAcceptance> {
         uuid(&group_id, "group id")?;
         if record.is_none() && served.after > 0 {
             return Err(input("A continuation needs the record it continues: fetch from version 1."));
         }
+        let guard = guard.pin()?;
         // The record first, then the settings, as the worker's marksOf: a record that does not open
         // is the answer even before settings are open.
-        let Some(Marks { account, record, settings_pin }) = self.open_marks(&me, &group_id, record)? else {
+        let Some(Marks { account, record, settings_pin, check }) = self.open_marks(&me, &group_id, record)?
+        else {
             return Ok(ServedAcceptance::RecordUnreadable);
         };
-        let reader = Reader { account: &account, me: &me, group_id: &group_id, checked_at: &checked_at };
+        let reader = Reader {
+            account: &account,
+            me: &me,
+            group_id: &group_id,
+            checked_at: &checked_at,
+            guard,
+            check: &check,
+        };
         let (cache, record_pin) = match &record {
             None => (RecordCache::None, Ok(None)),
             Some(ChainRecord { cache, pin }) => (cache.clone(), pin.clone()),
@@ -1095,7 +1228,7 @@ mod tests {
     use super::*;
     use crate::bytes::decode;
     use crate::envelope::open_with_nonce;
-    use crate::group_trust::accept_rosters;
+    use crate::group_trust::{accept_rosters, GroupAnchor};
     use crate::groups::tests::{
         area_key_at, ml_dsa_keys, History, Person, AREA, AREA_SEED, GROUP, OTHER_GROUP,
     };
@@ -1164,7 +1297,7 @@ mod tests {
             let RosterChain::Accepted { chain } = accept_rosters(
                 GROUP.into(),
                 self.h.key(1),
-                true,
+                Some(GroupAnchor::Created),
                 vec![],
                 self.h.rosters[..version].to_vec(),
                 vec![],
@@ -1197,7 +1330,14 @@ mod tests {
             record: Option<&str>,
             served: ServedChain,
         ) -> CoreResult<ServedAcceptance> {
-            ledger.accept_served(self.me(), GROUP.into(), record.map(str::to_string), served, CHECKED.into())
+            ledger.accept_served(
+                self.me(),
+                GROUP.into(),
+                record.map(str::to_string),
+                served,
+                FamilyGuard::Absent,
+                CHECKED.into(),
+            )
         }
 
         /* Accepted from version 1 with only the settings pin at `pinned`: the record a device keeps. */
@@ -1517,6 +1657,7 @@ mod tests {
             OTHER_GROUP.into(),
             Some(record.clone()),
             f.served(0, 2),
+            FamilyGuard::Absent,
             CHECKED.into()
         )));
         let theirs = AreaLedger::new();
@@ -1534,6 +1675,7 @@ mod tests {
             GROUP.into(),
             Some(record.clone()),
             f.served(0, 2),
+            FamilyGuard::Absent,
             CHECKED.into()
         )));
         let mut value = record_value(&record, &f.p1.user_id);
@@ -1673,7 +1815,15 @@ mod tests {
         let mut account = ledger.served_account().unwrap();
         account.generation += 1;
         let me = f.me();
-        let reader = Reader { account: &account, me: &me, group_id: GROUP, checked_at: CHECKED };
+        let check = Ok((false, vec![]));
+        let reader = Reader {
+            account: &account,
+            me: &me,
+            group_id: GROUP,
+            checked_at: CHECKED,
+            guard: None,
+            check: &check,
+        };
         let opened =
             chain_record_open(&account.store_key, &account.user_id, GROUP, &record).unwrap().unwrap();
         // A refusal on the continuation: the account error, never FetchFromVersionOne, and the family
@@ -1772,7 +1922,14 @@ mod tests {
         let mut me = f.me();
         me.user_id = me.user_id.to_uppercase();
         let ledger = f.ledger_with(Some(f.pin_at(1)));
-        let outcome = ledger.accept_served(me.clone(), GROUP.into(), None, f.served(0, 2), CHECKED.into());
+        let outcome = ledger.accept_served(
+            me.clone(),
+            GROUP.into(),
+            None,
+            f.served(0, 2),
+            FamilyGuard::Absent,
+            CHECKED.into(),
+        );
         assert_eq!(version_of(&outcome.unwrap()), Some(2));
         me.identities = vec![f.p2.served_keys()];
         let wrong = f.ledger_with(Some(f.pin_at(1))).accept_served(
@@ -1780,6 +1937,7 @@ mod tests {
             GROUP.into(),
             None,
             f.served(0, 2),
+            FamilyGuard::Absent,
             CHECKED.into(),
         );
         assert_eq!(wrong.unwrap_err(), input(OPEN_IDENTITY));
@@ -1790,6 +1948,7 @@ mod tests {
             GROUP.into(),
             None,
             f.served(0, 2),
+            FamilyGuard::Absent,
             CHECKED.into(),
         );
         assert_eq!(other.unwrap_err(), input(NO_ACCOUNT));

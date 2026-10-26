@@ -454,7 +454,7 @@ struct FamilyFixture {
 
         // The creator's device grants the folder's key to the member at roster 2.
         guard case .accepted(let chain) = try acceptRosters(
-            groupId: groupId, firstKeys: try groupPublicKey(seed: groupSeed), firstKeysChecked: true, pins: [], rosters: [r1, r2],
+            groupId: groupId, firstKeys: try groupPublicKey(seed: groupSeed), anchor: .created, pins: [], rosters: [r1, r2],
             successions: [], mlDsaKeys: [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!], me: creator.own, cache: nil
         ) else { throw FamilyFailure(message: "the creator's chain didn't accept") }
         grant = try areaGrantSeal(
@@ -531,7 +531,7 @@ struct FamilyFixture {
 
     /* The member's settings pin over `rosters`, as joining on the web left it. */
     func pin(through rosters: [SignedGroupStatement], checkedAt: String = "2026-10-18T09:00:00.000Z") throws -> GroupPin {
-        guard case .accepted(let chain) = try acceptRosters(groupId: groupId, firstKeys: try firstKeys, firstKeysChecked: true, pins: [], rosters: rosters,
+        guard case .accepted(let chain) = try acceptRosters(groupId: groupId, firstKeys: try firstKeys, anchor: .created, pins: [], rosters: rosters,
                                                            successions: [], mlDsaKeys: try signerKeys, me: member.own, cache: nil)
         else { throw FamilyFailure(message: "the member's chain didn't accept") }
         return try pinAfter(pins: [], chain: chain, checkedAt: checkedAt)

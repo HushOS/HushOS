@@ -8,6 +8,7 @@ import {
     mlDsaKeysOf,
     pattern,
     person,
+    servedKeysOf,
     type History,
     type Person,
 } from './group-testkit';
@@ -15,6 +16,7 @@ import {
     acceptRosters,
     checkNextRoster,
     joinCode,
+    pairCodeOf,
     nextRoster,
     pinAfter,
     type AcceptedRosters,
@@ -43,6 +45,7 @@ import { fingerprintOfKeys, keyDigest } from './fingerprint';
 import {
     createGroupSession,
     openDeviceRecord,
+    pairCode,
     sealDeviceRecord,
     type GrantWire,
     type GroupHost,
@@ -180,7 +183,7 @@ export async function chainOf(
     const accepted = await acceptRosters({
         groupId,
         firstKeys,
-        firstKeysChecked: true,
+        anchor: 'created',
         pins: [],
         rosters,
         successions,
@@ -893,6 +896,59 @@ export async function joinCodeWith(
 const filedFor = (spec: Json): [number, number][] =>
     spec.keys !== null && spec.who <= 5 ? [[spec.who, spec.keys]] : [];
 
+/*
+ * The pair codes of every two people of the family, each worked out by
+ * `me` over the doc's own chain as `me` accepts it (docs/optional-verification.md
+ * 3.4): at the later admission of the two (1 and 2 at roster 2; 1 and 3, 2 and
+ * 3 at roster 3), the same words from either side, and over that roster's
+ * digest, group key 1 and the two ids; someone not let in has none. What the
+ * other twin must work out alike from this doc's bytes.
+ */
+export async function pairSpecs(doc: Json): Promise<Json[]> {
+    const f = await family();
+    const rosters = historyOf(doc);
+    const words = async (version: number, a: number, b: number) =>
+        pairCodeOf(
+            await rosterDigest(rosters[version - 1]!.statement),
+            firstKeysOf(doc),
+            1,
+            f.p[a - 1]!.userId,
+            f.p[b - 1]!.userId,
+        );
+    const specs: Json[] = [];
+    for (const [a, b, version] of [
+        [1, 2, 2],
+        [1, 3, 3],
+        [2, 3, 3],
+    ] as const) {
+        const code = await words(version, a, b);
+        specs.push({ me: a, other: b, expected: { status: 'code', rosterVersion: version, code } });
+        specs.push({ me: b, other: a, expected: { status: 'code', rosterVersion: version, code } });
+    }
+    specs.push({ me: 1, other: 4, expected: { status: 'not-admitted' } });
+    return specs;
+}
+
+/* A pair code as `spec.me` works it out over the doc's chain, accepted as their own. */
+export async function pairRunOver(doc: Json, spec: Json): Promise<Json> {
+    const f = await family();
+    const reader = f.p[spec.me - 1]!;
+    const me = { userId: reader.userId, identities: [servedKeysOf(reader)] };
+    const accepted = await acceptRosters({
+        groupId: doc.family.groupId,
+        firstKeys: firstKeysOf(doc),
+        anchor: 'created',
+        pins: [],
+        rosters: historyOf(doc),
+        successions: [],
+        mlDsaKeys: await mlDsaKeys(),
+        me,
+        cache: null,
+    });
+    if (accepted.status !== 'accepted') throw new Error('expected an accepted chain');
+    return pairCode(accepted, me, f.p[spec.other - 1]!.userId, doc.family.rosters);
+}
+
 export async function joinRunOver(doc: Json, spec: Json) {
     let rosters = [...(doc.family.rosters as SignedStatementWire[])];
     if (spec.rosters === 'without-2') rosters = rosters.filter((_, index) => index !== 1);
@@ -1127,6 +1183,14 @@ export async function fixture() {
         joins.push({ ...spec, outcome });
     }
     doc.joinCodes = joins;
+    const pairs: Json[] = [];
+    for (const spec of await pairSpecs(doc)) {
+        const outcome = await pairRunOver(doc, spec);
+        if (canonical(outcome) !== canonical(spec.expected))
+            throw new Error(`pair ${spec.me}-${spec.other}: ${JSON.stringify(outcome)}`);
+        pairs.push({ ...spec, outcome });
+    }
+    doc.pairCodes = pairs;
     const sealed: Json[] = [];
     for (const spec of entrySpecs(doc)) {
         const { value, otherFamily } = entryValue(entries.get(spec.call)!, spec.change);
@@ -1181,6 +1245,22 @@ export async function check(doc: Json) {
         const outcome = await joinRunOver(doc, spec);
         if (canonical(outcome) !== canonical(spec.outcome))
             throw new Error(`${spec.name}: ${JSON.stringify(outcome)}`);
+    }
+    // Every pair code the other twin worked out over its own chain, worked out here alike, and as
+    // this twin's own specs declare it over those bytes.
+    const pairsHere = await pairSpecs(doc);
+    if (
+        canonical(doc.pairCodes.map((at: Json) => [at.me, at.other])) !==
+        canonical(pairsHere.map((at) => [at.me, at.other]))
+    )
+        throw new Error('the same pairs in the same order');
+    for (const [index, theirs] of (doc.pairCodes as Json[]).entries()) {
+        const outcome = await pairRunOver(doc, theirs);
+        if (
+            canonical(outcome) !== canonical(theirs.outcome) ||
+            canonical(outcome) !== canonical(pairsHere[index]!.expected)
+        )
+            throw new Error(`pair ${theirs.me}-${theirs.other}: ${JSON.stringify(outcome)}`);
     }
     for (const spec of doc.outboxEntries) {
         const read = await entryRead(doc, spec, spec.id, spec.envelope);

@@ -488,7 +488,7 @@ pub fn run(c: &Value) -> (Value, Option<String>) {
     let me = OwnIdentities { user_id: f.p1.user_id.clone(), identities: vec![served_keys(&f.p1)] };
     let record = c["record"].as_str().map(str::to_string);
     let accept = |record: Option<String>, served: ServedChain| {
-        ledger.accept_served(me.clone(), GROUP.into(), record, served, CHECKED.into())
+        ledger.accept_served(me.clone(), GROUP.into(), record, served, FamilyGuard::Absent, CHECKED.into())
     };
     if !c["held"].is_null() {
         use_settings(&ledger, &f.p1, &c["heldSettingsPin"]);
@@ -526,6 +526,7 @@ pub fn run(c: &Value) -> (Value, Option<String>) {
                     MarkSource::Pin => "pin",
                     MarkSource::Cache => "cache",
                     MarkSource::Join => "join",
+                    MarkSource::Pair => "pair",
                     MarkSource::Served => "served",
                 }).collect::<Vec<_>>(),
                 "signerUserId": side.signer_user_id,

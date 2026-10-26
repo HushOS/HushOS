@@ -176,8 +176,14 @@ fn apply(input: &mut Value, op: &Op) {
             }
         }
         Op::ToggleChecked => {
-            let checked = input["firstKeysChecked"].as_bool().unwrap_or(false);
-            input["firstKeysChecked"] = json!(!checked);
+            // The next anchor in turn: none, created, join, first use.
+            let next = match input["anchor"].as_str() {
+                None => json!("created"),
+                Some("created") => json!("join"),
+                Some("join") => json!("first-use"),
+                Some(_) => Value::Null,
+            };
+            input["anchor"] = next;
         }
         Op::FirstKeysFrom(case) => input["firstKeys"] = case_input(case)["firstKeys"].clone(),
         Op::MeFrom(case) => input["me"] = case_input(case)["me"].clone(),

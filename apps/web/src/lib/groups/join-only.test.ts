@@ -3,26 +3,30 @@ import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 /*
- * F1 (docs/groups-design.md 2.4, "With no marks at all"): a device with no
- * mark accepts a family's member list only with the join code the person
- * compared with the admin's screen, or over keys its own seed made, and
- * exactly two places may say so. The join flow passes `joining` (with that
- * code) to groupAccept, and only lib/groups/join.ts may, once the person said
- * "They match"; the creator's first acceptance passes `creating`, and only the
- * outbox's creation entry may, through lib/groups/sync.ts. The worker refuses
- * `creating` once any mark exists, but on a fresh device nothing else stands
- * between a server's made-up group key and the person's trust: so any other
- * module naming either is a defect.
+ * F1 (docs/groups-design.md 2.4, "With no marks at all";
+ * docs/optional-verification.md 3.3): a device with no mark accepts a
+ * family's member list only on the join path (with the join code the person
+ * compared with the admin's screen, or on first use, where nothing marks the
+ * family and its head lets this account in), or over keys its own seed made,
+ * and exactly two places may say so. The join flow passes `joining` (with
+ * the joins record the worker sealed) to groupAccept, and only
+ * lib/groups/join.ts may; the creator's first acceptance passes `creating`,
+ * and only the outbox's creation entry may, through lib/groups/sync.ts. The
+ * worker refuses `creating` once any mark exists, and first use once any
+ * mark exists, but on a fresh device nothing else stands between a server's
+ * made-up group key and the person's trust: so any other module naming
+ * either is a defect.
  *
  * Comments are left out: what is scanned is code that names the field (as a
  * key, a shorthand property, a quoted name or an assignment), and, beside it,
  * which modules name the groupAccept operation at all.
  *
- * The worker turns `joining` and `creating` into the core's `firstKeysChecked`
- * (packages/crypto/src/session-groups.ts), so the same rule is checked where
- * the flag itself is set: in the crypto package and in Drive, the shipped
- * modules that could call acceptance, every site that gives it anything but
- * `false` must be one of the sites listed below, each with why it may.
+ * The worker turns `joining` and `creating` into the core's `anchor`
+ * (packages/crypto/src/session-groups.ts; it was `firstKeysChecked`), so the
+ * same rule is checked where the anchor itself is set: in the crypto package
+ * and in Drive, the shipped modules that could call acceptance, every site
+ * that gives it anything but `null` must be one of the sites listed below,
+ * each with why it may. The scan still refuses `firstKeysChecked` anywhere.
  */
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -35,7 +39,9 @@ const ALLOWED: Record<string, { under: string; only: string[] }> = {
     creating: { under: 'lib/groups/', only: ['lib/groups/outbox.ts', 'lib/groups/sync.ts'] },
     // And acceptance itself is called from the sync and the join flow, nowhere else.
     groupAccept: { under: '', only: ['lib/groups/join.ts', 'lib/groups/sync.ts'] },
-    // The app never sets the core's flag itself: it says `joining` or `creating`, and the worker decides.
+    // The families layer never sets the core's anchor itself: it says `joining` or `creating`, and
+    // the worker decides. (Elsewhere in the app an anchor is a link's.)
+    anchor: { under: 'lib/groups/', only: [] },
     firstKeysChecked: { under: '', only: [] },
 };
 
@@ -43,31 +49,32 @@ const ALLOWED: Record<string, { under: string; only: string[] }> = {
 const PACKAGES = ['packages/crypto/src', 'packages/drive/src'];
 
 /*
- * Every site in PACKAGES that gives `firstKeysChecked` a value other than
- * `false`, as `module › enclosing function: value`. A new one fails the scan
- * until it is listed here with its reason.
+ * Every site in PACKAGES that gives `anchor` a value other than `null`, as
+ * `module › enclosing function: value`. A new one fails the scan until it is
+ * listed here with its reason. (Continuing a chain, extend, passes `null`:
+ * the cache is the mark.)
  */
-const FIRST_KEYS_SITES = [
-    // Continues a chain this device (or the server) already accepted: the first keys are that
-    // chain's own, vouched for when it was first accepted (checkNextRoster, checkNextSuccession).
-    'packages/crypto/src/group-trust.ts › extend: true',
+const ANCHOR_SITES = [
     // The server's acceptance of its own stored history, anchored on the version 1 keys stored at
     // creation, behind the capability only the server entry holds; its StoredChain opens and
-    // vouches for nothing on a device (I14).
-    'packages/crypto/src/group-trust.ts › acceptStored: true',
+    // vouches for nothing on a device (I14). No device anchor is `stored`.
+    "packages/crypto/src/group-trust.ts › acceptStored: 'stored'",
     // Creation, inside the worker, over the group key it just made: the staged chain the
     // creating call seals and grants against (design 3.1).
-    'packages/crypto/src/session-groups.ts › create: true',
-    // The worker's acceptance run (acceptRun, which accept and a join's joinRun call): a join
-    // carrying the compared join code where nothing marks the family, and the creating device's
-    // committed creation over served first keys equal to the seed it still holds; then the
-    // variable is passed on.
-    'packages/crypto/src/session-groups.ts › acceptRun: true',
-    'packages/crypto/src/session-groups.ts › acceptRun: true',
+    "packages/crypto/src/session-groups.ts › create: 'created'",
+    // The worker's acceptance run (acceptRun, which accept, a join's joinRun and a first use's
+    // firstUseRun call): a join where nothing marks the family, carrying the compared join code
+    // (`join`) or a first use's joins record (`first-use`: acceptance then also needs the head to
+    // let this account in, and the run needs the chain through the record's roster); and the
+    // creating device's committed creation over served first keys equal to the seed it still
+    // holds; then the variable is passed on.
+    "packages/crypto/src/session-groups.ts › acceptRun: joinMark ? 'join' : 'first-use'",
+    "packages/crypto/src/session-groups.ts › acceptRun: 'created'",
     'packages/crypto/src/session-groups.ts › acceptRun: (shorthand)',
-    // The join's admission (preview, check, and the join's own re-check): verifies over the served
-    // first keys only to work out the code the person compares, and commits, keeps and marks nothing.
-    'packages/crypto/src/session-groups.ts › admission: !marks',
+    // The join's admission (preview, check, first use, and each join's own re-check): verifies
+    // over the served first keys on first use only to work out the code the person compares or
+    // the roster a first use's record keeps, and commits, keeps and marks nothing.
+    "packages/crypto/src/session-groups.ts › admission: marks ? null : 'first-use'",
 ].sort();
 
 function modules(dir: string): string[] {
@@ -106,9 +113,10 @@ function names(source: string, field: string) {
 }
 
 /*
- * Where `source` gives `firstKeysChecked` a value: as a key, an assignment, a
- * shorthand property, or by its quoted name. `false`, and the field's type
- * (`boolean`), give nothing. Each site is named by the function around it.
+ * Where `source` gives `anchor` a value: as a key, an assignment, a
+ * shorthand property, or by its quoted name. `null`, and the field's type
+ * (`GroupAnchor…`), give nothing. Each site is named by the function around
+ * it. The old flag, `firstKeysChecked`, is a site wherever it appears.
  */
 function firstKeysSites(source: string, module: string) {
     const text = code(source);
@@ -117,12 +125,13 @@ function firstKeysSites(source: string, module: string) {
         for (const match of text.matchAll(pattern))
             found.push({ at: match.index, value: value(match) });
     };
-    take(/\bfirstKeysChecked\s*\??:\s*([^,;}\n]+)/g, (match) => match[1]!.trim());
-    take(/\bfirstKeysChecked\s*=(?![=>])\s*([^,;)\n]+)/g, (match) => match[1]!.trim());
-    take(/[{,]\s*firstKeysChecked\s*(?=[,}])/g, () => '(shorthand)');
-    take(/['"`]firstKeysChecked['"`]/g, () => '(by name)');
+    take(/\banchor\s*\??:\s*([^,;}\n]+)/g, (match) => match[1]!.trim());
+    take(/\banchor\s*=(?![=>])\s*([^,;)\n]+)/g, (match) => match[1]!.trim());
+    take(/[{,]\s*anchor\s*(?=[,}])/g, () => '(shorthand)');
+    take(/['"`]anchor['"`]/g, () => '(by name)');
+    take(/\bfirstKeysChecked\b/g, () => 'firstKeysChecked');
     return found
-        .filter(({ value }) => value !== 'false' && value !== 'boolean')
+        .filter(({ value }) => value !== 'null' && !value.startsWith('GroupAnchor'))
         .map(({ at, value }) => {
             const around = [...text.slice(0, at).matchAll(/\bfunction\s+([\w$]+)/g)].at(-1);
             return `${module} › ${around?.[1] ?? '(module)'}: ${value}`;
@@ -139,15 +148,15 @@ describe('who may vouch for a family’s first keys', () => {
         expect(offenders).toEqual(allowed.only);
     });
 
-    test('only the listed sites in the crypto core and Drive set `firstKeysChecked`', () => {
+    test('only the listed sites in the crypto core and Drive set `anchor`', () => {
         const sites = PACKAGES.flatMap(shipped).flatMap((path) =>
             firstKeysSites(readFileSync(join(REPO, path), 'utf8'), path),
         );
-        expect(sites.sort()).toEqual(FIRST_KEYS_SITES);
+        expect(sites.sort()).toEqual(ANCHOR_SITES);
     });
 
     test('no shipped module of the crypto core or Drive imports a test kit', () => {
-        // A test kit's ready-made acceptance input (READER) carries `firstKeysChecked: true`:
+        // A test kit's ready-made acceptance input (READER) carries `anchor: 'created'`:
         // spread into a shipped call it would set the flag where the scan above cannot see it.
         const importers = PACKAGES.flatMap(shipped).filter((path) =>
             /from\s+['"][^'"]*testkit['"]/.test(code(readFileSync(join(REPO, path), 'utf8'))),
@@ -155,26 +164,28 @@ describe('who may vouch for a family’s first keys', () => {
         expect(importers).toEqual([]);
     });
 
-    test('the first keys scan sees every way to set the flag, and names the function', () => {
+    test('the anchor scan sees every way to set the anchor, and names the function', () => {
         const sites = (source: string) => firstKeysSites(source, 'm.ts');
-        expect(sites(`async function a() { return accept({ firstKeysChecked: true }); }`)).toEqual([
-            'm.ts › a: true',
+        expect(sites(`async function a() { return accept({ anchor: 'first-use' }); }`)).toEqual([
+            "m.ts › a: 'first-use'",
         ]);
-        expect(
-            sites(`function b(x) { let firstKeysChecked = false; firstKeysChecked = x; }`),
-        ).toEqual(['m.ts › b: x']);
-        expect(sites(`function c(input) { input.firstKeysChecked = !marks; }`)).toEqual([
-            'm.ts › c: !marks',
+        expect(sites(`function b(x) { let anchor = null; anchor = x; }`)).toEqual(['m.ts › b: x']);
+        expect(sites(`function c(input) { input.anchor = marks ? null : 'join'; }`)).toEqual([
+            "m.ts › c: marks ? null : 'join'",
         ]);
-        expect(sites(`function d() { return accept({ served, firstKeysChecked }); }`)).toEqual([
+        expect(sites(`function d() { return accept({ served, anchor }); }`)).toEqual([
             'm.ts › d: (shorthand)',
         ]);
-        expect(sites(`function e(input) { input['firstKeysChecked'] = true; }`)).toEqual([
+        expect(sites(`function e(input) { input['anchor'] = 'created'; }`)).toEqual([
             'm.ts › e: (by name)',
+        ]);
+        // The old flag is a site wherever it appears, whatever it is given.
+        expect(sites(`function g() { return accept({ firstKeysChecked: false }); }`)).toEqual([
+            'm.ts › g: firstKeysChecked',
         ]);
         expect(
             sites(
-                `type I = { firstKeysChecked: boolean };\n// firstKeysChecked: true\nfunction f() { return { firstKeysChecked: false }; }`,
+                `type I = { anchor: GroupAnchor | null };\n// anchor: 'created'\nfunction f() { let anchor: GroupAnchor | null = null; return { anchor: null }; }`,
             ),
         ).toEqual([]);
     });

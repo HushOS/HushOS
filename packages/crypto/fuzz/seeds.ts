@@ -443,10 +443,19 @@ export function documents(target: Target): Uint8Array[] {
                 json({ kind: 'join_draws', draws: [0xffff_fffd, 0xffff_ffff, 5, 5, 17] }),
                 json({ kind: 'join_draws', draws: [0xffff_fffe] }),
                 json({ kind: 'join_draws', draws: [0, 12, 24, 1] }),
-                // Every shared session scenario but the one checking a showing from elsewhere.
+                // Every shared session scenario but the one checking a showing from elsewhere, and
+                // those of first use (its op, a step's guard and other settings are not in the
+                // kind yet; both twins run those scenarios in the shared fixtures).
                 ...joinSessionScenarios()
-                    .scenarios.filter((k: Json) =>
-                        k.steps.every((step: Json) => step.session !== 'elsewhere'),
+                    .scenarios.filter(
+                        (k: Json) =>
+                            ['none', 'pin-main-2'].includes(k.settings) &&
+                            k.steps.every(
+                                (step: Json) =>
+                                    step.session !== 'elsewhere' &&
+                                    step.op !== 'first-use' &&
+                                    step.guard === undefined,
+                            ),
                     )
                     .map((k: Json) =>
                         json({

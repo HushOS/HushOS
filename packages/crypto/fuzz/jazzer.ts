@@ -3,6 +3,9 @@ import { decode, encode } from '../src/keys';
 import { groups } from './fixtures';
 import { verdict, type Target } from './verdicts';
 
+/* Every anchor acceptance takes, and none. */
+const ANCHORS = [null, 'created', 'join', 'first-use'] as const;
+
 /*
  * The Jazzer.js entry points, one per target (`jazzer <bundle> -f <target>`).
  * run.ts bundles this file with esbuild and runs it on Node: under Bun,
@@ -222,7 +225,7 @@ export function acceptDocument(data: Buffer) {
                     );
                 break;
             case 13:
-                input.firstKeysChecked = !input.firstKeysChecked;
+                input.anchor = ANCHORS[p.consumeIntegralInRange(0, ANCHORS.length - 1)];
                 break;
             case 14:
                 input.firstKeys = caseInput(p).firstKeys;

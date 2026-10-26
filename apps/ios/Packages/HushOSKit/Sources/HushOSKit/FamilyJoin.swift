@@ -350,7 +350,7 @@ extension FamilySync {
         var overtaken = 0
         while true {
             let result = try ledger.acceptJoining(me: me, groupId: groupId, record: records.read(userId: userId, groupId: groupId)?.envelope,
-                                                  served: served, matched: matched)
+                                                  served: served, matched: matched, guard: .absent)
             switch result {
             case .recordUnreadable:
                 records.delete(userId: userId, groupId: groupId)

@@ -30,7 +30,7 @@ fn accepted(fixture: &Value) -> Arc<AcceptedRosters> {
             ed25519_public_key: s(first, "ed25519PublicKey"),
             ml_dsa_public_key: s(first, "mlDsaPublicKey"),
         },
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         fixture["rosters"].as_array().unwrap().iter().map(signed_of).collect(),
         fixture["successions"].as_array().unwrap().iter().map(signed_of).collect(),
@@ -129,7 +129,7 @@ fn the_web_s_history_is_accepted_here_as_the_web_accepted_it() {
     let refused = accept_rosters(
         GROUP.into(),
         group_public_key(group_seed(1)).unwrap(),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         rosters,
         fixture["successions"].as_array().unwrap().iter().map(signed_of).collect(),
@@ -212,7 +212,7 @@ fn the_web_s_seal_from_before_the_sealer_s_identity_was_folded_in_opens_here_thr
     let RosterChain::Accepted { chain } = accept_rosters(
         GROUP.into(),
         group_public_key(group_seed(1)).unwrap(),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         folded["rosters"].as_array().unwrap().iter().map(signed_of).collect(),
         vec![],

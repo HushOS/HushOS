@@ -416,10 +416,10 @@ public actor FamilySync: FamilyJudge {
             let me = try await vault.ownIdentities()
             let checkedAt = Self.checkTime(now())
             var served = try await fetchServed(groupId, after: row?.rosterVersion ?? 0)
-            var answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, checkedAt: checkedAt)
+            var answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
             if case .fetchFromVersionOne = answer {
                 served = try await fetchServed(groupId, after: 0)
-                answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, checkedAt: checkedAt)
+                answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
             }
             switch answer {
             case .accepted(let chain, let record, let pin):
@@ -844,7 +844,8 @@ public actor FamilySync: FamilyJudge {
         FamilyFork(memberList: of == .roster, version: version, sides: sides.map { side in
             FamilyFork.Side(digest: side.digest, from: side.from.map { source in
                 switch source {
-                case .pin: "your account’s earlier check"
+                // `.pair`: a family check in the settings (docs/optional-verification.md 3.4); its own words come with PR 5.
+                case .pin, .pair: "your account’s earlier check"
                 case .cache: "this device’s earlier check"
                 case .join: "the join code you compared"
                 case .served: "what the server shows now"

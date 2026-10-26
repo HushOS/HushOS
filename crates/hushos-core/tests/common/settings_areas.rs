@@ -212,6 +212,7 @@ pub fn run_settings(sealed: &[Value]) -> Value {
         f.group_id.clone(),
         None,
         served_of(f.h.key(1), f.h.rosters.clone()),
+        FamilyGuard::Absent,
         CHECKED.into(),
     );
     let accept = match &accepted {

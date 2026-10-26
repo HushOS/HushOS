@@ -80,6 +80,8 @@ fn open_document(user_id: &str, key: &[u8], envelope: &SettingsEnvelope) -> Core
 pub(crate) struct SettingsReading {
     pub(crate) pins: HashMap<String, Value>,
     pub(crate) contacts: Vec<(String, Value)>,
+    /* `{ ...settings.familyChecks }`: each family's check record as filed, read when acceptance takes its marks. */
+    pub(crate) checks: HashMap<String, Value>,
 }
 
 /* The `contacts` member as JavaScript holds it: an object's members in order (a key again keeps its place, takes the last value), or what kind it was. */
@@ -216,7 +218,11 @@ pub(crate) fn read_document(plaintext: &[u8]) -> CoreResult<SettingsReading> {
         Some(Value::Object(groups)) => groups.iter().map(|(id, pin)| (id.clone(), pin.clone())).collect(),
         _ => HashMap::new(),
     };
-    Ok(SettingsReading { pins, contacts })
+    let checks = match members.get("familyChecks") {
+        Some(Value::Object(checks)) => checks.iter().map(|(id, at)| (id.clone(), at.clone())).collect(),
+        _ => HashMap::new(),
+    };
+    Ok(SettingsReading { pins, contacts, checks })
 }
 
 /*
@@ -430,7 +436,13 @@ impl AreaLedger {
         };
         let Some(envelope) = settings_envelope else {
             let (_, generation, root) = unlocked()?;
-            return self.set_settings(&user_id, false, 0, HashMap::new(), vec![], Some((generation, &root)));
+            return self.set_settings(
+                &user_id,
+                false,
+                0,
+                (HashMap::new(), vec![], HashMap::new()),
+                Some((generation, &root)),
+            );
         };
         if !(1..=2).contains(&envelope.version)
             || !(1..=MAX_SAFE_INTEGER).contains(&envelope.settings_version)
@@ -457,8 +469,7 @@ impl AreaLedger {
             &user_id,
             true,
             envelope.settings_version,
-            pins,
-            reading.contacts,
+            (pins, reading.contacts, reading.checks),
             Some((generation, &root)),
         )
     }

@@ -47,7 +47,7 @@ import {
     type SuccessionLink,
 } from './identity';
 import { decode, encode } from './keys';
-import { checkGroupPin, checkTime, pinVerified, type GroupPin } from './pins';
+import { checkGroupPin, checkTime, pinTrust, type GroupPin } from './pins';
 import { successionPath } from './succession-path';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import type { ContactPin } from './contacts';
@@ -233,12 +233,48 @@ type ChainBody = {
     readonly deadBranches: readonly { version: number; signerUserId: string }[];
     /* What to keep locally and pass back next time. */
     readonly cache: GroupChainCache;
+    /*
+     * Whether this person vouched for the family in this acceptance, and
+     * through which roster (docs/optional-verification.md 3.3): they created
+     * it, compared a join code, or compared a pair code with another member
+     * (a pair mark held). Worked out by acceptance from its anchor and the
+     * marks, never passed in; null for a first-use chain and for one accepted
+     * on marks alone. Not kept in the cache.
+     */
+    readonly checked: FamilyChecked | null;
 };
+
+/*
+ * What vouches for a family's version 1 keys when nothing marks it on this
+ * device (docs/optional-verification.md 3.3), replacing `firstKeysChecked`:
+ * - created: the worker holds the seed of this creation, and the served first
+ *   keys are its public key;
+ * - join: the join code the person compared (the join mark, which then must
+ *   be given), the chain passing through its roster;
+ * - first-use: nothing; the served keys are taken because nothing contradicts
+ *   them, only on the join path, only with no mark at all, and only for an
+ *   account whose own entry is active at the head of the served chain.
+ * With any mark the marks decide the version 1 keys and an anchor vouches for
+ * nothing; with no mark and no anchor nothing is accepted.
+ */
+export type GroupAnchor = 'created' | 'join' | 'first-use';
+
+/*
+ * A family check this person made (docs/optional-verification.md 3.4): the
+ * pair code they compared with member `with` over the roster at
+ * `rosterVersion`. Held as a mark: the chain must hold a roster there over
+ * which the pair code of this account and `with` is `code`, else the hard
+ * warning, and a chain short of it is a rollback. Never a join mark.
+ */
+export type PairMark = { rosterVersion: number; with: string; code: string[] };
+
+/* How a family was vouched for in an acceptance, and through which roster (AcceptedRosters.checked). */
+export type FamilyChecked = { how: 'created' | 'join' | 'compared'; rosterVersion: number };
 
 /* One side of a conflict between marks: a digest, who holds it, and the signer of its statement when known. */
 export type MarkSide = {
     digest: string;
-    from: ('pin' | 'cache' | 'join' | 'served')[];
+    from: ('pin' | 'cache' | 'join' | 'pair' | 'served')[];
     signerUserId: string | null;
 };
 /*
@@ -485,7 +521,7 @@ async function mlDsaDigest(publicKey: string) {
 }
 
 /* Whether the served identity is exactly the one an entry names: X25519, Ed25519, both digests, key version. */
-async function servedIsEntry(served: ServedKeys, entry: RosterMember) {
+export async function servedIsEntry(served: ServedKeys, entry: RosterMember) {
     return served.keyVersion === entry.keyVersion && (await servedKeysAreEntry(served, entry));
 }
 
@@ -508,19 +544,24 @@ async function servedKeysAreEntry(served: ServedKeys, entry: RosterMember) {
     }
 }
 
-export type AcceptInput = {
+/* What every acceptance takes, its anchor, reader and cache aside. */
+type AcceptBase = {
     groupId: string;
     firstKeys: GroupPublicKey;
-    /* The person compared the group's words over `firstKeys` just now (a newcomer's join). */
-    firstKeysChecked: boolean;
     pins: GroupPin[];
     rosters: SignedGroupStatement[];
     successions: SignedGroupStatement[];
     mlDsaKeys: Record<string, string>;
+    /* The join code a newcomer compared with the admitting admin's screen (2.4, 3.2): with anchor `join`, or beside marks. */
+    joinMark?: JoinMark | null;
+    /* The family checks this person made (familyChecks in the settings), each a mark. */
+    pairMarks?: PairMark[] | null;
+};
+export type AcceptInput = AcceptBase & {
+    /* What vouches for `firstKeys` when nothing marks the family (GroupAnchor), or null. */
+    anchor: GroupAnchor | null;
     me: { userId: string; identities: ServedKeys[] };
     cache: GroupChainCache | null;
-    /* The join code a newcomer compared with the admitting admin's screen (2.4, 3.2), if any. */
-    joinMark?: JoinMark | null;
 };
 
 /*
@@ -537,16 +578,37 @@ export type AcceptInput = {
  */
 export type JoinMark = { rosterVersion: number; code: string[] };
 
+const twelveWords = (code: unknown): code is string[] =>
+    Array.isArray(code) &&
+    code.length === 12 &&
+    code.every((word) => typeof word === 'string' && /^[a-z]{3,8}$/.test(word));
+
 function checkJoinMark(mark: JoinMark) {
+    // A pair mark (it names the member compared with) is never a join mark: the two codes have
+    // their own domains, and neither may stand for the other.
     if (
         typeof mark !== 'object' ||
         mark === null ||
-        !Array.isArray(mark.code) ||
-        mark.code.length !== 12 ||
-        !mark.code.every((word) => typeof word === 'string' && /^[a-z]{3,8}$/.test(word))
+        Object.hasOwn(mark, 'with') ||
+        !twelveWords(mark.code)
     )
         throw new CryptoError('Invalid join mark.');
     return { rosterVersion: integer(mark.rosterVersion, 'join mark'), code: [...mark.code] };
+}
+
+function checkPairMark(mark: PairMark) {
+    if (
+        typeof mark !== 'object' ||
+        mark === null ||
+        typeof mark.with !== 'string' ||
+        !twelveWords(mark.code)
+    )
+        throw new CryptoError('Invalid pair mark.');
+    return {
+        rosterVersion: integer(mark.rosterVersion, 'pair mark'),
+        with: uuid(mark.with, 'user id'),
+        code: [...mark.code],
+    };
 }
 
 /*
@@ -581,10 +643,86 @@ export async function joinCode(
 }
 
 /*
+ * The pair code two members compare to check each other and their view of
+ * the family (docs/optional-verification.md 3.4): the first 160 bits of
+ * SHA-256("hushos/group/pair-code/v1" || rosterDigest || groupKeyDigest ||
+ * groupKeyVersion as 8 bytes big-endian || lowerId || higherId), read as the
+ * join code is (twelve words, 132 bits). The ids are the two lowercase
+ * account ids, sorted, 36 ASCII bytes each: with the roster alone every pair
+ * a later member is part of would share one code, so a server labelling a
+ * planted entry with another member's name could borrow a match. Its own
+ * domain: a pair code never stands for a join code, nor the reverse. Two
+ * equal ids are refused. The Rust core's `pair_code_of` gives the same words.
+ */
+const PAIR_CODE_DOMAIN = 'hushos/group/pair-code/v1';
+
+export async function pairCodeOf(
+    rosterDigest: string,
+    groupKey: GroupPublicKey,
+    groupKeyVersion: number,
+    userId: string,
+    otherUserId: string,
+): Promise<string[]> {
+    const ids = [uuid(userId, 'user id'), uuid(otherUserId, 'user id')].sort();
+    if (ids[0] === ids[1]) throw new CryptoError('A pair code is between two members.');
+    const text = new TextEncoder();
+    const domain = text.encode(PAIR_CODE_DOMAIN);
+    const input = new Uint8Array(domain.length + 72 + 72);
+    input.set(domain);
+    input.set(decode(digestOf(rosterDigest, 'roster digest'), 32), domain.length);
+    input.set(decode(await groupKeyDigest(groupKey), 32), domain.length + 32);
+    new DataView(input.buffer).setBigUint64(
+        domain.length + 64,
+        BigInt(integer(groupKeyVersion, 'group key version')),
+    );
+    input.set(text.encode(ids[0]!), domain.length + 72);
+    input.set(text.encode(ids[1]!), domain.length + 108);
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+    return fingerprintWords(
+        Array.from(hash.subarray(0, 20), (byte) => byte.toString(16).padStart(2, '0')).join(''),
+    );
+}
+
+/* The group key version the roster at `version` is under: one above every succession tied to an earlier roster. */
+function keyVersionAt(successions: Iterable<{ lastRosterVersion: number }>, version: number) {
+    let keyVersion = 1;
+    for (const out of successions) if (out.lastRosterVersion < version) keyVersion++;
+    return keyVersion;
+}
+
+/*
+ * The pair code of this account and `otherUserId` over the roster at
+ * `version` on an accepted chain, under the group key it is under. Checks no
+ * entry: the chain-level pairCode (session-groups.ts) is what a screen shows.
+ */
+export async function pairCodeAt(
+    chain: AcceptedRosters,
+    version: number,
+    userId: string,
+    otherUserId: string,
+) {
+    requireAccepted(chain);
+    if (!Number.isSafeInteger(version) || version < 1 || version > chain.rosterDigests.length)
+        throw new CryptoError('This member list is not on the family’s history.');
+    const keyVersion = keyVersionAt(chain.cache.successions, version);
+    return pairCodeOf(
+        chain.rosterDigests[version - 1]!,
+        chain.groupKeys[keyVersion - 1]!,
+        keyVersion,
+        userId,
+        otherUserId,
+    );
+}
+
+/*
  * Accepts a group's roster chain (2.4, 2.5, 2.7):
  * - `firstKeys` are the version 1 group keys as served. They must be the ones
- *   every pin and the cache name; with neither, `firstKeysChecked` must say
- *   the person just compared the words over them, or nothing is accepted;
+ *   every pin and the cache name; with neither, `anchor` must vouch for them
+ *   (GroupAnchor; `first-use` only with no pair mark either, and only for a
+ *   reader whose entry is active at the head), or nothing is accepted;
+ * - `joinMark` (with anchor `join` only) and `pairMarks` are codes the person
+ *   compared: the chain must pass through a roster at each one's version
+ *   whose code is that one's, or it is a fork; short of it, a rollback;
  * - `pins` are every group pin this person holds (the settings' and the
  *   device's own) and `cache` this device's record of what it verified
  *   (AcceptedRosters.cache, or null): the person's marks;
@@ -1010,7 +1148,7 @@ async function establishNext(state: State) {
 
 /* The sides of a conflict, merged by digest and sorted by it. */
 function sides(all: MarkSide[]): MarkSide[] {
-    const order = ['pin', 'cache', 'join', 'served'] as const;
+    const order = ['pin', 'cache', 'join', 'pair', 'served'] as const;
     const merged = new Map<string, MarkSide>();
     for (const side of all) {
         const held = merged.get(side.digest);
@@ -1110,13 +1248,21 @@ async function rosterRules(
     checkAreas(state.areas, previous?.roster, roster);
 }
 
-/* What acceptance takes: AcceptInput, with no reader to check (`me` null) when a chain is extended for a check. */
-type Accepting = Omit<AcceptInput, 'me' | 'cache'> & {
+/*
+ * What acceptance takes: AcceptInput, with no reader to check (`me` null) when
+ * a chain is extended for a check, and one more anchor no device passes:
+ * `stored`, the server's version 1 keys as stored at creation (acceptStored).
+ */
+type Accepting = AcceptBase & {
+    anchor: GroupAnchor | 'stored' | null;
     me: AcceptInput['me'] | null;
     cache: GroupChainCache | StoredChainCache | null;
     /* The server's acceptance: its cache must be the server's record, a device's never. */
     server?: boolean;
 };
+
+/* Refused when anchor `first-use` vouches for a chain whose head has no active entry for the reader. */
+export const NOT_LET_IN = 'This account is not in this family yet.';
 
 /* SHA-256 of the version 1 Ed25519 key and the ML-DSA key's digest: how a pin's first keys compare. */
 async function firstKeysMark(ed25519PublicKey: string, mlDsaPublicKeyDigest: string | null) {
@@ -1150,6 +1296,25 @@ async function accept(input: Accepting) {
         ? await checkCache(groupId, input.cache, input.server ?? false)
         : null;
     const joinMark = input.joinMark ? checkJoinMark(input.joinMark) : null;
+    const pairMarks = (input.pairMarks ?? []).map(checkPairMark);
+    // What vouches for the version 1 keys (named apart from the field, which only callers set).
+    const vouching = input.anchor;
+    if (
+        vouching !== null &&
+        vouching !== 'created' &&
+        vouching !== 'join' &&
+        vouching !== 'first-use' &&
+        vouching !== 'stored'
+    )
+        throw new CryptoError('Invalid anchor.');
+    // A join is anchored by the code compared; a join mark comes with a join, or beside the marks
+    // that decide (a rejoin), never with another anchor.
+    if (
+        (vouching === 'join' && joinMark === null) ||
+        (joinMark !== null && vouching !== 'join' && vouching !== null)
+    )
+        throw new CryptoError('A join is anchored by the join code compared, and only a join is.');
+    if (pairMarks.length > 0 && !input.me) throw new CryptoError('Invalid pair mark.');
     const conflict = (of: RosterFork['of'], version: number, all: MarkSide[]) => {
         const merged = sides(all);
         if (merged.length > 1) throw new Fork({ status: 'fork', of, version, sides: merged });
@@ -1217,15 +1382,17 @@ async function accept(input: Accepting) {
     for (const { value } of rosters.values())
         if (value.groupId !== groupId) throw new CryptoError('This roster is for another group.');
     const successions = await byDigest(input.successions, parseGroupSuccession);
-    // The served version 1 keys must be the ones the marks agree on, or, with no mark at all,
-    // the ones the person just checked the words over.
+    // The served version 1 keys must be the ones the marks agree on, or, with no mark at all, the
+    // ones the anchor vouches for. First use vouches only where nothing at all marks the family:
+    // a family check is a mark too, though it fixes no first keys.
+    const firstUse = firstMarks.length === 0 && vouching === 'first-use' && pairMarks.length === 0;
     if (firstMarks.length > 0) {
         const served = await firstKeysMark(
             firstKeys.ed25519PublicKey,
             await mlDsaDigest(firstKeys.mlDsaPublicKey),
         );
         if (served !== firstMarks[0]!.digest) throw new CryptoError(NOT_CHECKED);
-    } else if (!input.firstKeysChecked)
+    } else if (vouching === null || (vouching === 'first-use' && !firstUse))
         throw new CryptoError(
             'These group keys have not been checked: compare the join code first.',
         );
@@ -1309,9 +1476,7 @@ async function accept(input: Accepting) {
         if (joinMark.rosterVersion > head) throw new CryptoError(OLDER);
         const digest = chainDigest(joinMark.rosterVersion);
         // The group key that roster is under: one above every succession tied to an earlier roster.
-        let keyVersion = 1;
-        for (const out of state.verified.values())
-            if (out.lastRosterVersion < joinMark.rosterVersion) keyVersion++;
+        const keyVersion = keyVersionAt(state.verified.values(), joinMark.rosterVersion);
         const code = await joinCode(digest, state.keys[keyVersion - 1]!, keyVersion);
         if (code.join(' ') !== joinMark.code.join(' '))
             throw new Fork({
@@ -1328,6 +1493,40 @@ async function accept(input: Accepting) {
                 ]),
             });
     }
+    // The pair marks: each family check this person made, by its code over the roster compared
+    // and the two accounts (this one, and the member compared with), in version order.
+    for (const mark of [...pairMarks].sort((x, y) => x.rosterVersion - y.rosterVersion)) {
+        if (mark.rosterVersion > head) throw new CryptoError(OLDER);
+        const digest = chainDigest(mark.rosterVersion);
+        const keyVersion = keyVersionAt(state.verified.values(), mark.rosterVersion);
+        const code = await pairCodeOf(
+            digest,
+            state.keys[keyVersion - 1]!,
+            keyVersion,
+            input.me!.userId,
+            mark.with,
+        );
+        if (code.join(' ') !== mark.code.join(' '))
+            throw new Fork({
+                status: 'fork',
+                of: 'roster',
+                version: mark.rosterVersion,
+                sides: sides([
+                    { digest: mark.code.join(' '), from: ['pair'], signerUserId: null },
+                    {
+                        digest,
+                        from: ['served'],
+                        signerUserId: verifiedSigners.get(digest) ?? null,
+                    },
+                ]),
+            });
+    }
+    // First use takes the served version 1 keys only for a reader the head admits.
+    if (
+        firstUse &&
+        !(input.me && activeWith(rosterEntry(state.held.at(-1)!.roster, input.me.userId)))
+    )
+        throw new CryptoError(NOT_LET_IN);
     // Group key marks: each the chain's; beyond it, a rollback (or a succession withheld).
     for (const version of [...state.keyMarks.keys()].sort((x, y) => x - y)) {
         if (version > state.keys.length) continue;
@@ -1456,6 +1655,17 @@ async function accept(input: Accepting) {
             cacheVersion: CACHE_VERSION,
             ownEntryWrongAt: [...ownEntryWrongAt],
         },
+        checked:
+            vouching === 'created'
+                ? { how: 'created', rosterVersion: 1 }
+                : joinMark
+                  ? { how: 'join', rosterVersion: joinMark.rosterVersion }
+                  : pairMarks.length > 0
+                    ? {
+                          how: 'compared',
+                          rosterVersion: Math.min(...pairMarks.map((at) => at.rosterVersion)),
+                      }
+                    : null,
     };
     return { body, state };
 }
@@ -1520,7 +1730,9 @@ async function extend(
         return await accept({
             groupId: chain.groupId,
             firstKeys: chain.groupKeys[0]!,
-            firstKeysChecked: true,
+            // The cache is the mark: its first keys are the chain's own, vouched for when it was
+            // first accepted, so no anchor is passed.
+            anchor: null,
             pins: [],
             rosters,
             successions,
@@ -1619,7 +1831,7 @@ export async function acceptStored(
             (
                 await accept({
                     ...input,
-                    firstKeysChecked: true,
+                    anchor: 'stored',
                     pins: [],
                     me: null,
                     server: true,
@@ -1702,21 +1914,25 @@ function pinnedOf(set: KeySet): PinnedKeys {
 }
 
 /*
- * A new member's entry, only from the keys their words check confirmed: a
- * version 3 pin of them that verifies, and a served identity whose four keys
- * are the pinned ones (the lattice keys by digest) and whose keys statement
- * holds. Anything else and nobody is added.
+ * A new member's entry, only from keys this person's devices pinned: a
+ * version 3 pin of them, verified (a words check) or first-seen
+ * (docs/optional-verification.md 3.3: the keys served when they were let
+ * in), and a served identity whose four keys are the pinned ones (the lattice
+ * keys by digest) and whose keys statement holds. Never from a pin trusted
+ * through a group, which is that group's word. Anything else and nobody is
+ * added. Which roles such an entry may carry is the caller's rule (3.6).
  */
 export async function newRosterEntry(
     pin: ContactPin,
     served: ServedIdentity,
     options: { roles: GroupRole[]; rosterVersion: number },
 ): Promise<RosterMember> {
-    // A pin trusted through a group is that group's word, not a words check of the newcomer.
+    // A pin trusted through a group is that group's word, not a pin of the newcomer.
     if (pin.trustedVia !== undefined && pin.trustedVia !== null)
         throw new CryptoError('These are not the keys whose words were checked.');
+    const trust = await pinTrust(pin);
     if (
-        !(await pinVerified(pin)) ||
+        (trust !== 'verified' && trust !== 'seen') ||
         !(await verifyIdentityKeys(pin.userId, served)) ||
         served.encryptionPublicKey !== pin.encryptionPublicKey ||
         served.signingPublicKey !== pin.signingPublicKey ||

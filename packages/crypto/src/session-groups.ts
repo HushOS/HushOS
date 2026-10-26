@@ -2,10 +2,11 @@ import { encryptKey, decryptKey } from './aead';
 import { OLDER_CHAIN, SPLIT_CHAIN, type AreaLedger } from './area-ledger';
 import { NOT_THIS_ACCOUNT, OPEN_SETTINGS } from './protocol';
 import { areaKeyCommitment } from './area-keys';
-import { encodeStatement, sameBytes, uuid } from './canonical';
+import { digestOf, encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
 import {
     contactPinOf,
+    familyCheckOf,
     refuseDowngrade,
     settingsMarks,
     settingsPinOf,
@@ -37,9 +38,14 @@ import {
     typedComplete,
     type JoinFamily,
 } from './join-session';
-import { sameKeyDigest } from './fingerprint';
+import { digestHex, sameKeyDigest } from './fingerprint';
+import { requireAccepted } from './accepted';
+import type { GuardEntry } from './first-seen';
 import {
     acceptRosters,
+    pairCodeAt,
+    servedIsEntry,
+    NOT_LET_IN,
     firstRoster,
     foldInEntry,
     joinCode,
@@ -51,8 +57,11 @@ import {
     type AcceptedRosters,
     type GroupChainCache,
     type GroupIntegrity,
+    type GroupAnchor,
     type GroupReading,
     type JoinMark,
+    type MarkSide,
+    type RosterChain,
     type RosterFork,
     type ServedIdentity,
     type WriterPin,
@@ -97,7 +106,14 @@ import {
 } from './identity';
 import { checkId, newId } from './ids';
 import { decode, encode } from './keys';
-import { keyCommitment, type GroupPin, type OpenedArea } from './pins';
+import {
+    checkTime,
+    keyCommitment,
+    pinVerified,
+    type GroupPin,
+    type OpenedArea,
+    type PinKeys,
+} from './pins';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import { GROUP_OPERATIONS } from './protocol';
 import type { GranteeSecrets } from './sealing';
@@ -416,17 +432,17 @@ export type GroupRequests = {
     groupWords: { groupId: string; firstKeys: GroupPublicKey };
     /*
      * Accepts what route 5 served against this person's marks: the group pin
-     * in the settings this worker last opened or sealed (settingsOpen,
-     * settingsSeal; refused when it has opened none), and this device's sealed
-     * record (its cache and device pin). With no
-     * mark at all only two callers may vouch for the first keys: `joining`
-     * (the join flow, with the join code the person compared with the admin's
-     * screen as its mark) and `creating` (the creator's outbox entry, whose
-     * seed must derive the served first keys; refused when any mark exists).
-     * Where marks exist, `joining` vouches for nothing: the marks decide, and
-     * its join mark is one more. A refusal throws, and the group then reads
-     * unavailable. Staged calls whose roster the accepted chain holds are
-     * dropped and named in `dropped`.
+     * and the family check (familyChecks) in the settings this worker last
+     * opened or sealed (settingsOpen, settingsSeal; refused when it has opened
+     * none), and this device's sealed record (its cache and device pin). With
+     * no mark at all only two callers may vouch for the first keys: `joining`
+     * (the join flow, with the joins record of a compared join code, or of a
+     * first use: docs/optional-verification.md 3.3) and `creating` (the
+     * creator's outbox entry, whose seed must derive the served first keys;
+     * refused when any mark exists). Where marks exist, `joining` vouches for
+     * nothing: the marks decide, and its record is one more. A refusal throws,
+     * and the group then reads unavailable. Staged calls whose roster the
+     * accepted chain holds are dropped and named in `dropped`.
      */
     groupAccept: {
         userId: string;
@@ -444,6 +460,17 @@ export type GroupRequests = {
          */
         joining?: { joinsRecord: string } | null;
         creating?: { stagedEnvelope: string } | null;
+        /*
+         * This device's family guard (docs/optional-verification.md 2.8, kept
+         * apart from the record and never cleared by a `not-member` wipe nor
+         * by anything the server answers): the pin of the first acceptance
+         * that kept the family here, a mark like any pin, so a family that
+         * once was here is never taken on first use again; 'unreadable' when
+         * the guard's store could not be read, which refuses the acceptance
+         * (GUARD_UNREADABLE: never first use, and nothing taken on it). Keep
+         * the accepted `pin` as the guard when none is held.
+         */
+        guard?: GroupPin | 'unreadable' | null;
         /*
          * The record's device pin is a mark, its cache is left out: for a
          * record whose cache this release refuses (one a newer release wrote,
@@ -479,6 +506,46 @@ export type GroupRequests = {
          * lock. One that does not open here is refused with HOLDS_UNREADABLE.
          */
         holds?: string | null;
+    };
+    /*
+     * A newcomer's join on first use (docs/optional-verification.md 3.2 step
+     * 4, 3.3), the default join: the served chain verified as groupAccept
+     * would verify it, against this person's marks and the family guard;
+     * with none, from version 1 over the served first keys, only with
+     * settings this worker opened and only when this account's entry is
+     * active at the head. Nothing is committed: the version 4 joins record of
+     * the head roster is sealed for the data layer to keep, then groupAccept
+     * with it as `joining` commits, and the data layer deletes the record once
+     * the record and pin are written. With marks (a rejoin) the marks decide.
+     */
+    groupJoinFirstUse: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        guard?: GroupPin | 'unreadable' | null;
+        now: string;
+    };
+    /*
+     * The pair code this account compares with member `userId` (pairCode),
+     * over the committed chain. `rosters` is route 5 from version 1.
+     */
+    groupPairCode: { groupId: string; userId: string; rosters: SignedStatementWire[] };
+    /*
+     * "They match" in a family check (pairMatch) with member `userId`, over
+     * the committed chain and the contact pin of them in the settings this
+     * worker last opened: the check record and the verified pin to save, each
+     * only when the rules allow. `guard` is this device's guard entry for
+     * them. Nothing is saved here.
+     */
+    groupPairMatch: {
+        groupId: string;
+        userId: string;
+        rosters: SignedStatementWire[];
+        rosterVersion: number;
+        code: string[];
+        guard: GuardEntry | null | 'unreadable';
+        now: string;
     };
     /*
      * "They match" (the core's join_check): `mark` must be a code this worker
@@ -694,6 +761,14 @@ export type GroupResults = {
         | { status: 'fork'; fork: RosterFork }
         | { status: 'record-unreadable' };
 
+    groupJoinFirstUse:
+        /* Keep `joinsRecord` (the joins store), then groupAccept with it. */
+        | { status: 'first-use'; joinsRecord: string; rosterVersion: number }
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' };
+    groupPairCode: PairCode;
+    groupPairMatch: PairMatch;
     groupAccept:
         | {
               status: 'accepted';
@@ -1416,7 +1491,159 @@ export async function codeAt(chain: AcceptedRosters, version: number) {
     );
 }
 
+/*
+ * The pair code this account compares with `otherUserId` to check each other
+ * and the family (docs/optional-verification.md 3.4), over a chain this
+ * device accepted: the roster at which the later-admitted of the two last
+ * became active (admittedAt over `rosters`, route 5 from version 1, only those
+ * on the chain read), under the group key it is under. `own-entry-wrong`,
+ * with no code, when this account's own entry there names none of its own
+ * identities (`me.identities`, every one it has had) or acceptance found it
+ * wrong there: what such a device would compare is keys it does not hold, so
+ * personal words are the way to check that member. `not-admitted` when either
+ * has no active entry at the head. Both screens work it out alike, and it
+ * does not change when the family does.
+ */
+export type PairCode =
+    | { status: 'code'; rosterVersion: number; code: string[] }
+    | { status: 'own-entry-wrong'; rosterVersion: number }
+    | { status: 'not-admitted' };
+export async function pairCode(
+    chain: AcceptedRosters,
+    me: { userId: string; identities: ServedKeys[] },
+    otherUserId: string,
+    rosters: readonly SignedStatementWire[],
+): Promise<PairCode> {
+    requireAccepted(chain);
+    const other = uuid(otherUserId, 'user id');
+    if (other === me.userId) throw new CryptoError('A pair code is between two members.');
+    const onIt = await onChain(chain.rosterDigests, rosters);
+    const head = chain.rosterDigests.length;
+    const mine = runStart(onIt, head, me.userId);
+    const theirs = runStart(onIt, head, other);
+    if (mine === null || theirs === null) return { status: 'not-admitted' };
+    const version = Math.max(mine, theirs);
+    const entry = rosterEntry(onIt.get(version)!, me.userId);
+    let own = false;
+    for (const identity of me.identities)
+        if (entry && (await servedIsEntry(identity, entry))) own = true;
+    if (!own || chain.ownEntryWrongAt.includes(version))
+        return { status: 'own-entry-wrong', rosterVersion: version };
+    return {
+        status: 'code',
+        rosterVersion: version,
+        code: await pairCodeAt(chain, version, me.userId, other),
+    };
+}
+
+/*
+ * What a family check that matched writes on this device
+ * (docs/optional-verification.md 3.4): the check record for the settings
+ * (`familyChecks[groupId]`), only when `code` is the pair code this device
+ * works out for the two of them at `rosterVersion` (pairCode, so never on a
+ * device whose own entry there was wrong); and a verified pin of the other
+ * member's keys (the key fields of a version 3 pin, fingerprint over them, no
+ * trustedVia), only when:
+ * - their entry at the head of the chain is active and names the very keys
+ *   of their entry at the compared roster (a member whose keys changed since,
+ *   by a handover or a Continue, is checked with personal words instead);
+ * - and those keys are the ones this device's guard holds for them if it has
+ *   a guard entry (an unreadable guard writes nothing), or else the settings
+ *   pin's if there is one; with neither, the pin is written.
+ * On any mismatch of keys the check record may still be written (it is about
+ * the family), but no pin: the guard and the settings pin stay as they were.
+ * Nothing here is saved: the caller saves both in one settings write, then
+ * moves the guard (2.8).
+ */
+export type PairMatch = {
+    check: { rosterVersion: number; with: string; code: string[]; checkedAt: string } | null;
+    pin: PinKeys | null;
+};
+export async function pairMatch(input: {
+    chain: AcceptedRosters;
+    me: { userId: string; identities: ServedKeys[] };
+    otherUserId: string;
+    rosters: readonly SignedStatementWire[];
+    rosterVersion: number;
+    code: string[];
+    guard: GuardEntry | null | 'unreadable';
+    settingsPin: PinKeys | null;
+    checkedAt: string;
+}): Promise<PairMatch> {
+    const nothing: PairMatch = { check: null, pin: null };
+    const shown = await pairCode(input.chain, input.me, input.otherUserId, input.rosters);
+    if (
+        shown.status !== 'code' ||
+        shown.rosterVersion !== input.rosterVersion ||
+        shown.code.join(' ') !== input.code.join(' ')
+    )
+        return nothing;
+    const other = uuid(input.otherUserId, 'user id');
+    const check = {
+        rosterVersion: shown.rosterVersion,
+        with: other,
+        code: [...shown.code],
+        checkedAt: input.checkedAt,
+    };
+    const onIt = await onChain(input.chain.rosterDigests, input.rosters);
+    const compared = rosterEntry(onIt.get(shown.rosterVersion)!, other)!;
+    const head = rosterEntry(input.chain.roster, other);
+    if (!activeWith(head) || !sameEntryKeys(head!, compared)) return { check, pin: null };
+    const keys = {
+        keyVersion: head!.keyVersion,
+        encryptionPublicKey: head!.encryptionPublicKey,
+        signingPublicKey: head!.signingPublicKey,
+        mlDsaPublicKeyHash: digestHex(head!.mlDsaPublicKeyDigest),
+        kemPublicKeyHash: digestHex(head!.kemPublicKeyDigest),
+    };
+    const commitment = await keyCommitment(keys);
+    if (commitment === null) return { check, pin: null };
+    if (input.guard === 'unreadable') return { check, pin: null };
+    const held = input.guard ?? input.settingsPin;
+    if (held !== null && (await keyCommitment(held)) !== commitment) return { check, pin: null };
+    return { check, pin: { ...keys, fingerprint: commitment } };
+}
+
+/* Whether two entries name the same four keys (the lattice ones by digest), key version aside. */
+function sameEntryKeys(a: RosterMember, b: RosterMember) {
+    return (
+        a.encryptionPublicKey === b.encryptionPublicKey &&
+        a.signingPublicKey === b.signingPublicKey &&
+        a.mlDsaPublicKeyDigest === b.mlDsaPublicKeyDigest &&
+        a.kemPublicKeyDigest === b.kemPublicKeyDigest
+    );
+}
+
+/*
+ * An accepted chain held against a first use's joins record: it must pass
+ * through the roster the record holds. Short of it, a rollback (refused);
+ * another roster there, the fork, with the record's side `join` and the
+ * served one named by its signer when it is the head.
+ */
+function throughFirstUse(
+    chain: AcceptedRosters,
+    at: { rosterVersion: number; rosterDigest: string },
+): RosterChain {
+    if (chain.rosterDigests.length < at.rosterVersion) throw new CryptoError(OLDER_LIST);
+    const digest = chain.rosterDigests[at.rosterVersion - 1]!;
+    if (digest === at.rosterDigest) return chain;
+    const sides: MarkSide[] = [
+        { digest: at.rosterDigest, from: ['join'], signerUserId: null },
+        {
+            digest,
+            from: ['served'],
+            signerUserId: digest === chain.rosterDigest ? chain.roster.signerUserId : null,
+        },
+    ];
+    sides.sort((x, y) => (x.digest < y.digest ? -1 : 1));
+    return { status: 'fork', of: 'roster', version: at.rosterVersion, sides };
+}
+/* Acceptance's words for a chain short of a mark (group-trust.ts OLDER). */
+const OLDER_LIST = 'This is an older member list than this device has seen.';
+
 const USED_JOIN = 'This join code was already used to join. Compare it again.';
+/* A device whose family guard could not be read (2.8): never first use, and no join on it. */
+export const GUARD_UNREADABLE = 'HushOS couldn’t check this right now.';
 const sameMark = (a: JoinMark, b: JoinMark) =>
     a.rosterVersion === b.rosterVersion && a.code.join(' ') === b.code.join(' ');
 
@@ -1428,28 +1655,60 @@ async function recordDigest(record: string) {
 }
 
 /*
- * A joins record's code and check time (`{v:3, groupId, joinMark, checkedAt}`),
- * or null. Version 2 was sealed through the data layer (the earlier join.ts)
- * and is refused: a join in flight compares the code once more.
+ * A joins record, or null (docs/optional-verification.md 3.3):
+ * - version 4 with a join mark, `{v:4, groupId, joinMark, checkedAt}`, as
+ *   groupJoinCheck seals it after a match, and version 3 of the same shape (a
+ *   join in flight on an earlier release), read as before;
+ * - version 4 with a first use, `{v:4, groupId, firstUse: {rosterVersion,
+ *   rosterDigest}, at}`, as groupJoinFirstUse seals it: the roster the first
+ *   acceptance took, so a reload before the pin is written finishes against
+ *   it rather than taking first use again over whatever is served then.
+ * Version 2 was sealed through the data layer (the earlier join.ts) and is
+ * refused: a join in flight compares the code once more.
  */
-function joinsRead(groupId: string, value: unknown): { mark: JoinMark; checkedAt: string } | null {
+type JoinsRecord =
+    | { kind: 'code'; mark: JoinMark; checkedAt: string }
+    | { kind: 'first-use'; rosterVersion: number; rosterDigest: string; checkedAt: string };
+const rosterVersionOf = (value: unknown): value is number =>
+    Number.isSafeInteger(value) && (value as number) >= 1;
+function canonicalDigest(value: unknown): value is string {
+    try {
+        digestOf(value, 'roster digest');
+        return true;
+    } catch {
+        return false;
+    }
+}
+function joinsRead(groupId: string, value: unknown): JoinsRecord | null {
     if (typeof value !== 'object' || value === null) return null;
     const record = value as Record<string, unknown>;
+    if ((record.v !== 3 && record.v !== 4) || record.groupId !== groupId) return null;
+    const first = record.firstUse as Record<string, unknown> | null | undefined;
+    if (record.v === 4 && typeof first === 'object' && first !== null) {
+        const { rosterVersion, rosterDigest } = first;
+        if (
+            !rosterVersionOf(rosterVersion) ||
+            !canonicalDigest(rosterDigest) ||
+            typeof record.at !== 'string' ||
+            record.joinMark !== undefined
+        )
+            return null;
+        return { kind: 'first-use', rosterVersion, rosterDigest, checkedAt: record.at };
+    }
     const mark = record.joinMark as Record<string, unknown> | null | undefined;
-    if (record.v !== 3 || record.groupId !== groupId || typeof mark !== 'object' || mark === null)
-        return null;
+    if (typeof mark !== 'object' || mark === null) return null;
     const { rosterVersion, code } = mark;
     if (
         !Array.isArray(code) ||
         code.length !== 12 ||
         !code.every((word) => typeof word === 'string' && /^[a-z]{3,8}$/.test(word)) ||
-        !Number.isSafeInteger(rosterVersion) ||
-        (rosterVersion as number) < 1 ||
+        !rosterVersionOf(rosterVersion) ||
         typeof record.checkedAt !== 'string'
     )
         return null;
     return {
-        mark: { rosterVersion: rosterVersion as number, code: [...(code as string[])] },
+        kind: 'code',
+        mark: { rosterVersion, code: [...(code as string[])] },
         checkedAt: record.checkedAt,
     };
 }
@@ -1498,7 +1757,7 @@ export function createGroupSession(host: GroupHost) {
     /* The settings document this worker opened (session.ts's settingsOpen), or none: settings-marks.ts. */
     function useSettings(
         userId: string,
-        settings: { groups?: unknown; contacts?: unknown } | null,
+        settings: { groups?: unknown; contacts?: unknown; familyChecks?: unknown } | null,
         settingsVersion = 0,
     ) {
         settingsPins = settingsMarks(settingsPins, userId, settings, settingsVersion);
@@ -1622,7 +1881,7 @@ export function createGroupSession(host: GroupHost) {
         const accepted = await acceptRosters({
             groupId: chain.groupId,
             firstKeys: chain.groupKeys[0]!,
-            firstKeysChecked: false,
+            anchor: null,
             pins: [],
             rosters: [signed],
             successions: succession ? [succession] : [],
@@ -2002,7 +2261,7 @@ export function createGroupSession(host: GroupHost) {
             const chain = await acceptRosters({
                 groupId: group.id,
                 firstKeys: pair.publicKey,
-                firstKeysChecked: true,
+                anchor: 'created',
                 pins: [],
                 rosters: [signed],
                 successions: [],
@@ -2097,17 +2356,21 @@ export function createGroupSession(host: GroupHost) {
     }
 
     /*
-     * This person's marks for a group: the settings pin (from settings this
-     * worker opened) and this device's record, opened. `marks` also counts what
-     * this session holds, a committed chain or a fork. `null`: the record did
-     * not open (sealed under an earlier account root).
+     * This person's marks for a group: the settings pin and family check (from
+     * settings this worker opened), this device's record, opened, and the
+     * family guard (2.8) when given. `marks` also counts what this session
+     * holds, a committed chain or a fork. `null`: the record did not open
+     * (sealed under an earlier account root). A guard that could not be read
+     * refuses before anything else is read.
      */
     async function marksOf(input: {
         userId: string;
         groupId: string;
         record: string | null;
         withoutCache?: boolean;
+        guard?: GroupPin | 'unreadable' | null;
     }) {
+        if (input.guard === 'unreadable') throw new CryptoError(GUARD_UNREADABLE);
         const groupId = uuid(input.groupId, 'group id');
         const { userId, root } = host.unlocked();
         try {
@@ -2137,16 +2400,26 @@ export function createGroupSession(host: GroupHost) {
             if (!settingsPins || settingsPins.userId !== userId)
                 throw new CryptoError(OPEN_SETTINGS);
             const settingsPin = settingsPinOf(settingsPins, groupId);
-            const pins = [settingsPin, record?.pin ?? null].filter(
+            const pins = [settingsPin, record?.pin ?? null, input.guard ?? null].filter(
                 (pin): pin is GroupPin => pin !== null && pin !== undefined,
             );
-            // Marks include what this session already holds: a committed chain, or a fork.
+            const check = familyCheckOf(settingsPins, groupId);
+            // Marks include what this session already holds: a committed chain, or a fork; and a
+            // family check, though it fixes no first keys.
             const marks =
                 pins.length > 0 ||
                 (record?.cache ?? null) !== null ||
+                check.checked ||
                 chains.has(groupId) ||
                 forked.has(groupId);
-            return { groupId, userId, pins, cache: record?.cache ?? null, marks };
+            return {
+                groupId,
+                userId,
+                pins,
+                pairMarks: check.pairMarks,
+                cache: record?.cache ?? null,
+                marks,
+            };
         } finally {
             root.fill(0);
         }
@@ -2161,11 +2434,12 @@ export function createGroupSession(host: GroupHost) {
         // it, so nothing accepts, views or keeps a chain over first keys nobody checked.
         if (input.joining && typeof input.joining.joinsRecord !== 'string')
             throw new CryptoError('Compare the join code first.');
-        if (!input.joining) return acceptRun(input, null, input.checkedAt);
-        // A join: the code compared, from the joins record only a match sealed (the core's
-        // accept_joining). After the record is opened and digested, checked and taken with no await
-        // between the two, so of two submissions of the same record at once only one runs; given
-        // back when nothing is committed.
+        if (!input.joining) return acceptRun(input, null, input.checkedAt, null);
+        // A join: the code compared, from the joins record only a match sealed, or a first use,
+        // from the record only groupJoinFirstUse sealed (the core's accept_joining). After the
+        // record is opened and digested, checked and taken with no await between the two, so of
+        // two submissions of the same record at once only one runs; given back when nothing is
+        // committed.
         const joinGroup = uuid(input.groupId, 'group id');
         const opened = await openJoins(input.userId, joinGroup, input.joining.joinsRecord);
         if (!opened) return { status: 'join-unreadable' };
@@ -2175,7 +2449,10 @@ export function createGroupSession(host: GroupHost) {
         usedJoins.set(joinGroup, taken.add(used));
         let result: GroupResults['groupAccept'];
         try {
-            result = await joinRun(input, joinGroup, opened);
+            result =
+                opened.kind === 'code'
+                    ? await joinRun(input, joinGroup, opened)
+                    : await firstUseRun(input, opened);
         } catch (error) {
             usedJoins.get(joinGroup)?.delete(used);
             throw error;
@@ -2203,28 +2480,47 @@ export function createGroupSession(host: GroupHost) {
             (await codeAt(now.chain, opened.mark.rosterVersion)).join(' ') ===
                 opened.mark.code.join(' ');
         if (later) return showing(joinGroup, now.mark, 'changed');
-        return acceptRun(input, opened.mark, opened.checkedAt);
+        return acceptRun(input, opened.mark, opened.checkedAt, null);
+    }
+
+    /*
+     * A first use after its record's checks: the admission again (this
+     * account's entry active at the head, else 'not-admitted' and nothing
+     * kept), then the acceptance, which must pass through the roster the
+     * record holds: another roster there is the fork, a chain short of it a
+     * rollback, so a reload before the pin is written never takes first use
+     * again over whatever is served then.
+     */
+    async function firstUseRun(
+        input: GroupRequests['groupAccept'],
+        opened: { rosterVersion: number; rosterDigest: string; checkedAt: string },
+    ): Promise<GroupResults['groupAccept']> {
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        return acceptRun(input, null, opened.checkedAt, opened);
     }
 
     async function acceptRun(
         input: GroupRequests['groupAccept'],
         joinMark: JoinMark | null,
         checkedAt: string,
+        firstUse: { rosterVersion: number; rosterDigest: string } | null,
     ): Promise<GroupResults['groupAccept']> {
         // The session this run begins in: a lock or another account before it ends keeps nothing.
         const began = generation;
         const marked = await marksOf(input);
         if (!marked) return { status: 'record-unreadable' };
-        const { groupId, userId, pins, cache, marks } = marked;
-        let firstKeysChecked = false;
+        const { groupId, userId, pins, pairMarks, cache, marks } = marked;
+        let anchor: GroupAnchor | null = null;
         // Creation vouches for the first keys only where nothing marks the family (F1).
         if (input.creating && marks)
             throw new CryptoError('This device has already checked this family.');
-        // Joining vouches for them only where nothing does either, through its join mark, which the
-        // chain must pass through (a made-up history gives another code). With marks (a rejoin
-        // after a not-member wipe, which keeps the settings pin) the marks decide the first keys
-        // and the history, and the join mark only adds to them.
-        if (input.joining && !marks) firstKeysChecked = true;
+        // Joining vouches for them only where nothing does either: through its join mark, which
+        // the chain must pass through (a made-up history gives another code), or on first use,
+        // through nothing, the head admitting this account (acceptance checks it). With marks (a
+        // rejoin after a not-member wipe, which keeps the settings pin and the guard) the marks
+        // decide the first keys and the history, and the join mark only adds to them.
+        if (input.joining && !marks) anchor = joinMark ? 'join' : 'first-use';
         if (input.creating) {
             const { root } = host.unlocked();
             try {
@@ -2242,7 +2538,7 @@ export function createGroupSession(host: GroupHost) {
                     // Only the keys this device made: served first keys that are not the seed's are refused.
                     if (!sameGroupKey(pair.publicKey, input.served.firstKeys))
                         throw new CryptoError('These are not the family keys this device made.');
-                    firstKeysChecked = true;
+                    anchor = 'created';
                 } finally {
                     zeroSecrets(secrets);
                 }
@@ -2278,7 +2574,7 @@ export function createGroupSession(host: GroupHost) {
             chain = await acceptRosters({
                 groupId,
                 firstKeys: input.served.firstKeys,
-                firstKeysChecked,
+                anchor,
                 pins: sessionPin ? [...pins, sessionPin] : pins,
                 rosters: input.served.rosters.map(unwire),
                 successions: input.served.successions.map(unwire),
@@ -2286,7 +2582,9 @@ export function createGroupSession(host: GroupHost) {
                 me: { userId, identities },
                 cache,
                 joinMark,
+                pairMarks,
             });
+            if (firstUse && chain.status === 'accepted') chain = throughFirstUse(chain, firstUse);
         } catch (error) {
             // Only under the session the run began in; a refusal on a forked group keeps the fork:
             // it is still the person's own marks' conflict.
@@ -2360,6 +2658,7 @@ export function createGroupSession(host: GroupHost) {
         groupId: string;
         served: ServedChain;
         record: string | null;
+        guard?: GroupPin | 'unreadable' | null;
     }): Promise<
         | { status: 'code'; mark: JoinMark; chain: AcceptedRosters }
         | { status: 'not-admitted' }
@@ -2368,22 +2667,31 @@ export function createGroupSession(host: GroupHost) {
     > {
         const marked = await marksOf(input);
         if (!marked) return { status: 'record-unreadable' };
-        const { groupId, userId, pins, cache, marks } = marked;
+        const { groupId, userId, pins, pairMarks, cache, marks } = marked;
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
-        const chain = await acceptRosters({
-            groupId,
-            firstKeys: input.served.firstKeys,
-            // With no mark, over the served first keys, for the code only: the person compares it
-            // with the admin's next, and only the acceptance that carries it vouches for anything.
-            firstKeysChecked: !marks,
-            pins,
-            rosters: input.served.rosters.map(unwire),
-            successions: input.served.successions.map(unwire),
-            mlDsaKeys: { ...input.served.signerKeys },
-            me: { userId, identities },
-            cache,
-        });
+        let chain;
+        try {
+            chain = await acceptRosters({
+                groupId,
+                firstKeys: input.served.firstKeys,
+                // With no mark, over the served first keys on first use: for the code only, or for
+                // the record a first use keeps; only the acceptance that carries one commits.
+                anchor: marks ? null : 'first-use',
+                pins,
+                rosters: input.served.rosters.map(unwire),
+                successions: input.served.successions.map(unwire),
+                mlDsaKeys: { ...input.served.signerKeys },
+                me: { userId, identities },
+                cache,
+                pairMarks,
+            });
+        } catch (error) {
+            // First use takes a chain only when its head lets this account in: not let in yet.
+            if (error instanceof CryptoError && error.message === NOT_LET_IN)
+                return { status: 'not-admitted' };
+            throw error;
+        }
         if (chain.status === 'fork') return { status: 'fork', fork: chain };
         const version = await admittedAt(chain.rosterDigests, input.served.rosters, userId);
         if (version === null) return { status: 'not-admitted' };
@@ -2488,7 +2796,7 @@ export function createGroupSession(host: GroupHost) {
         const { userId, root } = host.unlocked();
         try {
             const joinsRecord = await sealDeviceRecord(root, userId, groupId, 'joins', {
-                v: 3,
+                v: 4,
                 groupId,
                 joinMark: now.mark,
                 checkedAt,
@@ -2499,7 +2807,71 @@ export function createGroupSession(host: GroupHost) {
         }
     }
 
-    /* The joins record's code and check time, or null when it does not open or is no version 3 record of this family's. */
+    /*
+     * The join on first use (groupJoinFirstUse): the admission (this account
+     * let in at the head, verified against the marks and the guard, or on
+     * first use with none), then the version 4 joins record of the head
+     * roster, checked at the settings pin's time when the account has one (a
+     * rejoin keeps its first acceptance), else `now`. Nothing is committed.
+     */
+    async function joinFirstUse(
+        input: GroupRequests['groupJoinFirstUse'],
+    ): Promise<GroupResults['groupJoinFirstUse']> {
+        const groupId = uuid(input.groupId, 'group id');
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        const checkedAt = settingsPins?.pins[groupId]?.checkedAt ?? input.now;
+        const { userId, root } = host.unlocked();
+        try {
+            const joinsRecord = await sealDeviceRecord(root, userId, groupId, 'joins', {
+                v: 4,
+                groupId,
+                firstUse: {
+                    rosterVersion: now.chain.roster.rosterVersion,
+                    rosterDigest: now.chain.rosterDigest,
+                },
+                at: checkedAt,
+            });
+            return {
+                status: 'first-use',
+                joinsRecord,
+                rosterVersion: now.chain.roster.rosterVersion,
+            };
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The pair code with member `userId` over the committed chain (groupPairCode). */
+    async function pairCodeOf(
+        input: GroupRequests['groupPairCode'],
+    ): Promise<GroupResults['groupPairCode']> {
+        const chain = committed(input.groupId);
+        const { me, identities } = ownIdentities();
+        return pairCode(chain, { userId: me.userId, identities }, input.userId, input.rosters);
+    }
+
+    /* A family check's "They match" with member `userId` (groupPairMatch): what to save, if anything. */
+    async function pairMatchOf(
+        input: GroupRequests['groupPairMatch'],
+    ): Promise<GroupResults['groupPairMatch']> {
+        const chain = committed(input.groupId);
+        const { me, identities } = ownIdentities();
+        checkTime(input.now);
+        return pairMatch({
+            chain,
+            me: { userId: me.userId, identities },
+            otherUserId: input.userId,
+            rosters: input.rosters,
+            rosterVersion: input.rosterVersion,
+            code: input.code,
+            guard: input.guard,
+            settingsPin: contactPin(uuid(input.userId, 'user id')),
+            checkedAt: input.now,
+        });
+    }
+
+    /* The joins record, or null when it does not open or is no version 3 or 4 record of this family's. */
     async function openJoins(userIdIn: string, groupId: string, envelope: string) {
         const { userId, root } = host.unlocked();
         try {
@@ -2795,6 +3167,12 @@ export function createGroupSession(host: GroupHost) {
                     throw new CryptoError('This person is in the family already.');
                 const pin = contactPin(op.userId);
                 if (!pin) throw new CryptoError(NOT_CHECKED);
+                // newRosterEntry builds from a first-seen pin too (design 3.3), but letting someone
+                // in over one waits for the manager rule beside it (3.6, the web's PR 4): until
+                // then an admission still takes a words check alone, so no role is ever handed to
+                // keys nobody checked.
+                if (!(await pinVerified(pin)))
+                    throw new CryptoError('These are not the keys whose words were checked.');
                 const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,
                     rosterVersion: next,
@@ -3585,6 +3963,12 @@ export function createGroupSession(host: GroupHost) {
                 return joinPreview(message.input);
             case 'groupJoinCheck':
                 return joinCheckOf(message.input);
+            case 'groupJoinFirstUse':
+                return joinFirstUse(message.input);
+            case 'groupPairCode':
+                return pairCodeOf(message.input);
+            case 'groupPairMatch':
+                return pairMatchOf(message.input);
             case 'groupOpenSeal':
                 return openSeal(message.input);
             case 'groupOpenArea':

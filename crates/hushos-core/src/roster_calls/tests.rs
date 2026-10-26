@@ -1,7 +1,9 @@
 use super::*;
 use crate::contacts::{identity_fingerprint_of_keys, key_digest};
-use crate::device_record::{ServedAcceptance, ServedChain};
-use crate::group_trust::{accept_rosters, pin_after, roster_check_next, GroupPin, RosterChain, VerifiedPin};
+use crate::device_record::{FamilyGuard, ServedAcceptance, ServedChain};
+use crate::group_trust::{
+    accept_rosters, pin_after, roster_check_next, GroupAnchor, GroupPin, RosterChain, VerifiedPin,
+};
 use crate::groups::tests::{
     accepted_of, area_key_at, group_seed_at, ml_dsa_keys, reader, History, Person, AREA, AREA_KEY, AREA_SEED,
     GROUP,
@@ -145,6 +147,7 @@ impl Family {
             GROUP.into(),
             None,
             self.served(self.h.rosters.clone()),
+            FamilyGuard::Absent,
             CHECKED.into(),
         );
         assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
@@ -318,7 +321,7 @@ fn after_body(f: &Family, body: &Value) -> Arc<AcceptedRosters> {
     match accept_rosters(
         GROUP.into(),
         f.h.key(1),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         rosters,
         successions,
@@ -477,6 +480,11 @@ fn an_admission_takes_the_pin_only_from_the_settings_and_refuses_a_member_unchec
     let via = VerifiedPin { trusted_via: Some(GROUP.into()), ..pin_of(&f.p[3]) };
     let trusted = f.ledger_of(1, [(f.p[3].user_id.clone(), via)].into(), true, true);
     assert_eq!(message(f.admit(&trusted, 4, vec![])), "These are not the keys whose words were checked.");
+    // A first-seen pin of the newcomer's very keys: roster_entry_new would build from it, but letting
+    // someone in over one waits for the manager rule beside it (design 3.6): still a words check only.
+    let seen = VerifiedPin { fingerprint: String::new(), ..pin_of(&f.p[3]) };
+    let first_seen = f.ledger_of(1, [(f.p[3].user_id.clone(), seen)].into(), true, true);
+    assert_eq!(message(f.admit(&first_seen, 4, vec![])), "These are not the keys whose words were checked.");
     // A live folder not opened here: answered before anything is signed.
     assert_eq!(f.admit(&f.ledger(true, false), 4, vec![]).unwrap(), RosterCall::OpenFoldersFirst);
     // Settings that file a pin under another person are refused outright.
@@ -704,7 +712,10 @@ fn a_staged_chain_is_never_committed_cached_or_a_mark() {
         Some(vec![]),
     );
     let served = f.served(won.rosters.clone());
-    match ledger.accept_served(f.me(), GROUP.into(), None, served, CHECKED.into()).unwrap() {
+    match ledger
+        .accept_served(f.me(), GROUP.into(), None, served, FamilyGuard::Absent, CHECKED.into())
+        .unwrap()
+    {
         ServedAcceptance::Accepted { chain, pin, .. } => {
             assert_eq!(chain.roster.roster_version, 3);
             assert_eq!(pin.roster_digest, chain.roster_digest);
@@ -720,8 +731,14 @@ fn a_staged_chain_is_never_committed_cached_or_a_mark() {
     // The served chain without either is still the family's (no mark of roster 3 to fall short of).
     let fresh = f.ledger(true, true);
     let _ = staged(f.admit(&fresh, 4, vec![])).unwrap();
-    let again =
-        fresh.accept_served(f.me(), GROUP.into(), None, f.served(f.h.rosters.clone()), CHECKED.into());
+    let again = fresh.accept_served(
+        f.me(),
+        GROUP.into(),
+        None,
+        f.served(f.h.rosters.clone()),
+        FamilyGuard::Absent,
+        CHECKED.into(),
+    );
     match again.unwrap() {
         ServedAcceptance::Accepted { chain, .. } => assert_eq!(chain.roster_digest, before.roster_digest),
         other => panic!("{other:?}"),
@@ -737,7 +754,9 @@ fn a_kept_call_whose_roster_the_family_now_holds_reads_as_landed() {
     let mut rosters = f.h.rosters.clone();
     rosters.push(signed_of(&body_of(&call)["roster"]));
     assert!(matches!(
-        ledger.accept_served(f.me(), GROUP.into(), None, f.served(rosters), CHECKED.into()).unwrap(),
+        ledger
+            .accept_served(f.me(), GROUP.into(), None, f.served(rosters), FamilyGuard::Absent, CHECKED.into())
+            .unwrap(),
         ServedAcceptance::Accepted { .. }
     ));
     assert_eq!(
@@ -1164,8 +1183,14 @@ fn a_member_whose_entry_still_names_their_earlier_keys_folds_them_in_before_any_
         user_id: next.user_id.clone(),
         identities: vec![f.p[0].served_keys(), next.served_keys()],
     };
-    let accepted =
-        ledger.accept_served(me.clone(), GROUP.into(), None, f.served(f.h.rosters.clone()), CHECKED.into());
+    let accepted = ledger.accept_served(
+        me.clone(),
+        GROUP.into(),
+        None,
+        f.served(f.h.rosters.clone()),
+        FamilyGuard::Absent,
+        CHECKED.into(),
+    );
     assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
     ledger
         .open_group_key(

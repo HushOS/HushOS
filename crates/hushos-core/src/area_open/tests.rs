@@ -1,6 +1,6 @@
 use super::*;
 use crate::bytes::decode;
-use crate::device_record::{ServedAcceptance, ServedChain};
+use crate::device_record::{FamilyGuard, ServedAcceptance, ServedChain};
 use crate::drive::workspace_open;
 use crate::group_trust::{pin_after, AcceptedRosters, OwnIdentities};
 use crate::groups::tests::{
@@ -81,7 +81,8 @@ impl Family {
             successions: vec![],
             signer_keys: ml_dsa_keys(&self.p.iter().collect::<Vec<_>>()),
         };
-        let accepted = ledger.accept_served(me, GROUP.into(), None, served, CHECKED.into());
+        let accepted =
+            ledger.accept_served(me, GROUP.into(), None, served, FamilyGuard::Absent, CHECKED.into());
         assert!(matches!(accepted, Ok(ServedAcceptance::Accepted { .. })), "{accepted:?}");
         ledger
     }
