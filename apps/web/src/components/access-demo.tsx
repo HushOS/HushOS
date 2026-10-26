@@ -170,7 +170,6 @@ export function AccessDemo() {
                     </ul>
                 </div>
                 <div className="flex flex-col justify-center gap-3">
-                    <p className="eyebrow text-muted-foreground">What HushOS does</p>
                     <p aria-live="polite" className="text-[17px] leading-relaxed text-pretty">
                         {note}
                     </p>

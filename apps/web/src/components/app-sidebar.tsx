@@ -10,8 +10,8 @@ import {
     SidebarContent,
     SidebarFooter,
     SidebarGroup,
-    SidebarGroupContent,
     SidebarGroupLabel,
+    SidebarGroupContent,
     SidebarHeader,
     SidebarMenu,
     SidebarMenuButton,
@@ -178,7 +178,7 @@ function PoolMeter({
                 line={`${family}: ${usedLine}, ${line}`}
             />
             <div className="flex flex-col gap-2 px-2 rail:hidden" data-storage-meter="pool">
-                <span className="eyebrow truncate text-muted-foreground">{family}</span>
+                <span className="truncate text-[13px] text-foreground">{family}</span>
                 <Progress
                     value={Math.round(used * 100)}
                     aria-label={`${family}’s storage used`}
@@ -247,7 +247,7 @@ function OwnMeter({ label }: { label: string | null }) {
                 line={`${label ? `${label}: ` : ''}${usedLine}${line ? `, ${line}` : ''}`}
             />
             <div className="flex flex-col gap-2 px-2 rail:hidden" data-storage-meter="own">
-                {label && <span className="eyebrow text-muted-foreground">{label}</span>}
+                {label && <span className="text-[13px] text-foreground">{label}</span>}
                 <Progress
                     value={Math.round(used * 100)}
                     aria-label="Storage used"
@@ -469,10 +469,9 @@ export function AppSidebar({
                     <NavGroup items={organise} pathname={pathname} small />
                 </SidebarGroup>
                 {user.role === 'admin' && (
+                    // The rule sets the operator's pages apart; the name is for assistive tech only.
                     <SidebarGroup className="border-t border-rule p-0 pt-4">
-                        <SidebarGroupLabel className="h-auto px-3 pb-1 text-xs font-semibold tracking-[0.06em] text-muted-foreground uppercase">
-                            Operator
-                        </SidebarGroupLabel>
+                        <SidebarGroupLabel className="sr-only">Operator</SidebarGroupLabel>
                         <NavGroup
                             items={operator.filter((entry) => !entry.billing || billing)}
                             pathname={pathname}

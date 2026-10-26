@@ -100,7 +100,7 @@ function CopyTile({
             <span
                 aria-live="polite"
                 className={cn(
-                    'eyebrow px-1 pt-2 transition-colors duration-150',
+                    'px-1 pt-2 text-[13px] transition-colors duration-150',
                     done ? 'text-foreground' : 'text-muted-foreground',
                 )}
             >

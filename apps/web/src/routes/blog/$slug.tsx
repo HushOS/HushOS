@@ -89,7 +89,7 @@ function PostPage() {
     return (
         <ReadingPage
             identity="blog"
-            eyebrow={
+            meta={
                 <span className="id-meta">
                     {formatDate(meta.date)} · {meta.author}
                 </span>

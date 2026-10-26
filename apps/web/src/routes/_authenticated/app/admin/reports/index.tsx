@@ -44,7 +44,7 @@ export const Route = createFileRoute('/_authenticated/app/admin/reports/')({
 });
 
 const cell = 'px-4 py-2.5 text-sm';
-const head = `${cell} eyebrow text-left text-muted-foreground`;
+const head = `${cell} label text-left text-muted-foreground`;
 
 /* A small segmented control: the chosen filter takes the sheet's colour in a quiet tray. */
 const tab = 'flex h-8 items-center rounded-xs px-3.5 text-[13px] font-semibold transition-colors';

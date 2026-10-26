@@ -43,7 +43,7 @@ export function FormRow({
                 <label
                     htmlFor={htmlFor}
                     className={cn(
-                        'eyebrow flex items-center text-muted-foreground @lg:h-10',
+                        'flex items-center text-sm text-muted-foreground @lg:h-10',
                         invalid && 'text-destructive',
                     )}
                 >

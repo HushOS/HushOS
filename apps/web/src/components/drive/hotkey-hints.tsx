@@ -27,7 +27,6 @@ export function HotkeyHints() {
             aria-live="polite"
             className="pointer-events-none fixed bottom-4 left-4 z-40 block max-w-sm rounded-xl border bg-popover p-3.5 text-popover-foreground shadow-overlay animate-in fade-in slide-in-from-bottom-1 duration-150 sm:bottom-6 sm:left-6"
         >
-            <p className="eyebrow mb-2 text-muted-foreground">Keyboard</p>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
                 {shortcuts.map((shortcut) => (
                     <div key={shortcut.id} className="contents">

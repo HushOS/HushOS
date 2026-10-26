@@ -175,7 +175,6 @@ typography:
         fontSize: 12px
         fontWeight: 600
         lineHeight: 1
-        letterSpacing: 0.06em
     code:
         fontFamily: Geist Mono Variable
         fontSize: 13px
@@ -306,7 +305,8 @@ The web sets everything in **Geist Variable** (Geist Sans), with a local Arial f
 - **Display** (72, 800, −0.035em) is the site's hero only. **Title large** (34, 800) is a phone tab's title. **Title** (22, 700) is a section or a dialog. Web page titles are 20px rising to 28px, 800, −0.03em.
 - **Headline** (17, 600) for row names on the phones; web rows use 15px at 500.
 - **Body** (16, 1.55) for reading; **callout** (15) for list text and controls; **footnote** (13) for row subtitles and metadata.
-- **Label** (12, 600) in sentence case: form labels, badges, menu group labels, column heads (`eyebrow` on the web). Never uppercase: labels include tag names and people's words.
+- **Label** (12, 600) in sentence case: badges, chips and table column heads (`label` on the web), nothing else. Never uppercase: labels include tag names and people's words.
+- **No eyebrows.** Nothing small and muted sits above a heading, a section, a card or a field as a kicker. A section is named by a real heading at its scale (the site's heading scale on public pages, the settings section heading or page title in the app, Title in ink on the phones); a field by a plain label beside or above it in ink (13px at 600 on the web, callout at 600 on iOS, titleSmall on Android); a group in a menu or a palette by a plain muted line (13px regular on the web, body on Android). A kicker that only repeats or decorates what follows ("Info", "An invitation", "Support", an error's code) is deleted. The exceptions are facts with nowhere better to go, set as muted callout text, never as a label: the date line over a reading page's title (Last updated, a post's date and author, which the blog's identity sets in mono) and the name of whoever carries an offer page.
 
 Everything is sentence case. Nothing in product UI is uppercase. Sizes and dates in lists use tabular figures in the text face, not mono.
 

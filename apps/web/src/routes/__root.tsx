@@ -136,14 +136,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     component: Outlet,
     notFoundComponent: () => (
         <StatusPage
-            code="404 · Not found"
             title="This page doesn’t exist."
             description="The link may be out of date, or the page may have moved."
         />
     ),
     errorComponent: ({ reset }) => (
         <StatusPage
-            code="Error"
             title="Something went wrong."
             description="Nothing about your account changed. Try again, and if it keeps happening, reload the page."
             action={
@@ -156,12 +154,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function StatusPage({
-    code,
     title,
     description,
     action,
 }: {
-    code: string;
     title: string;
     description: string;
     action?: ReactNode;
@@ -173,8 +169,7 @@ function StatusPage({
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-4 py-16">
                 <div className="rounded-2xl border border-rule bg-popover px-6 py-8 shadow-sm sm:px-8">
-                    <p className="eyebrow text-muted-foreground">{code}</p>
-                    <h1 className="mt-3 text-2xl font-bold tracking-tight text-balance">{title}</h1>
+                    <h1 className="text-2xl font-bold tracking-tight text-balance">{title}</h1>
                     <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
                         {description}
                     </p>

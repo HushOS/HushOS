@@ -102,7 +102,7 @@ export function TagStamps({
                         +{rest.length}
                     </PopoverTrigger>
                     <PopoverContent className="flex w-60 flex-col p-0">
-                        <p className="eyebrow truncate border-b border-rule px-3 py-2.5 text-muted-foreground">
+                        <p className="truncate border-b border-rule px-3 py-2.5 text-[13px] font-semibold">
                             {tags.length} tags on “{itemName}”
                         </p>
                         <div className="flex flex-col items-start gap-1 px-3 py-2">

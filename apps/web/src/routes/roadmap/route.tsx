@@ -221,7 +221,7 @@ function RoadmapPage() {
     return (
         <ReadingPage
             identity="roadmap"
-            eyebrow={<time dateTime={updated}>Last updated {formatDate(updated)}</time>}
+            meta={<time dateTime={updated}>Last updated {formatDate(updated)}</time>}
             title="Roadmap"
             summary={description}
             headings={timeline.map((section) => ({ id: section.status, title: section.title }))}
