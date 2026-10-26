@@ -1,0 +1,21 @@
+apps/android/scripts/release-apk.sh
+  s_566b8e0c4467a4::t_9e8294c8098d75 131
+docs/release/google.md
+  s_566b8e0c4467a4::t_5ef67718f7894a 182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c5a4e87a8c6aa250d07430e050cfc76f2e65de1c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
