@@ -508,7 +508,7 @@ struct KeepBothSheet: View {
                             .alpineRow()
                         }
                     } header: {
-                        Text(folders.count == 1 ? "New names" : "In “\(here.first?.folderName ?? "")”")
+                        SectionTitle(folders.count == 1 ? "New names" : "In “\(here.first?.folderName ?? "")”")
                     } footer: {
                         if folder == folders.last { Text("Each file is added under its new name. The ones already here don’t change.") }
                     }

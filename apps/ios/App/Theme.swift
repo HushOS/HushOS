@@ -23,7 +23,7 @@ enum Theme {
         static let callout = Font.subheadline
         /* footnote, 13: metadata and footers. */
         static let footnote = Font.footnote
-        /* label, 12 semibold: section labels. */
+        /* label, 12 semibold: badges and chips only, never a section's or a field's name. */
         static let label = Font.caption.weight(.semibold)
     }
 
@@ -52,6 +52,28 @@ enum Theme {
         let bar = UINavigationBar.appearance()
         bar.largeTitleTextAttributes = [.font: large, .foregroundColor: ink, .kern: -1.0]
         bar.titleTextAttributes = [.foregroundColor: ink]
+    }
+}
+
+/*
+ * A section's name over a grouped list: a real heading at the title scale in ink, never a small
+ * muted kicker (DESIGN.md, No eyebrows). Pulled in to line up with the card's edge.
+ */
+struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(Theme.Text.title).foregroundStyle(Alpine.ink).textCase(nil)
+            .padding(.leading, -Alpine.Space.s1).accessibilityAddTraits(.isHeader)
+    }
+}
+
+/* A field's name over the field: callout at 600 in ink, sentence case. */
+struct FieldLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).textCase(nil)
     }
 }
 

@@ -206,7 +206,7 @@ struct SelfHostingView: View {
                     Label(problem, systemImage: "exclamationmark.circle").font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
                 }
             } header: {
-                Text("Server address").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                FieldLabel("Server address")
             } footer: {
                 Text(readOnly ? "Use this only if you or your organisation runs your own HushOS server. Sign out to change it."
                               : "Use this only if you or your organisation runs your own HushOS server.")

@@ -193,7 +193,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
                             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4),
                             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2),
                         ) {
-                            Text("Tags", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S1))
+                            Text("Tags", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S1))
                             for (tag in state.tags.tags) AlpineChip(tag.name, selected = tagFilter == tag.id, leading = { TagDot(tag.colour) }, onClick = {
                                 tagFilter = if (tagFilter == tag.id) null else tag.id
                                 scope.launch { tagged = tagFilter?.let { model.tagged(it) } ?: emptyList() }

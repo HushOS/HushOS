@@ -249,7 +249,7 @@ struct FamiliesSection: View {
                         .alpineRow()
                 }
             } header: {
-                Text("Families").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                SectionTitle("Families")
             }
         }
     }
@@ -464,7 +464,7 @@ struct FamilyPage: View {
                 }
             }
         } header: {
-            Text("Family folders").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+            SectionTitle("Family folders")
         }
     }
 
@@ -507,7 +507,7 @@ struct FamilyPage: View {
                 .alpineRow()
             }
         } header: {
-            Text("Members").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+            SectionTitle("Members")
         }
     }
 

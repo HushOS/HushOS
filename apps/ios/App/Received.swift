@@ -276,13 +276,13 @@ struct SharedView: View {
                 if people.isEmpty { Text("Nobody").foregroundStyle(Alpine.inkMuted).alpineRow() }
                 ForEach(people) { row in outgoing(row) }
             } header: {
-                Text("With people").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                SectionTitle("With people")
             }
             Section {
                 if links.isEmpty { Text("No links on").foregroundStyle(Alpine.inkMuted).alpineRow() }
                 ForEach(links) { row in outgoing(row) }
             } header: {
-                Text("Links").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                SectionTitle("Links")
             } footer: {
                 Text("Long-press to copy a link or turn it off.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
             }
@@ -741,9 +741,9 @@ struct ReportSheet: View {
                         .pickerStyle(.menu)
                         .alpineRow()
                     }
-                    Section("What’s wrong with it?") {
+                    Section {
                         TextField("What you saw, and where inside it", text: $reason, axis: .vertical).lineLimit(3 ... 8).alpineRow()
-                    }
+                    } header: { FieldLabel("What’s wrong with it?") }
                     Section {
                         TextField("Your email (optional)", text: $email).keyboardType(.emailAddress).textInputAutocapitalization(.never).alpineRow()
                     } footer: {
