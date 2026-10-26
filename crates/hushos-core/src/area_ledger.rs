@@ -308,7 +308,10 @@ struct State {
     store_key: Option<Zeroizing<[u8; 32]>>,
     /* The account root itself, for the identities' private halves (consent.rs); wiped when dropped. */
     account_root: Option<Zeroizing<Vec<u8>>>,
-    /* Bumped by open_account and clear: an acceptance commits only under the account it began with. */
+    /*
+     * Drawn afresh (next_generation) by every ledger and by open_account and clear: an acceptance commits
+     * only under the account it began with, and nothing begun in one ledger matches another's.
+     */
     generation: u64,
     /* The settings document's group pins as last opened (use_settings), and whether it opened. */
     settings: Option<Settings>,
@@ -1252,12 +1255,32 @@ fn area_write_version_of(chain: &AcceptedRosters, workspace_id: &str) -> Option<
 /// the app's Vault, its File Provider extension and its DocumentsProvider each
 /// keep one, filled from listings as they open folders. It holds keys only in
 /// memory; dropping it wipes them.
-#[derive(Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct AreaLedger {
     state: Mutex<State>,
     /* Draws standing in for the system CSPRNG, for the shared fixtures and the fuzz targets only (with_draws). */
     draws: Option<Mutex<std::collections::VecDeque<u32>>>,
+}
+
+/*
+ * A generation no other ledger in this process holds, nor this one before. Counted from 0, each
+ * ledger's generations collided across ledgers: a join showing from one ledger whose hidden
+ * positions happened to match was taken by another as its own.
+ */
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/* An empty state under a generation of its own. */
+fn fresh_state() -> State {
+    State { generation: next_generation(), ..State::default() }
+}
+
+impl Default for AreaLedger {
+    fn default() -> Self {
+        AreaLedger { state: Mutex::new(fresh_state()), draws: None }
+    }
 }
 
 impl std::fmt::Debug for AreaLedger {
@@ -1315,9 +1338,7 @@ impl AreaLedger {
         // settings), as the web's unlock of another user forgets the Drive keys and the families.
         let another = state.account.as_ref().is_some_and(|(held, _)| !held.eq_ignore_ascii_case(&user_id));
         if another {
-            let generation = state.generation + 1;
-            *state = State::default();
-            state.generation = generation;
+            *state = fresh_state();
         }
         state.account = Some((user_id.to_lowercase(), signing_public_key));
         state.store_key = Some(store_key);
@@ -1347,10 +1368,7 @@ impl AreaLedger {
 
     /// Every key, wiped: a lock or a sign-out.
     pub fn clear(&self) {
-        let mut state = self.lock();
-        let generation = state.generation + 1;
-        *state = State::default();
-        state.generation = generation;
+        *self.lock() = fresh_state();
     }
 
     /// The account's own workspace, its key at `version` opened from its grant
@@ -2030,7 +2048,7 @@ impl AreaLedger {
     #[cfg(feature = "fixtures")]
     #[doc(hidden)]
     pub fn with_draws(draws: Vec<u32>) -> Arc<AreaLedger> {
-        Arc::new(AreaLedger { state: Mutex::default(), draws: Some(Mutex::new(draws.into())) })
+        Arc::new(AreaLedger { state: Mutex::new(fresh_state()), draws: Some(Mutex::new(draws.into())) })
     }
 
     /* Whether this session holds the family: a committed chain, or a fork (the worker's `marks` counts both). */
