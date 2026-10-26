@@ -349,7 +349,11 @@ export async function reconcileGroup(
         }
         const plan = await planOf(subscription.product_id);
         if (!plan) {
-            unresolved.push(subscription.id);
+            // Kept as it was only while Polar hasn't ended it: one ended is swept as ended below
+            // (a readable row whose product later fails the catalogue read included), so it never
+            // counts as live nor keeps a dissolved family from the purge.
+            if (!subscription.ended_at && !ENDED.has(subscription.status))
+                unresolved.push(subscription.id);
             // A lapsed plan the lookup wrote with its product unread (findLapsedFamilyPlans) is
             // kept as Polar has it, so it leaves the page once ended; any other row is untouched.
             await recordUnread(groupId, subscription);

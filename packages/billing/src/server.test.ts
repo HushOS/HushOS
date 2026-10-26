@@ -7749,6 +7749,27 @@ describe('a dissolved family’s plan', () => {
         expect(cancelJobs).toEqual([groupId]);
     });
 
+    test('a paused plan whose product the catalogue can no longer read, revoked at Polar, is recorded as ended: the family can be purged', async () => {
+        const family = await familyOnPlan({ product: PRO_FAMILY });
+        const { groupId, subscription } = family;
+        subscription.status = 'paused';
+        await billing.reconcileGroup(groupId);
+        // Its product moves to one the catalogue can't read, and Polar ends it.
+        subscription.product_id = 'prod_archived';
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(
+            (await billingRepository.getGroupSubscription(subscription.id))?.endedAt,
+        ).toBeTruthy();
+        expect(await billingRepository.listDissolvedChargeable(groupId)).toEqual([]);
+        expect(await groupsRepository.leaveGroup(groupId, family.payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        await purgeDue(groupId);
+        expect(await groupsRepository.purgeDissolvedFamilies(30)).toMatchObject({ families: 1 });
+    });
+
     test('the daily run keeps a family’s list owed until every plan it lists is recorded, and the purge waits through it', async () => {
         const { reconcileBilling } = await import('../../jobs/src/jobs/reconcile-billing');
         const daily = () =>
