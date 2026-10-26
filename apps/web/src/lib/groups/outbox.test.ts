@@ -557,6 +557,53 @@ describe('admissions', () => {
         },
     );
 
+    /*
+     * The pin can move while one send is still retrying (a Continue in another tab during a
+     * wait, or between a refusal and its fix): every attempt checks it again, never only the
+     * first (Codex review of #206, P1).
+     */
+    test.each([
+        ['only their ML-KEM key', [1, 2, 3, 12]],
+        ['their X25519 and Ed25519 keys', [9, 10, 3, 4]],
+    ])(
+        'an admission whose pin moves (%s) while it waits to be sent again is never sent again',
+        async (_, moved) => {
+            const before = await pinOf('seen', [1, 2, 3, 4]);
+            const after = await pinOf('seen', moved);
+            // During the wait after an answer that never came.
+            const waiting = harness();
+            await checked(waiting, before);
+            waiting.server.script.push(noAnswer());
+            waiting.ctx.sleep = async () => {
+                waiting.settings.doc.contacts = { [NEWCOMER]: after as never };
+            };
+            const waited = await letIn(waiting.ctx, GROUP, admit, before);
+            expect(waited).toMatchObject({ status: 'sent', outcome: { status: 'other-keys' } });
+            expect(waiting.server.sent).toHaveLength(1);
+            // Kept, held: never dropped unseen.
+            expect(await waiting.store.outbox(USER, GROUP)).toHaveLength(1);
+            // Between a refusal and the fix that would send the same bytes again.
+            const fixing = harness();
+            await checked(fixing, before);
+            fixing.server.script.push(
+                refusal(409, 'grants-due', {
+                    missing: [
+                        { workspaceId: AREA_2, userId: 'b0b0b0b0-0000-4000-8000-000000000003' },
+                    ],
+                }),
+            );
+            const admitOnce = fixing.ctx.api.admit;
+            fixing.ctx.api.admit = async (...args) => {
+                fixing.settings.doc.contacts = { [NEWCOMER]: after as never };
+                return admitOnce(...args);
+            };
+            const fixed = await letIn(fixing.ctx, GROUP, admit, before);
+            expect(fixed).toMatchObject({ status: 'sent', outcome: { status: 'other-keys' } });
+            expect(fixing.server.sent).toHaveLength(1);
+            expect(fixing.server.grants).toEqual([]);
+        },
+    );
+
     test('a kept admission from before keys were recorded, with only its fingerprint, is sent exactly when the pin holds those keys', async () => {
         const kept = (admits: unknown) =>
             entry({

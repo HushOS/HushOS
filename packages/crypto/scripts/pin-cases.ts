@@ -158,6 +158,42 @@ const comparisons = [
     },
 ];
 
+/*
+ * A canonical base64url key written another way that a lenient decoder reads as the same bytes:
+ * with padding, or with the last character's spare bits set (Codex review of #206, P2).
+ */
+const padded = (key: string) => `${key}=`;
+const spareBits = (key: string) => {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const last = alphabet.indexOf(key.at(-1)!);
+    return key.slice(0, -1) + alphabet[last + 1];
+};
+for (const [what, change] of [
+    ['padded', padded],
+    ['with spare bits set', spareBits],
+] as const) {
+    comparisons.push(
+        {
+            name: `first-seen, the same ML-DSA key ${what}: never the same keys`,
+            pin: seen1,
+            served: { ...served(K1), mlDsaPublicKey: change(served(K1).mlDsaPublicKey!) },
+            expected: 'changed',
+        },
+        {
+            name: `first-seen, the same ML-KEM key ${what}: never the same keys`,
+            pin: seen1,
+            served: { ...served(K1), kemPublicKey: change(served(K1).kemPublicKey!) },
+            expected: 'changed',
+        },
+        {
+            name: `verified, the same ML-DSA key ${what}: never the same keys`,
+            pin: verified1,
+            served: { ...served(K1), mlDsaPublicKey: change(served(K1).mlDsaPublicKey!) },
+            expected: 'changed',
+        },
+    );
+}
+
 const servedPins = [
     { name: 'first-seen', served: served(K1, 3), form: 'seen', expected: await pin(K1, 'seen', 3) },
     {
@@ -175,6 +211,18 @@ const servedPins = [
     {
         name: 'an ML-KEM key one byte short',
         served: { ...served(K1), kemPublicKey: b64(1183, 4) },
+        form: 'seen',
+        expected: null,
+    },
+    {
+        name: 'an ML-DSA key with its spare bits set',
+        served: { ...served(K1), mlDsaPublicKey: spareBits(b64(1952, 3)) },
+        form: 'seen',
+        expected: null,
+    },
+    {
+        name: 'a padded ML-KEM key',
+        served: { ...served(K1), kemPublicKey: padded(b64(1184, 4)) },
         form: 'seen',
         expected: null,
     },

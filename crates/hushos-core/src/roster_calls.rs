@@ -1380,7 +1380,8 @@ impl AreaLedger {
     /// the head the call was built on, [`OutboxCall::Hold`] when it is never
     /// sent (an admission is sent only while this account's contact pin of the
     /// person, from the settings it last opened, holds the keys the entry was
-    /// built from, by key commitment), and only otherwise [`OutboxCall::Send`] with the very
+    /// built from, by key commitment; an app asks again before every attempt,
+    /// after each wait and fix, since the pin can move between them), and only otherwise [`OutboxCall::Send`] with the very
     /// bytes the call was signed as. `CoreError::Sealed`: the entry did not
     /// open (another account root, after a master-key rotation; another
     /// family) or is not an entry, or not the one kept under `outbox_id`:

@@ -129,17 +129,35 @@ export async function pinKeysOfServed(
     return { ...keys, fingerprint: form === 'verified' ? commitment : '' };
 }
 
-/* Bytes of exactly `length` in canonical base64url, as the Rust core's decode takes them; anything else throws. */
-function canonicalBytes(value: string, length: number) {
+/*
+ * Bytes in canonical base64url (of exactly `length`, when given), as the Rust core's decode
+ * takes them: no padding, no other alphabet, no spare bits set. Anything else throws, so a key
+ * written another way is never read as the same key on one client and refused on another.
+ */
+function canonicalBytes(value: string, length?: number) {
     if (typeof value !== 'string' || !/^[A-Za-z0-9_-]*$/.test(value))
         throw new Error('Invalid key.');
     const bytes = publicKeyBytes(value);
-    const again = btoa(String.fromCharCode(...bytes))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replace(/=+$/, '');
-    if (bytes.length !== length || again !== value) throw new Error('Invalid key.');
+    let again = '';
+    for (let at = 0; at < bytes.length; at += 0x8000)
+        again += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+    again = btoa(again).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+    if ((length !== undefined && bytes.length !== length) || again !== value)
+        throw new Error('Invalid key.');
     return bytes;
+}
+
+/*
+ * SHA-256 (hex) of a public key as the server serves it, or null when it is not canonical
+ * base64url: how a pin's digests are compared with served keys, alike in both twins (the Rust
+ * core's `digest_of` decodes canonically too).
+ */
+export async function servedKeyDigest(value: unknown) {
+    try {
+        return await keyDigest(canonicalBytes(value as string));
+    } catch {
+        return null;
+    }
 }
 
 /*

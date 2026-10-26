@@ -1,7 +1,6 @@
 import type { DriveSigners, GroupIntegrity } from '@hushos/crypto';
 import type { ContactPin } from '@hushos/crypto/contacts';
-import { keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
-import { pinKeysOfServed, pinTrust } from '@hushos/crypto/pins';
+import { pinKeysOfServed, pinTrust, servedKeyDigest } from '@hushos/crypto/pins';
 import type { Integrity, SignatureForm } from '@hushos/crypto/signatures';
 import type { NodeView, ServedIdentity, Signer, VersionView } from './api';
 
@@ -156,13 +155,9 @@ export async function comparePin(pin: Pin, served: ServedKeys): Promise<PinCompa
     return 'changed';
 }
 
-/* SHA-256 (hex) of a base64url public key, or null when it does not decode. */
-async function digestOf(publicKey: string) {
-    try {
-        return await keyDigest(publicKeyBytes(publicKey));
-    } catch {
-        return null;
-    }
+/* SHA-256 (hex) of a canonical base64url public key, or null for anything else (servedKeyDigest). */
+function digestOf(publicKey: string) {
+    return servedKeyDigest(publicKey);
 }
 
 /*
