@@ -647,15 +647,25 @@ const fakeClient = {
     },
     subscriptions: {
         // A customer's subscriptions, ended ones included, as Polar lists them.
+        // One page, as Polar's SDK answers it: 100 at most.
         async list(query: { external_customer_id?: string }) {
             polar.calls.push(`subscriptions.list:${query.external_customer_id}`);
             const customer = query.external_customer_id
                 ? polar.customers.get(query.external_customer_id)
                 : undefined;
+            const all = customer?.subscriptions ?? [];
             return {
-                items: (customer?.subscriptions ?? []).map((sub) => structuredClone(sub)),
-                pagination: { total_count: 0, max_page: 1 },
+                items: all.slice(0, 100).map((sub) => structuredClone(sub)),
+                pagination: { total_count: all.length, max_page: Math.ceil(all.length / 100) },
             };
+        },
+        // Every page.
+        async *iterList(query: { external_customer_id?: string }) {
+            polar.calls.push(`subscriptions.list:${query.external_customer_id}`);
+            const customer = query.external_customer_id
+                ? polar.customers.get(query.external_customer_id)
+                : undefined;
+            for (const sub of customer?.subscriptions ?? []) yield structuredClone(sub);
         },
         async get(id: string) {
             polar.calls.push(`subscriptions.get:${id}`);
@@ -1388,6 +1398,27 @@ describe('revokeForDeletion', () => {
         await billing.revokeForDeletion(userId);
         expect(polar.calls).toContain('subscriptions.revoke:sub_f');
         expect(polar.calls).toContain(`customers.deleteExternal:${userId}`);
+    });
+
+    test('revokes a past-due plan listed after a full page of ended ones', async () => {
+        const { userId } = await createTestAccount();
+        subscribe(userId, { id: 'sub_live' });
+        await billing.reconcileCustomer(userId);
+        const customer = polar.customers.get(userId)!;
+        const ended = Array.from({ length: 100 }, (_, i) => ({
+            ...customer.subscriptions[0]!,
+            id: `sub_old_${i}`,
+            status: 'canceled',
+            ended_at: new Date(Date.now() - DAY).toISOString(),
+        }));
+        // Past due: not in the customer's state, and not in the mirror (reconciled while active,
+        // it went past due without a delivery reaching HushOS). Only Polar's list has it, last.
+        const live = customer.subscriptions[0]!;
+        live.status = 'past_due';
+        customer.subscriptions = [...ended, live];
+        await rawSql(`update billing_subscriptions set ended_at = now() where id = 'sub_live'`);
+        await billing.revokeForDeletion(userId);
+        expect(polar.calls).toContain('subscriptions.revoke:sub_live');
     });
 
     test('does nothing for an account that never bought anything', async () => {
