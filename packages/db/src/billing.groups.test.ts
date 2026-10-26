@@ -888,6 +888,33 @@ describe('readings of Polar that overlap', () => {
         expect(await seatLimit(groupId)).toBe(9);
     });
 
+    test('two answers for one plan: the older, committing last, writes nothing', async () => {
+        const groupId = await family();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        const older = await billing.readingStamp();
+        expect(await change(groupId, plan({ units: 9 }), await billing.readingStamp())).toBe(
+            'applied',
+        );
+        expect(await change(groupId, plan({ units: 7 }), older)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
+    test('readings drawn at once, on several connections, are each numbered once, in the order drawn', async () => {
+        const drawn = await Promise.all(Array.from({ length: 20 }, () => billing.readingStamp()));
+        const numbers = drawn.map((stamp) => BigInt(stamp));
+        expect(new Set(numbers).size).toBe(20);
+        // Each later draw on one connection is numbered after the earlier ones, however close.
+        const first = await billing.readingStamp();
+        const second = await billing.readingStamp();
+        expect(BigInt(second)).toBeGreaterThan(BigInt(first));
+        for (const number of numbers) expect(BigInt(first)).toBeGreaterThan(number);
+        // So whichever commits last, the newest reading is kept.
+        const groupId = await family();
+        expect(await reconcile(groupId, [plan({ units: 9 })], second)).toBe('applied');
+        expect(await reconcile(groupId, [plan()], first)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
     test('a change never gives way to another change, which may be of another plan', async () => {
         const groupId = await family();
         expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');

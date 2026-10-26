@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "769f3528-deea-4b36-9896-b72fe2a5ec73",
+    "id": "7f7e99b2-90c5-4308-896b-9dbf1557b6b1",
     "prevIds": ["e840cd67-44e5-45b9-bb9a-e30d06f11ee7"],
     "ddl": [
         {
@@ -2255,7 +2255,7 @@
             "table": "billing_customers"
         },
         {
-            "type": "timestamp with time zone",
+            "type": "bigint",
             "typeSchema": null,
             "notNull": false,
             "dimensions": 0,
@@ -5674,7 +5674,7 @@
             "table": "group_billing_customers"
         },
         {
-            "type": "timestamp with time zone",
+            "type": "bigint",
             "typeSchema": null,
             "notNull": false,
             "dimensions": 0,
@@ -5687,7 +5687,7 @@
             "table": "group_billing_customers"
         },
         {
-            "type": "timestamp with time zone",
+            "type": "bigint",
             "typeSchema": null,
             "notNull": false,
             "dimensions": 0,
@@ -6202,6 +6202,19 @@
             "generated": null,
             "identity": null,
             "name": "product_unread",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "bigint",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "changed_from",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"
@@ -13677,6 +13690,17 @@
             "entityType": "checks",
             "schema": "public",
             "table": "workspaces"
+        },
+        {
+            "incrementBy": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "startWith": "1",
+            "cacheSize": 1,
+            "cycle": false,
+            "name": "billing_reading_seq",
+            "entityType": "sequences",
+            "schema": "public"
         }
     ],
     "renames": []

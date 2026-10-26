@@ -277,13 +277,12 @@ async function applyChanged(
     subscription: models.Subscription,
     paid: boolean,
     /*
-     * When Polar's answer came (readingStamp, taken as it arrived): by default now, for a caller
-     * that applies the answer as soon as it has it. Nothing is written when a reconcile that
-     * began later is written already: it read Polar after this answer.
+     * When Polar's answer came: readingStamp, taken by the caller as soon as the call that gave
+     * `subscription` returned, before anything else it does. Nothing is written when a reconcile
+     * that began later, or a later answer for this plan, is written already.
      */
-    readingFrom?: billingRepository.ReadingStamp,
+    answeredAt: billingRepository.ReadingStamp,
 ) {
-    const answeredAt = readingFrom ?? (await billingRepository.readingStamp());
     const plan = await planOf(subscription.product_id);
     if (!plan) return false;
     const tier = await tierStateOf(subscription, plan);
@@ -766,7 +765,7 @@ async function revokeWithoutPayer(
         billing: { group: groupId, subscription: live.id },
     });
     const revoked = await polar().subscriptions.revoke(live.id);
-    await applyChanged(groupId, revoked, false);
+    await applyChanged(groupId, revoked, false, await billingRepository.readingStamp());
     return true;
 }
 
@@ -1200,7 +1199,9 @@ async function setPending(groupId: string, subscription: models.Subscription, wa
             units: target.units,
             proration_behavior: 'next_period',
         });
-    if (!(await applyChanged(groupId, current, false))) throw unresolvedPlan();
+    // As the last of those calls answered (at least one ran: an unchanged plan returned above).
+    if (!(await applyChanged(groupId, current, false, await billingRepository.readingStamp())))
+        throw unresolvedPlan();
     const after = pendingOf(current);
     if (after.units !== target.units || after.product !== target.product)
         log.warn({
@@ -2210,6 +2211,7 @@ async function changePlaces(
                 });
                 return { status: 'unavailable' };
             }
+            const heldAt = await billingRepository.readingStamp();
             const heldPlan = await planOf(held.product_id);
             if (!heldPlan) return { status: 'no-plan' };
             const now = held.units ?? heldPlan.includedMembers;
@@ -2218,7 +2220,14 @@ async function changePlaces(
             // A raise that landed meanwhile may already hold the place.
             if (target <= now) return placesHeld(groupId, live, held, target);
             if (target - now > MAX_MEMBERS_PER_RAISE) return cap;
-            return raisePlaces(groupId, live, held, target, held.pending_update?.units ?? null);
+            return raisePlaces(
+                groupId,
+                live,
+                held,
+                heldAt,
+                target,
+                held.pending_update?.units ?? null,
+            );
         },
     );
 }
@@ -2293,6 +2302,8 @@ async function raisePlaces(
     groupId: string,
     live: { id: string; paidUnits: number },
     subscription: models.Subscription,
+    /* When Polar answered with `subscription` (readingStamp). */
+    readAt: billingRepository.ReadingStamp,
     target: number,
     cut: number | null,
 ): Promise<SeatResult> {
@@ -2301,7 +2312,7 @@ async function raisePlaces(
     // can't open a place.
     // The tier paid for is read from Polar's orders now, not taken from the row: a refund
     // since the last reconcile can't leave a place open.
-    if (!(await applyChanged(groupId, subscription, false))) return { status: 'no-plan' };
+    if (!(await applyChanged(groupId, subscription, false, readAt))) return { status: 'no-plan' };
     const row = await billingRepository.getLiveGroupSubscription(groupId);
     if (row && subscription.product_id !== paidTier(row).productId)
         return { status: 'confirm', url: null };
@@ -2562,6 +2573,7 @@ export async function changeGroupPlan(
                 } catch (error) {
                     throw unavailable(error);
                 }
+                const heldAt = await billingRepository.readingStamp();
                 if (
                     held.product_id !== subscription.product_id ||
                     held.cancel_at_period_end ||
@@ -2572,7 +2584,7 @@ export async function changeGroupPlan(
                         409,
                     );
                 // The tier paid for, read from Polar's orders now (a refund since the last reconcile).
-                if (!(await applyChanged(groupId, held, false))) throw unresolvedPlan();
+                if (!(await applyChanged(groupId, held, false, heldAt))) throw unresolvedPlan();
                 const fresh = (await billingRepository.getLiveGroupSubscription(groupId)) ?? live;
                 // Nothing stacks on a charge the bank hasn't confirmed: places, or an upgrade.
                 if (
@@ -2585,11 +2597,13 @@ export async function changeGroupPlan(
                         409,
                     );
                 let changed: models.Subscription;
+                let changedAt: billingRepository.ReadingStamp;
                 try {
                     changed = await polar().subscriptions.update(held.id, {
                         product_id: target.id,
                         proration_behavior: 'invoice',
                     });
+                    changedAt = await billingRepository.readingStamp();
                 } catch (error) {
                     const refused = refusedRaise(error);
                     if (refused.status === 'confirm') {
@@ -2612,7 +2626,7 @@ export async function changeGroupPlan(
                 // changed the product: a write that fails here is put right from Polar at once.
                 let applied: boolean;
                 try {
-                    applied = await applyChanged(groupId, changed, false);
+                    applied = await applyChanged(groupId, changed, false, changedAt);
                 } catch (error) {
                     log.warn({
                         message: 'Upgrade not written after Polar took it; reconciling',
@@ -2676,7 +2690,8 @@ export async function changeGroupPlan(
  */
 async function writeAsPolarHolds(groupId: string, subscriptionId: string) {
     try {
-        await applyChanged(groupId, await polar().subscriptions.get(subscriptionId), false);
+        const held = await polar().subscriptions.get(subscriptionId);
+        await applyChanged(groupId, held, false, await billingRepository.readingStamp());
     } catch (error) {
         log.warn({
             message: 'Family plan not re-read after a refused change',

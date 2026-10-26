@@ -6,6 +6,7 @@ import {
     foreignKey,
     index,
     integer,
+    pgSequence,
     pgTable,
     text,
     timestamp,
@@ -13,6 +14,14 @@ import {
 } from 'drizzle-orm/pg-core';
 import { users } from './auth';
 import { workspaces } from './workspaces';
+
+/*
+ * The order readings of Polar are taken in (readingStamp): one number per reading, drawn before
+ * its first Polar call, or as a change's answer arrives. No clock is involved, so a clock that
+ * steps, or two readings in the same instant, can't put them out of order. CACHE 1: every
+ * connection draws from the one counter, so numbers follow the order they were drawn in.
+ */
+export const billingReadingSeq = pgSequence('billing_reading_seq', { cache: 1 });
 
 // The provider's customer for a user. Polar finds it by external id (the user id);
 // the provider id is kept for deletion and support.
@@ -23,10 +32,10 @@ export const billingCustomers = pgTable('billing_customers', {
     provider: text().notNull(),
     providerCustomerId: text('provider_customer_id').notNull().unique(),
     /*
-     * When the newest reconcile written here began reading Polar, by the database's clock
-     * (readingStamp): one that began earlier and commits later writes nothing.
+     * The reading (billing_reading_seq, readingStamp) of the newest reconcile written here: one
+     * that began earlier and commits later writes nothing.
      */
-    reconciledFrom: timestamp('reconciled_from', { withTimezone: true }),
+    reconciledFrom: bigint('reconciled_from', { mode: 'bigint' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -110,15 +119,16 @@ export const groupBillingCustomers = pgTable(
          */
         plansUnlistedSince: timestamp('plans_unlisted_since', { withTimezone: true }),
         /*
-         * When the newest reconcile written here began reading Polar, by the database's clock
-         * (readingStamp): one that began earlier and commits later writes nothing.
+         * The reading (billing_reading_seq, readingStamp) of the newest reconcile written here:
+         * one that began earlier and commits later writes nothing.
          */
-        reconciledFrom: timestamp('reconciled_from', { withTimezone: true }),
+        reconciledFrom: bigint('reconciled_from', { mode: 'bigint' }),
         /*
-         * When the newest change written here (one plan as a raise, cut or revoke answered it)
-         * was answered: a reconcile that began earlier writes nothing and reads Polar again.
+         * The reading of the newest change written for any of this family's plans (one plan as a
+         * raise, cut or revoke answered it): a reconcile that began earlier writes nothing and
+         * reads Polar again.
          */
-        changedFrom: timestamp('changed_from', { withTimezone: true }),
+        changedFrom: bigint('changed_from', { mode: 'bigint' }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
@@ -262,6 +272,12 @@ export const groupBillingSubscriptions = pgTable(
          * pool, nor its payer's, since its tier can't be read. Cleared once its product reads.
          */
         productUnread: boolean('product_unread').notNull().default(false),
+        /*
+         * The reading (readingStamp) of the newest change written for this plan: an older answer
+         * for it, committing later (two changes, or a change and the lapsed-plan lookup), writes
+         * nothing.
+         */
+        changedFrom: bigint('changed_from', { mode: 'bigint' }),
         /*
          * The end of the last period in which this was the family's plan while `active` or
          * `trialing` (applyGroupState sets it when it picks the family's plan): what a payment on

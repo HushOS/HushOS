@@ -9449,6 +9449,58 @@ describe('reconciles that overlap', () => {
         expect(polar.calls).toContain(`customers.getStateExternal:group:${groupId}`);
     });
 
+    test('an upgrade answered before a revocation, its bookkeeping held, writes nothing once a reconcile has read the revocation', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
+        const waiting = async (count: number) => {
+            for (let tries = 0; tries < 500; tries++) {
+                const { rows } = await rawSql(
+                    "select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+                );
+                if ((rows[0] as { n: number }).n >= count) return;
+                await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            throw new Error('Nothing waited on the plan’s row');
+        };
+        // Polar answers the upgrade; the plan's row is then held (a slow write elsewhere), so the
+        // upgrade's bookkeeping waits with Polar's answer in hand.
+        const holder = await db.$client.connect();
+        const original = fakeClient.subscriptions.update.bind(fakeClient.subscriptions);
+        const spy = vi.spyOn(fakeClient.subscriptions, 'update').mockImplementationOnce((async (
+            ...args: Parameters<typeof original>
+        ) => {
+            const answer = structuredClone(await original(...args));
+            await holder.query('begin');
+            await holder.query(
+                'select id from group_billing_subscriptions where id = $1 for update',
+                [subscription.id],
+            );
+            return answer;
+        }) as typeof original);
+        let upgrade: Promise<unknown> | undefined;
+        let revoked: Promise<unknown> | undefined;
+        try {
+            upgrade = billing
+                .changeGroupPlan(payer, groupId, MAX_FAMILY)
+                .catch((error: unknown) => error);
+            await waiting(1);
+            // Polar's staff revoke the plan; its delivery reads that and waits for the row too.
+            subscription.status = 'canceled';
+            subscription.ended_at = new Date().toISOString();
+            revoked = billing.reconcileGroup(groupId);
+            await waiting(2);
+        } finally {
+            await holder.query('commit');
+            holder.release();
+            spy.mockRestore();
+        }
+        await Promise.all([upgrade, revoked]);
+        expect(
+            (await billingRepository.getGroupSubscription(subscription.id))?.endedAt,
+        ).toBeTruthy();
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        expect(await pool(groupId)).toBe(0n);
+    });
+
     test('a plan whose product can’t be read, ended at Polar, is not brought back by a reconcile that read it earlier', async () => {
         const { groupId } = await familyOnPlan();
         const unread = familySubscription(groupId, {

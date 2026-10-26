@@ -28,15 +28,18 @@ const LIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
 const LAPSED_STATUSES = ['unpaid', 'incomplete', 'paused'];
 
 /*
- * When a reading of Polar begins, by the database's clock, as text to the microsecond (a Date
- * keeps milliseconds only, and two readings can begin within one). Every write of Polar's state
- * carries one, and is compared under readingLock with the newest written: the database's clock
- * is the one clock every web and worker container shares, however many hosts run them.
+ * A reading of Polar, numbered in the order readings are taken (billing_reading_seq): drawn
+ * before a reconcile's first Polar call, or as a change's answer arrives. Every write of Polar's
+ * state carries one, and is compared under readingLock with the newest written. A number, not a
+ * time: a clock that steps (NTP, a migrated database), or two readings in one instant, can't put
+ * them out of order. Kept as text, a bigint to the database.
  */
 export type ReadingStamp = string & { readonly reading: unique symbol };
 
 export async function readingStamp() {
-    const result = await db.execute<{ at: string }>(sql`select clock_timestamp()::text as at`);
+    const result = await db.execute<{ at: string }>(
+        sql`select nextval('billing_reading_seq')::text as at`,
+    );
     return result.rows[0]!.at as ReadingStamp;
 }
 
@@ -194,13 +197,13 @@ export async function applyCustomerState(input: {
         if (!personal) return 'gone';
         const [customer] = await tx
             .select({
-                newer: sql<boolean>`coalesce(${billingCustomers.reconciledFrom} > ${input.readingFrom}::timestamptz, false)`,
+                newer: sql<boolean>`coalesce(${billingCustomers.reconciledFrom} > ${input.readingFrom}::bigint, false)`,
             })
             .from(billingCustomers)
             .where(eq(billingCustomers.userId, input.userId));
         if (customer?.newer) return 'stale';
         const now = new Date();
-        const reconciledFrom = sql`${input.readingFrom}::timestamptz`;
+        const reconciledFrom = sql`${input.readingFrom}::bigint`;
         if (input.customerId)
             await tx
                 .insert(billingCustomers)
@@ -990,9 +993,10 @@ export async function recordUnreadGroupSubscription(
 ): Promise<ReadingOutcome> {
     return db.transaction(async (tx) => {
         await readingLock(tx, `group:${groupId}`);
-        const claimed = await claimGroupReading(tx, groupId, readingFrom, false);
+        const claimed = await claimGroupReading(tx, groupId, readingFrom, [input.id]);
         if (claimed !== 'applied') return claimed;
         await writeUnread(tx, groupId, input);
+        await markChanged(tx, [input.id], readingFrom);
         return 'applied';
     });
 }
@@ -1045,20 +1049,21 @@ async function writeUnread(tx: Tx, groupId: string, input: UnreadGroupSubscripti
 }
 
 /*
- * Under readingLock: whether a reading of the family's plans that began at `readingFrom` is
- * still the newest, and if so recorded as such. A whole reconcile (`complete`) that began before
- * the newest reconcile written is `stale` (that one read Polar later, and did everything this one
+ * Under readingLock: whether a reading of the family's plans numbered `readingFrom` is still the
+ * newest, and if so recorded as such. A whole reconcile (`plans` absent) that began before the
+ * newest reconcile written is `stale` (that one read Polar later, and did everything this one
  * would); one that began before the newest change written is `rerun` (the change is newer than
- * what it read, the rest of its reading may not be). One plan's change is `stale` only behind a
- * newer reconcile, never behind another change, which may be of another plan.
+ * what it read, the rest of its reading may not be). A change of some plans (`plans`) is `stale`
+ * behind a newer reconcile, or behind a newer change of one of those plans (changed_from on its
+ * row); never behind a change of another plan.
  */
 async function claimGroupReading(
     tx: Tx,
     groupId: string,
     readingFrom: ReadingStamp,
-    complete: boolean,
+    plans?: string[],
 ): Promise<'applied' | 'stale' | 'rerun'> {
-    const stamp = sql`${readingFrom}::timestamptz`;
+    const stamp = sql`${readingFrom}::bigint`;
     const [row] = await tx
         .select({
             newerReconcile: sql<boolean>`coalesce(${groupBillingCustomers.reconciledFrom} > ${stamp}, false)`,
@@ -1067,19 +1072,42 @@ async function claimGroupReading(
         .from(groupBillingCustomers)
         .where(eq(groupBillingCustomers.groupId, groupId));
     if (row?.newerReconcile) return 'stale';
-    if (complete && row?.newerChange) return 'rerun';
+    if (!plans && row?.newerChange) return 'rerun';
+    if (plans?.length) {
+        const [newerPlan] = await tx
+            .select({ id: groupBillingSubscriptions.id })
+            .from(groupBillingSubscriptions)
+            .where(
+                and(
+                    inArray(groupBillingSubscriptions.id, plans),
+                    sql`${groupBillingSubscriptions.changedFrom} > ${stamp}`,
+                ),
+            )
+            .limit(1);
+        if (newerPlan) return 'stale';
+    }
     if (row)
         await tx
             .update(groupBillingCustomers)
             .set(
-                complete
-                    ? { reconciledFrom: stamp }
-                    : {
+                plans
+                    ? {
                           changedFrom: sql`greatest(${groupBillingCustomers.changedFrom}, ${stamp})`,
-                      },
+                      }
+                    : { reconciledFrom: stamp },
             )
             .where(eq(groupBillingCustomers.groupId, groupId));
     return 'applied';
+}
+
+/* A change's plans hold its reading, once written: an older answer for them then writes nothing. */
+async function markChanged(tx: Tx, plans: string[], readingFrom: ReadingStamp) {
+    if (!plans.length) return;
+    const stamp = sql`${readingFrom}::bigint`;
+    await tx
+        .update(groupBillingSubscriptions)
+        .set({ changedFrom: sql`greatest(${groupBillingSubscriptions.changedFrom}, ${stamp})` })
+        .where(inArray(groupBillingSubscriptions.id, plans));
 }
 
 /*
@@ -1190,10 +1218,16 @@ export async function applyGroupState(input: {
             .for('no key update');
         if (!group) return 'gone';
         const complete = input.complete !== false;
-        const claimed = await claimGroupReading(tx, input.groupId, input.readingFrom, complete);
+        const changed = input.subscriptions.map((subscription) => subscription.id);
+        const claimed = await claimGroupReading(
+            tx,
+            input.groupId,
+            input.readingFrom,
+            complete ? undefined : changed,
+        );
         if (claimed !== 'applied') return claimed;
         const now = new Date();
-        const stamp = sql`${input.readingFrom}::timestamptz`;
+        const stamp = sql`${input.readingFrom}::bigint`;
         if (input.customerId)
             await tx
                 .insert(groupBillingCustomers)
@@ -1274,6 +1308,8 @@ export async function applyGroupState(input: {
                     },
                 });
         }
+        // A change's plan holds its reading: an older answer for it, committing later, is stale.
+        if (!complete) await markChanged(tx, changed, input.readingFrom);
         // Kept as not ended: every subscription Polar just answered for that it hasn't ended
         // itself (no `ended_at`, not `canceled` or `incomplete_expired`), whatever its status:
         // `paused`, `unpaid` and `incomplete` too, which can still charge, so a dissolved
