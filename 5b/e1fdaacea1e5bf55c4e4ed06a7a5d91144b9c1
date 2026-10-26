@@ -1,0 +1,45 @@
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_c4714394e5d8cd 220-225,435-468
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_cf74328acc13f4 583
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_4050fe0496098f 1044,1051,1112-1120
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_77eb4ee78a8bdc 1354-1397,1405,2607
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_53d33ffa519155 666,674,676-677,680-689,7665-7751
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_f50270cc0edbf0 76
+packages/db/drizzle/20261026094157_family_lapsed_revoke_refusal/migration.sql
+  s_566b8e0c4467a4::t_18728138f0f4f4 3-6,8-13,15,17-18
+packages/db/drizzle/20261026094157_family_lapsed_revoke_refusal/snapshot.json
+  s_566b8e0c4467a4::t_36231a295f4c6e 4,5650-5662,6155-6167
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_315b39ce944c21 445-448,450,935,943,946,951-989,1078-1079,1254
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_963fe7a939e2cd 3527-3531
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_289f16c928a3a7 14
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_8c62b6a196c8a2 101-106,244-249
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_a60c30a21c830d 119-127
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_566b8e0c4467a4::t_218cd09aa19aaa 8,46-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5be1fdaacea1e5bf55c4e4ed06a7a5d91144b9c1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
