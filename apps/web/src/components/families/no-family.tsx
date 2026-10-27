@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
+import { DeclineInvitation } from '@/components/families/decline-invitation';
 import { NoticeList } from '@/components/families/family-alerts';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PageHeader } from '@/components/page-header';
@@ -96,8 +97,17 @@ export function NoFamily({
                                     </Link>
                                 }
                             >
-                                <span className="text-muted-foreground">
-                                    You accepted. Check each other’s words to finish.
+                                <span className="flex flex-col items-start gap-1">
+                                    <span className="text-muted-foreground">
+                                        You accepted. Check each other’s words to finish.
+                                    </span>
+                                    {/* Quiet, under the words: Continue is the row's way on. */}
+                                    <DeclineInvitation
+                                        userId={userId}
+                                        groupId={family.id}
+                                        family={family.name}
+                                        className="-ml-3.5"
+                                    />
                                 </span>
                             </Setting>
                         ))}

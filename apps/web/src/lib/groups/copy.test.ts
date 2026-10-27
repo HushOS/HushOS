@@ -38,11 +38,11 @@ describe('creating a family while waiting to join one', () => {
             family: { groupId: 'g1', name: 'Ortega family' },
         });
         expect(errorCopy(waiting)).toBe(
-            'You’re joining Ortega family already. Leave that invitation first, then you can create your own.',
+            'You’re joining Ortega family already. Decline that invitation first, then you can create your own.',
         );
         const unnamed = new GroupApiError('', 409, 'in-family', { reason: 'waiting' });
         expect(errorCopy(unnamed)).toBe(
-            'You’re joining a family already. Leave that invitation first, then you can create your own.',
+            'You’re joining a family already. Decline that invitation first, then you can create your own.',
         );
     });
 });

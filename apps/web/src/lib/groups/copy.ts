@@ -58,7 +58,7 @@ export function joinInFamilyCopy(yours: string, invitedTo: string, expiresAt: st
 
 /* Create a family, for someone waiting to join one (accepted, not let in yet). */
 export const createWhileWaitingCopy = (family: string | null) =>
-    `You’re joining ${family ?? 'a family'} already. Leave that invitation first, then you can create your own.`;
+    `You’re joining ${family ?? 'a family'} already. Decline that invitation first, then you can create your own.`;
 
 /* Create a family, for someone already in one. */
 export const createInFamilyCopy = (yours: string) =>

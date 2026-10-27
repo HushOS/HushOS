@@ -1843,6 +1843,58 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
     });
 });
 
+/*
+ * Backing out of a pending join (accepted, not let in): Decline invitation, on the join screen
+ * and on Family's Waiting to join row, asked once. The server's leave withdraws it; Family
+ * then offers Create a family again. Real accounts and a real invitation, so it runs where
+ * plans aren't sold (as CI runs): where they are, inviting needs a family with a paid plan.
+ */
+test.describe.serial('declining a pending join', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('someone waiting to join declines from Family: the wait is gone, and Create a family is back', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            await sellsPlans(request),
+            'Where plans are sold, inviting needs a family with a plan, which can’t be paid for here.',
+        );
+        test.setTimeout(300_000);
+        const maya = await person(browser, 'Maya Berg');
+        const sam = await person(browser, 'Sam Okafor');
+        await createFamily(maya, 'Berg family');
+        await invite(maya, sam.email);
+        await accept(sam, 'Berg family');
+        // The join screen offers it too, quietly.
+        await expect(sam.page.getByRole('button', { name: 'Decline invitation' })).toBeVisible();
+        await sam.page.goto('/app/family');
+        const page = sam.page.locator('[data-no-family]');
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await page.getByRole('button', { name: 'Decline invitation to Berg family' }).click();
+        const ask = sam.page.getByRole('alertdialog');
+        await expect(ask).toContainText('Decline the invitation to Berg family?');
+        await expect(ask).toContainText('You can be invited again.');
+        await ask.getByRole('button', { name: 'Decline invitation' }).click();
+        await expect(ask).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toHaveCount(
+            0,
+        );
+        await expect(page.getByRole('button', { name: 'Create a family' })).toBeVisible();
+        // The server says so too: the membership is gone from the account's families.
+        const listed = (await (
+            await sam.page.request.get('/api/groups', { headers: { 'HushOS-Client': 'web/1' } })
+        ).json()) as {
+            groups: { id: string; state: string }[];
+        };
+        expect(listed.groups.filter((group) => group.state === 'accepted')).toEqual([]);
+        for (const who of [maya, sam]) await who.page.context().close();
+    });
+});
+
 test.describe.serial('Family for someone waiting to join one', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 

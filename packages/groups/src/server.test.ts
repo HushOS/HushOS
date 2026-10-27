@@ -834,7 +834,7 @@ describe('one family per account (families-shared-pool 3.2)', () => {
             code: 'in-family',
             status: 409,
             message:
-                'You’re joining Ortega family already. Leave that invitation first, then you can create your own.',
+                'You’re joining Ortega family already. Decline that invitation first, then you can create your own.',
             data: { reason: 'waiting', family: { groupId: ortega.groupId, name: 'Ortega family' } },
         });
         expect((await groupsRepository.listGroupsFor(sam.userId)).map((g) => g.id)).toEqual([

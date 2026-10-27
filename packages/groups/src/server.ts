@@ -130,7 +130,7 @@ const inYourFamily = (family: { groupId: string; name: string }, invitedTo?: str
 const waitingToJoin = (family: { groupId: string; name: string | null }) =>
     new GroupError(
         'in-family',
-        `You’re joining ${family.name || 'a family'} already. Leave that invitation first, then you can create your own.`,
+        `You’re joining ${family.name || 'a family'} already. Decline that invitation first, then you can create your own.`,
         409,
         { reason: 'waiting', family },
     );
