@@ -1,0 +1,21 @@
+packages/drive/src/transfers.test.ts
+  s_566b8e0c4467a4::t_39ef62bb0c0331 135-136,274,1962-2002
+packages/drive/src/transfers.ts
+  s_566b8e0c4467a4::t_c1e47609468df6 478-479,1122-1123,1125,1141-1146,1158-1159,2262-2265,2270,2272-2273,2275-2282,2286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa12eaf48ade51f1f677712bf2b3166b90895714",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
