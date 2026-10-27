@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Lookup } from '@/lib/contacts';
 
@@ -88,7 +88,19 @@ describe('Check it’s Maya', () => {
         open();
         fireEvent.click(await screen.findByRole('button', { name: 'They don’t match' }));
         expect(screen.getByText(/These don’t match\. Check Maya’s email address/)).toBeVisible();
-        expect(screen.getByText(/choose Share on it, then Stop sharing\./)).toBeVisible();
+        expect(
+            screen.getByText(
+                /remove Maya for now and add them again once they do\. To stop sharing something with Maya, open Share on it\.$/,
+            ),
+        ).toBeVisible();
+        // Laid out as the changed-account notice is: in the dialog's footer, Done last in order,
+        // so a phone stacks it on top at full width and a wide screen keeps it at the right.
+        const footer = document.querySelector('[data-slot="dialog-footer"]') as HTMLElement;
+        expect(
+            within(footer)
+                .getAllByRole('button')
+                .map((button) => button.textContent),
+        ).toEqual(['Remove Maya from contacts', 'Done']);
         expect(screen.queryByRole('button', { name: 'They match' })).toBeNull();
         expect(pinContact).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Remove Maya from contacts' }));

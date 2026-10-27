@@ -35,6 +35,10 @@ export type Checking = { email: string; name: string };
  * (contact-flow.tsx): "Remove Maya?" replaces it in the same dialog, and
  * Cancel there comes back to it.
  */
+/* They don't match (6.6). Not yet approved by the owner: one string, so it is easy to change. */
+const mismatchWords = (name: string) =>
+    `These don’t match. Check ${name}’s email address with them. If it’s right and they still don’t match, remove ${name} for now and add them again once they do. To stop sharing something with ${name}, open Share on it.`;
+
 export function CheckContactStep({
     userId,
     person,
@@ -153,7 +157,7 @@ export function CheckContactStep({
                 <DialogTitle>Check it’s {name}</DialogTitle>
                 <DialogDescription>
                     {mismatch
-                        ? `These don’t match. Check ${name}’s email address with them. If it’s right and they still don’t match, you can remove ${name} from your contacts for now and add them again once they do. To stop sharing something with ${name}, choose Share on it, then Stop sharing.`
+                        ? mismatchWords(name)
                         : `Ask ${name} to open Contacts in HushOS and choose Your twelve words. If theirs match these, it’s really them. Do it in person or on a call.`}
                 </DialogDescription>
             </DialogHeader>
@@ -218,42 +222,46 @@ export function CheckContactStep({
                     {error}
                 </p>
             )}
-            <div className="flex flex-wrap justify-end gap-2">
-                {!lookup?.fingerprint ? (
-                    <Button variant="outline" onClick={onDone}>
-                        {lookup ? 'Done' : 'Cancel'}
-                    </Button>
-                ) : mismatch ? (
-                    <>
-                        {lookup.pinned && (
-                            <Button
-                                variant="outline"
-                                disabled={saving}
-                                onClick={() => setStage('remove')}
-                            >
-                                Remove {name} from contacts
-                            </Button>
-                        )}
-                        <Button onClick={onDone}>Done</Button>
-                    </>
-                ) : (
-                    <>
+            {lookup?.fingerprint && mismatch ? (
+                // As the changed-account notice lays them out: side by side on a wide screen, and on
+                // a phone full width and stacked, Done on top.
+                <DialogFooter>
+                    {lookup.pinned && (
                         <Button
                             variant="outline"
                             disabled={saving}
-                            onClick={() => {
-                                cue('error');
-                                setStage('mismatch');
-                            }}
+                            onClick={() => setStage('remove')}
                         >
-                            They don’t match
+                            Remove {name} from contacts
                         </Button>
-                        <Button disabled={saving} onClick={() => void theyMatch(lookup)}>
-                            {saving ? 'Saving…' : 'They match'}
+                    )}
+                    <Button onClick={onDone}>Done</Button>
+                </DialogFooter>
+            ) : (
+                <div className="flex flex-wrap justify-end gap-2">
+                    {!lookup?.fingerprint ? (
+                        <Button variant="outline" onClick={onDone}>
+                            {lookup ? 'Done' : 'Cancel'}
                         </Button>
-                    </>
-                )}
-            </div>
+                    ) : (
+                        <>
+                            <Button
+                                variant="outline"
+                                disabled={saving}
+                                onClick={() => {
+                                    cue('error');
+                                    setStage('mismatch');
+                                }}
+                            >
+                                They don’t match
+                            </Button>
+                            <Button disabled={saving} onClick={() => void theyMatch(lookup)}>
+                                {saving ? 'Saving…' : 'They match'}
+                            </Button>
+                        </>
+                    )}
+                </div>
+            )}
         </>
     );
 }
