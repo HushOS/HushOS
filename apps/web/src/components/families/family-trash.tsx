@@ -2,11 +2,12 @@ import type { TrashItem } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { cn } from 'cn';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { EmptyState, SkeletonRows, useCoarsePointer } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { TRASH_COLUMN } from '@/components/drive/trash-view';
 import { Spinner } from '@/components/motion';
+import { PageHeader } from '@/components/page-header';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -32,24 +33,9 @@ import { cue } from '@/lib/sounds';
 
 type Row = TrashItem & { workspaceId: string; folder: string };
 
-/*
- * What was moved to Trash in the family's folders, every folder's together,
- * as the second section of Trash (docs/families-shared-pool.md 7.1), inside the
- * family's space (FamilySpaceScope): Restore puts an item back (in its family
- * folder's top folder when its own folder is in the Trash too), Delete forever
- * asks once. Anyone in the family may do either, as in the folders
- * themselves, and only where this device may write in that folder. Items stay
- * 30 days, as in My files.
- */
-export function FamilyTrashList() {
-    const space = useFamilySpace();
-    const queryClient = useQueryClient();
-    const [busy, setBusy] = useState<string | null>(null);
-    const [deleting, setDeleting] = useState<Row | null>(null);
-    const mobile = useIsMobile();
-    // Touch has no hover: the actions show on every row there, as in My files' Trash.
-    const coarse = useCoarsePointer();
-    const trash = useQuery({
+/* The family folders' Trash, every folder's together, newest first: shared by the tab and its prefetch. */
+function familyTrashQueryOptions(space: ReturnType<typeof useFamilySpace>) {
+    return {
         queryKey: [...driveKeys.trash, 'family', space.groupId],
         queryFn: async () => {
             const rows: Row[] = [];
@@ -69,14 +55,44 @@ export function FamilyTrashList() {
         },
         staleTime: 15_000,
         retry: 1,
-    });
-    // Come for the family folders' Trash (/app/trash#family): it is below My files', which
-    // may load first and push it down, so it is scrolled to once its own list is there.
-    const listed = trash.data !== undefined;
+    };
+}
+
+/* Read while My files' tab is open, so the family's tab shows its list at once. */
+export function PrefetchFamilyTrash() {
+    const space = useFamilySpace();
+    const queryClient = useQueryClient();
+    const options = familyTrashQueryOptions(space);
+    // The family's folders are known once the space has synced; the list follows them.
+    const ready = space.areas.length;
     useEffect(() => {
-        if (listed && window.location.hash === '#family')
-            document.getElementById('family')?.scrollIntoView({ block: 'start' });
-    }, [listed]);
+        if (ready) void queryClient.prefetchQuery(options);
+        // `options` is rebuilt each render from the same space.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [queryClient, ready]);
+    return null;
+}
+
+/*
+ * The family folders' Trash as a Trash of its own (docs/families-shared-pool.md 7.1), the
+ * family's tab of Trash beside My files', inside the family's space (FamilySpaceScope). It
+ * reads as My files' does: the same header, columns, rows and actions. Restore puts an item
+ * back (in its family folder's top folder when its own folder is in the Trash too); Delete
+ * forever and Empty Trash ask once. Anyone in the family may do any of these, as in the
+ * folders themselves, and only where this device may write in that folder: Empty Trash leaves
+ * what this device can't change. Items stay 30 days, as in My files.
+ */
+export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
+    const space = useFamilySpace();
+    const queryClient = useQueryClient();
+    const [busy, setBusy] = useState<string | null>(null);
+    const [deleting, setDeleting] = useState<Row | null>(null);
+    const [confirmEmpty, setConfirmEmpty] = useState(false);
+    const [emptying, setEmptying] = useState<{ gone: number; total: number } | null>(null);
+    const mobile = useIsMobile();
+    // Touch has no hover: the actions show on every row there, as in My files' Trash.
+    const coarse = useCoarsePointer();
+    const trash = useQuery(familyTrashQueryOptions(space));
     const writable = (row: Row) =>
         space.areas.find((area) => area.workspaceId === row.workspaceId)?.write === 'writable';
 
@@ -134,10 +150,62 @@ export function FamilyTrashList() {
         }
     }
 
+    // What Empty Trash deletes: every item this device may write, less those inside a folder
+    // that is in the Trash too, which go with it.
+    const emptiable = (trash.data ?? []).filter((row) => writable(row) && !row.parentTrashed);
+
+    async function emptyAll() {
+        setConfirmEmpty(false);
+        const rows = emptiable;
+        setEmptying({ gone: 0, total: rows.length });
+        let failed = 0;
+        for (const [index, row] of rows.entries()) {
+            try {
+                const state = space.areas.find((area) => area.workspaceId === row.workspaceId)!;
+                const { client } = await openArea(space.userId, space.groupId, state);
+                await client.purge(row.node);
+            } catch {
+                failed += 1;
+            }
+            setEmptying({ gone: index + 1, total: rows.length });
+        }
+        setEmptying(null);
+        await invalidateFolders(queryClient);
+        if (failed === 0) {
+            cue('droplet');
+            toast.add({ type: 'success', title: 'Trash emptied' });
+        } else {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'The Trash couldn’t be emptied',
+                description: `${failed} of ${rows.length} ${rows.length === 1 ? 'item is' : 'items are'} still there. Try again.`,
+            });
+        }
+    }
+
     return (
-        // The same list as My files' Trash above it (TrashView): its columns by the list's
-        // own width, the same row and the same two actions, shown on hover as there.
-        <div className="@container/list flex flex-col" data-family-trash>
+        // The same list as My files' Trash (TrashView): its columns by the list's own width,
+        // the same row and the same two actions, shown on hover as there.
+        <div className="@container/list flex flex-1 flex-col" data-family-trash>
+            <PageHeader
+                title="Trash"
+                description="Items stay here for 30 days, then they’re deleted for good. They count towards the family’s storage until then."
+            >
+                {emptiable.length > 0 && (
+                    <Button
+                        variant="outline"
+                        disabled={busy !== null || emptying !== null}
+                        onClick={() => setConfirmEmpty(true)}
+                    >
+                        {emptying ? <Spinner /> : <Trash2Icon />}
+                        {emptying
+                            ? `Emptying… ${emptying.gone} of ${emptying.total}`
+                            : 'Empty Trash'}
+                    </Button>
+                )}
+            </PageHeader>
+            {tabs}
             {trash.isPending && <SkeletonRows rows={3} />}
             {trash.isError && (
                 <EmptyState title="The Trash couldn’t be opened" body={driveError(trash.error)}>
@@ -148,9 +216,10 @@ export function FamilyTrashList() {
                 </EmptyState>
             )}
             {trash.data?.length === 0 && (
-                <p className="border-t border-rule px-5 py-4 text-sm text-muted-foreground sm:px-8">
-                    Nothing in the family folders’ Trash.
-                </p>
+                <EmptyState
+                    title="Trash is empty"
+                    body="What anyone in the family moves to the Trash from the family folders stays here for 30 days."
+                />
             )}
             {trash.data && trash.data.length > 0 && (
                 <table
@@ -279,7 +348,9 @@ export function FamilyTrashList() {
                                                 >
                                                     <Button
                                                         variant="outline"
-                                                        disabled={busy !== null}
+                                                        disabled={
+                                                            busy !== null || emptying !== null
+                                                        }
                                                         aria-label={
                                                             row.parentTrashed
                                                                 ? `Restore “${row.node.name}” to ${row.folder}`
@@ -300,7 +371,9 @@ export function FamilyTrashList() {
                                                         aria-label={`Delete “${row.node.name}” forever`}
                                                         title="Delete forever"
                                                         className="text-destructive hover:bg-destructive-soft hover:text-destructive"
-                                                        disabled={busy !== null}
+                                                        disabled={
+                                                            busy !== null || emptying !== null
+                                                        }
                                                         onClick={() => setDeleting(row)}
                                                     >
                                                         <Trash2Icon />
@@ -315,6 +388,24 @@ export function FamilyTrashList() {
                     </tbody>
                 </table>
             )}
+            <AlertDialog open={confirmEmpty} onOpenChange={setConfirmEmpty}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Empty the family folders’ Trash?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            All {emptiable.length} {emptiable.length === 1 ? 'item' : 'items'} in
+                            the family folders’ Trash {emptiable.length === 1 ? 'is' : 'are'}{' '}
+                            deleted for good, for everyone in the family. This can’t be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <Button variant="destructive" onClick={() => void emptyAll()}>
+                            Empty Trash
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
             <AlertDialog
                 open={deleting !== null}
                 onOpenChange={(open) => !open && setDeleting(null)}

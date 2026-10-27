@@ -1989,10 +1989,7 @@ test.describe.serial('moving between My files and a family folder', () => {
         // Deleted, not left in the Trash, where it would still count.
         await ada.page.goto('/app/trash', { waitUntil: 'networkidle' });
         // Not left in the Trash either, where it would still count: nothing of hers is there.
-        // In a family, My files' Trash is one section of two and says so in a line.
-        await expect(ada.page.getByText('Nothing in My files’ Trash.')).toBeVisible({
-            timeout: 60_000,
-        });
+        await expect(ada.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
     }
 
     test('without one pool (billing off) the copy is charged to the folder: the file lands there byte for byte, and the original is gone', async () => {
@@ -2366,14 +2363,15 @@ test.describe.serial('one view for a family member, with one pool', () => {
         );
         await leave.getByRole('button', { name: 'Cancel' }).click();
 
-        // Trash: My files' and the family folders', two sections of one page.
+        // Trash: My files' and the family folders', a tab each.
         await theo.page.goto('/app/trash');
-        await expect(theo.page.getByRole('heading', { level: 2, name: 'My files' })).toBeVisible({
-            timeout: 60_000,
-        });
-        await expect(
-            theo.page.getByRole('heading', { level: 2, name: 'Family folders' }),
-        ).toBeVisible();
+        const trashTabs = theo.page.getByRole('tablist', { name: 'Whose Trash' });
+        await expect(trashTabs.getByRole('tab', { name: 'My files' })).toHaveAttribute(
+            'aria-selected',
+            'true',
+            { timeout: 60_000 },
+        );
+        await trashTabs.getByRole('tab', { name: family }).click();
         await expect(theo.page.locator('[data-family-trash]')).toBeVisible({ timeout: 90_000 });
     });
 });
@@ -2855,32 +2853,88 @@ test.describe
         await expect(ben.page.locator('[data-join-storage]')).toHaveCount(0);
     });
 
-    test('Trash: the family folders’ Trash is a section of Trash, beside My files’, and restores', async () => {
-        test.setTimeout(300_000);
+    test('Trash: the family folders’ Trash is a tab of its own beside My files’; each restores and empties alone', async () => {
+        test.setTimeout(420_000);
+        const toTrash = async (name: string) => {
+            await ben.page.getByRole('button', { name: `More for ${name}` }).click();
+            await ben.page.getByRole('menuitem', { name: /^Move to Trash/ }).click();
+            await expect(fileRow(ben.page, name)).toHaveCount(0, { timeout: 60_000 });
+        };
         await openFamilyFolder(ben, 'Aalto family', 'Family');
         await upload(ben, 'shopping.txt', 'Milk, bread\n');
-        await ben.page.getByRole('button', { name: 'More for shopping.txt' }).click();
-        await ben.page.getByRole('menuitem', { name: /^Move to Trash/ }).click();
-        await expect(fileRow(ben.page, 'shopping.txt')).toHaveCount(0, { timeout: 60_000 });
-        // Its old address leads to the section.
+        await upload(ben, 'plan.txt', 'Saturday\n');
+        await toTrash('shopping.txt');
+        await toTrash('plan.txt');
+        await ben.page.goto('/app/drive');
+        await upload(ben, 'receipt.txt', 'Paid\n');
+        await toTrash('receipt.txt');
+
+        // Its old address leads to the family's tab, named after the family.
         await ben.page.goto(`/app/s/${benFamily}/trash`);
-        await expect(ben.page).toHaveURL(/\/app\/trash#family$/, { timeout: 60_000 });
-        await expect(ben.page.getByRole('heading', { level: 2, name: 'My files' })).toBeVisible();
-        await expect(
-            ben.page.getByRole('heading', { level: 2, name: 'Family folders' }),
-        ).toBeVisible();
-        // My files' Trash holds nothing of it; the family folders' does.
-        await expect(ben.page.getByText('Nothing in My files’ Trash.')).toBeVisible({
-            timeout: 60_000,
+        await expect(ben.page).toHaveURL(/\/app\/trash\?view=family$/, { timeout: 60_000 });
+        const tabs = ben.page.getByRole('tablist', { name: 'Whose Trash' });
+        const mine = tabs.getByRole('tab', { name: 'My files' });
+        const family = tabs.getByRole('tab', { name: 'Aalto family' });
+        await expect(family).toHaveAttribute('aria-selected', 'true');
+        const familyRow = (name: string) =>
+            ben.page.locator('[data-family-trash] [data-node-id]').filter({ hasText: name });
+        const myRow = (name: string) =>
+            ben.page
+                .locator('tr[data-node-id]:not([data-family-trash] *)')
+                .filter({ hasText: name });
+        await expect(familyRow('shopping.txt')).toBeVisible({ timeout: 90_000 });
+        await expect(familyRow('shopping.txt')).toContainText('Family');
+        // Each tab is its own list: nothing of his own here.
+        await expect(ben.page.getByText('receipt.txt')).toHaveCount(0);
+
+        // Switching keeps the address, and back and forward walk the tabs.
+        await mine.click();
+        await expect(ben.page).toHaveURL(/\/app\/trash$/);
+        await expect(mine).toHaveAttribute('aria-selected', 'true');
+        await expect(myRow('receipt.txt')).toBeVisible({ timeout: 60_000 });
+        await expect(ben.page.getByText('shopping.txt')).toHaveCount(0);
+        await ben.page.goBack();
+        await expect(ben.page).toHaveURL(/\/app\/trash\?view=family$/);
+        await expect(familyRow('shopping.txt')).toBeVisible({ timeout: 60_000 });
+        await ben.page.goForward();
+        await expect(ben.page).toHaveURL(/\/app\/trash$/);
+        await expect(myRow('receipt.txt')).toBeVisible({ timeout: 60_000 });
+
+        // Restore, from the family's tab.
+        await family.click();
+        await familyRow('shopping.txt').getByRole('button', { name: 'Restore' }).click();
+        await expect(familyRow('shopping.txt')).toHaveCount(0, { timeout: 60_000 });
+
+        // Empty Trash on My files' tab empties only My files'.
+        await mine.click();
+        await ben.page.getByRole('button', { name: 'Empty Trash' }).click();
+        const emptyMine = ben.page.getByRole('alertdialog', { name: 'Empty My files’ Trash?' });
+        await expect(emptyMine).not.toContainText('family');
+        await emptyMine.getByRole('button', { name: 'Empty Trash' }).click();
+        await expect(ben.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+        await family.click();
+        await expect(familyRow('plan.txt')).toBeVisible({ timeout: 60_000 });
+
+        // And on the family's tab, only the family folders'.
+        await ben.page.goto('/app/drive');
+        await upload(ben, 'memo.txt', 'Call back\n');
+        await toTrash('memo.txt');
+        await ben.page.goto('/app/trash?view=family');
+        await expect(familyRow('plan.txt')).toBeVisible({ timeout: 90_000 });
+        await ben.page.getByRole('button', { name: 'Empty Trash' }).click();
+        const emptyFamily = ben.page.getByRole('alertdialog', {
+            name: 'Empty the family folders’ Trash?',
         });
-        const section = ben.page.locator('[data-family-trash]');
-        const row = section.locator('[data-node-id]').filter({ hasText: 'shopping.txt' });
-        await expect(row).toBeVisible({ timeout: 90_000 });
-        await expect(row).toContainText('Family');
-        await row.getByRole('button', { name: 'Restore' }).click();
-        await expect(row).toHaveCount(0, { timeout: 60_000 });
+        await expect(emptyFamily).toContainText('for everyone in the family');
+        await emptyFamily.getByRole('button', { name: 'Empty Trash' }).click();
+        await expect(ben.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+        await expect(familyRow('plan.txt')).toHaveCount(0);
+        await mine.click();
+        await expect(myRow('memo.txt')).toBeVisible({ timeout: 60_000 });
+
         await openFamilyFolder(ben, 'Aalto family', 'Family');
         await expect(fileRow(ben.page, 'shopping.txt')).toBeVisible({ timeout: 60_000 });
+        await expect(fileRow(ben.page, 'plan.txt')).toHaveCount(0);
     });
 });
 

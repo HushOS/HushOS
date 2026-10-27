@@ -481,6 +481,8 @@ test('trash: restore brings a file back, delete forever and empty trash remove t
 
     await page.goto('/app/trash');
     await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible();
+    // In no family there is one Trash: no tabs.
+    await expect(page.getByRole('tablist', { name: 'Whose Trash' })).toHaveCount(0);
     await expect(page.getByText('module.ts')).toBeVisible();
     await page.getByRole('button', { name: /delete “module.ts” forever/i }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete forever' }).click();
