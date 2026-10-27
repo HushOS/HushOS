@@ -5,22 +5,41 @@ import {
     publicKeyBytes,
     settingsRolledBack,
 } from '@hushos/auth/client';
+import {
+    CONTACTS_FULL,
+    keyCommitment,
+    nextGuardEntry,
+    pinTrust,
+    settingsWithPin,
+    type GuardEntry,
+} from '@hushos/crypto/pins';
+import type { ServedIdentity } from '@hushos/drive/api';
 import type { SharingLedger, TrustedGranter, TrustedGrantee } from '@hushos/drive/client';
 import {
     comparePin,
     granterKeysOf,
-    replacementUnseen,
     keysPassedThrough,
     pinAfterSuccession,
     pinOfServed,
     signersFromPins,
+    type DriveSigners,
     type Pin,
-    type ServedKeys,
 } from '@hushos/drive/trust';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { backfillConsent } from '@/lib/consent-backfill';
+import {
+    askPersistentStorage,
+    createIndexedDbContactGuard,
+    GuardRacedError,
+    GuardUnreadableError,
+    GuardUnsavedError,
+    withGuardLock,
+    type ContactGuardStore,
+} from '@/lib/contact-guard';
 import { onStaleIdentity } from '@/lib/drive-api';
+import { pinOf } from '@/lib/family-pin';
 import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
     identitySeen,
@@ -35,18 +54,18 @@ import {
 } from '@/lib/rollback-marks';
 
 /*
- * Contacts are pins: a person's identity keys as they were when their words
- * were compared, with the fingerprint both people compare. The pins live in the
- * settings document, sealed in the worker under the settings key, so every
- * device sees the same pins and a key the server swaps later is noticed rather
- * than trusted. A pin moves on to new keys without a words check only along a
- * succession chain signed by the keys it held. Reads are cached per unlock; a
- * lock forgets the identity and the settings key in the worker, and the next
- * read opens them again.
+ * Contacts are pins: a person's identity keys as this person's devices first
+ * saw them (first-seen), or as two people compared twelve words over them
+ * (verified). The pins live in the settings document, sealed in the worker
+ * under the settings key, so every device sees the same pins and a key the
+ * server swaps later is noticed rather than trusted. A pin moves on to new
+ * keys without the person only along a succession chain signed by the keys it
+ * held. Reads are cached per unlock; a lock forgets the identity and the
+ * settings key in the worker, and the next read opens them again.
  */
 
 export type { Pin };
-export { replacementUnseen };
+export { GUARD_UNREADABLE, GUARD_UNSAVED } from '@/lib/contact-guard';
 /* The settings as this app reads them: pins carry what the web keeps beside them. */
 export type LoadedSettings = {
     settings: Omit<Settings, 'contacts'> & {
@@ -437,140 +456,505 @@ export async function saveSettings(
     throw new Error('Your settings keep changing on another device. Try again.');
 }
 
-/* A contact's identity as the server serves it: what every pin check is made against. */
-type Served = ServedKeys;
+/*
+ * First use (docs/optional-verification.md 2): someone added, or met through
+ * something they shared, is remembered with the keys the server serves then
+ * (a first-seen pin), and shared with at once. Comparing twelve words, any
+ * time, makes the pin verified. A later change is followed only along a
+ * succession chain signed by keys this device holds; any other change pauses
+ * that one person (new shares, re-sealing, opening anything new from them)
+ * until the person continues or checks, and nothing is ever sealed to keys
+ * nobody pinned, followed or accepted.
+ *
+ * The settings pin is used only if it agrees with the guard this device keeps
+ * (lib/contact-guard.ts, 2.8): a settings document replaced by a newer copy
+ * that drops or swaps a pin is met as a change, never taken as first use.
+ */
+
+/* A served identity, with the keys statement first-seen pins are written over. */
+type Served = ServedIdentity;
 
 /*
- * Brings a pin up to the keys the server serves, when it can without a words
- * check: the pinned keys themselves, or new ones a succession chain signed by
- * the pinned keys leads to. Anything else (a changed key, a chain that does
- * not hold, none at all) is `changed`, and the pin is left as it was. A
- * followed pin is saved at once, so every device takes the same step.
- *
- * Only ever on the person's word (adding or checking someone, "Check again"
- * on a mark), never on its own: a device that followed served keys whenever
- * it met them would tell the server which contacts it pins. The chain is
- * asked for whole, from the first key version, so the request does not say
- * which version the pin is at either.
+ * The guard's store, and how the browser is asked to keep it. Tests hand in
+ * their own (setContactGuard); the app opens IndexedDB on first use.
  */
-const following = new Map<
-    string,
-    Promise<{ pin: Pin; outcome: 'same' | 'followed' | 'changed' }>
->();
-async function bringUpToDate(userId: string, pin: Pin, served: Served) {
-    const comparison = await comparePin(pin, served);
-    if (comparison !== 'succession') return { pin, outcome: comparison };
-    const key = `${pin.userId}:${served.encryptionPublicKey}`;
-    let pending = following.get(key);
-    if (!pending) {
-        pending = (async () => {
-            let links;
-            try {
-                ({ links } = await authClient.contactSuccession(pin.userId, 1));
-            } catch {
-                return { pin, outcome: 'changed' as const };
-            }
-            const { mlDsaPublicKey, kemPublicKey } = served;
-            if (!links.length || !mlDsaPublicKey || !kemPublicKey || !pin.mlDsaPublicKeyHash)
-                return { pin, outcome: 'changed' as const };
-            const { valid } = await authClient.rpc('identityVerifyChain', {
-                userId: pin.userId,
-                pinned: {
-                    keyVersion: pin.keyVersion ?? null,
-                    encryptionPublicKey: pin.encryptionPublicKey,
-                    signingPublicKey: pin.signingPublicKey,
-                    mlDsaPublicKeyHash: pin.mlDsaPublicKeyHash,
-                },
-                served: {
-                    keyVersion: served.keyVersion,
-                    encryptionPublicKey: served.encryptionPublicKey,
-                    signingPublicKey: served.signingPublicKey,
-                    mlDsaPublicKey,
-                    kemPublicKey,
-                },
-                links,
-            });
-            if (!valid) return { pin, outcome: 'changed' as const };
-            const next = await pinAfterSuccession(
-                pin,
-                { ...served, mlDsaPublicKey, kemPublicKey },
-                new Date(),
-                await keysPassedThrough(pin, links),
-            );
-            await saveSettings(boundQueryClient, userId, (settings) => {
-                const current = settings.contacts[pin.userId];
-                // Only from the keys the chain was checked from: another device may have moved first.
-                if (
-                    current &&
-                    current.encryptionPublicKey === pin.encryptionPublicKey &&
-                    current.signingPublicKey === pin.signingPublicKey
-                )
-                    settings.contacts[pin.userId] = next;
-                return settings;
-            });
-            return { pin: next, outcome: 'followed' as const };
-        })().finally(() => following.delete(key));
-        following.set(key, pending);
+type Guard = { store: ContactGuardStore; persist: () => Promise<boolean> };
+let guard: Guard | undefined;
+function contactGuard(): Guard {
+    guard ??= { store: createIndexedDbContactGuard(), persist: askPersistentStorage };
+    return guard;
+}
+export function setContactGuard(next: Guard | undefined) {
+    guard = next;
+    guardWrites++;
+}
+/* Every guard write in this tab: verdicts built over older entries are built again. */
+let guardWrites = 0;
+
+/*
+ * Someone whose keys changed with no chain from the keys this device holds:
+ * paused until the person continues or checks (2.4). Said calmly wherever it
+ * is met, as the same notice (components/drive/account-changed.tsx).
+ */
+export class AccountChangedError extends Error {
+    override name = 'AccountChangedError';
+    constructor(
+        readonly contactId: string,
+        readonly person: string,
+    ) {
+        super(`${firstNameOf(person)}’s account changed.`);
     }
-    return pending;
+}
+function firstNameOf(name: string) {
+    return name.trim().split(/\s+/)[0] || name;
+}
+export const notUpgradedWords = (name: string) =>
+    `${firstNameOf(name)} needs to sign in to HushOS once more before you can share with them.`;
+
+/*
+ * The people this tab found changed, so every place that shows them (Contacts,
+ * the share sheet, Shared with me) says so until Continue or a check. A
+ * session's knowledge only: the settings never carry it, and the next act
+ * finds the change again.
+ */
+export type AccountChange = { contactId: string; name: string; email: string };
+const changes = new Map<string, AccountChange>();
+const changeListeners = new Set<() => void>();
+let changeVersion = 0;
+const changeKey = (userId: string, contactId: string) => `${userId}:${contactId.toLowerCase()}`;
+function noteChange(userId: string, change: AccountChange) {
+    changes.set(changeKey(userId, change.contactId), change);
+    changeVersion++;
+    for (const listener of changeListeners) listener();
+    return change;
+}
+function clearChange(userId: string, contactId: string) {
+    if (!changes.delete(changeKey(userId, contactId))) return;
+    changeVersion++;
+    for (const listener of changeListeners) listener();
+}
+export function accountChangeOf(userId: string, contactId: string) {
+    return changes.get(changeKey(userId, contactId)) ?? null;
+}
+/* Re-renders when this tab finds or clears a change; read with accountChangeOf. */
+export function useAccountChanges() {
+    return useSyncExternalStore(
+        (listener) => {
+            changeListeners.add(listener);
+            return () => changeListeners.delete(listener);
+        },
+        () => changeVersion,
+        () => 0,
+    );
+}
+
+/* This device's entry for a person; a read that fails is never first use. */
+async function readGuard(userId: string, contactId: string) {
+    const { store } = contactGuard();
+    try {
+        return await Promise.all([
+            store.entry(userId, contactId),
+            store.pending(userId, contactId),
+        ]);
+    } catch (error) {
+        throw new GuardUnreadableError(error);
+    }
+}
+
+async function commitGuard(
+    userId: string,
+    contactId: string,
+    entry: GuardEntry,
+    revision: number,
+): Promise<GuardEntry> {
+    try {
+        await contactGuard().store.commit(userId, contactId, entry, revision);
+    } catch (error) {
+        if (error instanceof GuardRacedError) throw error;
+        throw new GuardUnsavedError(error);
+    }
+    guardWrites++;
+    return entry;
 }
 
 /*
- * "Check again": looks up a pinned contact's served keys and follows a
- * succession to them when a signed chain holds. Says what came of it: the
- * same keys, followed to new ones, keys that changed without a chain (a
- * words check is the only way on), or nobody pinned by that id.
+ * The guard entry for a person, with an act left pending settled first (2.8):
+ * one whose target the settings pin reached, over the entry's current
+ * revision, is finished silently; any other is dropped, and that act was
+ * never done. Under the account's lock.
+ */
+async function guardFor(userId: string, contactId: string, pin: Pin | null) {
+    const [entry, pending] = await readGuard(userId, contactId);
+    if (!pending) return entry;
+    const revision = entry?.revision ?? 0;
+    if (
+        pin !== null &&
+        pending.revision === revision &&
+        (await keyCommitment(pin)) === pending.target
+    ) {
+        const next = await nextGuardEntry(entry, pin).catch(() => null);
+        if (next) return commitGuard(userId, contactId, next, revision);
+    }
+    try {
+        await contactGuard().store.dropPending(userId, contactId);
+    } catch (error) {
+        throw new GuardUnsavedError(error);
+    }
+    return entry;
+}
+
+/*
+ * Whether the settings pin agrees with this device's guard, by key commitment
+ * (never by `fingerprint`, which every first-seen pin holds as ""): first use
+ * when this device has no entry, else agrees or changed. A pin missing from
+ * the settings while the guard holds the person is a change too.
+ */
+type Agreement = 'first-use' | 'agrees' | 'changed';
+async function agreement(entry: GuardEntry | null, pin: Pin | null): Promise<Agreement> {
+    if (entry === null) return 'first-use';
+    if (pin === null) return 'changed';
+    const trust = await pinTrust(pin);
+    if (trust !== 'verified' && trust !== 'seen') return 'changed';
+    const [held, keys] = await Promise.all([keyCommitment(entry), keyCommitment(pin)]);
+    return held !== null && held === keys ? 'agrees' : 'changed';
+}
+
+/* The key commitment of a served identity, or null for one that cannot be pinned. */
+async function servedCommitment(served: Served) {
+    if (!served.mlDsaPublicKey || !served.kemPublicKey) return null;
+    try {
+        return await keyCommitment(
+            await pinOfServed({
+                ...served,
+                mlDsaPublicKey: served.mlDsaPublicKey,
+                kemPublicKey: served.kemPublicKey,
+            }),
+        );
+    } catch {
+        return null;
+    }
+}
+
+/*
+ * A guard entry for keys this device acts on with nothing in the settings to
+ * change: a pin met here for the first time, or one now seen verified.
+ */
+async function rememberKeys(
+    userId: string,
+    contactId: string,
+    entry: GuardEntry | null,
+    pin: Pin,
+): Promise<GuardEntry> {
+    void contactGuard().persist();
+    return commitGuard(userId, contactId, await nextGuardEntry(entry, pin), entry?.revision ?? 0);
+}
+
+/*
+ * One act that changes whom this device trusts (2.8, "Committing an act"): a
+ * pending record naming the exact keys it moves to, the settings saved, then
+ * the guard entry at the next revision with the pending record deleted, in
+ * one transaction. Only then is the act done; a lost answer, a crash or a
+ * failed write between leaves the pending record for the next attempt to
+ * settle. `change` must write a pin of `target`'s keys, or the act stops.
+ * Under the account's lock.
+ */
+async function commitTrust(
+    queryClient: QueryClient | undefined,
+    userId: string,
+    contactId: string,
+    entry: GuardEntry | null,
+    target: Pin,
+    change: (settings: LoadedSettings['settings']) => LoadedSettings['settings'],
+): Promise<{ pin: Pin; entry: GuardEntry }> {
+    const { store, persist } = contactGuard();
+    void persist();
+    const keys = await keyCommitment(target);
+    if (keys === null) throw new Error('These keys can’t be remembered.');
+    const revision = entry?.revision ?? 0;
+    try {
+        await store.putPending(userId, contactId, {
+            target: keys,
+            revision,
+            at: new Date().toISOString(),
+        });
+    } catch (error) {
+        throw new GuardUnsavedError(error);
+    }
+    const saved = await saveSettings(queryClient ?? boundQueryClient, userId, change);
+    const pin = pinOf(saved.contacts, contactId)?.pin ?? null;
+    if (!pin || (await keyCommitment(pin)) !== keys)
+        throw new Error('Your contacts changed on another device. Try again.');
+    return {
+        pin,
+        entry: await commitGuard(userId, contactId, await nextGuardEntry(entry, pin), revision),
+    };
+}
+
+/*
+ * A pin from before post-quantum identities, or a malformed one, as a
+ * first-seen pin of the served keys (2.5, the crypto core's
+ * firstSeenOfLegacy): only when its X25519 and Ed25519 keys are the served
+ * ones and the keys statement holds, so the new keys are signed by the very
+ * Ed25519 key pinned before. Never verified. Null when the rule does not apply.
+ */
+async function firstSeenOfLegacy(pin: Pin, served: Served): Promise<Pin | null> {
+    const trust = await pinTrust(pin);
+    if (trust !== 'legacy' && trust !== 'invalid') return null;
+    if (
+        pin.encryptionPublicKey !== served.encryptionPublicKey ||
+        pin.signingPublicKey !== served.signingPublicKey
+    )
+        return null;
+    if (!(await keysHold(pin.userId, served))) return null;
+    try {
+        return {
+            ...pin,
+            ...(await pinOfServed({
+                ...served,
+                mlDsaPublicKey: served.mlDsaPublicKey!,
+                kemPublicKey: served.kemPublicKey!,
+            })),
+            fingerprint: '',
+        };
+    } catch {
+        return null;
+    }
+}
+
+/* Whether a succession chain the server serves leads from `from` to the served keys; checked in the worker. */
+async function chainHolds(
+    contactId: string,
+    from: Pick<
+        Pin,
+        'keyVersion' | 'encryptionPublicKey' | 'signingPublicKey' | 'mlDsaPublicKeyHash'
+    >,
+    served: Served,
+    links?: SuccessionLink[],
+) {
+    if (!served.mlDsaPublicKey || !served.kemPublicKey || !from.mlDsaPublicKeyHash) return false;
+    try {
+        // Asked for whole, from the first key version, so the request does not say where the pin is.
+        const chain = links ?? (await authClient.contactSuccession(contactId, 1)).links;
+        if (!chain.length) return false;
+        const { valid } = await authClient.rpc('identityVerifyChain', {
+            userId: contactId,
+            pinned: {
+                keyVersion: from.keyVersion ?? null,
+                encryptionPublicKey: from.encryptionPublicKey,
+                signingPublicKey: from.signingPublicKey,
+                mlDsaPublicKeyHash: from.mlDsaPublicKeyHash,
+            },
+            served: {
+                keyVersion: served.keyVersion,
+                encryptionPublicKey: served.encryptionPublicKey,
+                signingPublicKey: served.signingPublicKey,
+                mlDsaPublicKey: served.mlDsaPublicKey,
+                kemPublicKey: served.kemPublicKey,
+            },
+            links: chain,
+        });
+        return valid;
+    } catch {
+        return false;
+    }
+}
+type SuccessionLink = Awaited<ReturnType<typeof authClient.contactSuccession>>['links'][number];
+
+/*
+ * Where this device stands with one person, given the keys the server serves
+ * for them now (2.3, 2.4, 2.8):
+ * - ok: the settings pin agrees with the guard (or this device has none) and
+ *   holds the served keys, or follows them along a chain from the guard's
+ *   keys (`followed`);
+ * - new: nobody pinned: first use, or a contact removed from the settings
+ *   whose guard holds the served keys;
+ * - succession: a signed succession not looked up (a background pass);
+ * - changed: anything else, a pin missing from the settings included;
+ * - not-upgraded: a pin from before post-quantum identities whose person has
+ *   not signed in since, so their new keys cannot be pinned yet.
+ * `act` writes what the person's act needs (a first guard entry, a legacy pin
+ * made first-seen, a followed succession); `follow` looks a succession up,
+ * only ever on the person's act, so the server cannot learn whom this device
+ * pins by watching it look people up. Under the account's lock.
+ */
+type Standing =
+    | { kind: 'ok'; pin: Pin; entry: GuardEntry | null; followed: boolean }
+    | { kind: 'new'; entry: GuardEntry | null }
+    | { kind: 'succession'; pin: Pin }
+    | { kind: 'changed'; pin: Pin | null; entry: GuardEntry | null; wasVerified: boolean }
+    | { kind: 'not-upgraded'; pin: Pin };
+async function stand(
+    userId: string,
+    contactId: string,
+    served: Served,
+    { act, follow }: { act: boolean; follow: boolean },
+): Promise<Standing> {
+    const loaded = await loadSettings(userId);
+    const found = pinOf(loaded.settings.contacts, contactId);
+    let pin = found?.pin ?? null;
+    let entry = await guardFor(userId, contactId, pin);
+    let trust = pin ? await pinTrust(pin) : null;
+    const changed = async (): Promise<Standing> => ({
+        kind: 'changed',
+        pin,
+        entry,
+        // Whether this device had these people checked: the notice then leads with a check.
+        wasVerified:
+            Boolean(entry?.verified) ||
+            (trust === 'verified' && (await agreement(entry, pin)) !== 'changed'),
+    });
+    if (pin === null) {
+        if (entry === null) return { kind: 'new', entry };
+        const keys = await servedCommitment(served);
+        return keys !== null && keys === (await keyCommitment(entry))
+            ? { kind: 'new', entry }
+            : changed();
+    }
+    if (trust === 'legacy' || trust === 'invalid') {
+        // A legacy pin over a guard is settings older than this device has acted on.
+        if (entry !== null) return changed();
+        const upgraded = await firstSeenOfLegacy(pin, served);
+        if (!upgraded)
+            return pin.encryptionPublicKey === served.encryptionPublicKey &&
+                pin.signingPublicKey === served.signingPublicKey
+                ? { kind: 'not-upgraded', pin }
+                : changed();
+        if (!act) return { kind: 'ok', pin: upgraded, entry, followed: false };
+        const key = found!.key;
+        const before = pin;
+        ({ pin, entry } = await commitTrust(
+            boundQueryClient,
+            userId,
+            contactId,
+            entry,
+            upgraded,
+            (settings) => {
+                const current = settings.contacts[key];
+                // Only over the pin it was worked out from: another device may have moved first.
+                if (
+                    current &&
+                    current.encryptionPublicKey === before.encryptionPublicKey &&
+                    current.signingPublicKey === before.signingPublicKey
+                )
+                    settings.contacts[key] = { ...current, ...upgraded };
+                return settings;
+            },
+        ));
+        trust = 'seen';
+    }
+    if ((await agreement(entry, pin)) === 'changed') {
+        // The settings moved away from what this device holds: taken only along a chain this
+        // device verifies from the guard's keys to the served ones, which must be the pin's.
+        if (!follow || entry === null) return changed();
+        const keys = await servedCommitment(served);
+        if (keys === null || keys !== (await keyCommitment(pin))) return changed();
+        if (!(await chainHolds(contactId, entry, served))) return changed();
+        if (act) entry = await rememberKeys(userId, contactId, entry, pin);
+    }
+    const comparison = await comparePin(pin, served);
+    if (comparison === 'same') {
+        if (act && (entry === null || (trust === 'verified' && !entry.verified)))
+            entry = await rememberKeys(userId, contactId, entry, pin);
+        return { kind: 'ok', pin, entry, followed: false };
+    }
+    if (comparison !== 'succession') return changed();
+    if (!follow) return { kind: 'succession', pin };
+    let links;
+    try {
+        ({ links } = await authClient.contactSuccession(pin.userId, 1));
+    } catch {
+        return changed();
+    }
+    if (!(await chainHolds(contactId, pin, served, links))) return changed();
+    const from = pin;
+    const next = await pinAfterSuccession(
+        from,
+        { ...served, mlDsaPublicKey: served.mlDsaPublicKey!, kemPublicKey: served.kemPublicKey! },
+        new Date(),
+        await keysPassedThrough(from, links),
+    );
+    if (!act) return { kind: 'ok', pin: next, entry, followed: true };
+    const key = found!.key;
+    ({ pin, entry } = await commitTrust(
+        boundQueryClient,
+        userId,
+        contactId,
+        entry,
+        next,
+        (settings) => {
+            const current = settings.contacts[key];
+            // Only from the keys the chain was checked from: another device may have moved first.
+            if (
+                current &&
+                current.encryptionPublicKey === from.encryptionPublicKey &&
+                current.signingPublicKey === from.signingPublicKey
+            )
+                settings.contacts[key] = { ...current, ...next };
+            return settings;
+        },
+    ));
+    return { kind: 'ok', pin, entry, followed: true };
+}
+
+/*
+ * "Check again" on a mark: looks a pinned contact's served keys up and follows
+ * a succession to them when a signed chain holds. Says what came of it: the
+ * same keys, followed to new ones, a change with no chain (the notice), a pin
+ * whose person has not signed in since post-quantum keys, or nobody pinned.
  */
 export async function followServedKeys(
     userId: string,
     signer: { id: string },
 ): Promise<'same' | 'followed' | 'recheck' | 'changed' | 'not-pinned'> {
     const { settings } = await loadSettings(userId);
-    const held = settings.contacts[signer.id];
+    const held = pinOf(settings.contacts, signer.id)?.pin;
     if (!held) return 'not-pinned';
     const { contact } = await authClient.lookupContact(held.email);
-    if (contact.userId !== held.userId) return 'changed';
-    return (await bringUpToDate(userId, held, contact)).outcome;
-}
-
-/*
- * What sharing and opening do with keys the server serves that are not the
- * pinned ones: nothing on their own. Newer keys may be a succession, but only
- * the person's "Check again" follows one; until then, nothing is sealed to
- * them or opened with them.
- */
-async function servedMatchesPin(pin: Pin, served: Served) {
-    const comparison = await comparePin(pin, served);
-    if (comparison === 'same') return null;
-    if (comparison === 'recheck')
-        return `${pin.name}’s keys were upgraded. Compare words with them again in Contacts`;
-    return comparison === 'succession'
-        ? `${pin.name}’s sharing keys changed since you checked them. Check them again in Contacts`
-        : `${pin.name}’s keys have changed since you checked them. Check it’s them in Contacts`;
+    if (contact.userId.toLowerCase() !== held.userId.toLowerCase()) return 'changed';
+    const standing = await withGuardLock(userId, () =>
+        stand(userId, contact.userId, contact, { act: true, follow: true }),
+    );
+    switch (standing.kind) {
+        case 'ok':
+            return standing.followed ? 'followed' : 'same';
+        case 'not-upgraded':
+            return 'recheck';
+        case 'new':
+            return 'not-pinned';
+        default:
+            noteChange(userId, { contactId: held.userId, name: held.name, email: held.email });
+            return 'changed';
+    }
 }
 
 export type Lookup = {
     contact: ContactIdentity;
     /* The version 3 fingerprint over their four keys; null until their identity is upgraded. */
     fingerprint: string | null;
-    /* The pin already held for this person, when there is one. */
+    /* The pin held for this person, after any succession it followed just now. */
     pinned: Pin | null;
-    /* The looked-up key differs from the pinned one and no signed chain explains it: a warning, never a silent update. */
+    /* The served keys are not the ones this device holds and no signed chain explains it: the notice, never a silent update. */
     changed: boolean;
-    /* The pin predates a words check over every key it holds: check again before it counts. */
+    /* The pin is not verified (first-seen, or from before post-quantum keys) and nothing changed. */
     stale: boolean;
+    /* The pin is verified and agrees with this device: "Verified", and Check again. */
+    verified: boolean;
+    /* For a change: whether this device had them checked, so the notice leads with a check. */
+    wasVerified: boolean;
+    /* For a change: the key commitment of the keys this device held, for Technical details. */
+    heldFingerprint: string | null;
     /* The pin followed their signed succession to the keys looked up just now. */
     followed: boolean;
     /*
      * Whether their identity is version 2 with a keys statement that holds: the
-     * only kind words can be compared over. False for someone who has not
+     * only kind that can be pinned or checked. False for someone who has not
      * signed in since the post-quantum release.
      */
     upgraded: boolean;
 };
 
 /* Whether a served identity is version 2 and its keys statement holds; not by itself a reason to trust it. */
-async function keysHold(contactUserId: string, served: ContactIdentity) {
+async function keysHold(contactUserId: string, served: Served) {
     if (
         served.identityVersion !== 2 ||
         !served.mlDsaPublicKey ||
@@ -592,16 +976,17 @@ async function keysHold(contactUserId: string, served: ContactIdentity) {
     return valid;
 }
 
-/* Looks a person up by email and compares the keys the server gave with the pin held. */
+/*
+ * Looks a person up by email and says where this device stands with them:
+ * for Check it's Maya, the changed-account notice and letting someone into a
+ * family. A followed succession is saved; nobody is added here.
+ */
 export async function lookupContact(
-    queryClient: QueryClient,
+    _queryClient: QueryClient,
     userId: string,
     email: string,
 ): Promise<Lookup> {
-    const [{ contact }, loaded] = await Promise.all([
-        authClient.lookupContact(email),
-        queryClient.fetchQuery(settingsQueryOptions(userId)),
-    ]);
+    const { contact } = await authClient.lookupContact(email);
     const upgraded = await keysHold(contact.userId, contact);
     const print = upgraded
         ? await fingerprintOfKeys(
@@ -611,28 +996,180 @@ export async function lookupContact(
               publicKeyBytes(contact.kemPublicKey!),
           )
         : null;
-    const held = loaded.settings.contacts[contact.userId] ?? null;
-    const checked = held ? await bringUpToDate(userId, held, contact) : null;
-    const pinned = checked?.pin ?? null;
-    const changed = checked?.outcome === 'changed';
-    // A pin from before the release (or never checked) over keys that did not change.
-    const stale = pinned !== null && !changed && !(await pinVerified(pinned));
+    const standing = await withGuardLock(userId, () =>
+        stand(userId, contact.userId, contact, { act: true, follow: true }),
+    );
+    const pinned = standing.kind === 'new' ? null : standing.pin;
+    const changed = standing.kind === 'changed';
+    if (changed)
+        noteChange(userId, { contactId: contact.userId, name: contact.name, email: contact.email });
+    else clearChange(userId, contact.userId);
+    const verified = pinned !== null && !changed && (await pinTrust(pinned)) === 'verified';
+    const held = standing.kind === 'changed' ? (standing.entry ?? standing.pin) : null;
     return {
         contact,
         fingerprint: print,
         pinned,
         changed,
-        stale,
-        followed: checked?.outcome === 'followed',
+        stale: pinned !== null && !changed && !verified,
+        verified,
+        wasVerified: standing.kind === 'changed' && standing.wasVerified,
+        heldFingerprint: held ? await keyCommitment(held) : null,
+        followed: standing.kind === 'ok' && standing.followed,
         upgraded,
     };
 }
 
 /*
- * Writes the version 3 pin of a contact whose words were just compared: their
- * X25519 and Ed25519 keys, the digests of their ML-DSA and ML-KEM keys, and
- * the fingerprint over all four. Only for an upgraded identity whose keys
- * statement held (`lookup.upgraded`).
+ * Adding someone (6.2): looked up by email and, when the keys statement holds,
+ * remembered at once as a first-seen pin of the keys the server serves now. No
+ * words. Someone already added is said so; a change from the keys this device
+ * holds for them (a contact removed and added again over other keys included)
+ * is the notice instead. `writer`, from a mark: the account that wrote an
+ * item, which the address must be.
+ */
+export type Added =
+    | { outcome: 'added' | 'already'; pin: Pin }
+    | { outcome: 'changed'; change: AccountChange };
+export async function addContact(
+    queryClient: QueryClient,
+    userId: string,
+    email: string,
+    writer?: string,
+): Promise<Added> {
+    const { contact } = await authClient.lookupContact(email);
+    if (writer !== undefined && contact.userId.toLowerCase() !== writer.toLowerCase())
+        throw new Error('This isn’t the account that wrote it. Check the address, then try again.');
+    if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
+    return withGuardLock(userId, async () => {
+        const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
+        if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
+        if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(contact.name));
+        if (standing.kind !== 'new')
+            return {
+                outcome: 'changed',
+                change: noteChange(userId, {
+                    contactId: contact.userId,
+                    name: standing.pin?.name ?? contact.name,
+                    email: contact.email,
+                }),
+            };
+        const fresh: Pin = {
+            userId: contact.userId,
+            email: contact.email,
+            name: contact.name,
+            ...(await pinOfServed(
+                {
+                    ...contact,
+                    mlDsaPublicKey: contact.mlDsaPublicKey!,
+                    kemPublicKey: contact.kemPublicKey!,
+                },
+                'seen',
+            )),
+            pinnedAt: new Date().toISOString(),
+            firstSeen: 'added',
+        };
+        const { pin } = await commitTrust(
+            queryClient,
+            userId,
+            contact.userId,
+            standing.entry,
+            fresh,
+            (settings) => withPinOnce(settings, fresh),
+        );
+        return { outcome: 'added', pin };
+    });
+}
+
+/* `pin` for its person, under the served id: a pin stored under the id in other letters goes. */
+function withPinOnce(settings: LoadedSettings['settings'], pin: Pin) {
+    const next = settingsWithPin(settings, pin);
+    for (const key of Object.keys(next.contacts))
+        if (key !== pin.userId && key.toLowerCase() === pin.userId.toLowerCase())
+            delete next.contacts[key];
+    return next;
+}
+
+/*
+ * The pin a person moves to when they accept keys this device did not follow
+ * there (Continue, or They match over new keys): the served keys, the signing
+ * keys this device held kept as earlier ones (what they signed reads as theirs
+ * with earlier keys), and what was shared with them waiting to be sealed to
+ * the new keys. A family's word goes: the pin is this person's own now.
+ */
+function acceptedPin(
+    before: Pin | null,
+    base: Pick<Pin, 'signingPublicKey' | 'previousSigningKeys'> | null,
+    contact: ContactIdentity,
+    keys: Awaited<ReturnType<typeof pinOfServed>>,
+): Pin {
+    const kept = { ...before } as Partial<Pin>;
+    delete kept.trustedVia;
+    delete kept.trustedViaFamily;
+    delete kept.keysReplacedAt;
+    delete kept.replacementSeen;
+    const previous: string[] = [];
+    for (const key of [...(base?.previousSigningKeys ?? []), base?.signingPublicKey])
+        if (key && key !== keys.signingPublicKey && !previous.includes(key)) previous.push(key);
+    return {
+        ...kept,
+        userId: contact.userId,
+        email: contact.email,
+        name: contact.name,
+        ...keys,
+        pinnedAt: new Date().toISOString(),
+        firstSeen: before?.firstSeen ?? 'added',
+        ...(previous.length ? { previousSigningKeys: previous } : {}),
+        resealShares: true,
+    } as Pin;
+}
+
+/*
+ * Continue on "Maya's account changed" (6.7): the keys the server serves now,
+ * looked up afresh, become a first-seen pin, and what waited runs: what was
+ * shared with them is sealed again, to these keys only. A verified pin loses
+ * its verified state; Check it's Maya restores it.
+ */
+export async function continueWith(
+    queryClient: QueryClient,
+    userId: string,
+    change: AccountChange,
+): Promise<Pin> {
+    const { contact } = await authClient.lookupContact(change.email);
+    if (contact.userId.toLowerCase() !== change.contactId.toLowerCase())
+        throw new Error('That address now belongs to a different account.');
+    if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
+    const pin = await withGuardLock(userId, async () => {
+        const loaded = await loadSettings(userId);
+        const found = pinOf(loaded.settings.contacts, contact.userId);
+        const before = found?.pin ?? null;
+        const entry = await guardFor(userId, contact.userId, before);
+        // What this device trusted: the settings pin where it agrees, else the guard's keys.
+        const base = before && (await agreement(entry, before)) !== 'changed' ? before : entry;
+        const keys = await pinOfServed(
+            {
+                ...contact,
+                mlDsaPublicKey: contact.mlDsaPublicKey!,
+                kemPublicKey: contact.kemPublicKey!,
+            },
+            'seen',
+        );
+        const target = acceptedPin(before, base, contact, keys);
+        return (
+            await commitTrust(queryClient, userId, contact.userId, entry, target, (settings) =>
+                withPinOnce(settings, target),
+            )
+        ).pin;
+    });
+    clearChange(userId, contact.userId);
+    return pin;
+}
+
+/*
+ * They match (6.6): the version 3 pin of the keys whose words were just
+ * compared, verified. Over the keys this device held, it stays as it was in
+ * every other way; over others, it is a Continue that is also a check. Only
+ * for an upgraded identity whose keys statement held (`lookup.upgraded`).
  */
 export async function pinContact(queryClient: QueryClient, userId: string, lookup: Lookup) {
     const { contact } = lookup;
@@ -640,97 +1177,157 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
         throw new Error(
             `${contact.name} needs to sign in to HushOS once more before you can compare words.`,
         );
-    const fresh = await pinOfServed({
+    const keys = await pinOfServed({
         ...contact,
         mlDsaPublicKey: contact.mlDsaPublicKey,
         kemPublicKey: contact.kemPublicKey,
     });
-    return saveSettings(queryClient, userId, (settings) => {
-        const before = settings.contacts[lookup.contact.userId];
+    const pin = await withGuardLock(userId, async () => {
+        const loaded = await loadSettings(userId);
+        const found = pinOf(loaded.settings.contacts, contact.userId);
+        const before = found?.pin ?? null;
+        const entry = await guardFor(userId, contact.userId, before);
+        const base = before && (await agreement(entry, before)) !== 'changed' ? before : entry;
         const moved =
-            before !== undefined &&
-            (before.encryptionPublicKey !== lookup.contact.encryptionPublicKey ||
-                before.signingPublicKey !== lookup.contact.signingPublicKey);
-        // Fields this version does not know are kept; so are the keys a followed succession
-        // left behind, unless these words were compared over brand-new keys.
-        const kept = { ...before } as Partial<Pin>;
-        // These words were just compared: the pin is the reader's own now, not a group's word.
-        delete kept.trustedVia;
-        if (moved) {
-            delete kept.previousSigningKeys;
-            delete kept.keysReplacedAt;
-            delete kept.replacementSeen;
+            base !== null &&
+            (base.encryptionPublicKey !== contact.encryptionPublicKey ||
+                base.signingPublicKey !== contact.signingPublicKey);
+        let target: Pin;
+        if (moved) target = { ...acceptedPin(before, base, contact, keys), ...keys };
+        else {
+            // Fields this version does not know are kept, and so are the keys a followed succession
+            // left behind; the pin is the reader's own now, not a family's word.
+            const kept = { ...before } as Partial<Pin>;
+            delete kept.trustedVia;
+            target = {
+                ...kept,
+                userId: contact.userId,
+                email: contact.email,
+                name: contact.name,
+                ...keys,
+                pinnedAt: new Date().toISOString(),
+                ...(before?.keysReplacedAt ? { replacementSeen: before.keysReplacedAt } : {}),
+            } as Pin;
         }
-        settings.contacts[lookup.contact.userId] = {
-            ...kept,
-            userId: lookup.contact.userId,
-            email: lookup.contact.email,
-            name: lookup.contact.name,
-            ...fresh,
-            pinnedAt: new Date().toISOString(),
-            // Words compared after a replacement: People need not say so any more.
-            ...(!moved && before?.keysReplacedAt ? { replacementSeen: before.keysReplacedAt } : {}),
-            // Accepting new keys: what was shared with them is sealed again, to these.
-            ...(moved || before?.resealShares ? { resealShares: true } : {}),
-        };
-        return settings;
+        return (
+            await commitTrust(queryClient, userId, contact.userId, entry, target, (settings) =>
+                withPinOnce(settings, target),
+            )
+        ).pin;
     });
-}
-
-/* Stops showing that a contact replaced their keys, without comparing words again. */
-export function acknowledgeSuccession(queryClient: QueryClient, userId: string, contactId: string) {
-    return saveSettings(queryClient, userId, (settings) => {
-        const pin = settings.contacts[contactId];
-        if (pin?.keysReplacedAt) pin.replacementSeen = pin.keysReplacedAt;
-        return settings;
-    });
+    clearChange(userId, contact.userId);
+    return pin;
 }
 
 /*
- * The keys a share to a pinned contact is sealed to when the server, not the
- * person, names them: on rotation, when re-sealing older shares, and behind
- * the share dialog. The served keys must be the pinned ones, or follow from
- * them through a signed succession. A KEM key seen for the first time is
- * taken when the contact's signing key signed it, and its digest joins the
- * pin, so that a different key served later, or none at all, is refused
- * rather than sealed to.
+ * The keys a share to a pinned contact is sealed to: behind the share dialog
+ * (`follow`, the person's act, which follows a signed succession), and when
+ * the server, not the person, names the grantee, on rotation and when
+ * re-sealing older shares. The served keys must be the pinned ones, the pin
+ * must agree with this device's guard, and a pin from before post-quantum
+ * keys becomes first-seen first. Anything else shares nothing: a change is
+ * the notice, and a guard that cannot be read or written stops it.
  */
 export async function trustGrantee(
     userId: string,
     granteeUserId: string,
     served: Served,
+    { follow = false }: { follow?: boolean } = {},
 ): Promise<TrustedGrantee> {
-    const loaded = await loadSettings(userId);
-    const held = loaded.settings.contacts[granteeUserId];
-    if (!held) throw new Error('This person is not in your contacts. Pin them before sharing.');
-    if (!(await pinVerified(held)))
-        throw new Error(
-            `Check ${held.name}’s words again in Contacts: this pin was made before the words covered all their keys. Nothing was shared.`,
-        );
-    const pinned = held;
-    const moved = await servedMatchesPin(held, served);
-    if (moved) throw new Error(`${moved} before sharing. Nothing was shared.`);
-    // comparePin said `same`: the served ML-KEM key is the one the version 3 pin's digest names.
-    if (!served.kemPublicKey)
-        throw new Error(
-            `${pinned.name} hasn’t got post-quantum keys yet, so nothing was shared. They get them the next time they sign in.`,
-        );
-    return { encryptionPublicKey: pinned.encryptionPublicKey, kemPublicKey: served.kemPublicKey };
+    return withGuardLock(userId, async () => {
+        const standing = await stand(userId, granteeUserId, served, { act: true, follow });
+        if (standing.kind === 'new' || (standing.kind === 'changed' && standing.pin === null))
+            throw new Error('This person is not in your contacts. Add them before sharing.');
+        if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(standing.pin.name));
+        if (standing.kind === 'succession')
+            throw new Error(
+                `${firstNameOf(standing.pin.name)} updated their account. Share with them again to follow it.`,
+            );
+        if (standing.kind === 'changed') {
+            const pin = standing.pin!;
+            noteChange(userId, { contactId: pin.userId, name: pin.name, email: pin.email });
+            throw new AccountChangedError(pin.userId, pin.name);
+        }
+        // comparePin said `same` (or the pin followed to them): the served ML-KEM key is the one
+        // the version 3 pin's digest names.
+        if (!served.kemPublicKey) throw new Error(notUpgradedWords(standing.pin.name));
+        return {
+            encryptionPublicKey: standing.pin.encryptionPublicKey,
+            kemPublicKey: served.kemPublicKey,
+        };
+    });
 }
 
 /* Behind the share dialog: the pinned contact's served identity, checked against the pin. */
 export async function granteeKeys(userId: string, pin: Pin) {
     const { contact } = await authClient.lookupContact(pin.email);
-    if (contact.userId !== pin.userId)
+    if (contact.userId.toLowerCase() !== pin.userId.toLowerCase())
         throw new Error('That address now belongs to a different account.');
-    return { userId: pin.userId, ...(await trustGrantee(userId, pin.userId, contact)) };
+    return {
+        userId: pin.userId,
+        ...(await trustGrantee(userId, pin.userId, contact, { follow: true })),
+    };
 }
 
-export function removeContact(queryClient: QueryClient, userId: string, contactId: string) {
-    return saveSettings(queryClient, userId, (settings) => {
-        delete settings.contacts[contactId];
+/*
+ * Where each contact stands on this device, from the settings and the guard
+ * alone (no lookup): Verified only for a verified pin that agrees with the
+ * guard (a check made on another device over the same keys counts); a pin
+ * that disagrees with it is an account changed. A guard that cannot be read
+ * fails the whole query: nothing is shown as verified then.
+ */
+export async function contactStandings(userId: string) {
+    const loaded = await cachedSettings(userId);
+    let entries;
+    try {
+        entries = await contactGuard().store.entries(userId);
+    } catch (error) {
+        throw new GuardUnreadableError(error);
+    }
+    const out = new Map<string, { verified: boolean; changed: boolean }>();
+    for (const pin of Object.values(loaded.settings.contacts)) {
+        const held = await agreement(entries.get(pin.userId.toLowerCase()) ?? null, pin);
+        const trust = await pinTrust(pin);
+        out.set(pin.userId.toLowerCase(), {
+            verified: held !== 'changed' && trust === 'verified',
+            changed: held === 'changed',
+        });
+    }
+    return out;
+}
+export const contactStandingsQueryOptions = (userId: string, settingsAt: number) =>
+    queryOptions({
+        queryKey: ['contacts', 'standing', userId, settingsAt, guardWrites],
+        queryFn: () => contactStandings(userId),
+        staleTime: Infinity,
+        retry: false,
+    });
+
+/*
+ * Where this device stands with someone the share sheet lists, from the keys
+ * the server serves them now: the share sheet is one of the places a change is
+ * met (2.4). Nothing is written here; sharing or Review does that.
+ */
+export async function shareeStanding(userId: string, pin: Pin): Promise<'ok' | 'changed'> {
+    const { contact } = await authClient.lookupContact(pin.email);
+    if (contact.userId.toLowerCase() !== pin.userId.toLowerCase()) return 'changed';
+    const standing = await withGuardLock(userId, () =>
+        stand(userId, pin.userId, contact, { act: false, follow: false }),
+    );
+    if (standing.kind !== 'changed') return 'ok';
+    noteChange(userId, { contactId: pin.userId, name: pin.name, email: pin.email });
+    return 'changed';
+}
+
+/* Removing forgets the pin in the settings only; this device's guard keeps what it saw (2.8). */
+export async function removeContact(queryClient: QueryClient, userId: string, contactId: string) {
+    const saved = await saveSettings(queryClient, userId, (settings) => {
+        const found = pinOf(settings.contacts, contactId);
+        if (found) delete settings.contacts[found.key];
         return settings;
     });
+    clearChange(userId, contactId);
+    return saved;
 }
 
 /* The app's query client, so pins updated behind the share dialog reach the contacts page too. */
@@ -739,59 +1336,139 @@ export function bindContactsToQueries(client: QueryClient) {
     boundQueryClient = client;
 }
 
-/* A share whose granter is not pinned yet: shown as waiting for a words check, not as broken. */
+/* A share whose granter cannot be pinned yet: shown calmly, with why, never as broken. */
 export class UnverifiedGranterError extends Error {
     override name = 'UnverifiedGranterError';
 }
 
 /*
- * Which keys to open a share with: the pinned ones, and only when the server
- * serves those same keys or ones a signed succession from them leads to. A
- * share from someone not pinned stays shut until the person is added in People
- * you share with and their words are compared; taking the served key on first
- * use would let a server fake a share "from" anyone and plant its own key as
- * theirs.
+ * Which keys to open a share with (6.4). From someone this device has never
+ * met, the keys the share came with are pinned first-seen and it opens; that
+ * is first use, and the server could make a share look as if anyone sent it
+ * (docs/optional-verification.md 4.1). From someone pinned, the pinned keys,
+ * only when the server serves those same keys or a signed succession from
+ * them leads to them, and the pin agrees with this device's guard. Anything
+ * else waits for the person: "Maya's account changed", Review.
  */
 export async function trustGranter(
     granter: { id: string; name: string; email: string } & Served,
 ): Promise<TrustedGranter> {
     const userId = authClient.store.getState().unlockedUserId;
     if (!userId) throw new Error('Unlock your account first.');
-    const loaded = await loadSettings(userId);
-    const held = loaded.settings.contacts[granter.id];
-    if (!held || !(await pinVerified(held)))
-        throw new UnverifiedGranterError(
-            `Add ${granter.name} in Contacts and check their words to open what they shared.`,
-        );
-    const moved = await servedMatchesPin(held, granter);
-    if (moved) throw new Error(`${moved} to open what they shared.`);
-    // Both halves of the share's signature: the pinned Ed25519 key, and the served ML-DSA key
-    // whose digest the pin holds.
-    const keys = await granterKeysOf(held, granter);
-    if (!keys)
-        throw new Error(
-            `${held.name}’s keys have changed since you checked them. Check it’s them in Contacts to open what they shared.`,
-        );
-    return {
-        ...keys,
-        // Keys the pin followed a succession from open nothing: a share sealed under one waits.
-        ...(held.previousSigningKeys?.length ? { replaced: { name: held.name } } : {}),
-    };
+    return withGuardLock(userId, async () => {
+        let standing = await stand(userId, granter.id, granter, { act: true, follow: true });
+        if (standing.kind === 'new') {
+            if (!(await keysHold(granter.id, granter)))
+                throw new UnverifiedGranterError(
+                    `${firstNameOf(granter.name)} needs to sign in to HushOS once more before this opens.`,
+                );
+            const fresh: Pin = {
+                userId: granter.id,
+                email: granter.email,
+                name: granter.name,
+                ...(await pinOfServed(
+                    {
+                        ...granter,
+                        mlDsaPublicKey: granter.mlDsaPublicKey!,
+                        kemPublicKey: granter.kemPublicKey!,
+                    },
+                    'seen',
+                )),
+                pinnedAt: new Date().toISOString(),
+                firstSeen: 'shared-with-me',
+            };
+            try {
+                const { pin, entry } = await commitTrust(
+                    boundQueryClient,
+                    userId,
+                    granter.id,
+                    standing.entry,
+                    fresh,
+                    (settings) => settingsWithPin(settings, fresh),
+                );
+                standing = { kind: 'ok', pin, entry, followed: false };
+            } catch (error) {
+                if (error instanceof Error && error.message === CONTACTS_FULL)
+                    throw new UnverifiedGranterError(CONTACTS_FULL);
+                throw error;
+            }
+        }
+        if (standing.kind === 'not-upgraded')
+            throw new UnverifiedGranterError(
+                `${firstNameOf(standing.pin.name)} needs to sign in to HushOS once more before this opens.`,
+            );
+        if (standing.kind !== 'ok') {
+            const name = standing.pin?.name ?? granter.name;
+            noteChange(userId, {
+                contactId: granter.id,
+                name,
+                email: standing.pin?.email ?? granter.email,
+            });
+            throw new AccountChangedError(granter.id, name);
+        }
+        // Both halves of the share's signature: the pinned Ed25519 key, and the served ML-DSA key
+        // whose digest the pin holds.
+        const pin = standing.pin;
+        const keys = await granterKeysOf(pin, granter);
+        if (!keys) {
+            noteChange(userId, { contactId: granter.id, name: pin.name, email: pin.email });
+            throw new AccountChangedError(granter.id, pin.name);
+        }
+        return {
+            ...keys,
+            // Keys the pin followed a succession from open nothing: a share sealed under one waits.
+            ...(pin.previousSigningKeys?.length ? { replaced: { name: pin.name } } : {}),
+        };
+    });
 }
 
 /*
  * Who may have written what Drive lists, beside this account: every contact
- * whose words were checked, with the keys their pin followed a succession
- * from. Cached with the settings query, so a listing does not refetch them.
+ * pinned, verified or first-seen, with the keys their pin followed a
+ * succession from, as this device's guard allows (2.8): a settings pin that
+ * disagrees with the guard vouches for nothing, and the keys the guard holds
+ * stand in for it, never verified. A guard that cannot be read fails the set,
+ * so every item reads Couldn't check rather than as anyone's. Cached with the
+ * settings query and the guard's writes, so a listing does not refetch them.
  */
-const signersCache = new WeakMap<object, ReturnType<typeof signersFromPins>>();
+const signersCache = new WeakMap<object, { writes: number; signers: Promise<DriveSigners> }>();
 export async function trustedSigners(userId: string) {
     const loaded = await cachedSettings(userId);
-    let signers = signersCache.get(loaded.settings);
-    if (!signers) {
-        signers = signersFromPins(loaded.settings.contacts);
-        signersCache.set(loaded.settings, signers);
-    }
+    const held = signersCache.get(loaded.settings);
+    if (held && held.writes === guardWrites) return held.signers;
+    const signers = (async () => {
+        let entries;
+        try {
+            entries = await contactGuard().store.entries(userId);
+        } catch (error) {
+            throw new GuardUnreadableError(error);
+        }
+        const effective: Record<string, Pin> = {};
+        for (const [key, pin] of Object.entries(loaded.settings.contacts)) {
+            const entry = entries.get(pin.userId.toLowerCase()) ?? null;
+            if ((await agreement(entry, pin)) !== 'changed') effective[key] = pin;
+            else if (entry)
+                effective[key] = {
+                    userId: pin.userId,
+                    email: pin.email,
+                    name: pin.name,
+                    pinnedAt: pin.pinnedAt,
+                    keyVersion: entry.keyVersion,
+                    encryptionPublicKey: entry.encryptionPublicKey,
+                    signingPublicKey: entry.signingPublicKey,
+                    mlDsaPublicKeyHash: entry.mlDsaPublicKeyHash,
+                    kemPublicKeyHash: entry.kemPublicKeyHash,
+                    fingerprint: '',
+                    previousSigningKeys: entry.previousSigningKeys,
+                };
+        }
+        return signersFromPins(effective);
+    })();
+    const record = { writes: guardWrites, signers };
+    signersCache.set(loaded.settings, record);
+    signers.catch(() => {
+        if (signersCache.get(loaded.settings) === record) signersCache.delete(loaded.settings);
+    });
     return signers;
 }
 

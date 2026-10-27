@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useState, type ReactNode } from 'react';
+import { AccountChangedDialog } from '@/components/drive/account-changed';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
@@ -47,6 +48,12 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
+import {
+    accountChangeOf,
+    GUARD_UNREADABLE,
+    useAccountChanges,
+    type AccountChange,
+} from '@/lib/contacts';
 import {
     driveClient,
     driveError,
@@ -269,18 +276,28 @@ function WithMeRow({
     onSave: (node: DriveNode) => void;
     onReport: (node: DriveNode) => void;
 }) {
+    const { userId } = useDrive();
+    const queryClient = useQueryClient();
+    useAccountChanges();
+    const [reviewing, setReviewing] = useState<AccountChange | null>(null);
     const from = firstName(share.granter.name);
     const role = share.role === 'editor' ? 'can edit' : 'can view';
-    if (share.error)
+    if (share.error) {
+        // Waiting on the person, said calmly (6.4): an account that changed, a check that
+        // couldn't run, or someone who can't be added yet. Anything else couldn't open.
+        const change = accountChangeOf(userId, share.granter.id);
+        const unchecked = share.error === GUARD_UNREADABLE;
+        const calm = change !== null || unchecked || share.unverified;
         return (
             <li
                 data-shared={share.node.name}
+                data-waiting={change ? 'changed' : unchecked ? 'unchecked' : undefined}
                 className="flex h-16 items-center gap-4 border-b border-rule pr-5 pl-5 sm:pr-8 sm:pl-8"
             >
                 <span
                     className={cn(
                         'flex size-10 shrink-0 items-center justify-center rounded-full',
-                        share.unverified
+                        calm
                             ? 'bg-muted text-muted-foreground'
                             : 'bg-destructive-soft text-destructive',
                     )}
@@ -291,14 +308,40 @@ function WithMeRow({
                     <span className="truncate text-[15px] font-medium">
                         Shared by {share.granter.name}
                     </span>
-                    {share.unverified ? (
+                    {change ? (
                         <span className="text-[13px] text-muted-foreground">
-                            Opens once you’ve checked {from}’s words.{' '}
+                            {from}’s account changed. Review to open this.{' '}
+                            <Button
+                                variant="link"
+                                className="text-[13px] font-semibold"
+                                onClick={() => setReviewing(change)}
+                            >
+                                Review
+                            </Button>
+                        </span>
+                    ) : unchecked ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            {GUARD_UNREADABLE}{' '}
+                            <Button
+                                variant="link"
+                                className="text-[13px] font-semibold"
+                                onClick={() =>
+                                    void queryClient.invalidateQueries({
+                                        queryKey: driveKeys.shared,
+                                    })
+                                }
+                            >
+                                Try again
+                            </Button>
+                        </span>
+                    ) : share.unverified ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            {share.error}{' '}
                             <Link
                                 to="/app/contacts"
                                 className="font-semibold underline underline-offset-2"
                             >
-                                Add {from} in Contacts
+                                Go to Contacts
                             </Link>
                         </span>
                     ) : (
@@ -313,8 +356,14 @@ function WithMeRow({
                         </span>
                     )}
                 </span>
+                <AccountChangedDialog
+                    userId={userId}
+                    change={reviewing}
+                    onOpenChange={(open) => !open && setReviewing(null)}
+                />
             </li>
         );
+    }
     return (
         <li
             data-shared={share.node.name}

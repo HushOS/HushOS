@@ -163,8 +163,8 @@ function rekeyLine(
             const who = issue.rekey.rekeyer === 'verified' ? personWords(named) : null;
             return {
                 text: version
-                    ? `This version as ${who ? `${who} locked it` : 'it was locked'} again doesn’t match what was added. Don’t trust this item.`
-                    : `What ${who ? `${who} locked` : 'was locked'} again doesn’t match what was written. Don’t trust this item.`,
+                    ? `This version as ${who ? `${who} locked it` : 'it was locked'} again doesn’t match what was added.`
+                    : `What ${who ? `${who} locked` : 'was locked'} again doesn’t match what was written.`,
                 action: null,
             };
         }
@@ -178,31 +178,34 @@ function rekeyLine(
     }
 }
 
-const CANT_CONFIRM = 'HushOS can’t confirm who wrote this.';
-const CANT_CONFIRM_VERSION = 'HushOS can’t confirm who added this version.';
-export const COULDNT_CHECK = 'HushOS couldn’t check who wrote this. Try again later.';
+/*
+ * The words of the marks (docs/optional-verification.md 6.12): calm, and only
+ * for what can't be confirmed. A stripped signature reads exactly as a writer
+ * nobody can name: a server that strips one gets no milder words than one it
+ * cannot forge.
+ */
+const CANT_TELL = 'HushOS can’t tell who wrote this.';
+const CANT_TELL_VERSION = 'HushOS can’t tell who added this version.';
+export const COULDNT_CHECK = 'HushOS couldn’t check this right now.';
 
 function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
     const { signer, record, integrity } = issue;
     const version = record === 'version';
     const named = nameSigner(signer, names);
-    const plain = version ? CANT_CONFIRM_VERSION : CANT_CONFIRM;
-    const family = names.family?.name;
+    const plain = version ? CANT_TELL_VERSION : CANT_TELL;
     if (issue.rekey) return rekeyLine({ ...issue, rekey: issue.rekey }, named);
     switch (integrity) {
-        // Never an accusation: the keys differ from the ones this person checked, and no
-        // signed chain joins them. Comparing words again is the way out.
+        // Never an accusation: the keys differ from the ones in this person's contacts, and no
+        // signed chain joins them (family folders only). Checking it's them is the way out.
         case 'key-conflict': {
-            // A pin taken on a family's word was never this person's check: the keys are the
-            // ones that family vouched for, and the name and address are the server's.
-            if (named.kind === 'contact' && named.vouched)
-                return {
-                    text: `${named.vouched.name} (${named.vouched.email})’s keys don’t match the ones ${named.vouched.family} vouched for. Check it’s them again.`,
-                    action: signer ? { kind: 'check', signer } : null,
-                };
-            const who = memberWords(named, 'Its writer');
+            const who =
+                named.kind === 'contact'
+                    ? named.vouched
+                        ? plainContact(named)
+                        : firstName(named.name)
+                    : memberWords(named, 'Its writer');
             return {
-                text: `${who === 'Its writer' ? 'Its writer’s' : `${who}’s`} keys don’t match the ones you checked. Check it’s them again.`,
+                text: `${who}’s account looks different here than in your contacts.`,
                 action: signer ? { kind: 'check', signer } : null,
             };
         }
@@ -210,43 +213,42 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
             // Unnamed as Info's "Changed by" leaves them: nobody this person checked, nor on the list.
             const who = memberWords(named, 'someone you haven’t checked');
             return {
-                text: `${version ? 'Added' : 'Written'} by ${who}, who has left ${family ?? 'the family'}.`,
+                text: `${version ? 'Added' : 'Written'} by ${who}, who has left ${names.family?.name ?? 'the family'}.`,
                 action: null,
             };
         }
         case 'unchecked':
             return { text: COULDNT_CHECK, action: { kind: 'retry' } };
-        // No signature reads as any other record nobody can vouch for: a server that strips
-        // one gets no milder warning than one it cannot forge.
         case 'unsigned':
             return { text: plain, action: null };
         case 'unknown-signer':
             return {
-                text: `${plain} It was ${version ? 'added' : 'added or last changed'} by someone you haven’t checked.`,
-                // Checking words clears it only for someone not already counted as checked.
+                text: plain,
+                // Adding and checking them clears it only for someone not already in contacts.
                 action: signer && named.kind === 'unknown' ? { kind: 'check', signer } : null,
             };
         case 'bad-signature': {
-            // In a family's folders a server withholding a member's links makes their genuine
-            // records read this way (design 2.8, "Withholding links"): it is said as what it is.
-            if (family)
-                return {
-                    text: version
-                        ? 'HushOS couldn’t verify this version’s signature.'
-                        : 'HushOS couldn’t verify this signature.',
-                    action:
-                        signer && named.kind === 'contact'
-                            ? { kind: 'again', signer, name: plainContact(named) }
-                            : null,
-                };
-            const whose =
+            // Inside a family's folders a server withholding a member's links makes their genuine
+            // records read this way (design 2.8, "Withholding links"): said as what is not
+            // confirmed, never as anyone's doing.
+            const who =
                 named.kind === 'you'
-                    ? 'your'
+                    ? 'you'
                     : named.kind === 'contact'
-                      ? `${firstName(named.name)}’s`
-                      : 'its writer’s';
+                      ? named.vouched
+                          ? plainContact(named)
+                          : firstName(named.name)
+                      : named.kind === 'member'
+                        ? memberWords(named, '')
+                        : null;
             return {
-                text: `${version ? 'This version’s signature' : 'The signature'} doesn’t match ${whose} keys. Don’t trust this item.`,
+                text: who
+                    ? version
+                        ? `HushOS couldn’t confirm this version was added by ${who}.`
+                        : `HushOS couldn’t confirm this was written by ${who}.`
+                    : version
+                      ? 'HushOS couldn’t confirm who added this version.'
+                      : 'HushOS couldn’t confirm who wrote this.',
                 action:
                     signer && named.kind === 'contact'
                         ? { kind: 'again', signer, name: plainContact(named) }
@@ -304,16 +306,12 @@ export function issueLines(issues: IntegrityIssue[], names: SignerNames): IssueL
     return issues.map((issue) => line(issue, names));
 }
 
-/*
- * What the mark says on its face: Couldn't check when nothing could be, a
- * key conflict (worse than Unverified) as its own words, else Unverified.
- */
+/* What the mark says on its face: Couldn't check when nothing could be, else Unverified. */
 export function markLabel(issues: IntegrityIssue[]) {
     if (issues.length > 0 && issues.every((issue) => issue.integrity === 'unchecked'))
         return 'Couldn’t check';
-    // A re-keyer's conflicting keys say the re-key is not attested, not that the writer's differ.
-    if (issues.some((issue) => issue.integrity === 'key-conflict' && !issue.rekey))
-        return 'Keys don’t match';
+    // Keys that look different are said calmly in the mark's own words (6.12), under the same
+    // label as anything else that can't be confirmed.
     return 'Unverified';
 }
 
@@ -593,6 +591,56 @@ export function savedLine(
     const by = named.kind === 'you' ? 'you' : named.kind === 'contact' ? named.name : null;
     if (!by) return null;
     return `Saved from a link by ${by}. HushOS can’t confirm who made the original.`;
+}
+
+/*
+ * Info's line for an item whose records hold under keys this person's devices
+ * first saw for the writer, which nobody checked (verdict `seen`,
+ * docs/optional-verification.md 2.6): no mark anywhere, and here "Added by
+ * Maya" with "Not verified" and the way to check. Null when a mark speaks
+ * instead, when every record verified, or when the writer can't be named.
+ */
+export function seenLine(
+    node: {
+        integrity: NodeIntegrity | null;
+        metadataSigner?: Signer | null;
+        currentVersion: { signer?: Signer | null } | null;
+    },
+    names: SignerNames,
+): { name: string; signer: Signer } | null {
+    const integrity = node.integrity;
+    if (!integrity) return null;
+    const issues = integrityIssues({
+        metadataSigner: node.metadataSigner ?? null,
+        currentVersion: node.currentVersion ? { signer: node.currentVersion.signer ?? null } : null,
+        integrity,
+    });
+    if (issues.length) return null;
+    const records = [
+        {
+            verdict: integrity.metadata,
+            signer: verdictSigner(node.metadataSigner ?? null, integrity.rekeyed?.metadata),
+        },
+        ...(integrity.version === null
+            ? []
+            : [
+                  {
+                      verdict: integrity.version,
+                      signer: verdictSigner(
+                          node.currentVersion?.signer ?? null,
+                          integrity.rekeyed?.version,
+                      ),
+                  },
+              ]),
+    ];
+    // The content's writer first: who added what is there now.
+    for (const { verdict, signer } of [...records].reverse()) {
+        if (verdict !== 'seen' || !signer) continue;
+        const named = nameSigner(signer, names);
+        if (named.kind === 'contact') return { name: plainContact(named), signer };
+        if (named.kind === 'member') return { name: memberWords(named, ''), signer };
+    }
+    return null;
 }
 
 /*

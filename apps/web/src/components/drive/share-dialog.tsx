@@ -15,7 +15,8 @@ import {
     XIcon,
 } from 'lucide-react';
 import { useId, useState } from 'react';
-import { CheckContact } from '@/components/drive/check-contact';
+import { AccountChangedDialog } from '@/components/drive/account-changed';
+import { CheckContactDialog, type Checking } from '@/components/drive/check-contact';
 import { useDrive } from '@/components/drive/drive-shell';
 import { describeLink, LinkOptionsDialog } from '@/components/drive/link-row';
 import { PersonAvatar } from '@/components/person-avatar';
@@ -56,8 +57,19 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import { granteeKeys, settingsQueryOptions, type Pin } from '@/lib/contacts';
+import {
+    accountChangeOf,
+    addContact,
+    AccountChangedError,
+    granteeKeys,
+    settingsQueryOptions,
+    shareeStanding,
+    useAccountChanges,
+    type AccountChange,
+    type Pin,
+} from '@/lib/contacts';
 import { familyWord, vouchLine } from '@/lib/family-pin';
+import { afterTrustChanged } from '@/lib/integrity';
 import {
     displayName,
     driveClient,
@@ -81,8 +93,10 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /*
  * Who can open an item: the people it is shared with, each with what they can
  * do, and the one link anyone can use. Sharing seals the item's key on this
- * device to a contact's checked key, so only contacts can be chosen; someone new
- * is added and checked right here, without leaving.
+ * device to the keys remembered for a contact, so only contacts can be chosen;
+ * someone new is added by their email right here and shared with in the same
+ * step, with no words (docs/optional-verification.md 6.3). Someone whose
+ * account changed waits for Review before anything new is shared with them.
  */
 export function ShareDialog({
     node,
@@ -119,9 +133,10 @@ function ShareForm({
         queryFn: () => driveClient.nodeShares(node),
         staleTime: 0,
     });
-    /* An email being added as a contact: the dialog shows the check in its place. */
-    const [adding, setAdding] = useState<string | null>(null);
+    useAccountChanges();
     const [chosen, setChosen] = useState<Pin | null>(null);
+    const [checking, setChecking] = useState<Checking | null>(null);
+    const [reviewing, setReviewing] = useState<AccountChange | null>(null);
     const [role, setRole] = useState<ShareRole>('viewer');
     /* 'share' while sealing, else the id of the share whose role is changing. */
     const [pending, setPending] = useState<string | null>(null);
@@ -156,6 +171,49 @@ function ShareForm({
             setChosen(null);
             setRole('viewer');
         } catch (cause) {
+            if (reviewChange(cause, chosen)) return;
+            cue('error');
+            setError(driveError(cause));
+        } finally {
+            setPending(null);
+        }
+    }
+    /* An account that changed is the notice, not an error: nothing was shared. */
+    function reviewChange(cause: unknown, pin: Pick<Pin, 'userId' | 'name' | 'email'>) {
+        if (!(cause instanceof AccountChangedError)) return false;
+        setReviewing(
+            accountChangeOf(userId, pin.userId) ?? {
+                contactId: pin.userId,
+                name: pin.name,
+                email: pin.email,
+            },
+        );
+        return true;
+    }
+    /* Someone new by their email (6.3): added as 6.2 adds them, and shared with, in one step. */
+    async function shareWithNew(email: string) {
+        setPending('share');
+        setError('');
+        try {
+            const added = await addContact(queryClient, userId, email);
+            if (added.outcome === 'changed') {
+                setReviewing(added.change);
+                return;
+            }
+            const pin = added.pin;
+            const current = await currentNode(queryClient, node);
+            await driveClient.share(current, await granteeKeys(userId, pin), 'viewer');
+            await refresh();
+            await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
+            // What they wrote now reads as theirs.
+            if (added.outcome === 'added') afterTrustChanged(queryClient);
+            cue('success');
+            toast.add({ type: 'success', title: `Shared with ${firstName(pin.name)}` });
+        } catch (cause) {
+            if (cause instanceof AccountChangedError) {
+                setReviewing({ contactId: cause.contactId, name: cause.person, email });
+                return;
+            }
             cue('error');
             setError(driveError(cause));
         } finally {
@@ -177,6 +235,7 @@ function ShareForm({
                 title: `${firstName(target.grantee.name)} ${next === 'editor' ? 'can edit' : 'can view'} “${node.name}” now`,
             });
         } catch (cause) {
+            if (reviewChange(cause, pin)) return;
             cue('error');
             toast.add({
                 type: 'error',
@@ -210,28 +269,6 @@ function ShareForm({
             setPending(null);
         }
     }
-
-    if (adding !== null)
-        return (
-            <>
-                <DialogHeader>
-                    <DialogTitle>Add a contact</DialogTitle>
-                    <DialogDescription>
-                        Then you can share “{node.name}” with them.
-                    </DialogDescription>
-                </DialogHeader>
-                <CheckContact
-                    userId={userId}
-                    email={adding}
-                    onCancel={() => setAdding(null)}
-                    onAdded={(pin) => {
-                        toast.add({ type: 'success', title: `${pin.name} added to your contacts` });
-                        setAdding(null);
-                        setChosen(pin);
-                    }}
-                />
-            </>
-        );
 
     return (
         <>
@@ -284,13 +321,21 @@ function ShareForm({
                     </div>
                 </div>
             ) : (
-                <PeopleField
-                    loading={settings.isPending}
-                    contacts={choices}
-                    anyContacts={contacts.length > 0}
-                    onPick={setChosen}
-                    onAdd={setAdding}
-                />
+                <>
+                    <PeopleField
+                        loading={settings.isPending}
+                        busy={pending === 'share'}
+                        contacts={choices}
+                        anyContacts={contacts.length > 0}
+                        onPick={setChosen}
+                        onAdd={(email) => void shareWithNew(email)}
+                    />
+                    {error && (
+                        <p role="alert" className="text-[13px] text-destructive">
+                            {error}
+                        </p>
+                    )}
+                </>
             )}
 
             <div className="flex flex-col">
@@ -313,61 +358,21 @@ function ShareForm({
                         {driveError(shares.error)}
                     </p>
                 )}
-                {shares.data?.map((entry) => {
-                    const pinned = Boolean(settings.data?.settings.contacts[entry.grantee.id]);
-                    return (
-                        <div
-                            key={entry.id}
-                            data-share={entry.grantee.email}
-                            data-suite={entry.suite}
-                            className="flex h-16 items-center gap-3 border-b border-rule last:border-0"
-                        >
-                            <PersonAvatar name={entry.grantee.name} seed={entry.grantee.id} />
-                            <span className="flex min-w-0 flex-1 flex-col">
-                                <span className="truncate text-[15px] font-medium">
-                                    {entry.grantee.name}
-                                </span>
-                                <span className="truncate text-[13px] text-muted-foreground">
-                                    {entry.grantee.email}
-                                </span>
-                            </span>
-                            <Select<string>
-                                value={entry.role}
-                                disabled={pending !== null}
-                                onValueChange={(value) => {
-                                    if (value === 'stop') setStopping(entry);
-                                    else if (value) void changeRole(entry, value as ShareRole);
-                                }}
-                                items={[...ROLES, { value: 'stop', label: 'Stop sharing' }]}
-                            >
-                                <SelectTrigger
-                                    className="h-9 w-[128px] pointer-coarse:h-11"
-                                    aria-label={`What ${entry.grantee.name} can do`}
-                                >
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {ROLES.map((option) => (
-                                        <SelectItem
-                                            key={option.value}
-                                            value={option.value}
-                                            disabled={!pinned && option.value !== entry.role}
-                                        >
-                                            {option.label}
-                                        </SelectItem>
-                                    ))}
-                                    <SelectSeparator />
-                                    <SelectItem
-                                        value="stop"
-                                        className="text-destructive data-highlighted:text-destructive"
-                                    >
-                                        Stop sharing
-                                    </SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    );
-                })}
+                {shares.data?.map((entry) => (
+                    <PersonRow
+                        key={entry.id}
+                        userId={userId}
+                        entry={entry}
+                        pin={settings.data?.settings.contacts[entry.grantee.id] ?? null}
+                        disabled={pending !== null}
+                        onRole={(next) => void changeRole(entry, next)}
+                        onCheck={() =>
+                            setChecking({ email: entry.grantee.email, name: entry.grantee.name })
+                        }
+                        onStop={() => setStopping(entry)}
+                        onReview={setReviewing}
+                    />
+                ))}
             </div>
 
             <LinksSection node={node} />
@@ -378,6 +383,21 @@ function ShareForm({
                 </Button>
             </DialogFooter>
 
+            <CheckContactDialog
+                userId={userId}
+                person={checking}
+                onOpenChange={(value) => !value && setChecking(null)}
+            />
+            <AccountChangedDialog
+                userId={userId}
+                change={reviewing}
+                onOpenChange={(value) => {
+                    if (value) return;
+                    setReviewing(null);
+                    // A Continue or a check changes where each row stands.
+                    void queryClient.invalidateQueries({ queryKey: ['contacts', 'sharee'] });
+                }}
+            />
             <AlertDialog
                 open={stopping !== null}
                 onOpenChange={(value) => !value && setStopping(null)}
@@ -408,6 +428,116 @@ function ShareForm({
                 </AlertDialogContent>
             </AlertDialog>
         </>
+    );
+}
+
+/*
+ * Someone the item is shared with: what they can do, Check it's Maya, Stop
+ * sharing. The keys HushOS serves for them now are looked up as the sheet
+ * opens (the share sheet is one of the places a change is met, 2.4): an
+ * account that changed reads so on its second line, with Review, and its role
+ * waits until then. No verification text otherwise.
+ */
+function PersonRow({
+    userId,
+    entry,
+    pin,
+    disabled,
+    onRole,
+    onCheck,
+    onStop,
+    onReview,
+}: {
+    userId: string;
+    entry: ShareView;
+    pin: Pin | null;
+    disabled: boolean;
+    onRole: (role: ShareRole) => void;
+    onCheck: () => void;
+    onStop: () => void;
+    onReview: (change: AccountChange) => void;
+}) {
+    const standing = useQuery({
+        queryKey: ['contacts', 'sharee', userId, entry.grantee.id],
+        queryFn: () => shareeStanding(userId, pin!),
+        enabled: pin !== null,
+        staleTime: 60_000,
+        retry: false,
+    });
+    const change =
+        accountChangeOf(userId, entry.grantee.id) ??
+        (standing.data === 'changed' && pin
+            ? { contactId: pin.userId, name: pin.name, email: pin.email }
+            : null);
+    const first = firstName(entry.grantee.name);
+    return (
+        <div
+            data-share={entry.grantee.email}
+            data-suite={entry.suite}
+            data-standing={change ? 'changed' : undefined}
+            className="flex h-16 items-center gap-3 border-b border-rule last:border-0"
+        >
+            <PersonAvatar name={entry.grantee.name} seed={entry.grantee.id} />
+            <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-[15px] font-medium">{entry.grantee.name}</span>
+                {change ? (
+                    <span className="truncate text-[13px] text-muted-foreground">
+                        {first}’s account changed ·{' '}
+                        <Button
+                            variant="link"
+                            className="text-[13px] font-semibold"
+                            onClick={() => onReview(change)}
+                        >
+                            Review
+                        </Button>
+                    </span>
+                ) : (
+                    <span className="truncate text-[13px] text-muted-foreground">
+                        {entry.grantee.email}
+                    </span>
+                )}
+            </span>
+            <Select<string>
+                value={entry.role}
+                disabled={disabled}
+                onValueChange={(value) => {
+                    if (value === 'stop') onStop();
+                    else if (value === 'check') onCheck();
+                    else if (value) onRole(value as ShareRole);
+                }}
+                items={[
+                    ...ROLES,
+                    { value: 'check', label: `Check it’s ${first}` },
+                    { value: 'stop', label: 'Stop sharing' },
+                ]}
+            >
+                <SelectTrigger
+                    className="h-9 w-[128px] pointer-coarse:h-11"
+                    aria-label={`What ${entry.grantee.name} can do`}
+                >
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    {ROLES.map((option) => (
+                        <SelectItem
+                            key={option.value}
+                            value={option.value}
+                            disabled={(!pin || change !== null) && option.value !== entry.role}
+                        >
+                            {option.label}
+                        </SelectItem>
+                    ))}
+                    <SelectSeparator />
+                    {pin && <SelectItem value="check">Check it’s {first}</SelectItem>}
+                    <SelectItem
+                        value="stop"
+                        className="text-destructive data-highlighted:text-destructive"
+                    >
+                        Stop sharing
+                    </SelectItem>
+                </SelectContent>
+            </Select>
+        </div>
     );
 }
 
@@ -446,12 +576,14 @@ function RoleSelect({
  */
 function PeopleField({
     loading,
+    busy,
     contacts,
     anyContacts,
     onPick,
     onAdd,
 }: {
     loading: boolean;
+    busy: boolean;
     contacts: Pin[];
     anyContacts: boolean;
     onPick: (contact: Pin) => void;
@@ -463,7 +595,7 @@ function PeopleField({
     const typed = query.trim();
     const isEmail = EMAIL.test(typed);
     // A pin taken on a family's word never matches a typed address: its name and address are the
-    // server's, so adding someone by email always goes through comparing words (decision D10).
+    // server's, so someone typed by email is always added as their own (decision D10).
     const known = contacts.some(
         (contact) => !familyWord(contact) && contact.email.toLowerCase() === typed.toLowerCase(),
     );
@@ -502,6 +634,7 @@ function PeopleField({
                         if (event.key === 'ArrowDown' && !open) setOpen(true);
                     }}
                     onBlur={() => setOpen(false)}
+                    disabled={busy}
                     placeholder="Add a name or email"
                     aria-label="Add people"
                     className="h-full min-w-0 flex-1 bg-transparent text-base outline-none sm:text-[15px] placeholder:text-muted-foreground"
@@ -569,14 +702,7 @@ function PeopleField({
                             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground">
                                 <UserPlusIcon className="size-4" aria-hidden="true" />
                             </span>
-                            <span className="flex min-w-0 flex-col">
-                                <span className="truncate text-sm font-medium">
-                                    Add “{typed}” as a contact
-                                </span>
-                                <span className="text-[13px] text-muted-foreground">
-                                    You’ll check it’s them first
-                                </span>
-                            </span>
+                            <span className="truncate text-sm font-medium">Share with {typed}</span>
                         </CommandItem>
                     )}
                     {!loading && matches.length === 0 && !(isEmail && !known) && (

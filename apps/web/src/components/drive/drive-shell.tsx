@@ -17,6 +17,7 @@ import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
 import { useAuthView } from '@/lib/auth-view';
+import { CheckContactHost } from '@/components/drive/check-contact';
 import { backfillOwnConsent, bindContactsToQueries } from '@/lib/contacts';
 import {
     closeSpaces,
@@ -317,6 +318,7 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
                     {/* The same element hidden and shown, so the page is not mounted twice. */}
                     <div className={painted ? 'contents' : 'hidden'}>{children}</div>
                 </FirstPaintContext.Provider>
+                <CheckContactHost userId={user.id} />
             </DriveContext.Provider>
         );
     // The line stays in one place in the tree from the restore to the list, so it is drawn once.

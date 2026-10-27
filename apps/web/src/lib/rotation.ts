@@ -2,7 +2,9 @@ import type { DriveNode } from '@hushos/drive/client';
 import type { QueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
+import { sharingLedger } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, folderQueryOptions } from '@/lib/drive';
+import { stopSharingWith } from '@/lib/stop-sharing';
 
 /*
  * Revocation stops the server; rotation shuts the door. After a share or link
@@ -87,6 +89,21 @@ export function rotateAfterRevoke(queryClient: QueryClient, node: DriveNode) {
     // Starting again learns of the rotation the server already holds for the node.
     running = previous.then(() => quietly(queryClient, node.name, () => driveClient.rotate(node)));
     return running;
+}
+
+/*
+ * Stop sharing with Maya (lib/stop-sharing.ts): every share with them revoked
+ * here, then each item re-keyed in the background, as one stopped share is.
+ */
+export async function stopSharingWithPerson(queryClient: QueryClient, contactId: string) {
+    const { stopped } = await stopSharingWith(contactId, {
+        ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
+        shares: () => driveClient.mySharing(),
+        revoke: (node, shareId) => driveClient.revokeShare(node, shareId),
+        rotate: (node) => rotateAfterRevoke(queryClient, node),
+    });
+    await queryClient.invalidateQueries({ queryKey: driveKeys.all });
+    return stopped;
 }
 
 /* Settles when any rotation this tab started has finished; at once when none has. */

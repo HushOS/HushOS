@@ -13,12 +13,15 @@ import {
 } from './helpers';
 
 /*
- * Who wrote what, end to end as two people (docs/integrity-design.md): what
- * the owner adds carries no mark; what someone they have not checked adds is
- * marked Unverified, until they check that person's words; a check that cannot
- * run shows Couldn't check, never no mark; and when one of them replaces their
- * sharing keys, the other follows only when they check again, what the old keys
- * signed turns Unverified, and what each shares with the other opens again.
+ * Who wrote what, end to end as two people (docs/integrity-design.md,
+ * docs/optional-verification.md 2.6): what the owner adds carries no mark;
+ * what a contact adds carries none either, and Info says "Not verified" until
+ * their words are checked; what someone who is not a contact adds is marked
+ * Unverified, until they are added; a check that cannot run shows Couldn't
+ * check, never no mark; and when one of them replaces their sharing keys, the
+ * other follows the signed change when they next open something of theirs,
+ * what the old keys signed turns Unverified, and what each shares with the
+ * other opens again.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -104,7 +107,7 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     await expect(info.locator('[data-integrity]')).toHaveAttribute('data-integrity', 'unchecked');
     await mark(maya, 'notes.md').hover();
     const details = maya.locator('[data-integrity-details]');
-    await expect(details).toContainText('HushOS couldn’t check who wrote this. Try again later.');
+    await expect(details).toContainText('HushOS couldn’t check this right now.');
     // Once they load again, a retry checks again and her own file is clean. The details
     // stay open on a click, so Try again is in reach while the load still fails.
     await mark(maya, 'notes.md').click();
@@ -138,7 +141,7 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     await maya.unroute(refuse);
 });
 
-test('a file from someone not checked is Unverified, says who, and clears once checked', async () => {
+test('a contact’s file carries no mark and reads Not verified; someone who isn’t one is Unverified until added', async () => {
     await maya.goto('/app/contacts');
     await addContact(maya, samEmail);
     await sam.goto('/app/contacts');
@@ -167,13 +170,21 @@ test('a file from someone not checked is Unverified, says who, and clears once c
     await sam.locator('input[type=file]').first().setInputFiles([samples.files.code]);
     await expect(row(sam, 'module.ts')).toBeVisible({ timeout: 60_000 });
 
-    // Maya checked Sam's words: his file is verified, and carries nothing.
+    // Sam is Maya's contact, first-seen: his file carries nothing, and Info says who and how far.
     await maya.goto('/app/drive');
     await openFolder(maya, 'Together');
     await expect(row(maya, 'module.ts')).toBeVisible({ timeout: 60_000 });
     await expect(mark(maya, 'module.ts')).toHaveCount(0);
+    const box = (await row(maya, 'module.ts').boundingBox())!;
+    await maya.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+    await maya.keyboard.press('i');
+    const seen = maya.locator('[data-details] [data-integrity-seen]');
+    await expect(seen).toContainText('Sam Okafor', { timeout: 60_000 });
+    await expect(seen).toContainText('Not verified');
+    await expect(seen.getByRole('button', { name: 'Check it’s Sam' })).toBeVisible();
+    await maya.keyboard.press('i');
 
-    // Without that check, it is someone she hasn't checked.
+    // Not a contact any more: someone HushOS can't name.
     await maya.goto('/app/contacts');
     await maya.getByRole('button', { name: 'More for Sam Okafor' }).click();
     await maya.getByRole('menuitem', { name: 'Remove' }).click();
@@ -191,31 +202,33 @@ test('a file from someone not checked is Unverified, says who, and clears once c
     await mark(maya, 'module.ts').hover();
     const details = maya.locator('[data-integrity-details]');
     // The server names the writer by account id alone: no name or address it could make up.
-    await expect(details).toContainText(
-        'HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked.',
-    );
+    await expect(details).toContainText('HushOS can’t tell who wrote this.');
     await expect(details).not.toContainText('Sam');
     await mark(maya, 'module.ts').click();
-    await details.getByRole('button', { name: 'Check their words' }).click();
+    await details.getByRole('button', { name: 'Check who wrote this' }).click();
     const check = dialog(maya).filter({ hasText: 'Check who wrote this' });
-    // Someone other than the writer is said not to be them, and cannot be checked from here.
+    // Someone other than the writer is said not to be them, and is not added from here.
     await check.getByLabel('Email').fill(mayaEmail);
-    await check.getByRole('button', { name: 'Look up' }).click();
+    await check.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(
         check.getByText('This isn’t the account that wrote it.', { exact: false }),
     ).toBeVisible({ timeout: 60_000 });
-    await expect(check.getByRole('button', { name: 'They match' })).toBeDisabled();
-    await check.getByRole('button', { name: 'They don’t match' }).click();
-    await check.getByRole('button', { name: 'Back' }).click();
-    await expect(check).toHaveCount(0);
-    await mark(maya, 'module.ts').click();
-    await details.getByRole('button', { name: 'Check their words' }).click();
     await check.getByLabel('Email').fill(samEmail);
-    await check.getByRole('button', { name: 'Look up' }).click();
-    await expect(check.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
-    await check.getByRole('button', { name: 'They match' }).click();
-    await expect(check).toHaveCount(0);
+    await check.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(check).toHaveCount(0, { timeout: 60_000 });
+    // Added again over the keys this device held for him: his file is his once more.
     await expect(mark(maya, 'module.ts')).toHaveCount(0, { timeout: 30_000 });
+    // Then, if she likes, his words: They match makes him verified.
+    const words = dialog(maya).filter({ hasText: 'Check it’s Sam' });
+    await expect(words.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
+    await words.getByRole('button', { name: 'They match' }).click();
+    await expect(words).toHaveCount(0);
+    await maya.goto('/app/contacts');
+    await expect(maya.locator(`[data-contact="${samEmail}"]`)).toHaveAttribute(
+        'data-standing',
+        'verified',
+        { timeout: 60_000 },
+    );
 });
 
 test('a copy Sam saves of what Maya shared, which he checked, carries no mark', async () => {
@@ -261,7 +274,7 @@ test('a copy Sam saves of what Maya shared, which he checked, carries no mark', 
     await sam.keyboard.press('i');
 });
 
-test('after Sam replaces his sharing keys, Maya follows only when she checks, and his old keys vouch for nothing', async () => {
+test('after Sam replaces his sharing keys, Maya follows when she opens what he shared, and his old keys vouch for nothing', async () => {
     // Something of Sam's shared with Maya, sealed and signed under his first keys.
     await sam.goto('/app/drive');
     await newFolder(sam);
@@ -287,39 +300,17 @@ test('after Sam replaces his sharing keys, Maya follows only when she checks, an
     await expect(sam.getByText('Sharing keys replaced')).toBeVisible({ timeout: 60_000 });
     await expect(dialog(sam)).toHaveCount(0);
 
-    // Maya's device does not follow his new keys by itself: his share waits for her to check.
-    await maya.goto('/app/shared');
-    await expect(maya.locator('[data-shared="Shared folder"]').getByRole('alert')).toContainText(
-        'Sam Okafor’s sharing keys changed since you checked them. Check them again in Contacts',
-        { timeout: 60_000 },
-    );
-    await maya.goto('/app/contacts');
-    await expect(maya.locator(`[data-contact="${samEmail}"]`)).toBeVisible({ timeout: 60_000 });
-    await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
-
-    // Checking him looks his keys up and follows the succession signed by the keys she checked.
-    await maya.getByRole('button', { name: 'More for Sam Okafor' }).click();
-    await maya.getByRole('menuitem', { name: 'Check it’s them' }).click();
-    const checking = dialog(maya).filter({ hasText: 'Check it’s Sam' });
-    await expect(checking).toContainText(
-        'Sam replaced their sharing keys; the change is signed by their previous keys.',
-        { timeout: 60_000 },
-    );
-    await checking.getByRole('button', { name: 'Already in your contacts' }).click();
-    await expect(checking).toHaveCount(0);
-    const notice = maya.locator(`[data-succession="${samEmail}"]`);
-    await expect(notice).toContainText(
-        'Sam Okafor replaced their sharing keys; the change is signed by their previous keys.',
-    );
-    await expect(notice.getByRole('button', { name: 'Compare words again' })).toBeVisible();
-    // His contact counts as checked: nothing to check again.
-    await expect(maya.locator(`[data-contact="${samEmail}"]`)).not.toContainText('Check again');
-
-    // His share, sealed again under his new keys when he replaced them, opens.
+    // Opening what he shared is Maya's own act: her device asks for his chain then, checks it
+    // from the keys it holds, follows it, and his share, sealed again under his new keys, opens.
     await maya.goto('/app/shared');
     await expect(
         maya.locator('[data-shared="From Sam"]').getByRole('link', { name: 'From Sam' }),
     ).toBeVisible({ timeout: 60_000 });
+    // Followed quietly: no changed-account notice, no banner, and he is still verified.
+    await maya.goto('/app/contacts');
+    const samRow = maya.locator(`[data-contact="${samEmail}"]`);
+    await expect(samRow).toHaveAttribute('data-standing', 'verified', { timeout: 60_000 });
+    await expect(samRow).not.toContainText('Account changed');
 
     // What he wrote under his first keys no longer verifies: keys replaced vouch for nothing.
     await maya.goto('/app/drive');
@@ -356,38 +347,17 @@ test('after Sam replaces his sharing keys, Maya follows only when she checks, an
         .click({ timeout: 60_000 });
     await expect(row(sam, 'module.ts')).toBeVisible({ timeout: 60_000 });
 
-    // Comparing words again clears the notice. The dialog opens on his words: while his keys
-    // are looked up it says so, and the email form (a field a password manager lights up on)
-    // never shows, not even for the frame before the lookup starts.
+    // Check again says, quietly, that he updated his account; the words are his new keys'.
     await maya.goto('/app/contacts');
-    const lookup = '**/api/auth/contacts/lookup';
-    let release = () => {};
-    const held = new Promise<void>((resolve) => (release = resolve));
-    await maya.route(lookup, async (route) => {
-        await held;
-        await route.continue();
+    await maya.getByRole('button', { name: 'More for Sam Okafor' }).click();
+    await maya.getByRole('menuitem', { name: 'Check again' }).click();
+    const again = dialog(maya).filter({ hasText: 'Check it’s Sam' });
+    await expect(again.locator('[data-followed]')).toContainText('Sam updated their account on', {
+        timeout: 60_000,
     });
-    await maya.evaluate(() => {
-        const seen = () =>
-            document.querySelector('[data-slot=dialog-content] input[type=email]') !== null;
-        new MutationObserver(() => {
-            if (seen()) document.documentElement.dataset.emailFieldSeen = '';
-        }).observe(document.body, { childList: true, subtree: true });
-    });
-    await maya
-        .locator(`[data-succession="${samEmail}"]`)
-        .getByRole('button', { name: 'Compare words again' })
-        .click();
-    const again = dialog(maya).filter({ hasText: 'Check Sam again' });
-    await expect(again.getByRole('status')).toHaveText('Getting their words');
-    await expect(again.getByRole('textbox')).toHaveCount(0);
-    release();
-    await expect(again.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
-    await maya.unroute(lookup);
-    await expect(maya.locator('html')).not.toHaveAttribute('data-email-field-seen');
-    await expect(again).toContainText('Sam replaced their sharing keys');
+    await expect(again.locator('[data-fingerprint-words]')).toBeVisible();
     await again.getByRole('button', { name: 'They match' }).click();
-    await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
+    await expect(again).toHaveCount(0);
 });
 
 test('a copy of what no longer verifies keeps its Unverified mark', async () => {

@@ -16,6 +16,7 @@ import {
     markLabel,
     rekeyedLines,
     savedLine,
+    seenLine,
     verifiedByLine,
     vouchedByLine,
     type SignerNames,
@@ -40,8 +41,8 @@ describe('integrity lines', () => {
     test('a stripped signature reads no milder than a writer nobody checked', () => {
         const [unsigned] = issueLines([issue('unsigned', null)], names);
         const [unknown] = issueLines([issue('unknown-signer', STRANGER)], names);
-        expect(unsigned!.text).toBe('HushOS can’t confirm who wrote this.');
-        expect(unknown!.text.startsWith(unsigned!.text)).toBe(true);
+        expect(unsigned!.text).toBe('HushOS can’t tell who wrote this.');
+        expect(unknown!.text).toBe(unsigned!.text);
         expect(unsigned!.text).not.toMatch(/before HushOS signed/);
         // Nothing to check for a record with no writer: no way out offered that leads nowhere.
         expect(unsigned!.action).toBeNull();
@@ -90,6 +91,32 @@ describe('integrity lines', () => {
         expect(markLabel([issue('bad-signature', MAYA), issue('unchecked', MAYA, 'version')])).toBe(
             'Unverified',
         );
+    });
+});
+
+describe('a writer nobody checked', () => {
+    const node = (
+        metadata: NodeIntegrity['metadata'],
+        version: NodeIntegrity['metadata'] | null,
+        signer: string,
+    ) => ({
+        integrity: { metadata, version } as NodeIntegrity,
+        metadataSigner: { id: signer },
+        currentVersion: version === null ? null : { signer: { id: signer } },
+    });
+
+    test('Info names a first-seen writer with no mark, and only when nothing is wrong', () => {
+        // No mark at all for their records: nothing failed, nobody compared words.
+        expect(integrityIssues(node('seen', 'seen', MAYA))).toEqual([]);
+        expect(seenLine(node('seen', 'seen', MAYA), names)).toEqual({
+            name: 'Maya Lindqvist',
+            signer: { id: MAYA },
+        });
+        // A mark speaks instead when any record did not verify.
+        expect(seenLine(node('seen', 'bad-signature', MAYA), names)).toBeNull();
+        // Verified records, and a writer nobody can name, say nothing here.
+        expect(seenLine(node('verified', 'verified', MAYA), names)).toBeNull();
+        expect(seenLine(node('seen', 'seen', STRANGER), names)).toBeNull();
     });
 });
 
@@ -157,26 +184,28 @@ describe('in a family folder', () => {
 
     test('a bad signature never accuses anyone, since withheld links make genuine records read so', () => {
         const [line] = issueLines([issue('bad-signature', SAM)], family);
-        expect(line!.text).toBe('HushOS couldn’t verify this signature.');
-        expect(line!.text).not.toMatch(/Don’t trust/);
-        expect(issueLines([issue('bad-signature', SAM, 'version')], family)[0]!.text).toBe(
-            'HushOS couldn’t verify this version’s signature.',
+        // Said as what is not confirmed, the member named as the server names them, with their address.
+        expect(line!.text).toBe(
+            'HushOS couldn’t confirm this was written by Sam Lindqvist (sam@example.com).',
         );
-        // Outside a family folder the personal reading stands.
-        expect(issueLines([issue('bad-signature', SAM)], names)[0]!.text).toMatch(
-            /Don’t trust this item/,
+        expect(line!.text).not.toMatch(/Don’t trust|doesn’t match/);
+        expect(issueLines([issue('bad-signature', MAYA, 'version')], family)[0]!.text).toBe(
+            'HushOS couldn’t confirm this version was added by Maya.',
+        );
+        // Outside a family folder nobody the server names is named.
+        expect(issueLines([issue('bad-signature', SAM)], names)[0]!.text).toBe(
+            'HushOS couldn’t confirm who wrote this.',
         );
     });
 
-    test('keys that conflict with this person’s check are worse than Unverified, never an accusation', () => {
+    test('keys that conflict with this person’s contacts are said calmly, never as an accusation', () => {
         const [line] = issueLines([issue('key-conflict', MAYA)], family);
         // Named from the pin, never from what the server calls them.
-        expect(line!.text).toBe(
-            'Maya’s keys don’t match the ones you checked. Check it’s them again.',
-        );
-        expect(line!.text).not.toMatch(/Mom/);
+        expect(line!.text).toBe('Maya’s account looks different here than in your contacts.');
+        expect(line!.text).not.toMatch(/Mom|keys/);
         expect(line!.action).toEqual({ kind: 'check', signer: { id: MAYA } });
-        expect(markLabel([issue('key-conflict', MAYA)])).toBe('Keys don’t match');
+        // The amber mark, never one of its own (6.12).
+        expect(markLabel([issue('key-conflict', MAYA)])).toBe('Unverified');
         // A pin taken on a family's word was never Ana's own check: the server's full name and
         // address, and the family that vouched for the keys.
         const vouched: SignerNames = {
@@ -191,9 +220,9 @@ describe('in a family folder', () => {
         };
         const [onWord] = issueLines([issue('key-conflict', SAM)], vouched);
         expect(onWord!.text).toBe(
-            'Sam Lindqvist (sam@example.com)’s keys don’t match the ones Berg family vouched for. Check it’s them again.',
+            'Sam Lindqvist (sam@example.com)’s account looks different here than in your contacts.',
         );
-        expect(onWord!.text).not.toMatch(/you checked/);
+        expect(onWord!.text).not.toMatch(/vouches for/);
         expect(onWord!.action).toEqual({ kind: 'check', signer: { id: SAM } });
         // Ranked first, ahead of a bad signature on the other record.
         const node = {
@@ -441,12 +470,12 @@ describe('a re-keyed item', () => {
 
     test('“doesn’t match” names the re-keyer only when their verified signature covers it', () => {
         expect(lines(folder('bad-signature', note({ bound: false })))).toEqual([
-            'What Maya locked again doesn’t match what was written. Don’t trust this item.',
+            'What Maya locked again doesn’t match what was written.',
         ]);
         // The contents differ, but the re-key signature is someone unchecked's, or missing: nobody named.
         for (const integrity of ['unknown-signer', 'unsigned', 'bad-signature'] as const)
             expect(lines(folder('bad-signature', note({ bound: false, integrity })))).toEqual([
-                'What was locked again doesn’t match what was written. Don’t trust this item.',
+                'What was locked again doesn’t match what was written.',
             ]);
         // Nor is a mismatch ever said in the writer's name.
         expect(lines(folder('bad-signature', note({ bound: false })))[0]).not.toMatch(/Sam/);

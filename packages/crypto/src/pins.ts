@@ -1,6 +1,7 @@
 import { bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import { fingerprint, hexBytes, keyDigest, publicKeyBytes } from './fingerprint';
+import type { Settings } from './contacts';
 
 /*
  * The rules a device applies to the pins and settings the server hands back.
@@ -353,4 +354,78 @@ export function pinAhead(current: GroupPin | null, next: GroupPin) {
     return Object.entries(next.areas).some(
         ([workspaceId, version]) => version > (current.areas[workspaceId] ?? 0),
     );
+}
+
+/* What a settings document may hold once sealed (contacts.ts sealSettings). */
+export const SETTINGS_MAX_BYTES = 64 * 1024;
+
+/* What adding someone says when the settings have no room for one more pin (docs/optional-verification.md 2.7). */
+export const CONTACTS_FULL = 'Your contacts are full. Remove someone you no longer share with.';
+
+/*
+ * The settings with `pin` written for its person, as a new document: the one
+ * given is never changed, so a pin that does not fit leaves nothing behind.
+ * Refused, with CONTACTS_FULL, when the document would no longer seal
+ * (SETTINGS_MAX_BYTES, as sealSettings measures it). A first-seen pin is
+ * about 500 bytes, so a document holds roughly a hundred people.
+ */
+export function settingsWithPin<S extends Settings>(settings: S, pin: S['contacts'][string]): S {
+    const next = { ...settings, contacts: { ...settings.contacts, [pin.userId]: pin } };
+    const json = new TextEncoder().encode(JSON.stringify({ ...next, version: 2 }));
+    if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError(CONTACTS_FULL);
+    return next;
+}
+
+/*
+ * What one device keeps per contact, apart from the settings (2.8): the keys
+ * it last acted on for them (the inputs of their key commitment, and the key
+ * version), the signing keys it saw them replace, whether it saw these keys
+ * verified, and a revision that only rises. Never written to the settings,
+ * never cleared by anything the server answers.
+ */
+export type GuardEntry = {
+    revision: number;
+    keyVersion: number | null;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    mlDsaPublicKeyHash: string;
+    kemPublicKeyHash: string;
+    previousSigningKeys: string[];
+    verified: boolean;
+};
+
+/*
+ * The guard entry after this device acted on `pin` (adding, sharing,
+ * opening, Continue, a check, a followed succession): the pin's keys at the
+ * next revision. A signing key the guard held before and the pin does not is
+ * kept as replaced; `verified` says whether this device saw these very keys
+ * verified, through this pin or before. Refused for a pin that is neither
+ * verified nor first-seen, so a guard never holds keys that match nothing.
+ */
+export async function nextGuardEntry(
+    previous: GuardEntry | null,
+    pin: PinKeys,
+): Promise<GuardEntry> {
+    const trust = await pinTrust(pin);
+    if (trust !== 'verified' && trust !== 'seen')
+        throw new CryptoError('Only a verified or first-seen pin is remembered.');
+    const keys = (await keyCommitment(pin))!;
+    const same = previous !== null && (await keyCommitment(previous)) === keys;
+    const replaced = [...(previous?.previousSigningKeys ?? [])];
+    if (
+        previous &&
+        previous.signingPublicKey !== pin.signingPublicKey &&
+        !replaced.includes(previous.signingPublicKey)
+    )
+        replaced.push(previous.signingPublicKey);
+    return {
+        revision: (previous?.revision ?? 0) + 1,
+        keyVersion: pin.keyVersion ?? null,
+        encryptionPublicKey: pin.encryptionPublicKey,
+        signingPublicKey: pin.signingPublicKey,
+        mlDsaPublicKeyHash: pin.mlDsaPublicKeyHash!,
+        kemPublicKeyHash: pin.kemPublicKeyHash!,
+        previousSigningKeys: replaced.filter((key) => key !== pin.signingPublicKey),
+        verified: trust === 'verified' || (same && previous?.verified === true),
+    };
 }
