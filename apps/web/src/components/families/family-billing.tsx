@@ -1066,7 +1066,8 @@ function PlanSection(props: Inner) {
                         : TAX_ON_CHARGES}
                 </p>
             </div>
-            {actions.addPlaces && (
+            {/* Kept while open: a raise to the limit takes Add places away, not its bank step. */}
+            {(actions.addPlaces || adding) && (
                 <AddPlacesDialog
                     {...props}
                     open={adding}
@@ -1189,13 +1190,17 @@ type DialogProps = Inner & {
  * "Add places": charged now for the rest of the period, at the per-member
  * rate past the included members, quoted as Polar truncates it. A bank that
  * wants the payer to confirm sends them to the portal; nothing opens before.
+ * From the press on, it reads the summary the raise was quoted from: the one
+ * the server answers with already holds the places, and may have none left.
  */
-function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
-    const range = addRange(summary);
+function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props }: DialogProps) {
     const [count, setCount] = useState(1);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [confirmUrl, setConfirmUrl] = useState<string | null>(null);
+    const [quoted, setQuoted] = useState<FamilyBillingFull | null>(null);
+    const summary = quoted ?? props.summary;
+    const range = addRange(summary);
     const live = summary.subscription;
     const price = livePrice(summary);
     if (!live || !range) return null;
@@ -1208,6 +1213,7 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
     async function add() {
         setBusy(true);
         setError('');
+        setQuoted(summary);
         try {
             const result = await groupBillingApi.setUnits(groupId, live!.units + value);
             onDone(result.billing);
@@ -1215,10 +1221,12 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
                 setConfirmUrl(result.url);
                 return;
             }
+            setQuoted(null);
             cue('success');
             toast.add({ type: 'success', title: `Added ${places(value)} to ${family}` });
             onOpenChange(false);
         } catch (cause) {
+            setQuoted(null);
             cue('error');
             setError(authError(cause));
         } finally {
@@ -1235,6 +1243,7 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
                 if (!next) {
                     setError('');
                     setConfirmUrl(null);
+                    setQuoted(null);
                     setCount(1);
                 }
             }}
