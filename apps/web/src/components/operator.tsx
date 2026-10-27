@@ -1,6 +1,7 @@
 import { cn } from 'cn';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
  * The operator console's furniture: a dense heading, monospaced numbers and
@@ -44,10 +45,16 @@ export const th =
     'h-8 border-b border-rule px-2 text-left text-[11px] font-bold tracking-[0.04em] whitespace-nowrap text-muted-foreground uppercase';
 export const td = 'h-9 border-b border-rule px-2 text-[13px]';
 
-/* A dense table that scrolls sideways on its own when the page is narrow. */
+/*
+ * A dense table that scrolls sideways on its own when the page is narrow. Its cells' padding hangs
+ * outside the page's column (DESIGN.md: align the text, not the box), so a column's words line up
+ * with the heading and a row's hover tint reaches past them; the scroller hangs with it, so the tint
+ * isn't clipped. It is relative so a visually hidden heading (sr-only, absolutely placed) scrolls
+ * with the table instead of widening the page on a phone.
+ */
 export function OperatorTable({ children }: { children: ReactNode }) {
     return (
-        <div className="min-w-0 overflow-x-auto">
+        <div className="relative -mx-2 min-w-0 overflow-x-auto">
             <table className="w-full border-collapse">{children}</table>
         </div>
     );
@@ -107,7 +114,7 @@ export function FilterTabs<T extends string>({
     onChange: (value: T) => void;
 }) {
     return (
-        <fieldset className="m-0 flex min-w-0 rounded-md border-0 bg-muted p-0.5">
+        <fieldset className={cn('m-0 flex min-w-0 rounded-md border-0 p-0.5', segmentTrack)}>
             <legend className="sr-only">{label}</legend>
             {options.map((option) => (
                 <button
@@ -118,7 +125,7 @@ export function FilterTabs<T extends string>({
                     className={cn(
                         'h-7 cursor-pointer rounded-sm px-3 text-[13px] font-semibold whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring',
                         value === option.value
-                            ? 'bg-card text-foreground shadow-sm'
+                            ? segmentOn
                             : 'text-muted-foreground hover:text-foreground',
                     )}
                 >

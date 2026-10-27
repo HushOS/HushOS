@@ -144,7 +144,7 @@ export function StorageCard({ userId }: { userId: string }) {
                     )}
                     data-pool-line
                 >
-                    {pool.name}’s storage, for everyone’s own files and the family folders. Your
+                    The family’s storage, for everyone’s own files and the family folders. Your
                     files take {formatSpace(own)}.{' '}
                     {full
                         ? 'The family’s storage is full.'

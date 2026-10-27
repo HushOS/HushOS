@@ -3,6 +3,7 @@ import { CircleCheckIcon } from 'lucide-react';
 import { useId, useState, type ComponentProps, type ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
 import { SECRET_FIELD } from '@/components/password-input';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
  * The pieces Account and Plan and storage are built from: a group with its
@@ -25,7 +26,7 @@ export function SettingsGroup({
     const id = useId();
     return (
         <section aria-labelledby={id} className="flex flex-col">
-            <div className="flex items-end justify-between gap-4 border-b border-rule pb-3">
+            <div className="hang-end flex items-end justify-between gap-4 border-b border-rule pb-3">
                 <div className="flex min-w-0 flex-col gap-0.5">
                     <h2 id={id} className="text-lg font-bold tracking-[-0.01em]">
                         {title}
@@ -45,18 +46,21 @@ export function Setting({
     children,
     action,
     below,
+    data,
 }: {
     label: ReactNode;
     children?: ReactNode;
     action?: ReactNode;
     below?: ReactNode;
+    /* `data-*` attributes for the row, which tests and verification find it by. */
+    data?: Record<`data-${string}`, string | boolean>;
 }) {
     return (
-        <div className="flex flex-col gap-2 border-b border-rule py-4 last:border-0">
+        <div {...data} className="flex flex-col gap-2 border-b border-rule py-4 last:border-0">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 sm:grid-cols-[11rem_minmax(0,1fr)_auto]">
                 <span className="text-sm font-semibold max-sm:col-span-2">{label}</span>
                 <div className="min-w-0 text-[15px]">{children}</div>
-                <div className="flex items-center justify-end gap-2">{action}</div>
+                <div className="hang-end flex items-center justify-end gap-2">{action}</div>
             </div>
             {below && <div className="sm:pl-[calc(11rem+1.5rem)]">{below}</div>}
         </div>
@@ -87,7 +91,12 @@ export function Segmented<T extends string>({
     disabled?: boolean;
 }) {
     return (
-        <fieldset className="m-0 flex w-fit max-w-full min-w-0 flex-wrap gap-1 rounded-md border-0 bg-muted p-1">
+        <fieldset
+            className={cn(
+                'm-0 flex w-fit max-w-full min-w-0 flex-wrap gap-1 rounded-md border-0 p-1',
+                segmentTrack,
+            )}
+        >
             <legend className="sr-only">{label}</legend>
             {options.map((option) => (
                 <button
@@ -99,7 +108,7 @@ export function Segmented<T extends string>({
                     className={cn(
                         'h-8 cursor-pointer rounded-sm px-3.5 text-sm font-semibold whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default',
                         value === option.value
-                            ? 'bg-card text-foreground shadow-sm'
+                            ? segmentOn
                             : 'text-muted-foreground hover:text-foreground',
                     )}
                 >

@@ -183,7 +183,7 @@ describe('in a family folder', () => {
             ...family,
             checked: {
                 ...family.checked,
-                [SAM]: 'Sam Lindqvist (sam@example.com), whom Berg family vouches for',
+                [SAM]: 'Sam Lindqvist (sam@example.com), whom the member list of Berg family vouches for',
             },
             vouched: {
                 [SAM]: { name: 'Sam Lindqvist', email: 'sam@example.com', family: 'Berg family' },
@@ -235,7 +235,7 @@ describe('in a family folder', () => {
             ...family,
             checked: {
                 ...family.checked,
-                [SAM]: 'Sam Lindqvist (sam@example.com), whom Lindqvist family vouches for',
+                [SAM]: 'Sam Lindqvist (sam@example.com), whom the member list of Lindqvist family vouches for',
             },
             vouched: {
                 [SAM]: {

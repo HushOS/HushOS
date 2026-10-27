@@ -60,7 +60,7 @@ function FamilySpacePage() {
                 </Link>
                 <Link
                     to="/app/trash"
-                    hash="family"
+                    search={{ view: 'family' }}
                     className={buttonVariants({ variant: 'outline' })}
                 >
                     Trash

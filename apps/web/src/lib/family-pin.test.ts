@@ -73,9 +73,9 @@ describe('a pin on a family’s word', () => {
     test('says whose word it is wherever its name is shown, with the address beside it', () => {
         const pin = familyPin(undefined, fromFamily(1), family);
         expect(familyWord(pin)).toBe('Lindqvist family');
-        expect(vouchLine(pin)).toBe('Lindqvist family vouches for these keys');
+        expect(vouchLine(pin)).toBe('The member list of Lindqvist family vouches for these keys');
         expect(pinName(pin)).toBe(
-            'Sam Lindqvist (sam@example.com), whom Lindqvist family vouches for',
+            'Sam Lindqvist (sam@example.com), whom the member list of Lindqvist family vouches for',
         );
         const own = { ...pin, trustedVia: null };
         expect(familyWord(own)).toBeNull();

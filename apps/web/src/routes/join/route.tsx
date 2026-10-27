@@ -269,8 +269,8 @@ function OpenInvitation({
         !ownFiles || code === 'email-mismatch' || code === 'already-member'
             ? null
             : ownPlan
-              ? `${ownPlan} From then on your files use ${invitation.name}’s storage. They take ${ownFiles} now.`
-              : `Once you’re let in, your files use ${invitation.name}’s storage. They take ${ownFiles} now.`;
+              ? `${ownPlan} From then on your files use the family’s storage. They take ${ownFiles} now.`
+              : `Once you’re let in, your files use the family’s storage. They take ${ownFiles} now.`;
     return (
         <AuthLayout
             title={

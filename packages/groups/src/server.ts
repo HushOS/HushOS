@@ -776,6 +776,18 @@ function headView(head: groupsRepository.Head): Head {
     };
 }
 
+/*
+ * The family's payer is leaving or being removed while a change to its plan holds the plan's
+ * claim (a resume, a raise, the dissolve job): billing's own "in progress" sentence.
+ */
+function planBusy() {
+    return new GroupError(
+        'busy',
+        'Another change to this plan is in progress. Try again in a moment.',
+        409,
+    );
+}
+
 /* A chain write's answer: the new head, or the refusal as the route's error. */
 function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: boolean } {
     switch (result.status) {
@@ -880,6 +892,11 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             throw forbidden();
         case 'not-member':
             throw notMember();
+        case 'busy':
+            throw planBusy();
+        // Removing the payer of a plan that renews (asked again under the plan's lock).
+        case 'pays':
+            throw paysForPlan();
         case 'unavailable':
             throw unavailable();
         case 'invalid':
@@ -1913,7 +1930,7 @@ export async function acceptInvitation(userId: string, token: string, address: s
     if (opened && !(await familyHasPlan(opened.group.id)))
         throw new GroupError(
             'no-plan',
-            `${opened.group.name} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`,
+            `Nobody new can join ${opened.group.name} right now. Ask whoever invited you; this invitation works again once there’s a plan.`,
             402,
             { invitee: true },
         );
@@ -1981,7 +1998,7 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
         declined:
             'Your bank declined the charge for another place. Nothing was charged and nobody was let in.',
         confirm:
-            'Your bank wants you to confirm the charge for another place. Confirm it in the billing portal, then let them in again.',
+            'Your bank wants you to confirm the charge for another place. Confirm it in Card and invoices, under Billing, then let them in again.',
         payment: 'The payment for another place did not go through. Nobody was let in.',
         busy: 'Another change to this plan is in progress. Try again in a moment.',
         changed:
@@ -2254,9 +2271,14 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
         case 'not-last':
             throw new GroupError(
                 'payer',
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support.',
                 409,
             );
+        case 'busy':
+            throw planBusy();
+        // The leaver pays for a plan that renews (the route's precheck, asked again under the lock).
+        case 'pays':
+            throw youPay();
         case 'unavailable':
             throw unavailable();
     }

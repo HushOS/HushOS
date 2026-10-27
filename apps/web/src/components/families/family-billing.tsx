@@ -1,21 +1,20 @@
 import type { FamilyPlan } from '@hushos/billing/api';
-import { FAMILY_MAX_MEMBERS, spaceOf, planTierName } from '@hushos/billing/protocol';
+import {
+    CANCELLATION_REASONS,
+    FAMILY_MAX_MEMBERS,
+    cancellationReasonLabels,
+    planTierName,
+    spaceOf,
+    type CancellationReason,
+} from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { Segmented } from '@/components/settings';
+import { PortalLink } from '@/components/portal-link';
+import { Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import {
-    AlertDialog,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -27,6 +26,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
 import { billingQueryOptions, localeHintQueryOptions } from '@/lib/billing';
 import { storageQueryOptions } from '@/lib/queries';
@@ -100,17 +107,7 @@ function organizersLine(members: readonly FamilyMember[] | undefined) {
     return names.length ? names.join(' or ') : null;
 }
 
-function Section({ id, title, children }: { id?: string; title: string; children: ReactNode }) {
-    return (
-        <section id={id} className="flex scroll-mt-4 flex-col" aria-label={title}>
-            <h2 className="eyebrow px-5 pt-6 pb-2 text-muted-foreground sm:px-8">{title}</h2>
-            <div className="flex flex-col gap-3 border-t border-rule px-5 pt-4 sm:px-8">
-                {children}
-            </div>
-        </section>
-    );
-}
-
+/* A label and its figure in a dialog's list of amounts (a `dl` grid). */
 function Fact({ label, children }: { label: string; children: ReactNode }) {
     return (
         <>
@@ -120,31 +117,31 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
     );
 }
 
-function PoolLine({ storage }: { storage: FamilyBilling['storage'] }) {
-    // No pool (a family from before plans were sold), or an empty one: nothing to measure.
-    if (!storage || storage.quotaBytes === '0') return null;
-    const used = Number(storage.usedBytes);
-    const quota = Number(storage.quotaBytes);
-    return (
-        <span className="flex flex-col gap-1.5">
-            <span>
-                {formatSpace(storage.usedBytes)} of {formatQuota(storage.quotaBytes)} used
-            </span>
-            <StorageMeter used={used} quota={quota} parts={null} className="h-1.5 max-w-64" />
-        </span>
-    );
+/* A figure in a row of facts: tabular, so sizes and dates line up down the column. */
+function Figure({ children }: { children: ReactNode }) {
+    return <span className="tabular-nums">{children}</span>;
+}
+
+/* The family has a pool to share, and the server said who stores what in it: Storage shows. */
+function poolShown(data: FamilyBilling | undefined): data is FamilyBilling & {
+    usage: NonNullable<FamilyBilling['usage']>;
+    storage: NonNullable<FamilyBilling['storage']>;
+} {
+    return Boolean(data?.enabled && data.usage && data.storage && data.storage.quotaBytes !== '0');
 }
 
 /* A member's own files as a manager sees them: whole GB, rounded up on the server. */
 const roundedLabel = (bytes: string) => (bytes === '0' ? 'Under 1 GB' : formatQuota(bytes));
 
 /*
- * Who stores what in the family's pool (docs/families-shared-pool.md 3.9, 7.3), under the
- * plan. Everyone sees their own files exactly, the family folders' total and what is free;
- * the organizer and anyone who manages the family also see each member's own files, which
- * the server rounds up to the whole GB before they leave it, largest first. Nobody sees
- * names, counts or types of anyone's files. Shown only while the family has a pool to share
- * (billing on, a live plan).
+ * The family's storage, said once on the page (docs/families-shared-pool.md 3.9, 7.3), in
+ * one format per viewer. Someone who manages the family sees each person's own files as the
+ * server rounds them (whole GB, rounded up, largest first), the family folders and what is
+ * free, never a total beside the rows. Everyone else sees the family's total (Used, which the
+ * server counts part by part in whole GB, so it gives no one member away), their own files
+ * exactly, and the family folders.
+ * Nobody sees names, counts or types of anyone's files. Shown only while the family has a
+ * pool to share (billing on, a live plan).
  */
 export function FamilyStorage({
     userId,
@@ -161,9 +158,18 @@ export function FamilyStorage({
     // uploads in flight; the summary's own arithmetic only for a payer who isn't pooled.
     const account = useQuery(storageQueryOptions);
     const data = summary.data;
-    if (!data?.enabled || !data.usage || !data.storage || data.storage.quotaBytes === '0')
-        return null;
+    if (!poolShown(data)) return null;
     const { usage, storage } = data;
+    // Someone without billing sees the plan here, beside the storage it gives, not in a
+    // section of its own that would only repeat the page header's places.
+    const planRow =
+        data.view === 'member' && data.hasPlan && data.planName ? (
+            <Setting label="Plan" data={{ 'data-family-plan': 'glance' }}>
+                <span className="font-semibold">
+                    {planTierName({ name: data.planName })} · {formatQuota(storage.quotaBytes)}
+                </span>
+            </Setting>
+        ) : null;
     const quota = BigInt(storage.quotaBytes);
     const used = BigInt(storage.usedBytes);
     const free =
@@ -177,59 +183,68 @@ export function FamilyStorage({
         const member = detail.data?.members.find((at) => at.userId === id);
         return member ? member.name : 'Someone in the family';
     };
+    const meter = (
+        <StorageMeter
+            used={Number(used)}
+            quota={Number(quota)}
+            parts={null}
+            className="mt-2 h-1.5 max-w-64"
+        />
+    );
+    const full = (
+        <span className="font-semibold text-destructive">The family’s storage is full</span>
+    );
+    const folders = (
+        <Setting data={{ 'data-usage-folders': true }} label="Family folders">
+            <Figure>{usage.foldersBytes === '0' ? 'None' : formatQuota(usage.foldersBytes)}</Figure>
+        </Setting>
+    );
     return (
-        <Section title="Storage">
-            <div
-                data-family-usage={usage.members ? 'manager' : 'member'}
-                className="flex flex-col gap-3"
-            >
-                <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-2.5 text-sm sm:max-w-md">
-                    {usage.members
-                        ? usage.members.map((member) => (
-                              <div key={member.userId} className="contents" data-usage-member>
-                                  <dt className="truncate">{nameOf(member.userId)}</dt>
-                                  <dd className="text-right tabular-nums">
-                                      {roundedLabel(member.ownBytesRounded)}
-                                  </dd>
-                              </div>
-                          ))
-                        : usage.ownBytes !== null && (
-                              <div className="contents" data-usage-own>
-                                  <dt>Your files</dt>
-                                  <dd className="text-right tabular-nums">
-                                      {formatSpace(usage.ownBytes)}
-                                  </dd>
-                              </div>
-                          )}
-                    <div className="contents" data-usage-folders>
-                        <dt>Family folders</dt>
-                        <dd className="text-right tabular-nums">
-                            {usage.foldersBytes === '0' ? 'None' : formatQuota(usage.foldersBytes)}
-                        </dd>
-                    </div>
-                    <div className="contents" data-usage-free>
-                        <dt className="text-muted-foreground">Free</dt>
-                        <dd
-                            className={cn(
-                                'text-right tabular-nums',
-                                free === 0n
-                                    ? 'font-semibold text-destructive'
-                                    : 'text-muted-foreground',
-                            )}
+        <SettingsGroup
+            title="Storage"
+            description={
+                usage.members
+                    ? 'Each person’s own files, rounded up to the whole GB.'
+                    : `The people who manage ${family} see only how much your files take, rounded up to the whole GB.`
+            }
+        >
+            {usage.members ? (
+                <div data-family-usage="manager" className="flex flex-col">
+                    {planRow}
+                    {usage.members.map((member) => (
+                        <Setting
+                            key={member.userId}
+                            data={{ 'data-usage-member': true }}
+                            label={nameOf(member.userId)}
                         >
-                            {free === 0n
-                                ? 'The family’s storage is full'
-                                : formatSpace(free.toString())}
-                        </dd>
-                    </div>
-                </dl>
-                <p className="max-w-[43em] text-[13px] text-muted-foreground">
-                    {usage.members
-                        ? 'How much each person’s own files take, rounded up to the whole GB. You can’t see what the files are.'
-                        : `Your files include your Trash and earlier versions. The people who manage ${family} see how much your files take, rounded up to the whole GB, never what they are.`}
-                </p>
-            </div>
-        </Section>
+                            <Figure>{roundedLabel(member.ownBytesRounded)}</Figure>
+                        </Setting>
+                    ))}
+                    {folders}
+                    <Setting data={{ 'data-usage-free': true }} label="Free">
+                        {free === 0n ? full : <Figure>{formatSpace(free.toString())}</Figure>}
+                        {meter}
+                    </Setting>
+                </div>
+            ) : (
+                <div data-family-usage="member" className="flex flex-col">
+                    {planRow}
+                    <Setting data={{ 'data-usage-total': true }} label="Used">
+                        <Figure>
+                            {formatSpace(storage.usedBytes)} of {formatQuota(storage.quotaBytes)}
+                        </Figure>
+                        {free === 0n && <span className="block">{full}</span>}
+                        {meter}
+                    </Setting>
+                    {usage.ownBytes !== null && (
+                        <Setting data={{ 'data-usage-own': true }} label="Your files">
+                            <Figure>{formatSpace(usage.ownBytes)}</Figure>
+                        </Setting>
+                    )}
+                    {folders}
+                </div>
+            )}
+        </SettingsGroup>
     );
 }
 
@@ -298,15 +313,16 @@ function GlanceTop({
         const name = tierName({ name: lapsed.productName });
         const paused = lapsed.standing === 'paused';
         return (
-            <div className="px-5 sm:px-8">
-                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
+            <div>
+                {/* Nothing here is theirs to fix: said plainly, without the payer's alarm. */}
+                <Alert data-plan-notice="unpaid">
                     <AlertTitle>
                         {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
                     </AlertTitle>
                     <AlertDescription>
                         {paused
-                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
-                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                            ? 'The plan is paused, so the family’s storage is empty until it resumes.'
+                            : 'The plan gives no storage until it’s paid or replaced.'}{' '}
                         Nothing can be added to the family folders, nobody new can join, and your
                         own files count against your own storage again. Nothing is deleted.{' '}
                         {who ? `${who} can sort it out.` : 'The organizer can sort it out.'}
@@ -316,13 +332,13 @@ function GlanceTop({
         );
     }
     return (
-        <div className="px-5 sm:px-8">
+        <div>
             <Alert data-plan-notice="none">
-                <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
+                <AlertTitle>No family plan right now</AlertTitle>
                 <AlertDescription>
                     {empty
-                        ? 'Nobody new can join, and nothing can be added to the family folders, until it has one.'
-                        : 'Nobody new can join until it has one.'}{' '}
+                        ? `Nobody new can join ${family}, and nothing can be added to the family folders, until there’s a plan.`
+                        : `Nobody new can join ${family} until there’s a plan.`}{' '}
                     {who ? `${who} can choose one.` : 'The organizer can choose one.'}
                 </AlertDescription>
             </Alert>
@@ -339,24 +355,29 @@ function GlanceSection({
     /* The family's places, as its page header says them (placesOf): the same figure in both. */
     seats: { used: number; limit: number } | null;
 }) {
-    if (!summary.hasPlan || !summary.planName) return null;
+    // With a pool to share, Storage names the plan beside what it gives (FamilyStorage).
+    if (!summary.hasPlan || !summary.planName || poolShown(summary)) return null;
+    // The storage it gives is Storage's, below: said there once, not here as well.
     return (
-        <Section title="Plan">
-            <div data-family-plan="glance" className="flex flex-col gap-2 text-sm">
-                <span className="text-base font-bold">
-                    {planTierName({ name: summary.planName })}
-                    {summary.storage && summary.storage.quotaBytes !== '0'
-                        ? ` · ${formatQuota(summary.storage.quotaBytes)}`
-                        : ''}
-                </span>
-                <PoolLine storage={summary.storage} />
-                {seats && (
-                    <span className="text-muted-foreground tabular-nums" data-glance-places>
-                        {seats.used} of {seats.limit} places taken
+        <SettingsGroup title="Plan">
+            <div data-family-plan="glance" className="flex flex-col">
+                <Setting label="Plan">
+                    <span className="font-semibold">
+                        {planTierName({ name: summary.planName })}
+                        {summary.storage && summary.storage.quotaBytes !== '0'
+                            ? ` · ${formatQuota(summary.storage.quotaBytes)}`
+                            : ''}
                     </span>
+                </Setting>
+                {seats && (
+                    <Setting label="Places" data={{ 'data-glance-places': true }}>
+                        <Figure>
+                            {seats.used} of {seats.limit} taken
+                        </Figure>
+                    </Setting>
                 )}
             </div>
-        </Section>
+        </SettingsGroup>
     );
 }
 
@@ -424,7 +445,7 @@ function PlanTop(props: Inner) {
 
     if (activating)
         return (
-            <div className="px-5 sm:px-8">
+            <div>
                 <Alert variant={gaveUp ? 'warning' : 'info'}>
                     <AlertDescription>
                         {gaveUp
@@ -441,14 +462,14 @@ function PlanTop(props: Inner) {
         const waiting = live.units - live.paidUnits;
         if (state.overdue)
             return (
-                <div className="px-5 sm:px-8" data-plan-notice="overdue">
+                <div data-plan-notice="overdue">
                     <Alert variant="destructive">
                         <AlertTitle>
-                            The last payment for {family}’s plan didn’t go through
+                            The last payment for the family’s plan didn’t go through
                         </AlertTitle>
                         <AlertDescription>
                             {payerYou
-                                ? 'Update the card in Manage payment and invoices, under Billing, to keep it.'
+                                ? 'Update the card in Card and invoices, under Billing, to keep it.'
                                 : `${payerName ?? 'The person who pays for it'} needs to update the card to keep it.`}
                         </AlertDescription>
                     </Alert>
@@ -456,16 +477,14 @@ function PlanTop(props: Inner) {
             );
         if (state.ending)
             return (
-                <div className="px-5 sm:px-8" data-plan-notice="ending">
+                <div data-plan-notice="ending">
                     <Alert>
-                        <AlertTitle>
-                            {family}’s plan ends on {ends}
-                        </AlertTitle>
+                        <AlertTitle>The family’s plan ends on {ends}</AlertTitle>
                         <AlertDescription>
                             After that, nobody can upload to the family folders, and everyone’s own
                             files count against their own storage again. Nothing is deleted.{' '}
                             {payerYou
-                                ? 'To keep the plan, resume it in Manage payment and invoices, under Billing.'
+                                ? 'To keep it, choose Resume plan under Billing.'
                                 : `${payerName ?? 'The person who pays for it'} can resume it before then.`}
                         </AlertDescription>
                     </Alert>
@@ -473,24 +492,24 @@ function PlanTop(props: Inner) {
             );
         if (upgradeWaiting(live) && payerYou)
             return (
-                <div className="px-5 sm:px-8" data-plan-notice="upgrade-waiting">
+                <div data-plan-notice="upgrade-waiting">
                     <Alert variant="warning">
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for{' '}
                             {tierName({ name: live.productName })} yet. It starts once it does:
-                            confirm it in Manage payment and invoices. Until then the family keeps
-                            the storage it has.
+                            confirm it in Card and invoices, under Billing. Until then the family
+                            keeps the storage it has.
                         </AlertDescription>
                     </Alert>
                 </div>
             );
         if (waiting > 0 && payerYou)
             return (
-                <div className="px-5 sm:px-8">
+                <div>
                     <Alert variant="warning">
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for {places(waiting)} yet. They
-                            open once it does: confirm it in Manage payment and invoices.
+                            open once it does: confirm it in Card and invoices, under Billing.
                         </AlertDescription>
                     </Alert>
                 </div>
@@ -509,50 +528,50 @@ function PlanTop(props: Inner) {
         const next = actions.choosePlan
             ? payerYou
                 ? paused
-                    ? `Resume it in the billing portal, or choose a plan below, which ends ${name} first.`
-                    : `Choose a plan below; that ends ${name} first. If the billing portal offers to retry the payment, that restores ${name}.`
+                    ? `Resume it in Card and invoices, or choose a plan below, which ends ${name} first.`
+                    : `Choose a plan below; that ends ${name} first. If Card and invoices offers to retry the payment, that restores ${name}.`
                 : paused
                   ? `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can resume it instead.`
-                  : `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can instead retry the payment in the billing portal, if it offers to.`
+                  : `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can instead retry the payment in Card and invoices, if it offers to.`
             : payerYou
               ? paused
-                  ? 'Resume it in the billing portal.'
-                  : 'Retry the payment in the billing portal, if it offers to.'
+                  ? 'Resume it in Card and invoices.'
+                  : 'Retry the payment in Card and invoices, if it offers to.'
               : ask
                 ? `${ask} can sort it out.`
                 : `${payer} can sort it out.`;
         return (
-            <div className="flex flex-col gap-2 px-5 sm:px-8">
+            <div className="flex flex-col gap-6">
                 <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
                     <AlertTitle>
                         {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
                     </AlertTitle>
                     <AlertDescription>
                         {paused
-                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
-                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                            ? 'The plan is paused, so the family’s storage is empty until it resumes.'
+                            : 'The plan gives no storage until it’s paid or replaced.'}{' '}
                         Nothing can be added to the family folders, nobody new can join, and
                         everyone’s own files count against their own storage again. Nothing is
                         deleted. {next}
                     </AlertDescription>
+                    {actions.portal && (
+                        <AlertAction>
+                            <PortalButton
+                                groupId={props.groupId}
+                                label={paused ? 'Resume in Card and invoices' : 'Card and invoices'}
+                            />
+                        </AlertAction>
+                    )}
                 </Alert>
-                {actions.portal && (
-                    <PortalButton
-                        groupId={props.groupId}
-                        label={paused ? 'Resume in portal' : 'Billing portal'}
-                    />
-                )}
                 {actions.choosePlan && <ChoosePlan {...props} renewing />}
             </div>
         );
     }
     if (state.kind === 'lapsed')
         return (
-            <div className="flex flex-col gap-2 px-5 sm:px-8">
+            <div className="flex flex-col gap-6">
                 <Alert data-plan-notice="lapsed">
-                    <AlertTitle>
-                        {family}’s plan ended on {formatDay(state.endedAt)}
-                    </AlertTitle>
+                    <AlertTitle>The family’s plan ended on {formatDay(state.endedAt)}</AlertTitle>
                     <AlertDescription>
                         {emptyPool
                             ? 'Nobody can upload to the family folders, and nobody new can join, until it’s renewed. Until then, everyone’s own files count against their own storage.'
@@ -572,13 +591,13 @@ function PlanTop(props: Inner) {
     // Never paid for.
     if (actions.choosePlan) return <ChoosePlan {...props} />;
     return (
-        <div className="px-5 sm:px-8">
+        <div>
             <Alert data-plan-notice="none">
-                <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
+                <AlertTitle>No family plan right now</AlertTitle>
                 <AlertDescription>
                     {emptyPool
-                        ? 'Nobody new can join, and nothing can be added to the family folders, until it has one.'
-                        : 'Nobody new can join until it has one.'}{' '}
+                        ? `Nobody new can join ${family}, and nothing can be added to the family folders, until there’s a plan.`
+                        : `Nobody new can join ${family} until there’s a plan.`}{' '}
                     {roles.includes('billing')
                         ? 'No family plans are on sale right now.'
                         : ask
@@ -611,7 +630,7 @@ function PortalButton({ groupId, label }: { groupId: string; label: string }) {
         }
     }
     return (
-        <div className="flex flex-col gap-1 pb-2">
+        <div className="flex flex-col gap-1">
             <Button
                 variant="outline"
                 className="w-fit"
@@ -619,7 +638,7 @@ function PortalButton({ groupId, label }: { groupId: string; label: string }) {
                 onClick={() => void open()}
                 data-family-portal
             >
-                {busy ? 'Opening portal' : label}
+                {busy ? 'Opening' : label}
                 <ArrowUpRightIcon />
             </Button>
             {error && (
@@ -715,7 +734,7 @@ function ChoosePlan({
             id="choose-plan"
             aria-labelledby={`${groupId}-choose`}
             data-choose-plan
-            className={cn('flex scroll-mt-4 flex-col gap-4', !renewing && 'px-5 sm:px-8')}
+            className="flex scroll-mt-4 flex-col gap-4"
         >
             <div className="flex min-w-0 flex-col gap-0.5 border-b border-rule pb-3">
                 <h2 id={`${groupId}-choose`} className="text-lg font-bold tracking-[-0.01em]">
@@ -723,13 +742,13 @@ function ChoosePlan({
                 </h2>
                 {!renewing && (
                     <p className="max-w-[43em] text-sm text-muted-foreground">
-                        {family} needs a plan before you can invite anyone or make family folders.
+                        Choose a plan before you invite anyone to {family} or make family folders.
                         {alone && ' Until then, only you are in it.'}
                     </p>
                 )}
                 {ownPlan && (
                     <p className="max-w-[43em] text-sm" data-personal-plan-ends>
-                        {ownPlan} From then on your files use {family}’s storage.
+                        {ownPlan} From then on your files use the family’s storage.
                     </p>
                 )}
             </div>
@@ -849,7 +868,7 @@ function PlanSection(props: Inner) {
     const [removing, setRemoving] = useState(false);
     const [changing, setChanging] = useState(false);
     const [cancelling, setCancelling] = useState(false);
-    const [busy, setBusy] = useState<'portal' | 'keep' | 'tier' | null>(null);
+    const [busy, setBusy] = useState<'portal' | 'keep' | 'tier' | 'resume' | null>(null);
     const [error, setError] = useState('');
     usePageRestored(() => setBusy(null));
     if (state.kind !== 'live') return null;
@@ -883,7 +902,7 @@ function PlanSection(props: Inner) {
             const result = await groupBillingApi.setUnits(groupId, live.units);
             settle(result.billing);
             cue('success');
-            toast.add({ type: 'success', title: `${family} keeps ${places(live.units)}` });
+            toast.add({ type: 'success', title: `The family’s plan keeps ${places(live.units)}` });
         } catch (cause) {
             cue('error');
             setError(authError(cause));
@@ -901,7 +920,26 @@ function PlanSection(props: Inner) {
             cue('success');
             toast.add({
                 type: 'success',
-                title: `${family} keeps ${tierName({ name: live.productName })}`,
+                title: `The family’s plan stays on ${tierName({ name: live.productName })}`,
+            });
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    async function resume() {
+        setBusy('resume');
+        setError('');
+        try {
+            const result = await groupBillingApi.resume(groupId);
+            settle(result.billing);
+            cue('success');
+            toast.add({
+                type: 'success',
+                title: `The family’s plan renews on ${ends}`,
             });
         } catch (cause) {
             cue('error');
@@ -920,18 +958,26 @@ function PlanSection(props: Inner) {
         : null;
     const payerName = summary.payer?.you ? 'You' : personLine(members, summary.payer?.userId);
 
+    const anyChange =
+        actions.changePlan ||
+        actions.keepTier ||
+        actions.addPlaces ||
+        actions.removePlaces ||
+        actions.keepPlaces;
+
     return (
-        <Section id="billing" title="Billing">
-            <div
-                data-family-plan="billing"
-                className={cn(
-                    'flex flex-col gap-4 rounded-xl border p-4 sm:p-5',
-                    state.overdue ? 'border-destructive' : 'border-rule',
-                )}
-            >
-                <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-                    <div className="flex min-w-0 flex-col gap-1">
-                        <span className="text-xl font-bold">{name}</span>
+        <SettingsGroup
+            title="Billing"
+            description={
+                access === 'billing'
+                    ? 'Only the person who pays for the plan can change it.'
+                    : undefined
+            }
+        >
+            <div data-family-plan="billing" id="billing" className="flex scroll-mt-4 flex-col">
+                <Setting label="Plan">
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="font-semibold">{name}</span>
                         <span className="text-sm text-muted-foreground">
                             {amountLine ? `${amountLine} · ` : ''}
                             {state.ending ? (
@@ -950,51 +996,64 @@ function PlanSection(props: Inner) {
                                 {ends}
                             </span>
                         )}
-                    </div>
-                    {actions.portal && (
-                        // The page's one blue button only while a renewal failed and you pay;
-                        // otherwise Invite someone keeps it, and the notice above says the rest.
-                        <Button
-                            variant={paymentNeedsYou(summary) ? 'default' : 'outline'}
-                            disabled={busy !== null}
-                            onClick={() => void portal()}
-                        >
-                            {busy === 'portal' ? 'Opening…' : 'Manage payment and invoices'}
-                            <ArrowUpRightIcon />
-                        </Button>
-                    )}
-                </div>
-                <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2.5 text-sm">
-                    <Fact label="Places">
+                    </span>
+                </Setting>
+                <Setting label="Places">
+                    <Figure>
                         {summary.seats.used} of {summary.seats.limit} taken · {live.includedMembers}{' '}
                         included
-                        {live.pendingUnits !== null && live.pendingUnits < live.units && (
-                            <span className="block text-muted-foreground">
-                                {places(live.units)} paid for until {ends}
-                            </span>
-                        )}
-                        {live.paidUnits < live.units && (
-                            <span className="block text-muted-foreground">
-                                {places(live.units - live.paidUnits)} wait for the bank
-                            </span>
-                        )}
-                    </Fact>
-                    <Fact label="Storage">
-                        <PoolLine storage={summary.storage} />
-                    </Fact>
-                    {charge && (
-                        <Fact label="Next charge">
-                            {formatMoney(charge.amount, charge.currency)} on {formatDay(charge.on)}
-                        </Fact>
+                    </Figure>
+                    {live.pendingUnits !== null && live.pendingUnits < live.units && (
+                        <span className="block text-sm text-muted-foreground">
+                            {places(live.units)} paid for until {ends}
+                        </span>
                     )}
-                    {payerName && <Fact label="Paid by">{payerName}</Fact>}
-                </dl>
-                {(actions.changePlan ||
-                    actions.keepTier ||
-                    actions.addPlaces ||
-                    actions.removePlaces ||
-                    actions.keepPlaces) && (
-                    <div className="flex flex-wrap gap-2">
+                    {live.paidUnits < live.units && (
+                        <span className="block text-sm text-muted-foreground">
+                            {places(live.units - live.paidUnits)} wait for the bank
+                        </span>
+                    )}
+                </Setting>
+                {charge && (
+                    <Setting
+                        label="Next charge"
+                        below={
+                            <p className="text-[13px] text-muted-foreground">{TAX_ON_CHARGES}</p>
+                        }
+                    >
+                        <Figure>
+                            {formatMoney(charge.amount, charge.currency)} on {formatDay(charge.on)}
+                        </Figure>
+                    </Setting>
+                )}
+                {payerName && (
+                    <Setting
+                        label="Paid by"
+                        action={
+                            actions.portal &&
+                            // A failed renewal the payer must fix: the portal is the step, so a
+                            // blue button. Otherwise a link: it opens Polar's page and changes
+                            // nothing on the plan, beside Change plan and Add places.
+                            (paymentNeedsYou(summary) ? (
+                                <Button disabled={busy !== null} onClick={() => void portal()}>
+                                    {busy === 'portal' ? 'Opening' : 'Card and invoices'}
+                                    <ArrowUpRightIcon />
+                                </Button>
+                            ) : (
+                                <PortalLink
+                                    busy={busy === 'portal'}
+                                    disabled={busy !== null}
+                                    onOpen={() => void portal()}
+                                />
+                            ))
+                        }
+                    >
+                        {payerName}
+                    </Setting>
+                )}
+                {(anyChange || actions.cancel || actions.resume) && (
+                    // One row: the changes first, Cancel plan last and quiet, at the row's end.
+                    <div className="flex flex-wrap items-center gap-2 py-4">
                         {actions.changePlan && (
                             <Button
                                 variant="outline"
@@ -1042,29 +1101,34 @@ function PlanSection(props: Inner) {
                                 Remove places at renewal
                             </Button>
                         )}
+                        {actions.resume && (
+                            <Button
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => void resume()}
+                            >
+                                {busy === 'resume' ? 'Resuming…' : 'Resume plan'}
+                            </Button>
+                        )}
+                        {actions.cancel && (
+                            // Asked once, in a dialog; quiet here so it never outweighs the plan.
+                            <Button
+                                variant="destructive-ghost"
+                                disabled={busy !== null}
+                                onClick={() => setCancelling(true)}
+                                // At the row's end, its words line up with the column's edge, as the outline buttons' do.
+                                className={cn(anyChange && 'sm:-mr-3.5 sm:ml-auto')}
+                            >
+                                Cancel plan
+                            </Button>
+                        )}
                     </div>
                 )}
                 {error && (
-                    <p role="alert" className="text-sm text-destructive">
+                    <p role="alert" className="pb-4 text-sm text-destructive">
                         {error}
                     </p>
                 )}
-                {actions.cancel && (
-                    // It opens a dangerous flow (asked once), so destructive-outline, as DESIGN.md says.
-                    <Button
-                        variant="destructive-outline"
-                        disabled={busy !== null}
-                        onClick={() => setCancelling(true)}
-                        className="self-start"
-                    >
-                        Cancel plan
-                    </Button>
-                )}
-                <p className="text-[13px] text-muted-foreground">
-                    {access === 'billing'
-                        ? `Only the person who pays for the plan can change it. ${TAX_ON_CHARGES}`
-                        : TAX_ON_CHARGES}
-                </p>
             </div>
             {actions.addPlaces && (
                 <AddPlacesDialog
@@ -1090,30 +1154,146 @@ function PlanSection(props: Inner) {
                     onDone={settle}
                 />
             )}
-            <AlertDialog open={cancelling} onOpenChange={setCancelling}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Cancel {family}’s plan?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            You cancel it in the billing portal. The family keeps its plan and{' '}
-                            {formatQuota(live.quotaBytes)} until {ends}. After that, nobody can
-                            upload to the family folders, and everyone’s own files count against
-                            their own storage again. Nothing is deleted.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Keep the plan</AlertDialogCancel>
-                        <Button
-                            variant="destructive"
-                            disabled={busy !== null}
-                            onClick={() => void portal()}
-                        >
-                            {busy === 'portal' ? 'Opening…' : 'Cancel in the billing portal'}
-                        </Button>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-        </Section>
+            {actions.cancel && (
+                <CancelFamilyPlanDialog
+                    groupId={groupId}
+                    family={family}
+                    planName={tierName({ name: live.productName })}
+                    quotaBytes={live.quotaBytes}
+                    ends={ends}
+                    open={cancelling}
+                    onOpenChange={setCancelling}
+                    onDone={(next) => {
+                        settle(next);
+                        setCancelling(false);
+                        toast.add({ type: 'success', title: `The family’s plan ends on ${ends}` });
+                    }}
+                />
+            )}
+        </SettingsGroup>
+    );
+}
+
+const reasonItems = [
+    { value: '', label: 'Prefer not to say' },
+    ...CANCELLATION_REASONS.map((value) => ({ value, label: cancellationReasonLabels[value] })),
+];
+
+/*
+ * Cancelling the family's plan, here as a person cancels their own: what the family keeps and
+ * until when, then why (the reason goes to Polar with it). It ends at the period's end, and
+ * Resume plan takes it back until then.
+ */
+function CancelFamilyPlanDialog({
+    groupId,
+    family,
+    planName,
+    quotaBytes,
+    ends,
+    open,
+    onOpenChange,
+    onDone,
+}: {
+    groupId: string;
+    family: string;
+    planName: string;
+    quotaBytes: string;
+    ends: string;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onDone: (billing: FamilyBilling) => void;
+}) {
+    const id = useId();
+    const [reason, setReason] = useState<CancellationReason | ''>('');
+    const [comment, setComment] = useState('');
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    async function submit() {
+        setPending(true);
+        setError('');
+        try {
+            const result = await groupBillingApi.cancel(groupId, {
+                reason: reason || undefined,
+                comment: comment.trim() || undefined,
+            });
+            cue('success');
+            onDone(result.billing);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    return (
+        <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+            <DialogContent className="sm:max-w-[480px]" data-cancel-family-plan>
+                <DialogHeader>
+                    <DialogTitle>Cancel the plan for {family}?</DialogTitle>
+                    <DialogDescription>
+                        The family keeps {planName} and {formatQuota(quotaBytes)} until {ends}.
+                        After that, nothing new can be added to the family folders, and everyone’s
+                        own files count against their own storage again. Nothing is deleted, and you
+                        can resume the plan until then.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-1.5">
+                    <label htmlFor={`${id}-reason`} className="text-[13px] font-semibold">
+                        Why are you cancelling?
+                    </label>
+                    <Select
+                        value={reason}
+                        disabled={pending}
+                        onValueChange={(value) =>
+                            setReason((value ?? '') as CancellationReason | '')
+                        }
+                        items={reasonItems}
+                    >
+                        <SelectTrigger id={`${id}-reason`} className="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {reasonItems.map((item) => (
+                                <SelectItem key={item.value} value={item.value}>
+                                    {item.label}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                    <label htmlFor={`${id}-comment`} className="text-[13px] font-semibold">
+                        Anything else?{' '}
+                        <span className="font-normal text-muted-foreground">· optional</span>
+                    </label>
+                    <Textarea
+                        id={`${id}-comment`}
+                        maxLength={500}
+                        disabled={pending}
+                        value={comment}
+                        onChange={(event) => setComment(event.target.value)}
+                        className="min-h-20 text-[15px]"
+                    />
+                </div>
+                {error && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        {error}
+                    </p>
+                )}
+                <DialogFooter>
+                    <Button
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => onOpenChange(false)}
+                    >
+                        Keep the plan
+                    </Button>
+                    <Button variant="destructive" disabled={pending} onClick={() => void submit()}>
+                        {pending ? 'Cancelling…' : 'Cancel plan'}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -1310,7 +1490,7 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
  * one starts at the renewal, only once the family folders fit in it, and
  * refunds nothing. Places stay as they are.
  */
-function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
+function ChangePlanDialog({ groupId, summary, open, onOpenChange, onDone }: DialogProps) {
     const id = useId();
     const moves = tierMoves(summary);
     const live = summary.subscription;
@@ -1350,8 +1530,8 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
                 type: 'success',
                 title:
                     result.when === 'renewal'
-                        ? `${family} moves to ${tierName(chosen.plan)} on ${ends}`
-                        : `${family} is on ${tierName(chosen.plan)}`,
+                        ? `The family’s plan moves to ${tierName(chosen.plan)} on ${ends}`
+                        : `The family’s plan is ${tierName(chosen.plan)} now`,
             });
             onOpenChange(false);
         } catch (cause) {
@@ -1508,7 +1688,7 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
  * "Remove places at renewal": free, from the period's end, never below the
  * members or the included count. The places removed stop taking newcomers now.
  */
-function RemovePlacesDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
+function RemovePlacesDialog({ groupId, summary, open, onOpenChange, onDone }: DialogProps) {
     const range = removeRange(summary);
     const live = summary.subscription;
     const [target, setTarget] = useState<number | null>(null);
@@ -1530,7 +1710,10 @@ function RemovePlacesDialog({ groupId, family, summary, open, onOpenChange, onDo
             const result = await groupBillingApi.setUnits(groupId, value);
             onDone(result.billing);
             cue('success');
-            toast.add({ type: 'success', title: `${family} has ${places(value)} from ${ends}` });
+            toast.add({
+                type: 'success',
+                title: `The family’s plan has ${places(value)} from ${ends}`,
+            });
             onOpenChange(false);
         } catch (cause) {
             cue('error');
@@ -1556,8 +1739,8 @@ function RemovePlacesDialog({ groupId, family, summary, open, onOpenChange, onDo
                 <DialogHeader>
                     <DialogTitle>Remove places at renewal</DialogTitle>
                     <DialogDescription>
-                        From {ends}, {family} has fewer places. Nothing is refunded and nobody is
-                        removed. Nobody new can take the places you remove, starting now.
+                        From {ends}, the family’s plan has fewer places. Nothing is refunded and
+                        nobody is removed. Nobody new can take the places you remove, starting now.
                     </DialogDescription>
                 </DialogHeader>
                 <Stepper
@@ -1693,10 +1876,14 @@ export function SeatHelp({
                 <ArrowUpRightIcon />
             </Button>
         );
-    else if ((reason === 'declined' || reason === 'canceling' || reason === 'confirm') && payerYou)
+    // Set to end: the payer resumes it here first.
+    else if (reason === 'canceling' && payerYou)
+        body = <p>Resume the plan under Billing first; then they can join.</p>;
+    // A declined or unconfirmed charge is fixed with the card: the portal is the step, a button.
+    else if ((reason === 'declined' || reason === 'confirm') && payerYou)
         body = (
             <Button variant="outline" disabled={busy} onClick={() => void portal()}>
-                {busy ? 'Opening…' : 'Manage payment and invoices'}
+                {busy ? 'Opening' : 'Card and invoices'}
                 <ArrowUpRightIcon />
             </Button>
         );
