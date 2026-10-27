@@ -1,0 +1,77 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_cd1d0b1d7f409c 460,471,477-478,480,492-493,499-500
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_81d08bf6e1134d 184
+apps/web/src/components/drive/area-notice.tsx
+  s_566b8e0c4467a4::t_3182fcd5e5fac9 49-51
+apps/web/src/components/drive/check-contact.test.tsx
+  s_566b8e0c4467a4::t_04ac20d9a7f0da 81-83
+apps/web/src/components/drive/move-dialog.tsx
+  s_566b8e0c4467a4::t_0d9d31833c57ac 345
+apps/web/src/components/drive/trust-as-family.tsx
+  s_566b8e0c4467a4::t_9ac3d5c5ff93c6 47
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_566b8e0c4467a4::t_2b51ba9542fc7a 58
+apps/web/src/components/families/family-alerts.tsx
+  s_566b8e0c4467a4::t_48f49c6fc6b746 22,36
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_b931d66b658fbf 324-325,337,340-341,468,482,551-552,574,596,599-600,745,751,905,923,942,1169,1232,1493,1533-1534,1691,1713-1716,1742-1743
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_aa5f18cc32ea78 242,252-253
+apps/web/src/components/families/key-changes.tsx
+  s_566b8e0c4467a4::t_62f4ea20839891 44
+apps/web/src/components/families/let-in-dialog.tsx
+  s_566b8e0c4467a4::t_d97cee0d78d1d1 234,276,492-496
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_b507ff02b7a806 484,516
+apps/web/src/components/families/new-folder-dialog.tsx
+  s_566b8e0c4467a4::t_e21905b6b22b03 56
+apps/web/src/components/storage-card.tsx
+  s_566b8e0c4467a4::t_a393ca33c563d8 147
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_dd2c4ff57e834f 643,652,665,682,695
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_4b177585067b15 130-131
+apps/web/src/lib/family-pin.test.ts
+  s_566b8e0c4467a4::t_d7fd3b2e6d242e 76,78
+apps/web/src/lib/family-pin.ts
+  s_566b8e0c4467a4::t_05df22067788dd 18,21,27-29
+apps/web/src/lib/groups/copy.ts
+  s_566b8e0c4467a4::t_ed88971572568c 98,111,113,115,130-131,136,156-157,308,311,313-314
+apps/web/src/lib/groups/removal.ts
+  s_566b8e0c4467a4::t_0eaa34da2e923b 68
+apps/web/src/lib/integrity-lines.test.ts
+  s_566b8e0c4467a4::t_b9d8073b4b94bf 186,238
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  s_566b8e0c4467a4::t_044cef4655e640 234,313
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/f.$folderId.tsx
+  s_566b8e0c4467a4::t_fafce0111cd377 87
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_d3bf3f19194158 472
+apps/web/src/routes/join/route.tsx
+  s_566b8e0c4467a4::t_b7e2303b8cefa4 272-273
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_abc9447ea6e575 1050,1482,1540,1597,1617,2053,2269,2275,2296
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_63b3cf43f60fa6 8439
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_99908a16b20f1e 167
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_02d74299e0c50b 1930
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3d047626329ea4802e95639e2d846f49d7bfdedf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
