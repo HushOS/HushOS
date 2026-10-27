@@ -1586,6 +1586,9 @@ export class GranterWaitingError extends Error {
  * device has acted on before (its guard holds them, their pin gone), so a
  * removal sticks.
  */
+const removedWords = (first: string) =>
+    `You removed ${first} from your contacts. Open this to add them again.`;
+
 export async function trustGranter(
     granter: { id: string; name: string; email: string } & Served,
     { explicit = false }: { explicit?: boolean } = {},
@@ -1603,7 +1606,7 @@ export async function trustGranter(
             if (standing.kind === 'new' && !explicit && (standing.removed || standing.entry))
                 throw new GranterWaitingError(
                     standing.removed
-                        ? `You removed ${first} from your contacts. Open this to add them again.`
+                        ? removedWords(first)
                         : `Open this to add ${first} to your contacts.`,
                 );
             if (standing.kind === 'succession')
@@ -1632,13 +1635,20 @@ export async function trustGranter(
                 };
                 try {
                     // Over nobody: a pin another device saved meanwhile is kept, or decided again.
+                    // Listing never undoes a removal: one recorded on any attempt of this save
+                    // (another device added and removed them meanwhile) stops the add, and the
+                    // share waits for the person's Open, the only act that clears it.
                     const { pin, entry } = await commitTrust(
                         boundQueryClient,
                         userId,
                         granter.id,
                         standing.entry,
                         fresh,
-                        (settings) => withPinIf(settings, fresh, null),
+                        (settings) => {
+                            if (!explicit && contactRemoved(settings, granter.id))
+                                throw new GranterWaitingError(removedWords(first));
+                            return withPinIf(settings, fresh, null);
+                        },
                     );
                     standing = { kind: 'ok', pin, entry, followed: false };
                 } catch (error) {

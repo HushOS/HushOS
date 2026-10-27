@@ -740,6 +740,27 @@ describe('listing what was shared, and opening it', () => {
         );
     });
 
+    test('a removal saved on another device while listing adds them stops the add', async () => {
+        const w = await world();
+        // Another device adds Maya and the person removes her, between this device's read and its
+        // save: the save is tried again over a document that records the removal.
+        w.server.beforeNextSave = async () =>
+            w.replace({
+                ...(await w.stored()),
+                removedContacts: { [MAYA]: new Date().toISOString() },
+            });
+        await expect(trustGranter(granter(w.maya))).rejects.toThrow(
+            'You removed Maya from your contacts. Open this to add them again.',
+        );
+        expect((await w.stored()).contacts[MAYA]).toBeUndefined();
+        expect((await w.stored()).removedContacts).toEqual({ [MAYA]: expect.any(String) });
+        // The person's own Open is what adds her back.
+        expect((await trustGranter(granter(w.maya), { explicit: true })).signingPublicKey).toBe(
+            w.maya.signingPublicKey,
+        );
+        expect((await w.stored()).removedContacts).toBeUndefined();
+    });
+
     test('a pin gone from the settings with no removal recorded waits too where the guard holds them', async () => {
         const w = await world();
         await addContact(query, ME, MAYA_EMAIL);
