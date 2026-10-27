@@ -1,0 +1,57 @@
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_febb41ec407321 2172-2301
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_566b8e0c4467a4::t_483da6e289208c 373-383
+  s_566b8e0c4467a4::t_e4b92e70504a69 595-597
+  s_566b8e0c4467a4::t_38f05027dfc132 5,20-26,44,46-54,58,366-370,384-388,391-393,398,420,446-448,480,485-486,492-493,502-510,515-594,598-617,624-626,629-633,635,637-641,655,664-665,667,670,680-681,683,686,690-691,693-694,696,699,703-707,709,712,739-744,749-762,764,766-768
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_102a3f3609bcae 247-251
+  s_566b8e0c4467a4::t_4c7b4c152a39f5 775-781,1153-1168,1191,1216-1221
+apps/web/src/components/ui/autocomplete.tsx
+  s_566b8e0c4467a4::t_55ca04e57ca01f 1-99
+apps/web/src/lib/affiliate-form.ts
+  s_566b8e0c4467a4::t_e363025fd754ff 1-118
+  s_566b8e0c4467a4::t_44990a29eb421f 119-131
+apps/web/src/lib/affiliate-routes.test.ts
+  s_566b8e0c4467a4::t_7a0240539c97a4 1-30
+  s_566b8e0c4467a4::t_6e8fbd03fdbbd8 31-33
+apps/web/src/lib/affiliate-form.test.ts
+  s_566b8e0c4467a4::t_7a316ab3428d49 1-97
+  s_566b8e0c4467a4::t_5739ac15152266 98-113
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_43319d8030638f 512
+apps/web/src/lib/growth-api.ts
+  s_566b8e0c4467a4::t_59bba7d9265a26 14-20
+apps/web/src/lib/use-debounced-value.ts
+  s_566b8e0c4467a4::t_b81abc4a2b1bac 1-11
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_3b30ba919cb211 239-240,312-317
+packages/billing/src/growth.ts
+  s_566b8e0c4467a4::t_af097d44cdc9aa 87,230,238-252,290-293,309,316-327,369-370
+packages/db/drizzle/20261027013917_affiliate_pending_email/migration.sql
+  s_566b8e0c4467a4::t_76c5afc5994075 1
+packages/db/drizzle/20261027013917_affiliate_pending_email/snapshot.json
+  s_566b8e0c4467a4::t_ecd6fe9a3ccf24 1-13720
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_5f031b0944ac98 1,295,367-368,370,375-380,382-383,387-407
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_453a3be576ea37 14
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_50348619f0a8df 45-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "081822704972f4a4d7d4be0caa05f2abebfdedfd",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
