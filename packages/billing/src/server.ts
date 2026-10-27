@@ -34,6 +34,7 @@ import {
     unavailable,
     type BillingUser,
     type CatalogueProduct,
+    type FamilyCatalogueProduct,
 } from './provider';
 import { GROUP_CUSTOMER_PREFIX, lapsedPlan, livePlan, type CancellationReason } from './protocol';
 
@@ -130,7 +131,7 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
         billingRepository.getPendingIntent(user.id),
         listCatalogue().then((catalogue) => catalogue.plans),
         // Read from the one cached product list even where families aren't served (below).
-        getFamilyCatalogue().then(offeredFamilies),
+        getFamilyCatalogue(),
         billingRepository.getPooledFamily(user.id),
     ]);
     const live = livePlan(summary.subscription);
@@ -147,10 +148,9 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
             : null;
     // A family tier picked on the pricing page: the app opens Create a family with it, or, where
     // families aren't served (any more), Plans. Whether they're in a family is the app's to check.
-    const intendedFamily =
-        intent?.planProductId && families.some((plan) => plan.id === intent.planProductId)
-            ? intent.planProductId
-            : null;
+    const intendedFamily = intent?.planProductId
+        ? intendedFamilyOf(intent.planProductId, families)
+        : null;
     const family = pooled
         ? {
               name: pooled.name,
@@ -160,6 +160,23 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
           }
         : null;
     return { enabled: true, ...summary, intendedPlan, intendedFamily, family };
+}
+
+/*
+ * The family plan a signup's intent names, as the app should open it: the tier itself while it
+ * is on sale; the one on sale now of the same tier and billing period when an operator has
+ * replaced it since; otherwise (archived, the single plan from before the tiers) the id as it
+ * is, which the app finds in no offer and sends to Plans. Null for anything but a family plan.
+ */
+function intendedFamilyOf(productId: string, families: FamilyCatalogueProduct[]) {
+    const offered = offeredFamilies(families);
+    if (offered.some((plan) => plan.id === productId)) return productId;
+    const chosen = families.find((plan) => plan.id === productId);
+    if (!chosen) return null;
+    const successor = chosen.tier
+        ? offered.find((plan) => plan.tier === chosen.tier && plan.interval === chosen.interval)
+        : undefined;
+    return successor?.id ?? productId;
 }
 
 /*

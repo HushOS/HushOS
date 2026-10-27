@@ -269,6 +269,14 @@ describe('firstLanding', () => {
         expect(forgotten).toHaveLength(1);
     });
 
+    test('a tier no longer sold goes to Plans, and is forgotten', async () => {
+        const { all, forgotten } = deps({
+            summary: async () => ({ intendedPlan: null, intendedFamily: 'family-retired' }),
+        });
+        expect(await firstLanding(all)).toEqual({ kind: 'go', to: { to: '/app/billing' } });
+        expect(forgotten).toHaveLength(1);
+    });
+
     test('someone waiting to join a family lands on Family, without the tier', async () => {
         const { all } = deps({ families: async () => [member('accepted')] });
         expect(await firstLanding(all)).toEqual({ kind: 'go', to: { to: '/app/family' } });

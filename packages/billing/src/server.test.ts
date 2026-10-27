@@ -2090,17 +2090,75 @@ describe('a family tier chosen at sign-up', () => {
         expect(await growthRepository.pendingReferralCode(userId)).toBe('FRIEND25');
     });
 
-    test('a family plan no longer offered, or a personal plan, is never named', async () => {
-        const old = await createTestAccount();
-        // The single Family plan from before the tiers: still sold to its subscribers, not offered.
-        await intend(old.userId, FAMILY);
-        expect((await billing.getSummary(userOfId(old.userId))).intendedFamily).toBeNull();
+    test('a personal plan, or a product that isn’t a family plan, is never named as one', async () => {
         const personal = await createTestAccount();
         await intend(personal.userId, MAX);
         expect(await billing.getSummary(userOfId(personal.userId))).toMatchObject({
             intendedPlan: MAX,
             intendedFamily: null,
         });
+        const stranger = await createTestAccount();
+        await intend(stranger.userId, 'not-a-product');
+        expect((await billing.getSummary(userOfId(stranger.userId))).intendedFamily).toBeNull();
+    });
+
+    /* The catalogue as `change` leaves it, past its cache; put back afterwards for later tests. */
+    async function withCatalogue(change: () => () => void, run: () => Promise<void>) {
+        const clock = vi.spyOn(Date, 'now');
+        catalogueClock += 10 * 60_000;
+        const undo = change();
+        try {
+            clock.mockReturnValue(new Date().getTime() + catalogueClock);
+            await run();
+        } finally {
+            undo();
+            clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+            await billing.listCatalogue();
+            clock.mockRestore();
+        }
+    }
+
+    test('a tier replaced since sign-up is named as the one on sale now, same tier and period', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, PRO_FAMILY);
+        const NEW_PRO = 'b6666666-aaaa-4aaa-8aaa-b66666666666';
+        await withCatalogue(
+            () => {
+                polar.products.push({
+                    ...tierProduct(NEW_PRO, 'Family Pro (monthly)', 'pro', FAMILY_POOL, {
+                        usd: 2200,
+                    }),
+                    created_at: '2026-10-20T00:00:00Z',
+                } as never);
+                return () => polar.products.splice(polar.products.length - 1, 1);
+            },
+            async () => {
+                expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBe(NEW_PRO);
+            },
+        );
+    });
+
+    test('a tier no longer sold at all is still named, so the app sends them to Plans', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, PRO_FAMILY);
+        const pro = polar.products.find((candidate) => candidate.id === PRO_FAMILY)!;
+        await withCatalogue(
+            () => {
+                pro.is_archived = true;
+                return () => {
+                    pro.is_archived = false;
+                };
+            },
+            async () => {
+                expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBe(
+                    PRO_FAMILY,
+                );
+            },
+        );
+        // The single Family plan from before the tiers, never offered beside them.
+        const old = await createTestAccount();
+        await intend(old.userId, FAMILY);
+        expect((await billing.getSummary(userOfId(old.userId))).intendedFamily).toBe(FAMILY);
     });
 
     test('forgetting it leaves a personal plan for its checkout', async () => {
