@@ -22,10 +22,12 @@ const buttonVariants = cva(
                 link: 'h-auto rounded-none border-transparent px-0 font-normal text-primary underline decoration-1 underline-offset-4 hover:text-primary-hover',
             },
             size: {
-                default: 'h-9 px-3.5 pointer-coarse:h-11 pointer-coarse:px-4',
-                xs: "h-7 gap-1.5 px-2.5 text-xs [&_svg:not([class*='size-'])]:size-3",
-                sm: "h-8 px-3 text-[13px] [&_svg:not([class*='size-'])]:size-3.5",
-                lg: 'h-11 px-5 text-[15px]',
+                // Each size names its side padding (--btn-px); compoundVariants below applies it.
+                default:
+                    'h-9 [--btn-px:--spacing(3.5)] pointer-coarse:h-11 pointer-coarse:[--btn-px:--spacing(4)]',
+                xs: "h-7 gap-1.5 text-xs [--btn-px:--spacing(2.5)] [&_svg:not([class*='size-'])]:size-3",
+                sm: "h-8 text-[13px] [--btn-px:--spacing(3)] [&_svg:not([class*='size-'])]:size-3.5",
+                lg: 'h-11 text-[15px] [--btn-px:--spacing(5)]',
                 row: 'h-14 px-5 sm:px-6',
                 icon: 'size-9 pointer-coarse:size-11',
                 'icon-xs': "size-7 [&_svg:not([class*='size-'])]:size-3",
@@ -37,6 +39,24 @@ const buttonVariants = cva(
             variant: 'default',
             size: 'default',
         },
+        compoundVariants: [
+            {
+                /*
+                 * Balance icons optically (DESIGN.md, Layout). A glyph's empty side reads as
+                 * extra padding, so the icon and words move toward it: 1px toward a leading icon,
+                 * 1.5px toward a trailing arrow or chevron, whose open side is wider. The two
+                 * paddings still add up to 2 × --btn-px, so the button keeps its size. Logical
+                 * sides, so the nudge follows the icon in right-to-left text.
+                 *
+                 * The padding itself is `btn-pad` (styles.css), in the components layer, so a call
+                 * site's own padding replaces it whatever cn merges, on touch screens too. A state
+                 * that shows only the icon is a square instead (`max-sm:w-9 max-sm:px-0
+                 * max-sm:pointer-coarse:w-11`), so it keeps 44px to a finger and its icon centred.
+                 */
+                size: ['default', 'xs', 'sm', 'lg'],
+                className: 'btn-pad icon-start:[--icon-shift:1px] icon-end:[--icon-shift:-1.5px]',
+            },
+        ],
     },
 );
 
@@ -49,6 +69,8 @@ function Button({
     return (
         <ButtonPrimitive
             data-slot="button"
+            // Read by hang-end (styles.css): a quiet button that ends a row hangs its padding.
+            data-variant={variant ?? undefined}
             className={cn(buttonVariants({ variant, size, className }))}
             {...props}
         />

@@ -563,7 +563,7 @@ export function TrashView({
                 >
                     <thead>
                         <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
-                            <th scope="col" className="pl-4 text-left md:pl-8">
+                            <th scope="col" className="pl-5 text-left sm:pl-8">
                                 <span className="flex items-center gap-3 md:gap-4">
                                     <span className="w-8 shrink-0 md:w-10" />
                                     Name
@@ -637,7 +637,7 @@ export function TrashView({
                                         )}
                                     >
                                         <td className="min-w-0 p-0">
-                                            <span className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-3 pl-4 md:grid-cols-[2.5rem_minmax(0,1fr)] md:gap-x-4 md:pl-8">
+                                            <span className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-3 pl-5 sm:pl-8 md:grid-cols-[2.5rem_minmax(0,1fr)] md:gap-x-4">
                                                 <span
                                                     className={cn(
                                                         'row-span-2',
