@@ -456,10 +456,10 @@ describe('the guard (2.8)', () => {
         await deleteContactGuard(w.guardName);
         let release!: () => void;
         const held = withGuardLock(ME, () => new Promise<void>((done) => (release = done)));
-        const read = vi.spyOn(w.store, 'entries');
-        // A verdict reads K0 and the guard's empty entries, then waits for the lock.
+        // A verdict reads the settings (K0), then waits for the lock.
+        const reads = auth.settings.mock.calls.length;
         const judged = trustedSigners(ME);
-        await vi.waitFor(() => expect(read).toHaveBeenCalled());
+        await vi.waitFor(() => expect(auth.settings.mock.calls.length).toBeGreaterThan(reads));
         await new Promise((done) => setTimeout(done, 50));
         // Meanwhile another tab continues to K1: its pending record and the settings land, and it
         // is interrupted before it writes the guard.
@@ -491,7 +491,34 @@ describe('the guard (2.8)', () => {
         expect(await trustGrantee(ME, MAYA, after)).toMatchObject({
             encryptionPublicKey: after.encryptionPublicKey,
         });
-        read.mockRestore();
+    });
+
+    test('a contact removed on another device while a verdict waits for the lock is judged as removed', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await pinContact(query, ME, await lookupContact(query, ME, MAYA_EMAIL));
+        // A new device: the settings hold Maya verified at K0, the guard holds nothing.
+        await deleteContactGuard(w.guardName);
+        let release!: () => void;
+        const held = withGuardLock(ME, () => new Promise<void>((done) => (release = done)));
+        const reads = auth.settings.mock.calls.length;
+        const judged = trustedSigners(ME);
+        const standings = contacts.contactStandings(ME);
+        await vi.waitFor(() => expect(auth.settings.mock.calls.length).toBeGreaterThan(reads));
+        await new Promise((done) => setTimeout(done, 50));
+        // Another device removes her meanwhile.
+        await w.replace({
+            ...(await w.stored()),
+            contacts: {},
+            removedContacts: { [MAYA]: new Date().toISOString() },
+        });
+        release();
+        await held;
+        // Neither reader judges from the K0 it may have read first: she vouches for nothing,
+        // and Contacts says nothing of her, let alone Verified.
+        expect((await judged)[MAYA]).toBeUndefined();
+        expect((await standings).get(MAYA)).toBeUndefined();
+        expect(await w.real.entry(ME, MAYA)).toBeNull();
     });
 
     test('a lost settings answer shares nothing on the act, and the next act finishes it silently', async () => {

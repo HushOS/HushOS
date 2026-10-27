@@ -749,44 +749,49 @@ async function rememberKeys(
 }
 
 /*
- * Pins that came with the settings and that this device's guard holds
- * nothing for yet (a new device, a browser signed back into): each is written
- * to the guard before anything uses it (2.8), so a later change made on
- * another device (a Continue, a stale copy) is met here as a change, never
- * taken as first use. A write that fails fails the caller: nothing is judged
- * or shown as theirs on a pin the guard could not keep. Returns the entries
- * as stored afterwards.
+ * The settings pins and this device's guard entries as one view, both read
+ * under the account's lock, for the readers that judge from them (who wrote
+ * what, and Verified on Contacts). Nothing is judged from a pin read before
+ * the lock: a contact removed or moved on another device meanwhile is judged
+ * as the settings are now. And a pin that came with
+ * the settings with nothing for it in the guard yet (a new device, a browser
+ * signed back into) is written to the guard before it is used, so a later
+ * change made on another device is met here as a change, never as first
+ * use. A guard that cannot be read or written fails the caller, so nothing is
+ * judged or shown as theirs.
  */
-async function rememberSynced(
-    userId: string,
-    contacts: Record<string, Pin>,
-    entries: Map<string, GuardEntry>,
-) {
-    const missing: string[] = [];
-    for (const pin of Object.values(contacts)) {
-        if (entries.has(pin.userId.toLowerCase())) continue;
-        const trust = await pinTrust(pin);
-        if (trust === 'verified' || trust === 'seen') missing.push(pin.userId);
-    }
-    if (!missing.length) return entries;
-    await withGuardLock(userId, async () => {
-        // Read again under the lock: an act another tab left pending is settled only against the
-        // settings as they are now, never against a pin read before the lock was ours.
+async function guardedView(userId: string) {
+    return withGuardLock(userId, async () => {
         const { settings } = await loadSettings(userId);
-        for (const contactId of missing) {
-            const pin = pinOf(settings.contacts, contactId)?.pin ?? null;
-            const entry = await guardFor(userId, contactId, pin);
-            if (entry !== null || pin === null) continue;
+        const { store } = contactGuard();
+        const read = async () => {
+            try {
+                return await store.entries(userId);
+            } catch (error) {
+                throw new GuardUnreadableError(error);
+            }
+        };
+        let entries = await read();
+        const due = new Set<string>();
+        for (const pin of Object.values(settings.contacts)) {
+            const id = pin.userId.toLowerCase();
+            if (entries.has(id)) continue;
             const trust = await pinTrust(pin);
-            if (trust === 'verified' || trust === 'seen')
-                await rememberKeys(userId, contactId, null, pin);
+            if (trust === 'verified' || trust === 'seen') due.add(id);
         }
+        if (due.size) {
+            for (const contactId of due) {
+                const pin = pinOf(settings.contacts, contactId)?.pin ?? null;
+                const entry = await guardFor(userId, contactId, pin);
+                if (entry !== null || pin === null) continue;
+                const trust = await pinTrust(pin);
+                if (trust === 'verified' || trust === 'seen')
+                    await rememberKeys(userId, contactId, null, pin);
+            }
+            entries = await read();
+        }
+        return { contacts: settings.contacts, entries };
     });
-    try {
-        return await contactGuard().store.entries(userId);
-    } catch (error) {
-        throw new GuardUnreadableError(error);
-    }
 }
 
 /*
@@ -1500,17 +1505,10 @@ export async function granteeKeys(userId: string, pin: Pin) {
  * fails the whole query: nothing is shown as verified then.
  */
 export async function contactStandings(userId: string) {
-    const loaded = await cachedSettings(userId);
-    let entries;
-    try {
-        entries = await contactGuard().store.entries(userId);
-    } catch (error) {
-        throw new GuardUnreadableError(error);
-    }
-    // "Verified" is shown over a pin only once this device's guard keeps it.
-    entries = await rememberSynced(userId, loaded.settings.contacts, entries);
+    // Judged only from pins and entries read under the lock, acts left pending settled first.
+    const { contacts, entries } = await guardedView(userId);
     const out = new Map<string, { verified: boolean; changed: boolean }>();
-    for (const pin of Object.values(loaded.settings.contacts)) {
+    for (const pin of Object.values(contacts)) {
         const held = await agreement(entries.get(pin.userId.toLowerCase()) ?? null, pin);
         const trust = await pinTrust(pin);
         out.set(pin.userId.toLowerCase(), {
@@ -1700,9 +1698,10 @@ export async function trustGranter(
  * pinned, verified or first-seen, with the keys their pin followed a
  * succession from, as this device's guard allows (2.8): a settings pin that
  * disagrees with the guard vouches for nothing, and the keys the guard holds
- * stand in for it, never verified. A pin the guard holds nothing for is
- * written to it first (rememberSynced). A guard that cannot be read or
- * written fails the set, so every item reads Couldn't check rather than as
+ * stand in for it, never verified. Pins and entries are read under the
+ * account's lock, with acts left pending settled and pins the guard holds
+ * nothing for written to it first (guardedView). A guard that cannot be read
+ * or written fails the set, so every item reads Couldn't check rather than as
  * anyone's. Cached with the
  * settings query and the guard's writes, so a listing does not refetch them.
  */
@@ -1712,16 +1711,10 @@ export async function trustedSigners(userId: string) {
     const held = signersCache.get(loaded.settings);
     if (held && held.writes === guardWrites) return held.signers;
     const signers = (async () => {
-        let entries;
-        try {
-            entries = await contactGuard().store.entries(userId);
-        } catch (error) {
-            throw new GuardUnreadableError(error);
-        }
-        // A pin judges what Drive lists only once this device's guard keeps it.
-        entries = await rememberSynced(userId, loaded.settings.contacts, entries);
+        // Judged only from pins and entries read under the lock, acts left pending settled first.
+        const { contacts, entries } = await guardedView(userId);
         const effective: Record<string, Pin> = {};
-        for (const [key, pin] of Object.entries(loaded.settings.contacts)) {
+        for (const [key, pin] of Object.entries(contacts)) {
             const entry = entries.get(pin.userId.toLowerCase()) ?? null;
             if ((await agreement(entry, pin)) !== 'changed') effective[key] = pin;
             else if (entry)
