@@ -20,7 +20,7 @@ export const groupBillingApi: GroupBillingApi = {
     summary: (groupId) => unwrap(group(groupId).get()),
     checkout: (groupId, productId, currency, endLapsed) =>
         unwrap(group(groupId).checkout.post({ productId, currency, endLapsed })),
-    setUnits: (groupId, units) => unwrap(group(groupId).units.post({ units })),
+    setUnits: (groupId, units, from) => unwrap(group(groupId).units.post({ units, from })),
     changePlan: (groupId, productId) => unwrap(group(groupId).plan.post({ productId })),
     portal: (groupId) => unwrap(group(groupId).portal.post({})),
     sync: (groupId) => unwrap(group(groupId).sync.post({})),

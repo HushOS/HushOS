@@ -3122,6 +3122,85 @@ describe('family places', () => {
         expect(await seatLimit(groupId)).toBe(6);
     });
 
+    test('a raise counted from a total that has changed since is refused and charges nothing', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        const moved = {
+            status: 409,
+            message:
+                'Your family’s places changed a moment ago. Check the new total and try again.',
+        };
+        // Another tab raised to seven; this one, still showing six, asks for eight.
+        subscription.units = 7;
+        await expect(billing.setGroupUnits(payer, groupId, 8, 6)).rejects.toMatchObject(moved);
+        // Even when the absolute count would already be there: nothing was bought by this ask.
+        await expect(billing.setGroupUnits(payer, groupId, 7, 6)).rejects.toMatchObject(moved);
+        expect(raises()).toEqual([]);
+        // The summary it then reads shows Polar's seven, so the next ask counts from there.
+        expect(await billing.getGroupBilling(payer, groupId)).toMatchObject({
+            subscription: { units: 7 },
+        });
+        // A raise that lands between the first read and the one under the claim, too.
+        polar.afterGet = () => {
+            subscription.units = 8;
+        };
+        await expect(billing.setGroupUnits(payer, groupId, 9, 7)).rejects.toMatchObject(moved);
+        expect(raises()).toEqual([]);
+        // Counted from the total Polar has, it goes through.
+        await billing.setGroupUnits(payer, groupId, 10, 8);
+        expect(subscription.units).toBe(10);
+        expect(raises()).toHaveLength(1);
+    });
+
+    test('a raise from a total another tab has since passed is refused, never scheduled as a cut', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        // Tab A quoted six to eight; tab B raised to ten, and the mirror has caught up.
+        subscription.units = 10;
+        await billing.reconcileGroup(groupId);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.units).toBe(10);
+        polar.calls = [];
+        await expect(billing.setGroupUnits(payer, groupId, 8, 6)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'Your family’s places changed a moment ago. Check the new total and try again.',
+        });
+        // Nothing asked of Polar, no cut waiting for the renewal.
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+        expect(subscription.pending_update ?? null).toBeNull();
+        expect(
+            (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
+        ).toBeNull();
+        expect(await seatLimit(groupId)).toBe(10);
+        // A real cut sends no total, or one above what it asks for, and is still scheduled.
+        await billing.setGroupUnits(payer, groupId, 8, 10);
+        expect(subscription).toMatchObject({ units: 10, pending_update: { units: 8 } });
+    });
+
+    test('a stale raise below the members another tab has since let in is told the total moved', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        // Tab A quoted six to eight; tab B raised to ten and let in nine members in all.
+        subscription.units = 10;
+        await billing.reconcileGroup(groupId);
+        for (let count = 1; count < 9; count++)
+            await setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
+        polar.calls = [];
+        // Eight is below the nine members, but what A needs to hear is that the total moved.
+        await expect(billing.setGroupUnits(payer, groupId, 8, 6)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'Your family’s places changed a moment ago. Check the new total and try again.',
+        });
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+        expect(subscription.pending_update ?? null).toBeNull();
+        // A cut below the members, asked as a cut, is still refused for that.
+        await expect(billing.setGroupUnits(payer, groupId, 8)).rejects.toMatchObject({
+            status: 400,
+        });
+    });
+
     test('an admission gets a place only from the payer, and only on a 200', async () => {
         const { payer, groupId, subscription, others } = await familyOnPlan({
             units: 6,
@@ -6299,13 +6378,20 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
-        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
-            status: 'confirm',
+        // An admission is told the upgrade comes first, with the portal to confirm it in.
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({
+            status: 'upgrade-waiting',
+            url: `https://polar.test/portal/${polar.customers.get(`group:${groupId}`)?.id}/${payer.id}`,
         });
-        await expect(billing.setGroupUnits(payer, groupId, 6)).resolves.toMatchObject({
-            confirmPayment: true,
+        // The payer's own raise is refused outright: nothing went to Polar, so there is
+        // nothing of it to confirm, and the portal would only show the upgrade's charge.
+        polar.sessions = [];
+        await expect(billing.setGroupUnits(payer, groupId, 6)).rejects.toMatchObject({
+            status: 409,
+            message: 'Confirm the plan change with your bank first, then add places.',
         });
         expect(raises()).toEqual([]);
+        expect(polar.sessions).toEqual([]);
         expect(subscription.units).toBe(4);
     });
 
@@ -6444,7 +6530,8 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
-        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        // The upgrade the bank holds comes first: said as that, not as a place to confirm.
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('upgrade-waiting');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
     });
@@ -6687,7 +6774,8 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
-        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        // The upgrade the bank holds comes first: said as that, not as a place to confirm.
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('upgrade-waiting');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
         expect((await live(groupId))?.paidProductId).toBe(PLUS);
@@ -6913,7 +7001,8 @@ describe('family tiers', () => {
             });
         };
         polar.calls = [];
-        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        // The upgrade the bank holds comes first: said as that, not as a place to confirm.
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('upgrade-waiting');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
     });

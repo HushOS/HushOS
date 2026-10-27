@@ -2151,7 +2151,18 @@ export type SeatResult =
     | { status: 'busy' }
     /* Polar charged for the place, but billed it on a plan changed meanwhile: nobody let in. */
     | { status: 'changed' }
+    /*
+     * An upgrade the bank still holds: nothing stacks on it, so nothing went to Polar. It is
+     * confirmed in the portal (`url`, for an admission) before any place can be had.
+     */
+    | { status: 'upgrade-waiting'; url: string | null }
     | { status: 'unavailable' };
+
+/*
+ * What the payer's own raise can meet besides: a total that changed since the payer read it.
+ * An admission counts from no total.
+ */
+type RaiseResult = SeatResult | { status: 'moved' };
 
 /* A refused raise, by what Polar said. */
 function refusedRaise(error: unknown): SeatResult {
@@ -2179,7 +2190,9 @@ async function changePlaces(
     groupId: string,
     live: { id: string; paidUnits: number },
     target: number,
-): Promise<SeatResult> {
+    /* The count the payer's ask was made from: another one means it no longer says how many it adds. */
+    from?: number,
+): Promise<RaiseResult> {
     let subscription: models.Subscription;
     try {
         subscription = await polar().subscriptions.get(live.id);
@@ -2190,6 +2203,7 @@ async function changePlaces(
     const plan = await planOf(subscription.product_id);
     if (!plan) return { status: 'no-plan' };
     const current = subscription.units ?? plan.includedMembers;
+    if (from !== undefined && from !== current) return { status: 'moved' };
     const cap = { status: 'cap' as const, max: plan.maxMembers, step: MAX_MEMBERS_PER_RAISE };
     if (target > plan.maxMembers) return cap;
     if (subscription.cancel_at_period_end) return { status: 'canceling' };
@@ -2199,7 +2213,7 @@ async function changePlaces(
     // raise works from a read taken under the claim, never from the one above.
     return withPlanChange(
         live.id,
-        (): SeatResult => ({ status: 'busy' }),
+        (): RaiseResult => ({ status: 'busy' }),
         async () => {
             let held: models.Subscription;
             try {
@@ -2215,6 +2229,8 @@ async function changePlaces(
             const heldPlan = await planOf(held.product_id);
             if (!heldPlan) return { status: 'no-plan' };
             const now = held.units ?? heldPlan.includedMembers;
+            // A raise that landed between the two reads moved the count the ask was made from.
+            if (from !== undefined && from !== now) return { status: 'moved' };
             if (held.cancel_at_period_end) return { status: 'canceling' };
             if (target > heldPlan.maxMembers) return cap;
             // A raise that landed meanwhile may already hold the place.
@@ -2306,7 +2322,7 @@ async function raisePlaces(
     readAt: billingRepository.ReadingStamp,
     target: number,
     cut: number | null,
-): Promise<SeatResult> {
+): Promise<RaiseResult> {
     // No raise on top of an upgrade the bank hasn't confirmed: the two orders never interleave.
     // Polar's product, just read, against the tier paid for: a row a failed write left behind
     // can't open a place.
@@ -2315,7 +2331,7 @@ async function raisePlaces(
     if (!(await applyChanged(groupId, subscription, false, readAt))) return { status: 'no-plan' };
     const row = await billingRepository.getLiveGroupSubscription(groupId);
     if (row && subscription.product_id !== paidTier(row).productId)
-        return { status: 'confirm', url: null };
+        return { status: 'upgrade-waiting', url: null };
     const startedAt = Date.now();
     let raised: models.Subscription;
     try {
@@ -2371,10 +2387,13 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
     if (target <= billingRepository.seatLimitOf(live)) return { status: 'ok' };
     const customer = await billingRepository.getGroupCustomer(groupId);
     if (!customer || customer.payerUserId !== admitterId) return { status: 'payer' };
-    const result = await changePlaces(groupId, live, target);
-    if (result.status !== 'confirm') return result;
+    const raised = await changePlaces(groupId, live, target);
+    // No total is sent from here, so a moved one never comes back.
+    const result: SeatResult = raised.status === 'moved' ? { status: 'busy' } : raised;
+    // A charge to confirm, or an upgrade to confirm first: either way, in the portal.
+    if (result.status !== 'confirm' && result.status !== 'upgrade-waiting') return result;
     return {
-        status: 'confirm',
+        status: result.status,
         url: await portalFor(groupId, admitterId).then(
             (portal) => portal.url,
             () => null,
@@ -2387,12 +2406,22 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
  * refused whole on a 402), fewer is scheduled for the period's end and never
  * below the members admitted or the plan's included count.
  */
-export async function setGroupUnits(user: BillingUser, groupId: string, units: number) {
+export async function setGroupUnits(
+    user: BillingUser,
+    groupId: string,
+    units: number,
+    /* The count the payer saw: a raise from another one is refused (`moved`), never re-aimed. */
+    from?: number,
+) {
     requireFamilyBilling();
     // The payer may always pay for less, even after leaving the family; adding needs a member.
     await requirePayer(groupId, user.id);
     const live = await billingRepository.getLiveGroupSubscription(groupId);
     if (!live) throw new BillingError('This family has no plan.', 404);
+    // A raise counted from a total the family no longer has is refused before anything else:
+    // never re-aimed, never read as a cut because another tab has since passed it, and never
+    // told it is below members that tab has since let in.
+    if (from !== undefined && units > from && live.units !== from) throw await placesMoved(groupId);
     const used = await groupsRepository.seatsUsed(groupId);
     const floor = Math.max(live.includedMembers, used);
     if (units < floor)
@@ -2412,7 +2441,7 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
         return { billing: await getGroupBilling(user, groupId), url: null };
     }
     await familyOf(groupId, user.id, 'billing');
-    const result = await changePlaces(groupId, live, units);
+    const result = await changePlaces(groupId, live, units, from);
     switch (result.status) {
         case 'ok':
             return { billing: await getGroupBilling(user, groupId), url: null };
@@ -2422,10 +2451,30 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
                 url: (await portalFor(groupId, user.id)).url,
                 confirmPayment: true as const,
             };
+        case 'moved':
+            throw await placesMoved(groupId);
         default:
             throw seatError(result);
     }
 }
+
+/* A raise from a moved total, refused; Polar's count is written now, for the next summary. */
+async function placesMoved(groupId: string) {
+    await reconcileGroup(groupId).catch((error: unknown) =>
+        log.warn({
+            message: 'A family could not be read again after its places moved',
+            billing: { status: statusOf(error) },
+        }),
+    );
+    return new BillingError(PLACES_MOVED, 409);
+}
+
+/* Said when the payer adds places while an upgrade waits for the bank: nothing went to Polar. */
+const UPGRADE_FIRST = 'Confirm the plan change with your bank first, then add places.';
+
+/* Said when the count a raise was made from is no longer the family's: nothing was charged. */
+const PLACES_MOVED =
+    'Your family’s places changed a moment ago. Check the new total and try again.';
 
 /* Said when Polar has charged for a place on a plan that changed meanwhile: never "try again". */
 const CHARGED_BUT_CHANGED =
@@ -2753,6 +2802,8 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
             );
         case 'busy':
             return new BillingError(BUSY, 409);
+        case 'upgrade-waiting':
+            return new BillingError(UPGRADE_FIRST, 409);
         case 'changed':
             return new BillingError(CHARGED_BUT_CHANGED, 409);
         case 'cap':

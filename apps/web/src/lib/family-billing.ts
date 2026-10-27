@@ -310,6 +310,47 @@ export function renewalAmount(summary: FamilyBillingFull, units: number, plan?: 
 /* An upgrade whose charge the bank hasn't confirmed: the family keeps the tier it paid for. */
 export const upgradeWaiting = (live: FamilySubscription) => live.paidProductId !== live.productId;
 
+/*
+ * A change the bank holds: the summary it was quoted from, the server's answer to it, and what
+ * it asks for (the places after a raise, the tier's product id for an upgrade). Read by value
+ * against each fresh summary, it is still held, paid, or gone. The answer is the baseline, not
+ * the target: Polar keeps a raise or a move it wants confirmed, or (a 402) changes nothing.
+ */
+export type HeldChange<T> = { quoted: FamilyBillingFull; answered: FamilyBillingFull; target: T };
+export type Standing = 'held' | 'paid' | 'gone';
+
+/*
+ * The summary a change is read against: until the cache takes the answer (a tick after the
+ * dialog does), the page still hands over the one the change was quoted from, which says
+ * nothing of it, so the answer stands in for it.
+ */
+const freshest = <T>(summary: FamilyBillingFull, held: HeldChange<T>) =>
+    summary === held.quoted ? held.answered : summary;
+
+/*
+ * Paid once the places are paid for and no other charge waits on top of them; gone with the
+ * plan, or once there are fewer places than the server answered with (a cut that took effect).
+ */
+export function raiseStanding(summary: FamilyBillingFull, held: HeldChange<number>): Standing {
+    const live = freshest(summary, held).subscription;
+    if (!live) return 'gone';
+    if (live.paidUnits >= held.target && live.paidUnits >= live.units) return 'paid';
+    const answered = held.answered.subscription;
+    return answered && live.units < answered.units ? 'gone' : 'held';
+}
+
+/*
+ * Paid once the plan is the tier asked for and its charge no longer waits; gone with the
+ * plan, or on a tier neither answered nor asked for (an upgrade reverted, another move).
+ */
+export function upgradeStanding(summary: FamilyBillingFull, held: HeldChange<string>): Standing {
+    const live = freshest(summary, held).subscription;
+    if (!live) return 'gone';
+    if (live.productId === held.target && !upgradeWaiting(live)) return 'paid';
+    const answered = held.answered.subscription?.productId;
+    return live.productId === held.target || live.productId === answered ? 'held' : 'gone';
+}
+
 /* The smaller tier the family moves to at the period's end, if one is scheduled. */
 export function pendingTier(summary: FamilyBillingFull): FamilyPlan | undefined {
     const id = summary.subscription?.pendingProductId;
@@ -459,7 +500,8 @@ export function familyActions(
             live.paidUnits >= live.units &&
             tierMoves(summary).length > 0,
         keepTier: changeable && !state.overdue && live.pendingProductId !== null,
-        addPlaces: changeable && addRange(summary) !== null,
+        // Nor while an upgrade waits for the bank: the server refuses places on top of it.
+        addPlaces: changeable && !upgradeWaiting(live) && addRange(summary) !== null,
         removePlaces:
             changeable &&
             removeRange(summary) !== null &&

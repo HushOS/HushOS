@@ -1258,13 +1258,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/billing/groups/:id/units',
         {
             params: t.Object({ id: uuidSchema }),
-            body: t.Object({ units: t.Integer({ minimum: 1, maximum: 10_000 }) }),
+            body: t.Object({
+                units: t.Integer({ minimum: 1, maximum: 10_000 }),
+                from: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
+            }),
         },
         async ({ request, sessionToken, params, body }) =>
             billing.setGroupUnits(
                 await billingMutation(request, sessionToken),
                 params.id,
                 body.units,
+                body.from,
             ),
     )
     .post(
