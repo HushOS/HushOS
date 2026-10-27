@@ -57,6 +57,7 @@ import {
     serveMedia,
     TEXT_CEILING,
 } from '@/lib/previews';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
  * The viewer: one file at a time over the folder, with the neighbours a key
@@ -192,7 +193,12 @@ export function Preview({
                                 </span>
                             )}
                             {offered && (
-                                <fieldset className="m-0 inline-flex min-w-0 shrink-0 rounded-md border-0 bg-muted p-0.5">
+                                <fieldset
+                                    className={cn(
+                                        'm-0 inline-flex min-w-0 shrink-0 rounded-md border-0 p-0.5',
+                                        segmentTrack,
+                                    )}
+                                >
                                     <legend className="sr-only">Show</legend>
                                     {(['Formatted', 'Source'] as const).map((label) => {
                                         const on = (label === 'Source') === source;
@@ -209,7 +215,7 @@ export function Preview({
                                                 className={cn(
                                                     'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] sm:px-3 font-semibold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                                     on
-                                                        ? 'bg-card text-foreground shadow-sm'
+                                                        ? segmentOn
                                                         : 'text-muted-foreground hover:text-foreground',
                                                 )}
                                             >

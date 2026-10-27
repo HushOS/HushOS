@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { buttonVariants } from '@/components/ui/button';
 import { formatQuota } from '@/lib/queries';
 import { salesContactQueryOptions } from '@/lib/social';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
  * The public site's furniture, shared by every page: one centred column, the
@@ -231,7 +232,11 @@ export function SiteSwitch<T extends string>({
         <fieldset
             disabled={disabled}
             aria-busy={disabled || undefined}
-            className={cn('m-0 flex min-w-0 gap-1 rounded-md border-0 bg-muted p-1', className)}
+            className={cn(
+                'm-0 flex min-w-0 gap-1 rounded-md border-0 p-1',
+                segmentTrack,
+                className,
+            )}
         >
             <legend className="sr-only">{label}</legend>
             {options.map((option) => (
@@ -244,7 +249,7 @@ export function SiteSwitch<T extends string>({
                         // 40px drawn, 44px to a finger: the tap area reaches into the track's padding.
                         "relative flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-sm px-4 text-[15px] whitespace-nowrap outline-none after:absolute after:inset-x-0 after:-inset-y-0.5 after:content-[''] focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60",
                         value === option.value
-                            ? 'bg-card font-bold text-foreground shadow-sm'
+                            ? cn(segmentOn, 'font-bold')
                             : 'font-medium text-muted-foreground hover:text-foreground',
                     )}
                 >

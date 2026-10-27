@@ -85,6 +85,13 @@
     }
 }
 
+/*
+ * Which side of a button its icon is on, for the optical balance in button.tsx (DESIGN.md, Layout).
+ * Arrows and chevrons point onward and trail the words; any other icon leads them.
+ */
+@custom-variant icon-start (&:has(> svg:first-child:not(.lucide-arrow-right, .lucide-arrow-up-right, .lucide-chevron-down, .lucide-chevron-right, .lucide-external-link, .lucide-square-arrow-out-up-right)));
+@custom-variant icon-end (&:has(> svg:last-child:is(.lucide-arrow-right, .lucide-arrow-up-right, .lucide-chevron-down, .lucide-chevron-right, .lucide-external-link, .lucide-square-arrow-out-up-right)));
+
 @theme inline {
     --font-sans: 'Geist Variable', 'Geist Fallback', sans-serif;
     --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -309,6 +316,9 @@
     }
     * {
         @apply border-border outline-ring;
+        /* Thin scrollbars everywhere (dialogs, menus, lists), with the field edge as the thumb, no track. */
+        scrollbar-width: thin;
+        scrollbar-color: var(--input) transparent;
     }
     html {
         text-rendering: optimizeLegibility;
@@ -350,6 +360,30 @@
 /* A small label: column heads, keys in a list, the name of a section. Sentence case, in the text face. */
 @utility eyebrow {
     @apply font-sans text-xs leading-none font-semibold tracking-normal normal-case;
+}
+
+/*
+ * Align the text, not the box (DESIGN.md, Layout). A quiet button that ends a row hangs its
+ * padding past the column's edge, so its words line up with the edge above it; its hover tint
+ * hangs too. On the container whose last child it is.
+ */
+@utility hang-end {
+    /* Its end padding and its 1px border (transparent on a quiet button). */
+    & > :is([data-variant='ghost'], [data-variant='destructive-ghost']):last-child {
+        margin-inline-end: calc((var(--btn-px, 0px) + var(--icon-shift, 0px) + 1px) * -1);
+    }
+}
+
+/*
+ * A button's side padding (button.tsx sets --btn-px per size), nudged toward its icon. Its end is
+ * what hang-end takes back. In the components layer, so any padding utility a call site passes
+ * replaces it.
+ */
+@layer components {
+    .btn-pad {
+        padding-inline-start: calc(var(--btn-px) - var(--icon-shift, 0px));
+        padding-inline-end: calc(var(--btn-px) + var(--icon-shift, 0px));
+    }
 }
 
 /* The surface that holds a page's content, raised from the ground. */

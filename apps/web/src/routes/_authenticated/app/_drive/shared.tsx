@@ -64,6 +64,7 @@ import { rotateAfterRevoke } from '@/lib/rotation';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/shared')({
     validateSearch: (search: Record<string, unknown>): { view?: 'by-me' } =>
@@ -91,9 +92,7 @@ function Shared() {
     const tab = (on: boolean) =>
         cn(
             'flex h-8 items-center rounded-sm px-4 text-sm font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
-            on
-                ? 'bg-card text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground',
+            on ? segmentOn : 'text-muted-foreground hover:text-foreground',
         );
     return (
         <div className="flex flex-1 flex-col">
@@ -107,7 +106,7 @@ function Shared() {
                 <div
                     role="tablist"
                     aria-label="Direction"
-                    className="inline-flex rounded-md bg-muted p-1"
+                    className={cn('inline-flex rounded-md p-1', segmentTrack)}
                 >
                     <Link
                         to="/app/shared"

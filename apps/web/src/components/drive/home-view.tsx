@@ -498,7 +498,7 @@ export function HomeView() {
                                 >
                                     <thead>
                                         <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
-                                            <th scope="col" className="pl-4 text-left md:pl-8">
+                                            <th scope="col" className="pl-5 text-left sm:pl-8">
                                                 <span className="flex items-center gap-3 md:gap-4">
                                                     <span className="w-8 shrink-0 md:w-10" />
                                                     Name

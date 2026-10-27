@@ -374,7 +374,7 @@ export function RowName({
                 type="button"
                 tabIndex={-1}
                 data-row-thumb
-                className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-4 outline-none md:pr-4 md:pl-8"
+                className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-5 outline-none sm:pl-8 md:pr-4"
                 onClick={onSelect}
             >
                 {thumbnail}

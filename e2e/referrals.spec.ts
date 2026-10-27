@@ -58,6 +58,9 @@ test('someone who joins through the link gives both sides the bonus', async ({ b
         .getAttribute('href');
     expect(href).toBe(`/register?ref=${code}`);
     await joiner.goto(href!, { waitUntil: 'networkidle' });
+    // A code the link filled in is shown open, so the person can see it was applied.
+    await expect(joiner.getByLabel('Code', { exact: true })).toBeVisible();
+    await expect(joiner.getByLabel('Code', { exact: true })).toHaveValue(code);
     // The sign-up flow from here is the ordinary one; the code rides along.
     await registerAccount(joiner, 'Jo Joiner', undefined, { viaCurrentPage: true });
     await expect(storageMeter(joiner).first()).toBeVisible({ timeout: 60_000 });
@@ -76,6 +79,9 @@ test('someone who types the code at sign-up gets the bonus the same way', async 
     test.setTimeout(300_000);
     const typer = await (await newContext(browser)).newPage();
     await typer.goto('/register', { waitUntil: 'networkidle' });
+    // The code waits behind "Have a code?", so it never reads as a password or a sign-in code.
+    await expect(typer.getByLabel('Code', { exact: true })).toBeHidden();
+    await typer.getByRole('button', { name: 'Have a code?' }).click();
     // A code nobody issued is refused before any email goes out.
     await typer.getByLabel('Code', { exact: true }).fill('nobody-has-this');
     await typer.getByRole('textbox', { name: /^email/i }).fill('typo@hushos.local');
