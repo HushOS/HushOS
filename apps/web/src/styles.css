@@ -368,8 +368,21 @@
  * hangs too. On the container whose last child it is.
  */
 @utility hang-end {
-    & > [data-variant='ghost']:last-child {
-        margin-inline-end: calc((var(--btn-px, 0px) + var(--icon-shift, 0px)) * -1);
+    /* Its end padding and its 1px border (transparent on a quiet button). */
+    & > :is([data-variant='ghost'], [data-variant='destructive-ghost']):last-child {
+        margin-inline-end: calc((var(--btn-px, 0px) + var(--icon-shift, 0px) + 1px) * -1);
+    }
+}
+
+/*
+ * A button's side padding (button.tsx sets --btn-px per size), nudged toward its icon. Its end is
+ * what hang-end takes back. In the components layer, so any padding utility a call site passes
+ * replaces it.
+ */
+@layer components {
+    .btn-pad {
+        padding-inline-start: calc(var(--btn-px) - var(--icon-shift, 0px));
+        padding-inline-end: calc(var(--btn-px) + var(--icon-shift, 0px));
     }
 }
 

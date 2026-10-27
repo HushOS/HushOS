@@ -45,12 +45,16 @@ const buttonVariants = cva(
                  * Balance icons optically (DESIGN.md, Layout). A glyph's empty side reads as
                  * extra padding, so the icon and words move toward it: 1px toward a leading icon,
                  * 1.5px toward a trailing arrow or chevron, whose open side is wider. The two
-                 * paddings still add up to 2 × --btn-px, so the button keeps its size. A call
-                 * site's own px- replaces both, shift and all. The variants are in styles.css.
+                 * paddings still add up to 2 × --btn-px, so the button keeps its size. Logical
+                 * sides, so the nudge follows the icon in right-to-left text.
+                 *
+                 * The padding itself is `btn-pad` (styles.css), in the components layer, so a call
+                 * site's own padding replaces it whatever cn merges, on touch screens too. A state
+                 * that shows only the icon is a square instead (`max-sm:w-9 max-sm:px-0
+                 * max-sm:pointer-coarse:w-11`), so it keeps 44px to a finger and its icon centred.
                  */
                 size: ['default', 'xs', 'sm', 'lg'],
-                className:
-                    'pr-[calc(var(--btn-px)+var(--icon-shift,0px))] pl-[calc(var(--btn-px)-var(--icon-shift,0px))] icon-start:[--icon-shift:1px] icon-end:[--icon-shift:-1.5px]',
+                className: 'btn-pad icon-start:[--icon-shift:1px] icon-end:[--icon-shift:-1.5px]',
             },
         ],
     },
