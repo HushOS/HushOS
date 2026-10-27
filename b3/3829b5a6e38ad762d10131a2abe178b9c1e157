@@ -1,0 +1,21 @@
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_9943bfa73e4cca 489,1073,1083,1192-1260,1268-1276,1280-1284,1288-1296,1299,1305,1308,1312-1314,1317,1319,1322,1414-1422,1427-1432,1435-1443,1461,1464,1468-1470,1473,1480,1484
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_4bb6c47c8999bc 1447,1450-1452,1456-1485,1699-1701,1778-1922
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b33829b5a6e38ad762d10131a2abe178b9c1e157",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
