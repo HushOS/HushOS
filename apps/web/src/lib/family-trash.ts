@@ -20,11 +20,16 @@ export type EmptyRow = {
     /* Its folder is in the Trash too: it goes when that folder goes. */
     parentTrashed: boolean;
     kind: 'file' | 'folder';
+    /* Its own id and the ids of the folders above it, to count what goes with a folder. */
+    id?: string;
+    ancestorIds?: readonly string[];
 };
 
 export type EmptyPlan<T extends EmptyRow> = {
     /* What Empty Trash asks the server to delete. */
     purge: T[];
+    /* Every listed item that goes: what is asked for, and what is inside the folders asked for. */
+    going: T[];
     /* What goes, with what is inside the folders asked for. */
     goes: number;
     /* What stays: items in folders this device can't change. */
@@ -44,12 +49,26 @@ export function emptyPlan<T extends EmptyRow>(
     const goes = rows.filter((row) => row.writable);
     return {
         purge: goes.filter((row) => !row.parentTrashed),
+        going: goes,
         goes: goes.length,
         stays: rows.length - goes.length,
         keysChanged: rows.some((row) => !row.writable && row.reason === 'keys-changed'),
         folders: goes.some((row) => row.kind === 'folder' && !row.parentTrashed),
         unopened: options.unopened ?? false,
     };
+}
+
+/*
+ * How many listed items a set of purge requests covers: each one asked for, and every listed item
+ * inside it. Counts in the confirm's own unit (items listed), so "2 of 3" means the same in the
+ * confirm, the progress and the result, and a failed folder counts what stayed with it.
+ */
+export function itemsCovered(going: readonly EmptyRow[], ids: ReadonlySet<string>) {
+    return going.filter(
+        (row) =>
+            (row.id !== undefined && ids.has(row.id)) ||
+            (row.ancestorIds ?? []).some((ancestor) => ids.has(ancestor)),
+    ).length;
 }
 
 const items = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;

@@ -28,20 +28,38 @@ import {
     nodeSize,
 } from '@/lib/drive';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { emptyConfirmText, emptyPlan, emptyResult, staysLine } from '@/lib/family-trash';
+import {
+    emptyConfirmText,
+    emptyPlan,
+    emptyResult,
+    itemsCovered,
+    staysLine,
+} from '@/lib/family-trash';
 import { openArea, useFamilySpace } from '@/lib/spaces';
 import { cue } from '@/lib/sounds';
 
 type Row = TrashItem & { workspaceId: string; folder: string };
 
-/* The family folders' Trash, every folder's together, newest first: shared by the tab and its prefetch. */
+/*
+ * The family folders' Trash, every folder's together, newest first, and whether a folder this
+ * device couldn't open was left out: shared by the tab and its prefetch. The folders opened
+ * here are part of the key, so the list is read again when one opens.
+ */
 function familyTrashQueryOptions(space: ReturnType<typeof useFamilySpace>) {
+    const opened = space.areas
+        .filter((state) => state.opened && state.view.root)
+        .map((state) => state.workspaceId)
+        .sort();
     return {
-        queryKey: [...driveKeys.trash, 'family', space.groupId],
+        queryKey: [...driveKeys.trash, 'family', space.groupId, ...opened],
         queryFn: async () => {
             const rows: Row[] = [];
+            let unopened = false;
             for (const state of space.areas) {
-                if (!state.opened || !state.view.root) continue;
+                if (!state.opened || !state.view.root) {
+                    unopened = true;
+                    continue;
+                }
                 const { client } = await openArea(space.userId, space.groupId, state);
                 for (const item of await client.listTrash())
                     rows.push({
@@ -54,7 +72,7 @@ function familyTrashQueryOptions(space: ReturnType<typeof useFamilySpace>) {
             // the ISO string the type says, and sorting it as a string threw on two or more items.
             const at = (row: Row) =>
                 row.node.trashedAt ? new Date(row.node.trashedAt).getTime() : 0;
-            return rows.sort((a, b) => at(b) - at(a));
+            return { rows: rows.sort((a, b) => at(b) - at(a)), unopened };
         },
         staleTime: 15_000,
         retry: 1,
@@ -157,9 +175,11 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
     // this device may write, an item inside a trashed folder going with that folder.
     // Family folders this device couldn't open aren't listed (familyTrashQueryOptions skips
     // them), so their Trash is never counted: the page says so and never claims it is empty.
-    const unopened = space.areas.some((state) => !state.opened || !state.view.root);
+    // Both from the same reading, so the line and the list never disagree.
+    const rows = trash.data?.rows;
+    const unopened = trash.data?.unopened ?? false;
     const plan = emptyPlan(
-        (trash.data ?? []).map((row) => {
+        (rows ?? []).map((row) => {
             const write = space.areas.find((area) => area.workspaceId === row.workspaceId)?.write;
             return {
                 row,
@@ -168,6 +188,8 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                     write === 'keys-changed' ? ('keys-changed' as const) : ('read-only' as const),
                 parentTrashed: row.parentTrashed,
                 kind: row.node.kind,
+                id: row.node.id,
+                ancestorIds: row.ancestors.map((ancestor) => ancestor.id),
             };
         }),
         { unopened },
@@ -176,29 +198,33 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
 
     async function emptyAll() {
         setConfirmEmpty(false);
-        const rows = plan.purge.map((entry) => entry.row);
-        setEmptying({ gone: 0, total: rows.length });
-        let failed = 0;
-        for (const [index, row] of rows.entries()) {
+        // Counted in items listed, as the confirm counts them (itemsCovered): a folder's request
+        // is it and what is listed inside it, done or failed.
+        const asked = plan.purge;
+        const done = new Set<string>();
+        const failedIds = new Set<string>();
+        setEmptying({ gone: 0, total: plan.goes });
+        for (const { row } of asked) {
             try {
                 const state = space.areas.find((area) => area.workspaceId === row.workspaceId)!;
                 const { client } = await openArea(space.userId, space.groupId, state);
                 await client.purge(row.node);
             } catch {
-                failed += 1;
+                failedIds.add(row.node.id);
             }
-            setEmptying({ gone: index + 1, total: rows.length });
+            done.add(row.node.id);
+            setEmptying({ gone: itemsCovered(plan.going, done), total: plan.goes });
         }
         setEmptying(null);
         await invalidateFolders(queryClient);
         const result = emptyResult({
-            asked: rows.length,
-            failed,
+            asked: plan.goes,
+            failed: itemsCovered(plan.going, failedIds),
             stays: plan.stays,
             keysChanged: plan.keysChanged,
             unopened: plan.unopened,
         });
-        // Something was deleted unless every request failed: the deletion's sound, not an error's.
+        // The error's sound when any deletion failed; otherwise the deletion's, a partial one too.
         cue(result.type === 'error' ? 'error' : 'droplet');
         toast.add(result);
     }
@@ -234,13 +260,13 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                     </Button>
                 </EmptyState>
             )}
-            {trash.data?.length === 0 && !unopened && (
+            {rows?.length === 0 && !unopened && (
                 <EmptyState
                     title="Trash is empty"
                     body="What anyone in the family moves to the Trash from the family folders stays here for 30 days."
                 />
             )}
-            {trash.data && trash.data.length > 0 && (
+            {rows && rows.length > 0 && (
                 <table
                     aria-label="Family folders’ Trash"
                     className="w-full table-fixed border-collapse"
@@ -274,7 +300,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                         </tr>
                     </thead>
                     <tbody>
-                        {trash.data.map((row) => {
+                        {rows.map((row) => {
                             const where = [
                                 row.folder,
                                 ...row.ancestors.slice(1).map((at) => at.name),

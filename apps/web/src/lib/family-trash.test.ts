@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { emptyConfirmText, emptyPlan, emptyResult, staysLine, type EmptyRow } from './family-trash';
+import {
+    emptyConfirmText,
+    emptyPlan,
+    emptyResult,
+    itemsCovered,
+    staysLine,
+    type EmptyRow,
+} from './family-trash';
 
 const file = (writable: boolean, parentTrashed = false): EmptyRow => ({
     writable,
@@ -84,6 +91,22 @@ describe('emptying the family folders’ Trash', () => {
             description:
                 'Some family folders couldn’t be opened on this device; anything in their Trash is still there.',
         });
+    });
+
+    test('a failed folder counts the items that stayed with it, in the confirm’s own unit', () => {
+        const top: EmptyRow = { ...folder(true), id: 'folder' };
+        const inside: EmptyRow = { ...file(true, true), id: 'child', ancestorIds: ['folder'] };
+        const loose: EmptyRow = { ...file(true), id: 'loose' };
+        const plan = emptyPlan([top, inside, loose]);
+        expect(plan.goes).toBe(3);
+        // Two requests, the folder's failing: the folder and its child are still there.
+        const failed = itemsCovered(plan.going, new Set(['folder']));
+        expect(failed).toBe(2);
+        expect(emptyResult({ asked: plan.goes, failed, stays: 0 }).description).toBe(
+            '2 of 3 items couldn’t be deleted. Try again.',
+        );
+        // The progress counts the same way: the loose file's request done is one item.
+        expect(itemsCovered(plan.going, new Set(['loose']))).toBe(1);
     });
 
     test('“Trash emptied” only when nothing is left, and a failure still says what stays', () => {
