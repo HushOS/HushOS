@@ -26,32 +26,17 @@ import {
     formatQuota,
     localeHintQueryOptions,
 } from '@/lib/queries';
+import { readSent, rememberSent, subscribeSent } from '@/lib/link-sent';
 import { cue } from '@/lib/sounds';
 
 /*
  * The first step of signing up and of resetting a password: an email, and a
  * link sent to it. The address is kept for this tab only, so "Check your
- * inbox" can name it and send another link; it never goes in the URL.
+ * inbox" can name it and send another link; it never goes in the URL, and it
+ * goes once the link is used or someone signs out (lib/link-sent.ts).
  */
 
 type Sent = { email: string; purpose: 'register' | 'recover'; intent?: SignupIntent };
-const SENT_KEY = 'hushos-link-sent';
-
-function rememberSent(sent: Sent) {
-    try {
-        sessionStorage.setItem(SENT_KEY, JSON.stringify(sent));
-    } catch {
-        /* Without storage the inbox page just says "your inbox". */
-    }
-}
-function readSent(): string | null {
-    try {
-        return sessionStorage.getItem(SENT_KEY);
-    } catch {
-        return null;
-    }
-}
-const noSubscription = () => () => {};
 
 export function EmailStep({
     purpose,
@@ -253,7 +238,7 @@ export function EmailStep({
 
 export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' }) {
     // Rendered on the server without storage; the address arrives once the page hydrates.
-    const raw = useSyncExternalStore(noSubscription, readSent, () => null);
+    const raw = useSyncExternalStore(subscribeSent, readSent, () => null);
     let sent: Sent | null = null;
     try {
         const parsed = raw ? (JSON.parse(raw) as Sent) : null;

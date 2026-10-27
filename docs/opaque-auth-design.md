@@ -158,7 +158,7 @@ Cookies use HttpOnly, SameSite=Lax, Path=/, no Domain, and Secure plus the `__Ho
 
 ## Remembered browser unlock and portability
 
-The crypto worker owns the plaintext root. Zustand's persisted state contains only a versioned encrypted device bundle and lock revision. A non-exportable AES-GCM device key is stored as a `CryptoKey` in IndexedDB. The root is wrapped inside the worker, never exported to UI state. If localStorage is blocked or a write fails, the client continues in memory and warns that device access could not be saved. Persistence failures cannot prevent sign-out from attempting device-key cleanup and server-session revocation.
+The crypto worker owns the plaintext root. Zustand's persisted state contains only a versioned encrypted device bundle and lock revision. A non-exportable AES-GCM device key is stored as a `CryptoKey` in IndexedDB. The root is wrapped inside the worker, never exported to UI state. If localStorage is blocked or a write fails, the client continues in memory and warns that device access could not be saved. Persistence failures cannot prevent sign-out from attempting device-key cleanup and server-session revocation. Signing out removes the persisted entry and deletes the device key and device identity databases outright; nothing writes the entry back until a sign-in saves a device. A lock keeps the entry with no device and the new lock revision, which is how other tabs hear of it.
 
 Device associated data:
 

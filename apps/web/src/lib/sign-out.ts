@@ -1,6 +1,7 @@
 import type { useRouter } from '@tanstack/react-router';
 import { authClient } from '@/lib/auth-client';
 import { holdAuthView } from '@/lib/auth-view';
+import { forgetBrowserData } from '@/lib/device-data';
 import { forgetReturn } from '@/lib/return-to';
 import { forgetSession } from '@/lib/session';
 import { holdSignIn, markSignedOut } from '@/lib/sign-in-gate';
@@ -29,8 +30,18 @@ export async function forgetDevice() {
 /*
  * The same, failing when any part did not clear: a removed device acknowledges its removal
  * (and lets go of the cookie) only once this resolved, so a blocked store is tried again.
+ * Drive's parts are stopped and cleared by their owners first; then everything this browser
+ * keeps for an account is deleted by name. What that is lives in one list, lib/device-data.ts:
+ * a new store that holds anything of an account is registered there.
  */
 export async function clearDevice() {
+    const results = await Promise.allSettled([clearDrive()]);
+    results.push(...(await Promise.allSettled([forgetBrowserData()])));
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
+}
+
+async function clearDrive() {
     forgetReturn();
     // Every part is tried whatever another does; the first failure is reported once all settled.
     const results = await Promise.allSettled([

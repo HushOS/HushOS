@@ -308,3 +308,64 @@ describe('a key write when another tab upgrades the database', () => {
         expect((stored as CryptoKey).extractable).toBe(false);
     });
 });
+
+/*
+ * Signing out deletes the device databases outright: a browser someone signed out of keeps
+ * no database that says HushOS was used here, and the next sign-in finds no key.
+ */
+describe('clearing the device stores', () => {
+    beforeEach(() => {
+        vi.useRealTimers();
+        const globals = {
+            IDBCursor,
+            IDBCursorWithValue,
+            IDBDatabase,
+            IDBIndex,
+            IDBKeyRange,
+            IDBObjectStore,
+            IDBOpenDBRequest,
+            IDBRequest,
+            IDBTransaction,
+            IDBVersionChangeEvent,
+        };
+        for (const [name, value] of Object.entries(globals)) vi.stubGlobal(name, value);
+        vi.stubGlobal('indexedDB', new IDBFactory());
+    });
+    const names = async () => (await indexedDB.databases()).map((database) => database.name);
+
+    it('deletes both databases, and what they held with them', async () => {
+        const key = await createDeviceSigningKey();
+        if (!key) throw new Error('This runtime has no Ed25519 in Web Crypto.');
+        const identities = createBrowserDeviceIdentityStore();
+        await identities.save({
+            userId: '0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4',
+            emailHash: 'hash',
+            deviceId: '5b1c0d9e-8f7a-4c3b-9a2d-1e0f2a3b4c5d',
+            privateKey: key.privateKey,
+            publicKey: key.publicKey,
+        });
+        const keys = createBrowserDeviceKeyStore();
+        const { id } = await keys.create();
+        expect((await names()).sort((a, b) => String(a).localeCompare(String(b)))).toEqual([
+            'hushos-device-identity',
+            'hushos-device-keys',
+        ]);
+
+        await Promise.all([keys.clear(), identities.clear()]);
+        expect(await names()).toEqual([]);
+        expect(await keys.load(id)).toBeNull();
+        expect(await identities.load()).toBeNull();
+    });
+
+    it('waits out a connection another tab closes on versionchange', async () => {
+        await createBrowserDeviceKeyStore().create();
+        const other = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open('hushos-device-keys', 1);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        other.onversionchange = () => setTimeout(() => other.close(), 50);
+        await createBrowserDeviceKeyStore().clear();
+        expect(await names()).toEqual([]);
+    });
+});

@@ -219,7 +219,8 @@ A record signed with a signing key its writer has since replaced (one of the ear
 
 - The settings high-water mark is kept per user (not per identity key), survives a succession, and is never lowered.
 - Each device also keeps the highest own identity `keyVersion` it has opened and refuses an identity served as current with a lower one.
-- A new device has no marks; that is inherent.
+- A new device has no marks; that is inherent. Signing out deletes them, so a browser signed back in starts as a new one.
+- On the web they are one record per account in localStorage (`hushos.marks:<slot>`), sealed by the crypto worker with XChaCha20-Poly1305 under a key derived from the account root (`hushos/rollback-marks/v1`), the slot an HMAC of the user id under another root key, the associated data binding the record to the account and slot (`packages/crypto/src/rollback-marks.ts`). A locked browser holds ciphertext that names neither the account nor the counts. A record that does not open is refused ("HushOS couldn't read what this browser last saw of your account…"), never read as no marks; a browser that refuses site storage altogether has none, as before. Plaintext marks from earlier versions are sealed at the first read after an unlock and deleted. A master-key rotation gives the root a new slot: rotating on this browser carries the marks over (`carryMarks`); another browser of the account starts from none, which the server cannot cause.
 
 ### Legacy readers removed
 

@@ -232,6 +232,19 @@ describe('the sealed upload stash', () => {
         expect(fs.stashes()).toHaveLength(0);
     });
 
+    it('leaves no folder behind once wiped: tidying and reading after a sign-out make none', async () => {
+        const fs = privateFileSystem();
+        const { stash } = setup(fs, await worker());
+        const name = await stash.put(canary);
+        await stash.forget();
+        // What sign-out's upload sweep and a late read do after the wipe.
+        await stash.sweep!(new Set());
+        await stash.remove(name!);
+        await expect(stash.open(name!, described)).rejects.toBeInstanceOf(StashGone);
+        expect([...fs.directories.keys()]).toEqual([]);
+        expect(fs.disk()).toHaveLength(0);
+    });
+
     it('says when it could not delete the stash, so sign-out reports it', async () => {
         const fs = privateFileSystem();
         const { stash } = setup(fs, await worker());

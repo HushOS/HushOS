@@ -85,8 +85,17 @@ export function createSealedStash(options: {
         if (plaintextLeft) await removePlaintext(handle).catch(() => {});
         return handle;
     }
-    async function directory() {
-        return (await root()).getDirectoryHandle(DIRECTORY, { create: true });
+    async function directory(create = false) {
+        return (await root()).getDirectoryHandle(DIRECTORY, { create });
+    }
+    /* The folder if it is there; reading or tidying never makes it (a sign-out's sweep left one). */
+    async function existing() {
+        try {
+            return await directory();
+        } catch (error) {
+            if (notFound(error)) return null;
+            throw error;
+        }
     }
     async function writtenUnder() {
         try {
@@ -135,7 +144,7 @@ export function createSealedStash(options: {
                 // Marked before anything reaches the disk: a wipe that can't get there then fails.
                 options.written.set();
                 const parts = await options.seal(userId, name, bytes);
-                const handle = await (await directory()).getFileHandle(name, { create: true });
+                const handle = await (await directory(true)).getFileHandle(name, { create: true });
                 const writable = await handle.createWritable();
                 try {
                     for (const part of parts) await writable.write(part as BufferSource);
@@ -183,11 +192,12 @@ export function createSealedStash(options: {
             return opened;
         },
         async remove(name) {
-            await (await directory()).removeEntry(name).catch(() => {});
+            await (await existing())?.removeEntry(name).catch(() => {});
         },
         async sweep(keep) {
             await stash.settle();
-            const dir = await directory();
+            const dir = await existing();
+            if (!dir) return;
             const names: string[] = [];
             for await (const name of dir.keys()) if (!keep.has(name)) names.push(name);
             for (const name of names) await dir.removeEntry(name).catch(() => {});

@@ -237,13 +237,19 @@ describe('the device key at sign-in', () => {
         expect(await verify('attempt-2')).toBe(false);
     });
 
-    test('locking keeps the device key; signing out clears it', async () => {
+    test('locking keeps the device key; signing out clears it, and the saved unlock', async () => {
         const { auth, stored } = await client();
         await auth.login('maya@example.com', 'correct horse');
         await auth.lock();
         expect(stored()?.deviceId).toBe(deviceId);
+        // Locked, the entry stays without a device, for other tabs to lock on.
+        expect(JSON.parse(items.get('hushos-device-unlock')!).state.device).toBeNull();
         await auth.logout();
         expect(stored()).toBeNull();
+        expect(items.has('hushos-device-unlock')).toBe(false);
+        // Nothing after the sign-out puts it back, a lock included.
+        await auth.lock();
+        expect(items.has('hushos-device-unlock')).toBe(false);
     });
 });
 

@@ -11,6 +11,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
  */
 
 const stores = vi.hoisted(() => ({
+    // Every store of an account, deleted by name once Drive's own parts are cleared.
+    browser: vi.fn(),
     transfers: vi.fn(),
     stash: vi.fn(),
     mirror: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
 vi.mock('@/lib/session', () => ({ forgetSession }));
 const loadPage = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/load-page', () => ({ loadPage }));
+vi.mock('@/lib/device-data', () => ({ forgetBrowserData: stores.browser }));
 
 const { clearDevice, forgetDevice, leaveApp, signOut, NAVIGATE_TIMEOUT_MS, SIGN_OUT_TIMEOUT_MS } =
     await import('./sign-out');
@@ -59,6 +62,7 @@ const {
 } = await import('./sign-in-gate');
 
 beforeEach(() => {
+    stores.browser.mockResolvedValue(undefined);
     stores.transfers.mockResolvedValue(undefined);
     stores.stash.mockResolvedValue(undefined);
     stores.mirror.mockResolvedValue(undefined);
@@ -72,6 +76,7 @@ beforeEach(() => {
 describe('clearing a removed browser', () => {
     test('resolves only once every store cleared', async () => {
         await expect(clearDevice()).resolves.toBeUndefined();
+        expect(stores.browser).toHaveBeenCalledOnce();
         expect(stores.transfers).toHaveBeenCalledOnce();
         expect(stores.stash).toHaveBeenCalledOnce();
         expect(stores.mirror).toHaveBeenCalledOnce();
@@ -79,6 +84,7 @@ describe('clearing a removed browser', () => {
     });
 
     test.each([
+        ['what this browser keeps for the account', 'browser'],
         ['the uploads and their journal', 'transfers'],
         ['the sealed stash', 'stash'],
         ['the mirror', 'mirror'],
@@ -95,6 +101,32 @@ describe('clearing a removed browser', () => {
             expect(logged).toHaveBeenCalled();
         },
     );
+
+    test('deletes the stores by name only once Drive’s parts stopped writing to them', async () => {
+        let uploadsStopped = false;
+        stores.transfers.mockImplementation(
+            () =>
+                new Promise((resolve) =>
+                    setTimeout(() => {
+                        uploadsStopped = true;
+                        resolve(undefined);
+                    }, 20),
+                ),
+        );
+        let stoppedFirst: boolean | undefined;
+        stores.browser.mockImplementation(async () => {
+            stoppedFirst = uploadsStopped;
+        });
+        await clearDevice();
+        // An upload still running would write its journal again after its database was deleted.
+        expect(stoppedFirst).toBe(true);
+    });
+
+    test('deletes the stores by name even when a Drive part failed', async () => {
+        stores.groups.mockRejectedValue(new Error('Device storage is busy in another tab.'));
+        await expect(clearDevice()).rejects.toThrow('busy');
+        expect(stores.browser).toHaveBeenCalledOnce();
+    });
 
     test('clears every other store when one fails, then says it failed', async () => {
         stores.stash.mockRejectedValue(new Error('The stash could not be deleted.'));

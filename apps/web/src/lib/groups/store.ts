@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { deleteDatabase } from '@/lib/device-data';
 
 /*
  * What this device keeps of its families (the 1c plan, 1.3), in IndexedDB
@@ -236,32 +237,6 @@ export function createUnavailableGroupStore(): GroupStore {
         deleteHolds: async () => {},
         forgetGroup: async () => {},
     };
-}
-
-/*
- * Deletes one database, failing (so the caller tries again) if another tab
- * holds it open past `patience`: those tabs close on `versionchange`, so this
- * waits for them rather than give up at the first `blocked`.
- */
-export function deleteDatabase(name: string, patience = 5_000) {
-    return new Promise<void>((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(name);
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        request.onsuccess = () => {
-            clearTimeout(timer);
-            resolve();
-        };
-        request.onerror = () => {
-            clearTimeout(timer);
-            reject(request.error ?? new Error('Device storage could not be cleared.'));
-        };
-        request.onblocked = () => {
-            timer ??= setTimeout(
-                () => reject(new Error('Device storage is busy in another tab.')),
-                patience,
-            );
-        };
-    });
 }
 
 /*

@@ -51,8 +51,8 @@ function steps(
             calls.push('store');
             return identity;
         },
-        seen: () => marks,
-        remember: (keyVersion, identityVersion) => {
+        seen: async () => marks,
+        remember: async (keyVersion, identityVersion) => {
             marks = {
                 keyVersion: Math.max(marks.keyVersion, keyVersion),
                 identityVersion: Math.max(marks.identityVersion, identityVersion),
