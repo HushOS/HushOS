@@ -1,0 +1,23 @@
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_7c4cd609db6858 31-37,43-47,49-52,54,57,59-62,75,178-180,182,191-192,201-207,213,215-216,221-222,227,263,269,303
+apps/web/src/lib/family-trash.test.ts
+  s_566b8e0c4467a4::t_dfbd7e9fd10770 2-9,96-111
+apps/web/src/lib/family-trash.ts
+  s_566b8e0c4467a4::t_55c52d303d43b8 23-25,31-32,52,61-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d3fc6bf104cdb7ac23b062c61f9430066ad473f5",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
