@@ -158,7 +158,7 @@ function Technical({
 }) {
     return (
         <div className="border-b border-rule py-2 last:border-b-0">
-            <dt className="text-xs font-semibold text-muted-foreground">{label}</dt>
+            <dt className="text-[13px] text-muted-foreground">{label}</dt>
             <dd className="mt-1.5 min-w-0 font-mono text-[11px] leading-relaxed wrap-anywhere select-text">
                 {copy ? (
                     <CopyValue
@@ -385,9 +385,7 @@ export function ItemDetails({
             {!nameFirst && heading(node.name)}
             {onShare && (
                 <div className="flex flex-col gap-1.5 rounded-xl bg-muted px-3.5 py-3">
-                    <span className="text-xs font-semibold text-muted-foreground">
-                        Who can open
-                    </span>
+                    <span className="text-[13px] text-muted-foreground">Who can open</span>
                     <AccessCell access={access.get(node.id)} inherited={inherited} detail />
                     <button
                         type="button"
@@ -645,8 +643,8 @@ export function DetailsPanel({
             data-details=""
             className="sticky top-3 m-3 ml-0 flex max-h-[calc(100svh-12.5rem)] w-[320px] shrink-0 transform-gpu flex-col self-start overflow-y-auto overscroll-contain rounded-2xl border border-rule bg-card text-card-foreground shadow-md will-change-transform"
         >
-            <div className="flex items-center justify-between gap-2 py-2 pr-2 pl-4">
-                <p className="text-sm font-semibold text-muted-foreground">Info</p>
+            {/* The aside is named Details; the name under the preview is its heading. */}
+            <div className="flex items-center justify-end py-2 pr-2 pl-4">
                 <Button
                     variant="ghost"
                     size="icon-sm"

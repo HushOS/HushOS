@@ -350,9 +350,18 @@
     }
 }
 
-/* A small label: column heads, keys in a list, the name of a section. Sentence case, in the text face. */
-@utility eyebrow {
+/*
+ * The 12px label: badges, chips and table column heads, nothing else. Sentence case, in the text
+ * face. Not a kicker above a heading, a section or a field: a section gets a real heading, a
+ * field a plain label (DESIGN.md, Typography).
+ */
+@utility label {
     @apply font-sans text-xs leading-none font-semibold tracking-normal normal-case;
+}
+
+/* Retired for `label` and plain headings; only components/families still uses it until its redesign lands. */
+@utility eyebrow {
+    @apply label;
 }
 
 /* The surface that holds a page's content, raised from the ground. */

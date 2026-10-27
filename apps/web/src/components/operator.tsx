@@ -41,7 +41,7 @@ export function OperatorPage({
 }
 
 export const th =
-    'h-8 border-b border-rule px-2 text-left text-[11px] font-bold tracking-[0.04em] whitespace-nowrap text-muted-foreground uppercase';
+    'label h-8 border-b border-rule px-2 text-left whitespace-nowrap text-muted-foreground';
 export const td = 'h-9 border-b border-rule px-2 text-[13px]';
 
 /* A dense table that scrolls sideways on its own when the page is narrow. */

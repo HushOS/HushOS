@@ -277,7 +277,8 @@ export const type = {
     body: { size: 16, weight: 400, tracking: 0, leading: 1.55 },
     callout: { size: 15, weight: 400, tracking: 0, leading: 1.45 },
     footnote: { size: 13, weight: 400, tracking: 0, leading: 1.35 },
-    label: { size: 12, weight: 600, tracking: 0.06, leading: 1 },
+    /** Badges, chips and column heads only: never a kicker above a heading or a field. */
+    label: { size: 12, weight: 600, tracking: 0, leading: 1 },
 } as const;
 
 /*

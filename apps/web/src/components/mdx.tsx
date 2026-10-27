@@ -59,7 +59,7 @@ export const mdxComponents: MDXComponents = {
     ),
     th: (props) => (
         <th
-            className="eyebrow border-b border-rule py-2 pr-4 text-left text-muted-foreground"
+            className="label border-b border-rule py-2 pr-4 text-left text-muted-foreground"
             {...props}
         />
     ),
@@ -83,9 +83,9 @@ export function Cta({ children, title = 'Try it' }: { children: ReactNode; title
     return (
         <aside className="mt-8 flex flex-wrap items-center justify-between gap-x-8 gap-y-4 rounded-xl border border-rule px-5 py-5">
             <div className="min-w-0 flex-1 basis-64">
-                <p className="eyebrow text-muted-foreground">{title}</p>
+                <p className="text-[17px] leading-snug font-bold">{title}</p>
                 {/* MDX wraps the text in its own paragraph, so this must not be one. */}
-                <div className="mt-2 text-base leading-relaxed text-pretty [&>p]:mt-0">
+                <div className="mt-1 text-base leading-relaxed text-pretty [&>p]:mt-0">
                     {children}
                 </div>
             </div>
@@ -121,7 +121,7 @@ export function Ledger({ rows }: { rows: [string, string][] }) {
 export function Note({ title, children }: { title?: string; children: ReactNode }) {
     return (
         <aside className="mt-4 rounded-md border border-rule bg-muted px-4 py-3">
-            {title && <p className="eyebrow pt-1 text-foreground">{title}</p>}
+            {title && <p className="text-[15px] font-semibold">{title}</p>}
             <div className="mt-2 text-sm leading-relaxed text-muted-foreground [&>p]:mt-0">
                 {children}
             </div>

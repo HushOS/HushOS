@@ -158,7 +158,7 @@ function OfferPage() {
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-16 px-4 py-12 sm:px-8 sm:py-20">
                 <section className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
                     <div className="flex flex-col gap-6">
-                        <p className="eyebrow text-muted-foreground">
+                        <p className="text-[15px] text-muted-foreground">
                             {/* Whoever carries the offer, a creator or a campaign, named without claiming the offer is theirs. */}
                             Offer · {landing.name}
                         </p>
@@ -216,8 +216,7 @@ function OfferPage() {
                         </div>
                         <div className="ticket-tear" />
                         <div className="px-6 pt-5 pb-6">
-                            <p className="eyebrow text-muted-foreground">The offer</p>
-                            <dl className="mt-2 text-sm">
+                            <dl className="text-sm">
                                 {[
                                     ['Code', landing.code],
                                     ['Discount', offer],
@@ -256,7 +255,7 @@ function OfferPage() {
                             {/* The offer is on paid plans, but nobody has to take one: free is a choice here too. */}
                             <article className="flex flex-col gap-6 rounded-xl border border-rule px-6 py-6">
                                 <div className="flex flex-1 flex-col gap-2">
-                                    <p className="eyebrow text-muted-foreground">Free</p>
+                                    <h3 className="text-[17px] font-bold">Free</h3>
                                     <p className="text-3xl font-bold tracking-tight tabular-nums">
                                         {formatQuota(landing.catalogue.freeQuotaBytes)}
                                     </p>
@@ -288,7 +287,7 @@ function OfferPage() {
                                     className={`flex flex-col gap-6 rounded-xl border px-6 py-6 ${tier.recommended ? 'border-primary ring-3 ring-accent' : 'border-rule'}`}
                                 >
                                     <div className="flex flex-1 flex-col gap-2">
-                                        <p className="eyebrow text-muted-foreground">{tier.name}</p>
+                                        <h3 className="text-[17px] font-bold">{tier.name}</h3>
                                         <p className="text-3xl font-bold tracking-tight tabular-nums">
                                             {formatQuota(tier.quotaBytes)}
                                         </p>

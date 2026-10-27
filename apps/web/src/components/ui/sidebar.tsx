@@ -391,7 +391,7 @@ function SidebarGroupLabel({
         props: mergeProps<'div'>(
             {
                 className: cn(
-                    'eyebrow flex h-8 shrink-0 items-center rounded-md px-2 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear rail:pointer-events-none rail:-mt-8 rail:opacity-0 focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0',
+                    'flex h-8 shrink-0 items-center rounded-md px-2 text-[13px] text-muted-foreground ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-200 ease-linear rail:pointer-events-none rail:-mt-8 rail:opacity-0 focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0',
                     className,
                 ),
             },
