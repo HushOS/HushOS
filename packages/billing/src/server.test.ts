@@ -2523,7 +2523,7 @@ describe('affiliates', () => {
         const affiliate = await creator();
         const fan = await createTestAccount();
         const observer = lockObserver();
-        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
         let delivered: Promise<unknown> = Promise.resolve();
         // The removal has found nothing owed; Polar delivers an order.paid while it deletes the discount.
         polar.beforeDiscountDelete = async () => {
@@ -2554,7 +2554,7 @@ describe('affiliates', () => {
             // delivery is taken, and what would have been owed is left for the operator.
             expect(response).toBeInstanceOf(Response);
             expect((response as Response).status).toBe(200);
-            expect(warn).toHaveBeenCalledWith({
+            expect(error).toHaveBeenCalledWith({
                 message:
                     'Commission not recorded: its affiliate was removed while the order was paid. Pay it by hand if it is owed',
                 billing: {
@@ -2567,12 +2567,60 @@ describe('affiliates', () => {
                 },
             });
         } finally {
-            warn.mockRestore();
+            error.mockRestore();
             await observer.end();
         }
         const [earnings] = (await rawSql(`select count(*)::int as n from affiliate_earnings`))
             .rows as { n: number }[];
         expect(earnings!.n).toBe(0);
+    }, 60_000);
+
+    test('an order whose account is deleted while its earning waits is recorded with no account, for the live affiliate', async () => {
+        const affiliate = await creator();
+        const fan = await createTestAccount();
+        const observer = lockObserver();
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            // The account's deletion holds its row; the order.paid's earning waits on it.
+            await observer.query('begin');
+            await observer.query('select 1 from users where id = $1 for update', [fan.userId]);
+            const paid = await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_orphan',
+                    discount_id: 'disc_creator25',
+                    net_amount: 1000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: 'cus_fan', external_id: fan.userId },
+                },
+            });
+            const delivered = billing.handleWebhook(paid).catch((failure: unknown) => failure);
+            const until = Date.now() + DEADLINE;
+            while (!(await observer.waitingOn('affiliate_earnings'))) {
+                if (Date.now() > until) throw new Error('The earning never waited on the account.');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+            await observer.query('delete from users where id = $1', [fan.userId]);
+            await observer.query('commit');
+            const response = await delivered;
+            expect(response).toBeInstanceOf(Response);
+            expect((response as Response).status).toBe(200);
+            // The affiliate is still there: nothing to pay by hand, nothing logged.
+            expect(error).not.toHaveBeenCalled();
+        } finally {
+            error.mockRestore();
+            await observer.end();
+        }
+        const [row] = await growth.listAffiliates();
+        expect(row!.id).toBe(affiliate.id);
+        expect(row!.stats).toMatchObject({
+            orders: 1,
+            earnings: { usd: { unpaid: 200, paid: 0 } },
+        });
+        const earnings = (await rawSql(`select order_id, user_id from affiliate_earnings`))
+            .rows as { order_id: string; user_id: string | null }[];
+        expect(earnings).toEqual([{ order_id: 'order_orphan', user_id: null }]);
     }, 60_000);
 
     test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {

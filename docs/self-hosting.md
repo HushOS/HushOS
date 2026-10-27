@@ -509,7 +509,7 @@ Affiliates are creators an operator enrols at `/app/admin/affiliates`. The Polar
 - a coupon code, registered as a discount with Polar when billing is on, so it applies at checkout and can be typed there;
 - a commission on the net amount of every paid order from people who signed up through them.
 
-Commissions are recorded from Polar's `order.paid` webhook, once per order, and shown as owed until an operator marks them paid; paying them is done outside HushOS. A creator whose HushOS account is linked sees their code and earnings on their own Invite friends page. The operator links it by email; an email with no account yet is kept and linked when an account signs up with it. Without billing, affiliates can still be enrolled and attributed, but no discount exists to apply.
+Commissions are recorded from Polar's `order.paid` webhook, once per order, and shown as owed until an operator marks them paid; paying them is done outside HushOS. A creator whose HushOS account is linked sees their code and earnings on their own Invite friends page. The operator links it by email; an email with no account yet is kept and linked when an account signs up with it. Without billing, affiliates can still be enrolled and attributed, but no discount exists to apply. If an affiliate is removed while one of their orders is being paid, that order's commission cannot be recorded: the web server logs an error, `Commission not recorded: its affiliate was removed while the order was paid`, with the order, discount, affiliate, code, amount and currency under `billing` in its console output (JSON in production). Pay that commission by hand.
 
 ### Codes made at Polar
 

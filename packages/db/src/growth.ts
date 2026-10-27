@@ -541,15 +541,41 @@ export async function listAffiliates() {
     return Promise.all(rows.map(async (row) => ({ ...row, stats: await affiliateStats(row.id) })));
 }
 
-/*
- * Commission on one paid order. The order id is unique, so a replayed
- * webhook or a second attribution path records nothing the second time.
- */
 /* The commission on an order's net amount, in its smallest unit: rounded down. */
 export function commissionFor(netAmount: number, commissionBps: number) {
     return Math.floor((netAmount * commissionBps) / 10_000);
 }
 
+/* An earning whose affiliate was removed while its order was on the way. */
+export class AffiliateGoneError extends Error {
+    constructor(options?: { cause?: unknown }) {
+        super('The affiliate was removed.', options);
+        this.name = 'AffiliateGoneError';
+    }
+}
+
+const EARNING_AFFILIATE_KEY = 'affiliate_earnings_affiliate_id_affiliates_id_fkey';
+const EARNING_ACCOUNT_KEY = 'affiliate_earnings_user_id_users_id_fkey';
+
+/* The foreign key a driver error says was violated, within a few causes; null for anything else. */
+function violatedForeignKey(error: unknown) {
+    let at = error;
+    for (let depth = 0; depth < 5 && at && typeof at === 'object'; depth++) {
+        const { code, constraint } = at as { code?: unknown; constraint?: unknown };
+        if (code === '23503') return typeof constraint === 'string' ? constraint : null;
+        at = (at as { cause?: unknown }).cause;
+    }
+    return null;
+}
+
+/*
+ * Commission on one paid order. The order id is unique, so a replayed
+ * webhook or a second attribution path records nothing the second time.
+ * An account deleted while the order was on its way leaves the earning with
+ * no account, as `on delete set null` leaves every earlier one: commission is
+ * owed whether or not the buyer still has an account. An affiliate removed
+ * meanwhile throws AffiliateGoneError: there is nothing left to record it on.
+ */
 export async function recordEarning(input: {
     affiliateId: string;
     orderId: string;
@@ -557,22 +583,30 @@ export async function recordEarning(input: {
     currency: string;
     netAmount: number;
     commissionBps: number;
-}) {
+}): Promise<typeof affiliateEarnings.$inferSelect | null> {
     if (input.netAmount <= 0) return null;
     const commission = commissionFor(input.netAmount, input.commissionBps);
-    const [row] = await db
-        .insert(affiliateEarnings)
-        .values({
-            affiliateId: input.affiliateId,
-            orderId: input.orderId,
-            userId: input.userId,
-            currency: input.currency,
-            netAmount: input.netAmount,
-            commissionAmount: commission,
-        })
-        .onConflictDoNothing({ target: affiliateEarnings.orderId })
-        .returning();
-    return row ?? null;
+    try {
+        const [row] = await db
+            .insert(affiliateEarnings)
+            .values({
+                affiliateId: input.affiliateId,
+                orderId: input.orderId,
+                userId: input.userId,
+                currency: input.currency,
+                netAmount: input.netAmount,
+                commissionAmount: commission,
+            })
+            .onConflictDoNothing({ target: affiliateEarnings.orderId })
+            .returning();
+        return row ?? null;
+    } catch (error) {
+        const key = violatedForeignKey(error);
+        if (key === EARNING_ACCOUNT_KEY && input.userId)
+            return recordEarning({ ...input, userId: null });
+        if (key === EARNING_AFFILIATE_KEY) throw new AffiliateGoneError({ cause: error });
+        throw error;
+    }
 }
 
 export async function listEarnings(affiliateId: string, limit = 100) {

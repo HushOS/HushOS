@@ -565,9 +565,8 @@ async function recordAffiliateEarning(order: {
         // The affiliate was removed while this order was on its way: its earning has nowhere
         // to go, and no retry could rebuild it, since the removal takes the affiliate's terms
         // and attributions with it. What was owed is logged for the operator to pay by hand.
-        if (!violatesForeignKey(error) || (await growthRepository.getAffiliate(affiliate.id)))
-            throw error;
-        log.warn({
+        if (!(error instanceof growthRepository.AffiliateGoneError)) throw error;
+        log.error({
             message:
                 'Commission not recorded: its affiliate was removed while the order was paid. Pay it by hand if it is owed',
             billing: {
@@ -580,16 +579,6 @@ async function recordAffiliateEarning(order: {
             },
         });
     }
-}
-
-/* Postgres's foreign-key violation, within a few causes of a driver error. */
-function violatesForeignKey(error: unknown) {
-    let at = error;
-    for (let depth = 0; depth < 5 && at && typeof at === 'object'; depth++) {
-        if ((at as { code?: unknown }).code === '23503') return true;
-        at = (at as { cause?: unknown }).cause;
-    }
-    return false;
 }
 
 function rejectsEmail(error: unknown) {

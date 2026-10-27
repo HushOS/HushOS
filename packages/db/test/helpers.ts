@@ -85,6 +85,8 @@ export function lockObserver() {
         },
         /* Whether another session's statement naming `table` waits on a lock in this database. */
         async waitingOn(table: string) {
+            // Inside a transaction this connection holds open, the view would stay as first read.
+            await pool.query('select pg_stat_clear_snapshot()');
             const result = await pool.query<{ waiting: number }>(
                 `select count(*)::int as waiting from pg_stat_activity
                  where datname = current_database() and pid <> pg_backend_pid()
@@ -92,6 +94,10 @@ export function lockObserver() {
                 [table],
             );
             return result.rows[0]!.waiting > 0;
+        },
+        /* A statement on this connection, for a transaction the test holds open itself. */
+        async query(text: string, params: unknown[] = []) {
+            return (await pool.query(text, params)).rows;
         },
         end: () => pool.end(),
     };
