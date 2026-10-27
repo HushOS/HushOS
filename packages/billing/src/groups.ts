@@ -2042,8 +2042,13 @@ export async function startGroupCheckout(
         await reconcileGroup(groupId);
         throw new BillingError('This family already has a plan.', 409);
     }
+    // A code they signed up with, or a creator they came through, applies as it would to a
+    // personal plan (the payer's); the intent is then used, as a personal checkout uses it.
+    const { discountFor } = await import('./server');
+    const discountId = await discountFor(user.id, plan.id);
+    let checkout: models.Checkout;
     try {
-        const checkout = await polar().checkouts.create({
+        checkout = await polar().checkouts.create({
             products: [plan.id],
             customer_id: customerId,
             currency: (input.currency as models.PresentmentCurrency | undefined) ?? null,
@@ -2055,13 +2060,15 @@ export async function startGroupCheckout(
             success_url: `${familyPage()}?checkout_id={CHECKOUT_ID}`,
             return_url: familyPage(),
             allow_trial: false,
+            discount_id: discountId,
             allow_discount_codes: true,
             metadata: { hushos_group_id: groupId },
         });
-        return { url: checkout.url };
     } catch (error) {
         throw unavailable(error);
     }
+    await billingRepository.consumeIntent(user.id);
+    return { url: checkout.url };
 }
 
 /*

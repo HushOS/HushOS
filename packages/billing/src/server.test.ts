@@ -2337,6 +2337,47 @@ describe('affiliates', () => {
         expect(await growth.getOfferLanding('nobody')).toBeNull();
     });
 
+    /* Someone who signed up through `code` with Family Pro chosen, and made a family. */
+    async function familySignup(code: string) {
+        const fan = await createTestAccount();
+        await growth.attributeNewAccount(fan.userId, code);
+        await rawSql(
+            `insert into account_intents (user_id, plan_product_id, referral_code, source) values ('${fan.userId}', '${PRO_FAMILY}', '${code}', 'referral')`,
+        );
+        const { groupId } = await createTestFamily({ organizerId: fan.userId, pooled: true });
+        return { fan, groupId, user: userOf(fan, 'Fan') };
+    }
+    /* A paid order of the family's plan, as Polar delivers it: under the family's customer. */
+    const familyOrder = (groupId: string, id: string, discountId: string | null) =>
+        signedWebhook({
+            type: 'order.paid',
+            data: {
+                id,
+                discount_id: discountId,
+                net_amount: 2000,
+                currency: 'usd',
+                billing_reason: discountId ? 'subscription_create' : 'subscription_cycle',
+                customer: { id: `cus_${groupId}`, external_id: `group:${groupId}` },
+            },
+        });
+
+    test('a creator’s sign-up with a family tier: the family checkout carries the discount, and the family’s orders pay the creator', async () => {
+        await creator();
+        const { fan, groupId, user } = await familySignup('creator25');
+        await billing.startGroupCheckout(user, groupId, { productId: PRO_FAMILY });
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: 'disc_creator25' });
+        // Taken to checkout: the intent is used, as a personal checkout uses it.
+        expect(await billingRepository.getPendingIntent(fan.userId)).toBeNull();
+        await billing.handleWebhook(await familyOrder(groupId, 'order_fam_1', 'disc_creator25'));
+        // A renewal carries no discount: the creator is still found, through the payer.
+        await billing.handleWebhook(await familyOrder(groupId, 'order_fam_2', null));
+        const [row] = await growth.listAffiliates();
+        expect(row!.stats).toMatchObject({
+            orders: 2,
+            earnings: { usd: { unpaid: 800, paid: 0 } },
+        });
+    });
+
     test('pausing a creator takes down their page under both the slug and the code', async () => {
         const affiliate = await creator();
         await growth.updateAffiliate(affiliate.id, { active: false });
@@ -2666,6 +2707,26 @@ describe('affiliates', () => {
 });
 
 describe('offers made at Polar', () => {
+    test('an offer limited to personal plans isn’t carried to a family checkout, which Polar would refuse', async () => {
+        polar.discounts.push({
+            code: 'SOLO10',
+            basis_points: 1000,
+            duration: 'once',
+            name: 'Solo',
+            products: [{ id: PRO }],
+        });
+        const fan = await createTestAccount();
+        await growthRepository.rememberCoupon(fan.userId, 'SOLO10');
+        const { groupId } = await createTestFamily({ organizerId: fan.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(fan, 'Fan'), groupId, { productId: PRO_FAMILY });
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: null });
+        // The same code still rides to a personal checkout of the plan it covers.
+        const solo = await createTestAccount();
+        await growthRepository.rememberCoupon(solo.userId, 'SOLO10');
+        await billing.startCheckout({ id: solo.userId, name: 'Solo', email: solo.email }, PRO);
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: 'disc_solo10' });
+    });
+
     test('a code the operator made at Polar has a page and rides to checkout without an affiliate', async () => {
         polar.discounts.push({
             code: 'LAUNCH20',
@@ -2757,6 +2818,42 @@ describe('offers made at Polar', () => {
 });
 
 describe('referrals', () => {
+    test('a friend’s invite with a family tier: the family’s first paid order earns the inviter the paid bonus', async () => {
+        const inviter = await createTestAccount();
+        const { code } = await growth.getReferralSummary(inviter.userId);
+        const joiner = await createTestAccount();
+        await growth.attributeNewAccount(joiner.userId, code);
+        await rawSql(
+            `insert into account_intents (user_id, plan_product_id, referral_code, source) values ('${joiner.userId}', '${PRO_FAMILY}', '${code}', 'referral')`,
+        );
+        const { groupId } = await createTestFamily({ organizerId: joiner.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(joiner, 'Joiner'), groupId, {
+            productId: PRO_FAMILY,
+        });
+        // A friend's code is storage, not money: no discount at Polar, and the intent is used.
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: null });
+        expect(await billingRepository.getPendingIntent(joiner.userId)).toBeNull();
+        const before = BigInt(
+            (await authRepository.getStorageAllowance(inviter.userId))!.quotaBytes,
+        );
+        await billing.handleWebhook(
+            await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_fam_ref',
+                    net_amount: 2000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: `cus_${groupId}`, external_id: `group:${groupId}` },
+                },
+            }),
+        );
+        expect(BigInt((await authRepository.getStorageAllowance(inviter.userId))!.quotaBytes)).toBe(
+            before + 5n * GIB,
+        );
+        expect((await growth.getReferralSummary(inviter.userId)).paid).toMatchObject({ count: 1 });
+    });
+
     test('an invite gives both people storage, and a code that resolves to nobody gives nothing', async () => {
         const inviter = await createTestAccount();
         const summary = await growth.getReferralSummary(inviter.userId);

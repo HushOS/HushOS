@@ -364,11 +364,12 @@ export async function startCheckout(
 }
 
 /*
- * The provider discount a checkout carries: the affiliate this person arrived
- * through while it is live, else the code they were given, whether a creator's
- * or one the operator made at Polar and shared as a page.
+ * The provider discount a checkout carries, a personal plan's or a family's (the payer's):
+ * the affiliate this person arrived through while it is live, else the code they were given,
+ * whether a creator's or one the operator made at Polar and shared as a page (only where it
+ * covers `productId`). Creators' discounts cover every product, family plans included.
  */
-async function discountFor(userId: string) {
+export async function discountFor(userId: string, productId?: string) {
     const affiliate = await growthRepository.findAffiliateForCustomer(userId);
     if (affiliate?.active && affiliate.providerDiscountId) return affiliate.providerDiscountId;
     const code = await growthRepository.pendingReferralCode(userId);
@@ -378,7 +379,12 @@ async function discountFor(userId: string) {
     if (resolved?.kind === 'user') return null;
     // A paused creator's code is not the provider's to honour either.
     if (await growthRepository.findAffiliateByHandle(code)) return null;
-    return (await findProviderDiscount(code))?.id ?? null;
+    const offer = await findProviderDiscount(code);
+    // An offer the operator limited to other products would be refused at checkout: none, then,
+    // and the person may still type a code there.
+    if (offer && productId && offer.productIds.length && !offer.productIds.includes(productId))
+        return null;
+    return offer?.id ?? null;
 }
 
 /* A discount as Polar holds it, reduced to what a page and a checkout need. */
@@ -568,12 +574,17 @@ export async function grantOrderRewards(
 }
 
 /*
- * What a paid order of a family's plan earns, as its `order.paid` delivery gives it: the
- * commission of the affiliate whose discount it used, never one found through a person (the
- * family's customer is not one), and no referral reward.
+ * What a paid order of a family's plan earns, as a personal order does, with the family's payer
+ * as its owner: the commission of the affiliate whose discount it used, else of the one the
+ * payer signed up through; and the paid bonus for whoever invited the payer, once.
  */
-export async function grantFamilyOrderRewards(order: Parameters<typeof recordAffiliateEarning>[0]) {
-    await recordAffiliateEarning({ ...order, customer: null });
+export async function grantFamilyOrderRewards(
+    groupId: string,
+    order: Parameters<typeof recordAffiliateEarning>[0],
+) {
+    const payer = (await billingRepository.getGroupCustomer(groupId))?.payerUserId ?? null;
+    await recordAffiliateEarning({ ...order, customer: payer ? { external_id: payer } : null });
+    if (payer) await rewardPaidReferral(payer);
 }
 
 /* The inviter's storage when someone they invited pays for a plan; once per invitee, under a cap. */
@@ -941,10 +952,12 @@ export async function handleWebhook(request: Request): Promise<Response> {
                 event.data as Parameters<typeof notePaidAfterRevoke>[0],
             );
             if (!refunded) {
-                await recordAffiliateEarning(
-                    event.data as Parameters<typeof recordAffiliateEarning>[0],
-                );
-                if (userId) await rewardPaidReferral(userId);
+                const order = event.data as Parameters<typeof recordAffiliateEarning>[0];
+                if (owner?.kind === 'group') await grantFamilyOrderRewards(owner.id, order);
+                else {
+                    await recordAffiliateEarning(order);
+                    if (userId) await rewardPaidReferral(userId);
+                }
             }
             // A personal order paid while its owner's files draw from a family's pool (a
             // renewal that slipped past the revoke, a checkout that raced the admission):
