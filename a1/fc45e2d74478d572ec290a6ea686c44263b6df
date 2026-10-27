@@ -1,0 +1,52 @@
+bun.lock
+  h_f7ba60a6997566 284
+compose.yaml
+  h_f7ba60a6997566 163-165
+docs/groups-design.md
+  h_f7ba60a6997566 334-335,484
+docs/self-hosting.md
+  h_f7ba60a6997566 77,87,214,726
+packages/db/drizzle/20261026140033_group_dissolve_notices/migration.sql
+  h_f7ba60a6997566 1-26
+packages/db/drizzle/20261026140033_group_dissolve_notices/snapshot.json
+  h_f7ba60a6997566 1-13873
+packages/db/src/dissolve-notices.ts
+  h_f7ba60a6997566 1-188
+packages/db/src/groups.dissolve-notices-off.test.ts
+  h_f7ba60a6997566 1-54
+packages/db/src/groups.dissolve-notices.test.ts
+  h_f7ba60a6997566 1-584
+packages/db/src/groups.ts
+  h_f7ba60a6997566 15,1954-1955,3428-3429
+packages/db/src/schema/groups.ts
+  h_f7ba60a6997566 413-456
+packages/emails/scripts/render.tsx
+  h_f7ba60a6997566 2,215-258
+packages/emails/src/rendered/family-dissolved.ts
+  h_f7ba60a6997566 1-15
+packages/emails/src/service.ts
+  h_f7ba60a6997566 6,285-315
+packages/emails/src/templates/family-dissolved.tsx
+  h_f7ba60a6997566 1-293
+packages/jobs/Dockerfile
+  h_f7ba60a6997566 30
+packages/jobs/package.json
+  h_f7ba60a6997566 21
+packages/jobs/src/client.ts
+  h_f7ba60a6997566 29,59,157-169
+packages/jobs/src/jobs/groups.ts
+  h_f7ba60a6997566 2-3,48-115
+packages/jobs/src/worker.ts
+  h_f7ba60a6997566 11,14,105-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a1fc45e2d74478d572ec290a6ea686c44263b6df",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
