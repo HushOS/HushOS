@@ -50,9 +50,11 @@ export default function FamilyPlanEnding({
     /** Different in every message; see the end of the body. */
     marker?: string;
 }) {
+    // Setting a plan to end proves neither a payment nor that one is settled (a trial, a renewal
+    // Polar is still retrying), so the payer-left words promise only that it won't renew.
     const facts: [string, string][] = [
         ['Plan ends', endsOn],
-        ['Charged again', 'No'],
+        reason === 'payer-left' ? ['Renews', 'No'] : ['Charged again', 'No'],
         ['Refund', 'None: the plan runs until then'],
     ];
     return (
@@ -174,7 +176,7 @@ export default function FamilyPlanEnding({
                             }}
                         >
                             {reason === 'payer-left'
-                                ? 'You’re no longer in the family you pay for. Its plan is set to end with the period you paid for, so you won’t be charged again. Nothing is refunded for the rest of that period.'
+                                ? 'You’re no longer in the family you pay for. Its plan is set to end with the current period, so it won’t renew. Nothing is refunded for the rest of that period.'
                                 : 'The family you pay for was dissolved: it has no members left. Its plan is set to end with the period you paid for, so you won’t be charged again. Nothing is refunded for the rest of that period.'}
                         </Text>
                     </Section>

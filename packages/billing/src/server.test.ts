@@ -6055,6 +6055,27 @@ describe('a renewing family plan whose payer is no longer in the family', () => 
         expect(planEndingMail).toHaveLength(1);
     });
 
+    test('a setting to end that keeps failing close to the renewal reaches the operators’ list', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({ status: 'left' });
+        // Resumed in the portal, renewing in 30 hours; then Polar refuses every call.
+        subscription.cancel_at_period_end = false;
+        subscription.current_period_end = new Date(Date.now() + 30 * HOUR).toISOString();
+        await billing.reconcileGroup(groupId);
+        polar.unauthorized = true;
+        await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeInstanceOf(
+            billing.BillingError,
+        );
+        expect(
+            (await billingRepository.listGivenUpReissues()).map((row) => [
+                row.subscriptionId,
+                row.reason,
+            ]),
+        ).toEqual([[subscription.id, 'dissolved-failing']]);
+        polar.unauthorized = false;
+    });
+
     test('a payer still in the family keeps a renewing plan as it is', async () => {
         const { groupId, subscription } = await payerWhoCanLeave();
         polar.calls = [];

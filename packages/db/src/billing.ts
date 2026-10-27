@@ -955,10 +955,12 @@ export async function recordDissolveRefusal(
 }
 
 /*
- * A run of the job for a dissolved family failed in a way pg-boss retries: its plans that
- * can still charge and weren't refused are failing, since the first such run (kept by later
- * ones). Whatever the mirror says of their ending, since a run that fails may not have read
- * Polar. Cleared once a plan is set to end, seen ending by a reconcile, or refused.
+ * A run of the job for a dissolved family, or for a renewing plan whose payer is no longer in
+ * the family (listAbandonedChargeable), failed in a way pg-boss retries: those plans that can
+ * still charge and weren't refused are failing, since the first such run (kept by later ones),
+ * so one that keeps failing reaches the operators' list (`dissolved-failing`). Whatever the
+ * mirror says of their ending, since a run that fails may not have read Polar. Cleared once a
+ * plan is set to end, seen ending by a reconcile, or refused.
  */
 export async function recordDissolveFailing(groupId: string) {
     await db
@@ -971,7 +973,10 @@ export async function recordDissolveFailing(groupId: string) {
                 eq(groupBillingSubscriptions.groupId, groupId),
                 canStillCharge,
                 isNull(groupBillingSubscriptions.dissolveRefusedAt),
-                sql`exists (select 1 from ${groups} where ${groups.id} = ${groupBillingSubscriptions.groupId} and ${groups.dissolvedAt} is not null)`,
+                sql`(exists (select 1 from ${groups} where ${groups.id} = ${groupBillingSubscriptions.groupId} and ${groups.dissolvedAt} is not null) or (${groupBillingSubscriptions.status} in (${sql.join(
+                    [...LIVE_STATUSES].map((status) => sql`${status}`),
+                    sql`, `,
+                )}) and exists (select 1 from ${groupBillingCustomers} c where c.group_id = ${groupBillingSubscriptions.groupId} and c.payer_user_id is not null and not exists (select 1 from ${groupMemberships} m where m.group_id = c.group_id and m.user_id = c.payer_user_id and m.state = 'active'))))`,
             ),
         );
 }
