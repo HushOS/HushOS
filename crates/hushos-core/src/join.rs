@@ -896,6 +896,8 @@ impl AreaLedger {
         matched: &JoinMatched,
         guard: Option<&GroupPin>,
     ) -> CoreResult<JoinAcceptance> {
+        // The family as this join found it: a wipe before it commits keeps nothing (FAMILY_FORGOTTEN).
+        let epoch = self.family_epoch(group_id);
         let Admitted { admission, marks } = self.admission(me, group_id, record, served, guard)?;
         match admission {
             Admission::RecordUnreadable => return Ok(JoinAcceptance::RecordUnreadable),
@@ -929,6 +931,7 @@ impl AreaLedger {
             checked_at: &matched.checked_at,
             guard,
             check: &marks.check,
+            epoch,
         };
         let join = match &matched.mark {
             Joined::Code(mark) => JoinWith::Code(mark),

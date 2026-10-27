@@ -270,13 +270,18 @@ describe('the family guard (docs/optional-verification.md 2.8)', () => {
         ).toEqual(at(5, 2, { [AREA]: 2 }));
         // Nothing new: nothing to write.
         expect(guardAfter(GROUP, at(5, 2, { [AREA]: 2 }), at(5, 2))).toBeNull();
-        // An older pin never lowers it, and one that disagrees never replaces it.
+        // An older pin never lowers it: the guard covers it.
         expect(guardAfter(GROUP, at(5, 2), at(3, 1))).toBeNull();
-        expect(
-            guardAfter(GROUP, at(5, 2), { ...at(5, 2), rosterDigest: encode(key(99)) }),
-        ).toBeNull();
+        // One that disagrees never replaces it, and is no coverage either (a wipe drops nothing
+        // over it): another roster or group key at one version, or other first keys.
+        expect(guardAfter(GROUP, at(5, 2), { ...at(5, 2), rosterDigest: encode(key(99)) })).toBe(
+            'conflict',
+        );
+        expect(guardAfter(GROUP, at(5, 2), { ...at(5, 2), groupKeyDigest: encode(key(98)) })).toBe(
+            'conflict',
+        );
         expect(
             guardAfter(GROUP, at(5, 2), { ...at(6, 2), firstEd25519PublicKey: encode(key(9)) }),
-        ).toBeNull();
+        ).toBe('conflict');
     });
 });

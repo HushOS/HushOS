@@ -1,6 +1,6 @@
 import { encryptKey, decryptKey } from './aead';
-import { OLDER_CHAIN, SPLIT_CHAIN, type AreaLedger } from './area-ledger';
-import { NOT_THIS_ACCOUNT, OPEN_SETTINGS } from './protocol';
+import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
+import { FAMILY_FORGOTTEN, GUARD_CONFLICT, NOT_THIS_ACCOUNT, OPEN_SETTINGS } from './protocol';
 import { areaKeyCommitment } from './area-keys';
 import { encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
@@ -884,7 +884,10 @@ export type GroupResults = {
      * the family. `unreadable`: the held guard could not be read and there is
      * a floor, so `guard` is the floor's alone, to store once the entry reads
      * again or the person resets it (2.8); with no floor an unreadable guard
-     * does not hold the wipe up.
+     * does not hold the wipe up. A held guard that disagrees with the floor
+     * (guardAfter's 'conflict': two histories this device accepted) covers
+     * nothing: the call throws GUARD_CONFLICT and drops nothing, so the floor
+     * stays a mark until the session ends.
      */
     groupForget: { forgotten: boolean; guard: GroupPin | null; unreadable: boolean };
     groupStoreSeal: { envelope: string };
@@ -1729,6 +1732,8 @@ export function createGroupSession(host: GroupHost) {
     const usedJoins = new Map<string, Set<string>>();
     /* Bumped by forget(): an acceptance commits only into the session it began in. */
     let generation = 0;
+    /* Per family, bumped by every forgetGroup and never reset: an acceptance commits only into the family it began with. */
+    const forgets = new Map<string, number>();
     /* Groups whose last acceptance was a fork: roster verdicts are personal until it is sorted, and their folders' keys are held back (area-ledger.ts heldBack). */
     const forked = new Set<string>();
     /* Group seeds by `${groupId}:${groupKeyVersion}`. */
@@ -1796,6 +1801,14 @@ export function createGroupSession(host: GroupHost) {
         root.fill(0);
         if (now !== userId) throw new CryptoError(NOT_THIS_ACCOUNT);
     }
+    /*
+     * Refused (FAMILY_FORGOTTEN) once the family was let go of (forgetGroup)
+     * after an acceptance of it began at `epoch`: what it verified was against
+     * the floor the wipe dropped, and committing it would take the family back.
+     */
+    function stillTheFamily(groupId: string, epoch: number) {
+        if ((forgets.get(groupId) ?? 0) !== epoch) throw new CryptoError(FAMILY_FORGOTTEN);
+    }
     function commit(chain: AcceptedRosters) {
         // The ledger first: a chain it refuses (older, or another at the version held) leaves the
         // session's chains as they were, so the two never disagree about the family.
@@ -1839,6 +1852,8 @@ export function createGroupSession(host: GroupHost) {
         return true;
     }
     function forgetGroup(groupId: string) {
+        // An acceptance begun before this commits nothing (stillTheFamily).
+        forgets.set(groupId, (forgets.get(groupId) ?? 0) + 1);
         for (const [slot, seed] of seeds)
             if (slot.startsWith(`${groupId}:`)) {
                 seed.fill(0);
@@ -2520,6 +2535,8 @@ export function createGroupSession(host: GroupHost) {
         const marked = await marksOf(input);
         if (!marked) return { status: 'record-unreadable' };
         const { groupId, userId, pins, pairMarks, cache, marks } = marked;
+        // The family as this run found it, before its floor is read: a wipe before it ends keeps nothing.
+        const epoch = forgets.get(groupId) ?? 0;
         let anchor: GroupAnchor | null = null;
         // Creation vouches for the first keys only where nothing marks the family (F1).
         if (input.creating && marks)
@@ -2596,9 +2613,10 @@ export function createGroupSession(host: GroupHost) {
                 pairMarks,
             });
         } catch (error) {
-            // Only under the session the run began in; a refusal on a forked group keeps the fork:
-            // it is still the person's own marks' conflict.
+            // Only under the session the run began in, and the family not let go of since; a
+            // refusal on a forked group keeps the fork: it is still the person's own marks' conflict.
             stillTheSession(began, userId);
+            stillTheFamily(groupId, epoch);
             // An attempt the caller retries keeps what this session committed: the next attempt
             // either commits over it or, refused too, uncommits it.
             if (!input.retried) uncommit(groupId, forked.has(groupId));
@@ -2606,24 +2624,19 @@ export function createGroupSession(host: GroupHost) {
         }
         if (chain.status === 'fork') {
             stillTheSession(began, userId);
+            stillTheFamily(groupId, epoch);
             uncommit(groupId, true);
             return { status: 'fork', fork: chain };
         }
-        // An acceptance that lost a race with one committed while it ran changes nothing: no
-        // staged call dropped, no record or pin written; nor does one through another roster at
-        // the version committed meanwhile (the ledger refuses both again).
         // A lock or another account meanwhile: nothing is committed into a session this run did not
-        // begin in.
+        // begin in; nor into a family let go of meanwhile, which would take it back after its wipe.
         stillTheSession(began, userId);
-        const now = ledger.floor(groupId);
-        if (now && now.roster.rosterVersion > chain.roster.rosterVersion)
-            throw new CryptoError(OLDER_CHAIN);
-        if (
-            now &&
-            now.roster.rosterVersion === chain.roster.rosterVersion &&
-            now.rosterDigest !== chain.rosterDigest
-        )
-            throw new CryptoError(SPLIT_CHAIN);
+        stillTheFamily(groupId, epoch);
+        // An acceptance that lost a race with one committed while it ran changes nothing: no
+        // staged call dropped, no record or pin written; nor does one beside it, through another
+        // roster or another group key at a version committed meanwhile (verified against the
+        // floor read before, not this one). The ledger holds the whole floor to it again here.
+        ledger.checkCommit(chain);
         // Staged calls whose roster the server served and this acceptance took: they landed (another
         // tab sent them, or a resend this tab never heard back from), and go with their secrets.
         // Only after acceptance held, so junk served beside them, or under them, drops nothing.
@@ -2642,7 +2655,7 @@ export function createGroupSession(host: GroupHost) {
         // The family guard moves on with every acceptance, never down (docs/optional-verification.md
         // 2.8): the held one merged with this pin and the folders opened here, only when that
         // records anything new.
-        const guard = guardAfter(
+        const next = guardAfter(
             groupId,
             input.guard && input.guard !== 'unreadable'
                 ? checkGroupPin(groupId, input.guard)
@@ -2654,6 +2667,9 @@ export function createGroupSession(host: GroupHost) {
                 version: area.version,
             })),
         );
+        // The guard was a mark, so a chain that disagrees with it was the fork above; nothing is
+        // ever written over it.
+        const guard = next === 'conflict' ? null : next;
         const unlocked = host.unlocked();
         try {
             return {
@@ -4042,6 +4058,10 @@ export function createGroupSession(host: GroupHost) {
                             version: area.version,
                         })),
                     );
+                    // A held guard that disagrees with the floor covers nothing: two histories
+                    // this device accepted. Wiping would erase the floor, the only evidence of
+                    // one of them, so nothing is dropped and the wipe is refused.
+                    if (guard === 'conflict') throw new CryptoError(GUARD_CONFLICT);
                     if (held === 'unreadable')
                         return { forgotten: false, guard: guard ?? pin, unreadable: true };
                     if (guard) return { forgotten: false, guard, unreadable: false };

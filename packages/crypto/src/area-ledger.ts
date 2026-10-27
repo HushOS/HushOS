@@ -1,7 +1,7 @@
 import { areaKeyCommitment } from './area-keys';
 import { uuid } from './canonical';
 import type { AcceptedRosters } from './group-trust';
-import { areaWriteVersion, checkAreaRoot } from './groups';
+import { areaWriteVersion, checkAreaRoot, sameGroupKey } from './groups';
 import { CryptoError } from './errors';
 import { checkId } from './ids';
 import { decode } from './keys';
@@ -96,6 +96,26 @@ export type PendingKey = {
     /* What the parent key the fresh one is wrapped under is rooted at (`lineage`). */
     rootedAt: number | null;
 };
+
+/*
+ * Why `chain` may not be committed over `held` (a family's floor, or the
+ * chain committed now), or null when it extends it: it must reach as far
+ * (OLDER_CHAIN otherwise: a roster or a group key short of it) and pass
+ * through it, its roster digest at the held roster version and its group key
+ * at the held key version (SPLIT_CHAIN otherwise: another history beside it).
+ * The roster alone is not enough: two successions to other keys at one
+ * roster version leave the roster digest the same. The core's `overtaken_by`
+ * is its twin.
+ */
+function overtakenBy(held: AcceptedRosters, chain: AcceptedRosters) {
+    if (held.roster.rosterVersion > chain.roster.rosterVersion) return OLDER_CHAIN;
+    if (chain.rosterDigests[held.roster.rosterVersion - 1] !== held.rosterDigest)
+        return SPLIT_CHAIN;
+    if (held.groupKeyVersion > chain.groupKeyVersion) return OLDER_CHAIN;
+    const key = chain.groupKeys[held.groupKeyVersion - 1];
+    if (!key || !sameGroupKey(key, held.groupKey)) return SPLIT_CHAIN;
+    return null;
+}
 
 export function createAreaLedger() {
     /*
@@ -355,32 +375,29 @@ export function createAreaLedger() {
         return root !== undefined && root !== nodeId;
     }
     /*
+     * Refused (OLDER_CHAIN, SPLIT_CHAIN) unless `chain` passes through the
+     * family's floor and the chain committed now (overtakenBy), checked again
+     * at commit: an acceptance verified against an earlier floor that another
+     * moved meanwhile (to another group key at the same roster, say) commits
+     * nothing beside it. Throws before anything changes.
+     */
+    function checkCommit(chain: AcceptedRosters) {
+        for (const held of [floors.get(chain.groupId), chains.get(chain.groupId)]) {
+            const refusal = held && overtakenBy(held, chain);
+            if (refusal) throw new CryptoError(refusal);
+        }
+    }
+    /*
      * A family's chain, accepted from what the server served (never a staged
      * one): its areas are written under the versions it lists. An older chain
      * than the one held is refused (a background acceptance that lost a race
-     * with the foreground's). A new write version needs its root seen again;
+     * with the foreground's), and so is one beside it (checkCommit). A new
+     * write version needs its root seen again;
      * a retired area (a deleted family folder, design 2.10) is written no more.
      */
     function commit(chain: AcceptedRosters) {
+        checkCommit(chain);
         const floor = floors.get(chain.groupId);
-        if (floor && floor.roster.rosterVersion > chain.roster.rosterVersion)
-            throw new CryptoError(OLDER_CHAIN);
-        if (
-            floor &&
-            floor.roster.rosterVersion === chain.roster.rosterVersion &&
-            floor.rosterDigest !== chain.rosterDigest
-        )
-            throw new CryptoError(SPLIT_CHAIN);
-        const held = chains.get(chain.groupId);
-        if (held && held.roster.rosterVersion > chain.roster.rosterVersion)
-            throw new CryptoError(OLDER_CHAIN);
-        // Another roster at the very version held: a split view, never committed over the held one.
-        if (
-            held &&
-            held.roster.rosterVersion === chain.roster.rosterVersion &&
-            held.rosterDigest !== chain.rosterDigest
-        )
-            throw new CryptoError(SPLIT_CHAIN);
         chains.set(chain.groupId, chain);
         // The floor moves to a later roster, or to a later group key at the same roster (a
         // succession the roster that dropped a holder ties to itself, served after it).
@@ -1106,6 +1123,7 @@ export function createAreaLedger() {
         requireWritable,
         rootSeen,
         commit,
+        checkCommit,
         uncommit,
         floor,
         committedChain,

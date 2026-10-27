@@ -387,7 +387,8 @@ async function acceptJoin(
     } catch (error) {
         // Committed in the worker but not kept on the device: the worker lets go of it too,
         // or its chain would count as a mark this device cannot show, and a retry be refused.
-        await forgetInWorker(ctx, groupId);
+        // A wipe the worker refuses (GUARD_CONFLICT) keeps its floor; the store's error is the answer.
+        await forgetInWorker(ctx, groupId).catch(() => false);
         throw error;
     }
     const sync = await afterAccept(ctx, groupId, result);

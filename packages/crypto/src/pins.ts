@@ -312,17 +312,20 @@ export function mergePin(
  * The family guard after an acceptance (docs/optional-verification.md 2.8):
  * the held guard merged with the accepted `pin` and the folders opened on
  * this device (mergePin), only when that records anything new (pinAhead);
- * null when it is behind, conflicts, or adds nothing, so a guard never goes
- * down. The Rust core's `guard_after` is its twin.
+ * null when it is behind or adds nothing (the guard covers the pin), so a
+ * guard never goes down; 'conflict' when the two disagree (other first keys,
+ * or another roster or group key at one version), which is never coverage:
+ * nothing is written, and a wipe drops nothing over it. The Rust core's
+ * `guard_after` is its twin.
  */
 export function guardAfter(
     groupId: string,
     guard: GroupPin | null,
     pin: GroupPin,
     opened: readonly OpenedArea[] = [],
-): GroupPin | null {
+): GroupPin | null | 'conflict' {
     const merged = mergePin(groupId, guard, pin, opened);
-    if (merged === null || merged === 'conflict') return null;
+    if (merged === null || merged === 'conflict') return merged;
     return pinAhead(guard, merged) ? merged : null;
 }
 

@@ -435,7 +435,9 @@ export async function afterAccept(
  * nothing of the family unless this says the worker forgot it. No family guard
  * is kept on the web yet: PR 4 stores the guard handed back (merged into the
  * stored one, never lower, under the account's lock) between the two calls;
- * until then it is handed straight back, as no store could hold it.
+ * until then it is handed straight back, as no store could hold it. A held
+ * guard that disagrees with what the worker accepted is refused
+ * (GUARD_CONFLICT, thrown): nothing of the family is deleted.
  */
 export async function forgetInWorker(ctx: GroupContext, groupId: string): Promise<boolean> {
     const checkedAt = new Date().toISOString();

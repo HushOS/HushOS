@@ -2365,6 +2365,138 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "a-guard-that-disagrees-with-the-floor-holds-the-wipe-and-drops-nothing",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 3,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This family looks different from what this device already checked, so nothing of it was removed."
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This family looks different from what this device already checked, so nothing of it was removed."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                }
+            ]
         }
     ]
 }

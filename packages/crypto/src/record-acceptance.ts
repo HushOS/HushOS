@@ -1,4 +1,11 @@
-import { NOT_THIS_ACCOUNT, NO_ACCOUNT, OLDER_CHAIN, OPEN_SETTINGS, SPLIT_CHAIN } from './protocol';
+import {
+    FAMILY_FORGOTTEN,
+    NOT_THIS_ACCOUNT,
+    NO_ACCOUNT,
+    OLDER_CHAIN,
+    OPEN_SETTINGS,
+    SPLIT_CHAIN,
+} from './protocol';
 
 /*
  * The order a family's served chain is accepted in against this device's
@@ -58,13 +65,15 @@ export async function acceptFromRecord<T>(
 
 /*
  * The worker's answer to a run begun under a session or account that is gone,
- * or before the account was unlocked or its settings opened: nothing the
- * server served is in question, so no attempt is retried for it.
+ * or before the account was unlocked or its settings opened, or of a family
+ * the session let go of while it ran: nothing the server served is in
+ * question, so no attempt is retried for it (a retry would take the family
+ * back after its wipe).
  */
 export function accountError(error: unknown) {
     return (
         error instanceof Error &&
-        [NOT_THIS_ACCOUNT, NO_ACCOUNT, OPEN_SETTINGS].includes(error.message)
+        [NOT_THIS_ACCOUNT, NO_ACCOUNT, OPEN_SETTINGS, FAMILY_FORGOTTEN].includes(error.message)
     );
 }
 
