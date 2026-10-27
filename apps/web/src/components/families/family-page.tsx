@@ -378,7 +378,7 @@ export function FamilyPage({
                                     : 'Show technical details and leaving'
                             }
                             onClick={() => setTechnical((value) => !value)}
-                            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:h-11"
+                            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-11"
                         >
                             {technical ? 'Hide' : 'Show'}
                             <ChevronDownIcon

@@ -27,7 +27,7 @@ export function PortalLink({
             disabled={disabled || busy}
             data-portal-link
             className={cn(
-                'inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-sm text-sm text-muted-foreground underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11',
+                'inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-sm text-sm text-muted-foreground underline-offset-4 outline-hidden hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11',
                 className,
             )}
         >

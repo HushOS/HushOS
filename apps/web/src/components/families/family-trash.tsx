@@ -28,6 +28,7 @@ import {
     nodeSize,
 } from '@/lib/drive';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { emptyConfirmText, emptyPlan, emptyResult } from '@/lib/family-trash';
 import { openArea, useFamilySpace } from '@/lib/spaces';
 import { cue } from '@/lib/sounds';
 
@@ -152,13 +153,20 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
         }
     }
 
-    // What Empty Trash deletes: every item this device may write, less those inside a folder
-    // that is in the Trash too, which go with it.
-    const emptiable = (trash.data ?? []).filter((row) => writable(row) && !row.parentTrashed);
+    // What Empty Trash deletes and what stays (lib/family-trash.ts): only items in folders
+    // this device may write, an item inside a trashed folder going with that folder.
+    const plan = emptyPlan(
+        (trash.data ?? []).map((row) => ({
+            row,
+            writable: writable(row),
+            parentTrashed: row.parentTrashed,
+            kind: row.node.kind,
+        })),
+    );
 
     async function emptyAll() {
         setConfirmEmpty(false);
-        const rows = emptiable;
+        const rows = plan.purge.map((entry) => entry.row);
         setEmptying({ gone: 0, total: rows.length });
         let failed = 0;
         for (const [index, row] of rows.entries()) {
@@ -173,17 +181,9 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
         }
         setEmptying(null);
         await invalidateFolders(queryClient);
-        if (failed === 0) {
-            cue('droplet');
-            toast.add({ type: 'success', title: 'Trash emptied' });
-        } else {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title: 'The Trash couldn’t be emptied',
-                description: `${failed} of ${rows.length} ${rows.length === 1 ? 'item is' : 'items are'} still there. Try again.`,
-            });
-        }
+        const result = emptyResult({ asked: rows.length, failed, stays: plan.stays });
+        cue(result.type === 'success' ? 'droplet' : 'error');
+        toast.add(result);
     }
 
     return (
@@ -194,7 +194,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                 title="Trash"
                 description="Items stay here for 30 days, then they’re deleted for good. They count towards the family’s storage until then."
             >
-                {emptiable.length > 0 && (
+                {plan.purge.length > 0 && (
                     <Button
                         variant="outline"
                         disabled={busy !== null || emptying !== null}
@@ -394,11 +394,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>Empty the family folders’ Trash?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            All {emptiable.length} {emptiable.length === 1 ? 'item' : 'items'} in
-                            the family folders’ Trash {emptiable.length === 1 ? 'is' : 'are'}{' '}
-                            deleted for good, for everyone in the family. This can’t be undone.
-                        </AlertDialogDescription>
+                        <AlertDialogDescription>{emptyConfirmText(plan)}</AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>

@@ -2935,6 +2935,69 @@ test.describe
         await expect(fileRow(ben.page, 'shopping.txt')).toBeVisible({ timeout: 60_000 });
         await expect(fileRow(ben.page, 'plan.txt')).toHaveCount(0);
     });
+
+    test('Trash: Empty Trash on the family’s tab leaves what this device can’t change, and says so', async () => {
+        test.setTimeout(300_000);
+        // A second family folder, with one item in the Trash; another in Family's.
+        await ben.page.goto(`/app/s/${benFamily}`);
+        await ben.page.getByRole('button', { name: 'New family folder' }).click();
+        const dialog = ben.page.getByRole('dialog', { name: 'New family folder' });
+        await dialog.getByLabel('Name').fill('Photos');
+        await dialog.getByRole('button', { name: 'Create folder' }).click();
+        await expect(dialog).toHaveCount(0, { timeout: 90_000 });
+        await openFamilyFolder(ben, 'Aalto family', 'Photos');
+        const photos = new URL(ben.page.url()).pathname.split('/').at(-1)!;
+        await upload(ben, 'beach.txt', 'Sand\n');
+        await ben.page.getByRole('button', { name: 'More for beach.txt' }).click();
+        await ben.page.getByRole('menuitem', { name: /^Move to Trash/ }).click();
+        await expect(fileRow(ben.page, 'beach.txt')).toHaveCount(0, { timeout: 60_000 });
+        await openFamilyFolder(ben, 'Aalto family', 'Family');
+        await upload(ben, 'note.txt', 'Hi\n');
+        await ben.page.getByRole('button', { name: 'More for note.txt' }).click();
+        await ben.page.getByRole('menuitem', { name: /^Move to Trash/ }).click();
+        await expect(fileRow(ben.page, 'note.txt')).toHaveCount(0, { timeout: 60_000 });
+
+        // Fault-injected: the server serves Photos at a newer key than the member list names,
+        // so this device may not change it (`keys-changed`), as after a key change it missed.
+        await ben.page.route(
+            (url) => url.pathname === '/api/drive/spaces',
+            async (route) => {
+                const response = await route.fetch();
+                const json = (await response.json()) as {
+                    spaces: {
+                        areas: { root?: { id: string } | null; workspaceKeyVersion: number }[];
+                    }[];
+                };
+                for (const space of json.spaces)
+                    for (const area of space.areas)
+                        if (area.root?.id === photos) area.workspaceKeyVersion += 1;
+                return route.fulfill({ response, json });
+            },
+        );
+        try {
+            await ben.page.goto('/app/trash?view=family');
+            const row = (name: string) =>
+                ben.page.locator('[data-family-trash] [data-node-id]').filter({ hasText: name });
+            await expect(row('beach.txt')).toBeVisible({ timeout: 90_000 });
+            await expect(row('note.txt')).toBeVisible();
+            await ben.page.getByRole('button', { name: 'Empty Trash' }).click();
+            const confirm = ben.page.getByRole('alertdialog', {
+                name: 'Empty the family folders’ Trash?',
+            });
+            await expect(confirm).toContainText(
+                '1 item in the family folders’ Trash is deleted for good, for everyone in the family. 1 item in folders you can’t change stays.',
+            );
+            await confirm.getByRole('button', { name: 'Empty Trash' }).click();
+            await expect(ben.page.getByText('Some items are still in the Trash')).toBeVisible({
+                timeout: 60_000,
+            });
+            await expect(ben.page.getByText('Trash emptied')).toHaveCount(0);
+            await expect(row('note.txt')).toHaveCount(0, { timeout: 60_000 });
+            await expect(row('beach.txt')).toBeVisible();
+        } finally {
+            await ben.page.unrouteAll({ behavior: 'ignoreErrors' });
+        }
+    });
 });
 
 test.describe.serial('families off', () => {
