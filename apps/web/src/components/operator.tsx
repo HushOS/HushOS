@@ -116,7 +116,7 @@ export function FilterTabs<T extends string>({
                     aria-pressed={value === option.value}
                     onClick={() => onChange(option.value)}
                     className={cn(
-                        'h-7 cursor-pointer rounded-sm px-3 text-[13px] font-semibold whitespace-nowrap outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
+                        'h-7 cursor-pointer rounded-sm px-3 text-[13px] font-semibold whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                         value === option.value
                             ? 'bg-card text-foreground shadow-sm'
                             : 'text-muted-foreground hover:text-foreground',

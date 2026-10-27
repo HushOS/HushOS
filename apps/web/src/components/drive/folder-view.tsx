@@ -16,10 +16,14 @@ import {
     HiddenSortToggle,
     LIST_COLUMN,
     MarqueeBox,
+    ROW_FOCUS,
+    ROW_FOCUS_WITHIN,
     RowName,
     SelectableMark,
     SkeletonRows,
     SortButton,
+    TILE_FOCUS,
+    TILE_FOCUS_WITHIN,
     useHiddenColumn,
     useListSelection,
 } from '@/components/drive/file-list';
@@ -243,13 +247,13 @@ export function FolderView({ folderId }: { folderId: string }) {
         coarse,
         selected,
         setSelected,
-        focused,
         marquee,
         select,
         toggle,
         clear,
         selectAll,
         moveFocus,
+        focusShown,
     } = useListSelection(ids, dropRef);
     const [creating, setCreating] = useState(false);
     const [renaming, setRenaming] = useState<DriveNode | null>(null);
@@ -991,7 +995,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 aria-pressed={view === value}
                                 title={label}
                                 onClick={() => setView(value)}
-                                className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-hidden hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+                                className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-pressed:bg-accent aria-pressed:text-accent-foreground"
                             >
                                 <Icon className="size-4" aria-hidden="true" />
                             </button>
@@ -1203,14 +1207,13 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     }
                                                     className={cn(
                                                         'group/row h-14 cursor-default border-b border-rule select-none',
+                                                        ROW_FOCUS_WITHIN,
                                                         dropOver === node.id
                                                             ? 'bg-accent ring-2 ring-primary ring-inset'
                                                             : isSelected
                                                               ? 'bg-accent'
                                                               : 'hover:bg-muted',
-                                                        focused === node.id &&
-                                                            !isSelected &&
-                                                            'ring-1 ring-ring ring-inset',
+                                                        focusShown(node.id) && ROW_FOCUS,
                                                     )}
                                                 >
                                                     <td className="min-w-0 p-0">
@@ -1332,19 +1335,19 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                 }
                                                 className={cn(
                                                     'group/row relative flex cursor-default flex-col gap-2 rounded-xl p-2 select-none',
+                                                    TILE_FOCUS_WITHIN,
                                                     dropOver === node.id || isSelected
                                                         ? 'bg-accent ring-2 ring-primary ring-inset'
                                                         : 'hover:bg-muted',
-                                                    focused === node.id &&
-                                                        !isSelected &&
-                                                        'ring-1 ring-ring ring-inset',
+                                                    focusShown(node.id) && TILE_FOCUS,
                                                 )}
                                             >
                                                 <button
                                                     type="button"
                                                     aria-label={node.name}
                                                     aria-pressed={isSelected}
-                                                    className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-hidden"
+                                                    data-row-name
+                                                    className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-none"
                                                     onClick={(event) => select(node.id, event)}
                                                     onDoubleClick={() => open(node)}
                                                 >
@@ -1739,7 +1742,7 @@ function FolderPath({
                             className={cn(
                                 crumbClass,
                                 dropOver === crumb.id &&
-                                    'bg-accent text-accent-foreground outline-2 outline-primary',
+                                    'bg-accent text-accent-foreground outline-2 outline-solid outline-primary',
                             )}
                         >
                             {crumbName(crumb)}

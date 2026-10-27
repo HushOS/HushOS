@@ -19,7 +19,7 @@ function RadioItem({ className, children, ...props }: RadioPrimitive.Root.Props)
             <RadioPrimitive.Root
                 data-slot="radio"
                 className={cn(
-                    'relative flex size-[18px] shrink-0 items-center justify-center rounded-full border border-input bg-card transition-[background-color,border-color] duration-150 outline-hidden after:absolute after:-inset-x-3 after:-inset-y-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 data-checked:border-primary',
+                    'relative flex size-[18px] shrink-0 items-center justify-center rounded-full border border-input bg-card transition-[background-color,border-color] duration-150 outline-none after:absolute after:-inset-x-3 after:-inset-y-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 data-checked:border-primary',
                     className,
                 )}
                 {...props}
@@ -40,7 +40,7 @@ function RadioGroupItem({ className, ...props }: RadioPrimitive.Root.Props) {
         <RadioPrimitive.Root
             data-slot="radio"
             className={cn(
-                'relative flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full border border-input bg-card transition-[background-color,border-color] duration-150 outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 data-checked:border-primary',
+                'relative flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full border border-input bg-card transition-[background-color,border-color] duration-150 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 data-checked:border-primary',
                 className,
             )}
             {...props}

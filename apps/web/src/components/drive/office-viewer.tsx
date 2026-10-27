@@ -171,7 +171,7 @@ export function OfficeViewer({
                 <div
                     data-viewer-body
                     tabIndex={-1}
-                    className="flex-1 overflow-auto px-3 py-4 outline-hidden sm:px-6 sm:py-8"
+                    className="flex-1 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8"
                     data-office="docx"
                 >
                     <div className="sheet mx-auto max-w-4xl">
@@ -209,7 +209,7 @@ function SheetView({
             <div
                 data-viewer-body
                 tabIndex={-1}
-                className="min-h-0 flex-1 overflow-auto px-3 py-4 outline-hidden sm:px-6 sm:py-8"
+                className="min-h-0 flex-1 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8"
                 data-office="sheet"
             >
                 <div className="sheet mx-auto flex w-full max-w-5xl min-w-0 flex-col">
@@ -237,7 +237,7 @@ function SheetView({
         <div
             data-viewer-body
             tabIndex={-1}
-            className="flex min-h-0 flex-1 flex-col p-3 outline-hidden sm:p-6"
+            className="flex min-h-0 flex-1 flex-col p-3 outline-none sm:p-6"
             data-office="sheet"
         >
             {/* Clipped to its rounded corners: the sticky row numbers would otherwise paint over them. */}
@@ -318,7 +318,7 @@ function SheetView({
                                 aria-selected={index === active}
                                 onClick={() => setActive(index)}
                                 className={cn(
-                                    'h-8 shrink-0 cursor-pointer rounded-t-md px-4 text-[13px] whitespace-nowrap outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                                    'h-8 shrink-0 cursor-pointer rounded-t-md px-4 text-[13px] whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring',
                                     index === active
                                         ? 'border-x border-t border-rule bg-card font-bold text-foreground'
                                         : 'text-muted-foreground hover:text-foreground',
@@ -346,7 +346,7 @@ function SlidesView({ slides }: { slides: Slide[] }) {
         <div
             data-viewer-body
             tabIndex={-1}
-            className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-3 py-4 outline-hidden sm:px-6 sm:py-8 md:flex-row"
+            className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8 md:flex-row"
             data-office="slides"
         >
             <ol
@@ -360,7 +360,7 @@ function SlidesView({ slides }: { slides: Slide[] }) {
                             aria-current={index === at ? 'true' : undefined}
                             onClick={() => setAt(index)}
                             className={cn(
-                                'flex w-full max-w-56 cursor-pointer gap-2 rounded-md px-2.5 py-2 text-left text-[13px] outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
+                                'flex w-full max-w-56 cursor-pointer gap-2 rounded-md px-2.5 py-2 text-left text-[13px] outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                 index === at
                                     ? 'bg-accent font-bold text-accent-foreground'
                                     : 'hover:bg-card',

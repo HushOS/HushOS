@@ -119,7 +119,7 @@ function AccountPage() {
                             aria-expanded={advanced}
                             aria-controls="advanced-settings"
                             onClick={() => setAdvanced((value) => !value)}
-                            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+                            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
                         >
                             {advanced ? 'Hide' : 'Show'}
                             <ChevronDownIcon

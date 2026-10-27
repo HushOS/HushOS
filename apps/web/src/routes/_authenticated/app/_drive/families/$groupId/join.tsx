@@ -303,7 +303,7 @@ function JoinFamily() {
                         <h2
                             ref={stepHeading}
                             tabIndex={-1}
-                            className="text-[17px] font-bold outline-hidden"
+                            className="text-[17px] font-bold outline-none"
                         >
                             Compare the join code
                         </h2>
@@ -361,7 +361,7 @@ function JoinFamily() {
                 {step.kind === 'mismatch' && (
                     <Alert variant="destructive" data-mismatch>
                         <AlertTitle>
-                            <h2 ref={stepHeading} tabIndex={-1} className="outline-hidden">
+                            <h2 ref={stepHeading} tabIndex={-1} className="outline-none">
                                 Don’t use {family} yet
                             </h2>
                         </AlertTitle>
@@ -411,7 +411,7 @@ function OwnWords({
     const own = useQuery({ ...ownFingerprintQueryOptions(userId), staleTime: 0 });
     return (
         <section className="flex flex-col gap-3" aria-label="Your twelve words">
-            <h2 ref={headingRef} tabIndex={-1} className="text-[17px] font-bold outline-hidden">
+            <h2 ref={headingRef} tabIndex={-1} className="text-[17px] font-bold outline-none">
                 Read your twelve words to {them}
             </h2>
             <p className="text-sm text-muted-foreground">
@@ -487,7 +487,7 @@ function HiddenCode({
                                     next[slot] = event.target.value;
                                     onType(next);
                                 }}
-                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium outline-hidden focus-visible:ring-2 focus-visible:ring-ring aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive"
+                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive"
                             />
                         )}
                     </li>

@@ -560,7 +560,7 @@ function LinkContents({ opened }: { opened: Opened }) {
                                             <button
                                                 type="button"
                                                 data-crumb-id={crumb.id}
-                                                className="cursor-pointer font-semibold text-primary underline underline-offset-2 outline-hidden hover:text-primary-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+                                                className="cursor-pointer font-semibold text-primary underline underline-offset-2 outline-none hover:text-primary-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
                                                 onClick={() => go(crumb.id)}
                                             >
                                                 {crumb.name}
@@ -615,7 +615,7 @@ function LinkContents({ opened }: { opened: Opened }) {
                                         >
                                             <button
                                                 type="button"
-                                                className="flex min-w-0 cursor-pointer items-center gap-4 py-2 text-left text-[15px] font-medium outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                                                className="flex min-w-0 cursor-pointer items-center gap-4 py-2 text-left text-[15px] font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                                                 onClick={() =>
                                                     node.kind === 'folder'
                                                         ? go(node.id)

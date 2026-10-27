@@ -7,7 +7,7 @@ function Checkbox({ className, onCheckedChange, ...props }: CheckboxPrimitive.Ro
         <CheckboxPrimitive.Root
             data-slot="checkbox"
             className={cn(
-                'peer relative flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-xs border border-input bg-card transition-[background-color,border-color] duration-150 outline-hidden group-has-disabled/field:opacity-50 after:absolute after:-inset-x-3 after:-inset-y-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-indeterminate:border-primary data-indeterminate:bg-primary data-indeterminate:text-primary-foreground',
+                'peer relative flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-xs border border-input bg-card transition-[background-color,border-color] duration-150 outline-none group-has-disabled/field:opacity-50 after:absolute after:-inset-x-3 after:-inset-y-2 hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-indeterminate:border-primary data-indeterminate:bg-primary data-indeterminate:text-primary-foreground',
                 className,
             )}
             onCheckedChange={onCheckedChange}

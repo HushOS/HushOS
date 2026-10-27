@@ -659,7 +659,7 @@ function Step({
         <li className="flex flex-col gap-2.5" data-step={n} data-done={done || undefined}>
             <h3
                 tabIndex={-1}
-                className="flex items-center gap-2 text-[15px] font-semibold outline-hidden"
+                className="flex items-center gap-2 text-[15px] font-semibold outline-none"
             >
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] tabular-nums">
                     {done ? <CheckIcon className="size-3.5" aria-hidden="true" /> : n}

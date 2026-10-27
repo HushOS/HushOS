@@ -9,6 +9,7 @@ import { useDrive } from '@/components/drive/drive-shell';
 import {
     EmptyState,
     MarqueeBox,
+    ROW_FOCUS,
     SelectableMark,
     SelectionAction,
     SelectionBar,
@@ -196,13 +197,13 @@ export function TrashView({
         coarse,
         selected,
         setSelected,
-        focused,
         marquee,
         select,
         toggle,
         clear,
         selectAll,
         moveFocus,
+        focusShown,
     } = useListSelection(ids, listRef);
     // Only rows still in the trash count: one restored or deleted elsewhere drops out of the selection.
     const picked = rows.filter((item) => selected.has(item.node.id));
@@ -631,9 +632,7 @@ export function TrashView({
                                         className={cn(
                                             'group/row h-14 cursor-default border-b border-rule select-none',
                                             isSelected ? 'bg-accent' : 'hover:bg-muted',
-                                            focused === item.node.id &&
-                                                !isSelected &&
-                                                'ring-1 ring-ring ring-inset',
+                                            focusShown(item.node.id) && ROW_FOCUS,
                                         )}
                                     >
                                         <td className="min-w-0 p-0">

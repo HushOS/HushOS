@@ -14,6 +14,8 @@ import {
     EmptyState,
     LIST_COLUMN,
     MarqueeBox,
+    ROW_FOCUS,
+    ROW_FOCUS_WITHIN,
     RowName,
     SelectableMark,
     SkeletonRows,
@@ -141,13 +143,13 @@ export function HomeView() {
         coarse,
         selected,
         setSelected,
-        focused,
         marquee,
         select,
         toggle,
         clear,
         selectAll,
         moveFocus,
+        focusShown,
     } = useListSelection(ids, dropRef);
     const picker = useRef<UploadPicker>(null);
     const [creating, setCreating] = useState(false);
@@ -540,12 +542,11 @@ export function HomeView() {
                                                         }
                                                         className={cn(
                                                             'group/row h-14 cursor-default border-b border-rule select-none',
+                                                            ROW_FOCUS_WITHIN,
                                                             isSelected
                                                                 ? 'bg-accent'
                                                                 : 'hover:bg-muted',
-                                                            focused === node.id &&
-                                                                !isSelected &&
-                                                                'ring-1 ring-ring ring-inset',
+                                                            focusShown(node.id) && ROW_FOCUS,
                                                         )}
                                                     >
                                                         <td className="min-w-0 p-0">
@@ -822,7 +823,7 @@ function TypeChips({
                     aria-pressed={value === filter}
                     onClick={() => onChange(filter)}
                     className={cn(
-                        'flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 text-sm font-semibold transition-colors outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
+                        'flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 text-sm font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
                         value === filter
                             ? 'border-ink bg-ink text-secondary-foreground'
                             : 'border-rule bg-card text-foreground hover:bg-muted',
@@ -846,7 +847,7 @@ function TagPill({ tag, selected, onClick }: { tag: Tag; selected: boolean; onCl
             aria-pressed={selected}
             onClick={onClick}
             className={cn(
-                'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-semibold transition-colors outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
+                'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
                 selected
                     ? 'border-primary bg-accent text-accent-foreground'
                     : 'border-rule bg-card text-foreground hover:bg-muted',

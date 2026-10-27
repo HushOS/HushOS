@@ -47,7 +47,7 @@ export function ThemeToggle() {
         <div className="relative flex">
             <DropdownMenu>
                 <DropdownMenuTrigger
-                    className="flex size-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-hidden hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted aria-expanded:text-foreground disabled:opacity-50"
+                    className="flex size-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted aria-expanded:text-foreground disabled:opacity-50"
                     aria-label={`Appearance: ${theme === 'system' ? 'Same as this computer' : themeOptions[theme].label}`}
                     title="Appearance"
                     disabled={isPending}

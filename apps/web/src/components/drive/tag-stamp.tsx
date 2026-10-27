@@ -43,7 +43,7 @@ function StampLink({ tag }: { tag: Tag }) {
             draggable={false}
             onClick={(event) => event.stopPropagation()}
             onDoubleClick={(event) => event.stopPropagation()}
-            className="inline-flex outline-hidden focus-visible:[&>span]:outline-2 focus-visible:[&>span]:outline-offset-1 focus-visible:[&>span]:outline-ring hover:[&>span]:-translate-y-px [&>span]:transition-transform [&>span]:duration-100"
+            className="inline-flex outline-none focus-visible:[&>span]:outline-2 focus-visible:[&>span]:outline-solid focus-visible:[&>span]:outline-offset-1 focus-visible:[&>span]:outline-ring hover:[&>span]:-translate-y-px [&>span]:transition-transform [&>span]:duration-100"
         >
             <TagStamp name={tag.name} colour={tag.colour} />
         </Link>
@@ -97,7 +97,7 @@ export function TagStamps({
                             setOpen(true);
                         }}
                         onDoubleClick={(event) => event.stopPropagation()}
-                        className="inline-flex h-[18px] shrink-0 cursor-pointer items-center rounded-xs border border-input bg-muted px-1.5 text-[11px] leading-none font-semibold text-foreground tabular-nums outline-hidden transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring data-open:bg-accent data-open:text-accent-foreground"
+                        className="inline-flex h-[18px] shrink-0 cursor-pointer items-center rounded-xs border border-input bg-muted px-1.5 text-[11px] leading-none font-semibold text-foreground tabular-nums outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring data-open:bg-accent data-open:text-accent-foreground"
                     >
                         +{rest.length}
                     </PopoverTrigger>
