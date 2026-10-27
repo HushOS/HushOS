@@ -1,0 +1,64 @@
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_2890606a78d00a 2076-2113
+apps/web/src/lib/billing.ts
+  s_566b8e0c4467a4::t_6e575bcfdd19d8 29
+apps/web/src/lib/billing-api.ts
+  s_566b8e0c4467a4::t_f3e2c331467869 14
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_f29e6c6ab77a05 1701-1755,1757-1758,1760,1763,1767,1769,1775-1799,1802-1809,1811-1834,1836-1839,2152,2262,2971
+apps/web/src/routes/pricing/route.tsx
+  s_566b8e0c4467a4::t_0de4a40e9225c1 675-678,680-686,690-691,694-711,714-719,727-739,750,761,788-793
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_5ad70a207f8902 27,250,275-276
+DESIGN.md
+  s_566b8e0c4467a4::t_30e4717ee30d38 315,427,429,503
+apps/web/src/components/email-step.tsx
+  s_566b8e0c4467a4::t_884af5f36b2c4d 2,7,16-25,308-309,314-318,328-376,378-379
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_edc884e65ed2c7 44,439-464,497
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_1dd04756c3c466 201-206,372-373
+apps/web/src/lib/plans.ts
+  s_566b8e0c4467a4::t_6f7e04673053ac 184-185,233
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_60ac65082e8399 163-169
+  s_566b8e0c4467a4::t_b8178d5f8437a4 1,24-31,55-77,139-140,156-162,170-174
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_69f25fc6ba4ef2 125,128,132-133,148-153,162-177
+apps/web/src/routes/_authenticated/app/_drive/family/index.tsx
+  s_566b8e0c4467a4::t_a8b01d7df6d423 2,16-17,37,77
+apps/web/src/lib/family-signup.test.ts
+  s_566b8e0c4467a4::t_51ca7437f55e54 1-94
+  s_566b8e0c4467a4::t_8f4704557e8799 95
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_79463620b93f00 5,496-508
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_861c361cf6a14e 385-395
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_f78f143112eb5b 2,763
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_1bf10f760680fc 40-44,53,60-61,69-71,166,177
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_6b0eccedf13ac0 1224-1232
+apps/web/src/lib/family-signup.ts
+  s_566b8e0c4467a4::t_5c0398042bf28b 1-73
+  s_566b8e0c4467a4::t_3e64caf316c6dc 74
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_277733972d7689 11,35,41-44,46-47,143-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "af7d567a267b650750eb422edd6012edd6eaf105",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
