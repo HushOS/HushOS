@@ -1,0 +1,35 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_a857e3c9ca2760 344,412
+apps/web/src/components/drive/check-contact.test.tsx
+  s_566b8e0c4467a4::t_cfed861f7801b1 9-10,16,22,83,87,91,94-95,97,102-106
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_ed3edc2f9b8386 14,31-36,58-59,90,92,94-96,98,102,112,116,118,121-125,127-133,140,143,155,231,233
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_97e526ee8b80b3 80
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_46b17149163e89 362
+apps/web/src/lib/rotation.ts
+  s_566b8e0c4467a4::t_71669323f21a99 10-11,38,84,86-89,111,113-115
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_83db68b5b04b1d 66
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_ac73e222829bae 283,385-386,497-510
+packages/crypto/src/contacts.ts
+  s_566b8e0c4467a4::t_dad77532e450b7 93,95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7ec2e4d3d509c930d2ec403c2f1fc80178d5efe",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
