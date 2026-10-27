@@ -2880,6 +2880,8 @@ test.describe
                 .filter({ hasText: name });
         await expect(familyRow('shopping.txt')).toBeVisible({ timeout: 90_000 });
         await expect(familyRow('shopping.txt')).toContainText('Family');
+        // Every item here is in a folder this device can change: no line about items that stay.
+        await expect(ben.page.locator('[data-family-trash-stays]')).toHaveCount(0);
         // Each tab is its own list: nothing of his own here.
         await expect(ben.page.getByText('receipt.txt')).toHaveCount(0);
 
@@ -2994,6 +2996,10 @@ test.describe
             await expect(ben.page.getByText('Trash emptied')).toHaveCount(0);
             await expect(row('note.txt')).toHaveCount(0, { timeout: 60_000 });
             await expect(row('beach.txt')).toBeVisible();
+            // What stays is explained under the list, not only in the toast.
+            await expect(ben.page.locator('[data-family-trash-stays]')).toHaveText(
+                'Items in folders you can’t change stay until someone who can deletes them.',
+            );
         } finally {
             await ben.page.unrouteAll({ behavior: 'ignoreErrors' });
         }

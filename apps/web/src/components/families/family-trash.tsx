@@ -390,6 +390,16 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                     </tbody>
                 </table>
             )}
+            {plan.stays > 0 && (
+                // Why some rows have no actions and Empty Trash leaves them: said where they are,
+                // not only in a toast that goes.
+                <p
+                    data-family-trash-stays
+                    className="px-5 py-4 text-[13px] text-muted-foreground sm:px-8"
+                >
+                    Items in folders you can’t change stay until someone who can deletes them.
+                </p>
+            )}
             <AlertDialog open={confirmEmpty} onOpenChange={setConfirmEmpty}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
