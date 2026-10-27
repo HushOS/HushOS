@@ -476,6 +476,9 @@ pub fn pair_code(
     Ok(PairCode::Code { roster_version: version, code: pair_code_at(&chain, version, &me.user_id, other)? })
 }
 
+/* The check time of the floor's pin when it is only a mark (admission): acceptance reads none. */
+const FLOOR_CHECKED_AT: &str = "1970-01-01T00:00:00.000Z";
+
 /// A family check record, as the settings keep it (`familyChecks[groupId]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -777,7 +780,14 @@ impl AreaLedger {
             RecordCache::Held(cache) => Some(*cache),
             RecordCache::Refused { .. } => return Err(input(BAD_CACHE)),
         };
-        let pins: Vec<GroupPin> = settings_pin.into_iter().chain(record_pin).chain(guard.cloned()).collect();
+        // The session's floor (the highest chain committed here, kept through a refusal that
+        // uncommitted it) is a mark too, its pin among the pins, as acceptance holds it.
+        let floor_pin = match self.floor(group_id) {
+            Some(floor) => Some(crate::group_trust::pin_after(vec![], floor, FLOOR_CHECKED_AT.into())?),
+            None => None,
+        };
+        let pins: Vec<GroupPin> =
+            settings_pin.into_iter().chain(record_pin).chain(guard.cloned()).chain(floor_pin).collect();
         let (checked, pair_marks) = marks.check.clone()?;
         let marked = !pins.is_empty() || cache.is_some() || checked || self.holds_family(group_id);
         // With no mark, over the served first keys on first use: for the code only, or for the
@@ -1910,11 +1920,16 @@ mod tests {
         let j = join();
         let pin = pin_at(&j.h, &j.people(), 2);
         // Committed through roster 2, then settings without the family's pin: the committed chain
-        // still counts, so nothing is taken over the served first keys alone.
+        // still counts, so nothing is taken over the served first keys alone; the session's floor
+        // is the mark that vouches for them (as acceptance holds it), so the code is shown, and
+        // over other first keys it is refused.
         let held = j.ledger(Some(pin.clone()));
         assert!(matches!(j.accept(&held, j.served(2)), ServedAcceptance::Accepted { .. }));
         settings(&held, &j.p2.user_id, None);
-        assert!(j.preview(&held, None, j.served(3)).is_err());
+        assert!(matches!(j.preview(&held, None, j.served(3)).unwrap(), JoinPreview::Code { .. }));
+        let mut made_up = j.served(3);
+        made_up.first_keys = crate::group_public_key(vec![9u8; 64]).unwrap();
+        assert!(j.preview(&held, None, made_up).is_err());
         // The same after a fork.
         let other = join_with(&j.p1, &j.p2, &[GroupRole::Billing]);
         let forked = j.ledger(Some(pin));
@@ -2298,13 +2313,7 @@ mod tests {
         let reopened = ledger.join_matched_open(GROUP.into(), matched.record()).unwrap().unwrap();
         assert_eq!(j.accept_joining(&ledger, j.served(3), &reopened).unwrap_err(), input(USED));
         // A family forgotten (a join committed but not kept) may run its join again.
-        ledger
-            .forget_group(
-                GROUP.into(),
-                crate::device_record::FamilyGuard::Absent,
-                "2026-10-15T00:00:00.000Z".into(),
-            )
-            .unwrap();
+        crate::area_ledger::forget_fully(&ledger, GROUP);
         assert!(matches!(
             j.accept_joining(&ledger, j.served(3), &reopened).unwrap(),
             JoinAcceptance::Accepted { .. }

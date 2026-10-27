@@ -382,7 +382,14 @@ export function createAreaLedger() {
         )
             throw new CryptoError(SPLIT_CHAIN);
         chains.set(chain.groupId, chain);
-        if (!floor || floor.roster.rosterVersion < chain.roster.rosterVersion)
+        // The floor moves to a later roster, or to a later group key at the same roster (a
+        // succession the roster that dropped a holder ties to itself, served after it).
+        if (
+            !floor ||
+            floor.roster.rosterVersion < chain.roster.rosterVersion ||
+            (floor.roster.rosterVersion === chain.roster.rosterVersion &&
+                floor.groupKeyVersion < chain.groupKeyVersion)
+        )
             floors.set(chain.groupId, chain);
         for (const workspaceId of Object.keys(chain.areaKeys)) {
             const key = areaSlot(chain.groupId, workspaceId);

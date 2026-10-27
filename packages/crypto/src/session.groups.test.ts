@@ -950,6 +950,7 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
         await expect(carol.call('groupForget', { groupId, checkedAt: CHECKED })).resolves.toEqual({
             forgotten: false,
             guard: null,
+            unreadable: false,
         });
         await expect(
             carol.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters }),
@@ -1041,7 +1042,7 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
         ).rejects.toThrow(/not signed by the group key/);
         await expect(
             other.call('groupForget', { groupId: f.groupId, checkedAt: CHECKED }),
-        ).resolves.toEqual({ forgotten: false, guard: null });
+        ).resolves.toEqual({ forgotten: false, guard: null, unreadable: false });
     });
 
     test('rosters re-signed under made-up first keys give a code that is not Alice’s, and her code then forks', async () => {
@@ -1246,7 +1247,7 @@ describe('the join code a newcomer compares (groupJoinPreview)', () => {
         });
         // The preview set no fork: nothing to forget.
         await expect(another.call('groupForget', { groupId, checkedAt: CHECKED })).resolves.toEqual(
-            { forgotten: false, guard: null },
+            { forgotten: false, guard: null, unreadable: false },
         );
     });
 });
@@ -3706,11 +3707,13 @@ describe('trusting and forgetting', () => {
     test('forgetting a family drops its chain, its key and its folders’ keys', async () => {
         const f = await family();
         const { alice, groupId, ws } = f;
+        // No guard held: the floor's is handed back first and nothing goes; stored, it forgets.
+        const first = await alice.call('groupForget', { groupId, checkedAt: CHECKED });
+        expect(first).toMatchObject({ forgotten: false, unreadable: false });
+        expect(first.guard).not.toBeNull();
         await expect(
-            alice.call('groupForget', { groupId, checkedAt: CHECKED }),
-        ).resolves.toMatchObject({
-            forgotten: true,
-        });
+            alice.call('groupForget', { groupId, guard: first.guard, checkedAt: CHECKED }),
+        ).resolves.toEqual({ forgotten: true, guard: null, unreadable: false });
         await expect(
             alice.call('driveOpenNodes', { workspaceId: ws, nodes: [f.rootListing] }),
         ).resolves.toMatchObject({ nodes: [{ error: expect.stringMatching(/Open Drive again/) }] });
@@ -4867,16 +4870,32 @@ describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', (
         });
         const forget = (guard: GroupPin | 'unreadable' | null) =>
             alice.call('groupForget', { groupId, guard, checkedAt: CHECKED });
-        // An unreadable guard: refused, and nothing is forgotten (the guard to store is still handed back).
-        await expect(forget('unreadable')).rejects.toThrow(/couldn’t check this right now/);
+        // An unreadable guard over a floor: nothing goes, and the floor's guard comes back to store.
+        const blind = await forget('unreadable');
+        expect(blind).toMatchObject({ forgotten: false, unreadable: true });
+        expect(blind.guard).toMatchObject({ rosterVersion: 3, areas: { [ws]: 2 } });
+        // A held guard that is no pin is refused.
+        await expect(forget({ rosterVersion: 3 } as unknown as GroupPin)).rejects.toThrow();
+        // Held behind: nothing goes, and asking again without storing hands back the same guard.
         const wiped = await forget(first.guard);
-        expect(wiped.forgotten).toBe(true);
+        expect(wiped).toMatchObject({ forgotten: false, unreadable: false });
         expect(wiped.guard).toMatchObject({ rosterVersion: 3, areas: { [ws]: 2 } });
-        // Nothing accepted beyond the one held, or nothing held this session: nothing to store.
-        await expect(forget(wiped.guard)).resolves.toMatchObject({ guard: null });
-        const again = await sync(wiped.guard);
-        if (again.status !== 'accepted') throw new Error(again.status);
-        await expect(forget(wiped.guard)).resolves.toMatchObject({ guard: null });
+        await expect(forget(first.guard)).resolves.toEqual(wiped);
+        // The folder is still open: nothing was dropped.
+        await expect(sync(wiped.guard)).resolves.toMatchObject({ status: 'accepted', guard: null });
+        // Stored, the wipe goes through; then there is nothing left, and an unreadable guard does not hold it up.
+        await expect(forget(wiped.guard)).resolves.toEqual({
+            forgotten: true,
+            guard: null,
+            unreadable: false,
+        });
+        await expect(forget('unreadable')).resolves.toEqual({
+            forgotten: false,
+            guard: null,
+            unreadable: false,
+        });
+        // A held guard that is no pin is refused with no floor too.
+        await expect(forget({ rosterVersion: 3 } as unknown as GroupPin)).rejects.toThrow();
     });
 
     test('a family check that lands between the first use and its acceptance is a mark: the record then vouches for nothing', async () => {

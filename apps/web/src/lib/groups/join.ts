@@ -1,7 +1,14 @@
 import type { CryptoResults, JoinMark, RosterFork, ServedChain } from '@hushos/crypto';
 import { HOLDS_UNREADABLE, NOT_SHOWN } from '@hushos/crypto/join-session';
 import type { GroupContext } from './context';
-import { afterAccept, fetchServed, syncGroup, syncLocked, type SyncResult } from './sync';
+import {
+    afterAccept,
+    fetchServed,
+    forgetInWorker,
+    syncGroup,
+    syncLocked,
+    type SyncResult,
+} from './sync';
 
 /*
  * Joining a family (docs/groups-design.md 2.4 and 3.2): the newcomer's side,
@@ -380,8 +387,7 @@ async function acceptJoin(
     } catch (error) {
         // Committed in the worker but not kept on the device: the worker lets go of it too,
         // or its chain would count as a mark this device cannot show, and a retry be refused.
-        // The guard it returns is stored from PR 4 (docs/optional-verification.md 8).
-        await ctx.rpc('groupForget', { groupId, checkedAt: new Date().toISOString() });
+        await forgetInWorker(ctx, groupId);
         throw error;
     }
     const sync = await afterAccept(ctx, groupId, result);

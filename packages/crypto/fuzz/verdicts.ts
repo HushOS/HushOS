@@ -1307,6 +1307,7 @@ const SESSION_HISTORIES = [
     'madeUp',
     'removal',
     'removalFork',
+    'removalBare',
     'succOther',
 ];
 const SESSION_SETTINGS = ['none', 'pin-main-2', 'not-open', 'checked-before', 'checked-malformed'];
@@ -1394,8 +1395,8 @@ function sessionStep(step: unknown, at: number, lengths: number[]): Doc | undefi
             return from === undefined ? undefined : { op, from };
         }
         case 'forget': {
-            const keeps = stored();
-            return keeps === undefined ? undefined : { op, ...keeps };
+            const held = guard();
+            return held === undefined ? undefined : { op, ...held };
         }
         case 'holds':
         case 'guard':
@@ -1566,18 +1567,33 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
             if (settings === 'checked-before')
                 invariant(marks.length > 0, `step ${at}: a first use over a family check`);
         }
-        // A wipe hands back the guard of what this session accepted beyond the one held.
-        if (step.op === 'forget' && committed)
-            if (!guard || guard.rosterVersion < committed.version)
-                invariant(
-                    outcome.guard && outcome.guard.rosterVersion >= committed.version,
-                    `step ${at}: a wipe lost an acceptance whose guard was not stored`,
+        // A wipe drops nothing while the guard held does not hold what this session accepted:
+        // it hands back the guard to store, which does; only once it is held does it forget.
+        // (A cut chain is not compared: whether it holds the other is not the oracle's to say.)
+        const uncut = (mark: Mark | null) => mark === null || mark.served.cut === null;
+        if (step.op === 'forget' && status !== 'refused' && uncut(committed) && uncut(guardFrom)) {
+            const blind = step.guard === 'unreadable';
+            const covered =
+                !blind &&
+                committed !== null &&
+                guard !== null &&
+                guardFrom !== null &&
+                sessionHoldsMark(
+                    base,
+                    { ...guardFrom.served, through: guardFrom.version },
+                    committed,
                 );
-        if (outcome.guard && step.op === 'forget')
-            invariant(
-                committed !== null,
-                `step ${at}: a wipe handed back a guard of nothing accepted`,
-            );
+            if (committed === null || covered)
+                invariant(status === 'forgotten', `step ${at}: a wipe held up by nothing to store`);
+            else {
+                invariant(
+                    status === 'store-first' &&
+                        outcome.unreadable === blind &&
+                        outcome.guard.rosterVersion >= committed.version,
+                    `step ${at}: a wipe that would lose an acceptance whose guard was not stored`,
+                );
+            }
+        }
         if (outcome.guard) {
             const from = step.op === 'forget' ? committed!.served : step.served;
             // The pin it records is under the key its roster is under, as the history says.
@@ -1590,7 +1606,10 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
                         ),
                     `step ${at}: a guard under another key than its roster's`,
                 );
-            if ((step.guard === 'held' || step.op === 'forget') && guard)
+            if (
+                (step.guard === 'held' || (step.op === 'forget' && step.guard !== 'unreadable')) &&
+                guard
+            )
                 invariant(guardCovers(outcome.guard, guard), `step ${at}: the guard went back`);
             if (step.stored !== false) {
                 guard = outcome.guard;
@@ -1670,7 +1689,7 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
             used.clear();
         } else if (step.op === 'restore' && status !== 'skipped') {
             pending = copy(after[step.from]!);
-        } else if (step.op === 'forget') {
+        } else if (step.op === 'forget' && status === 'forgotten') {
             joined = false;
             committed = null;
             used.clear();

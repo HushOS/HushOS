@@ -71,7 +71,7 @@ fn a_folder_opened_here_raises_the_guard_an_acceptance_hands_back() {
     use common::groups::CHECKED;
     use common::roster_calls::{family, ledger_with, me, served_of};
     use common::settings_areas::{cases, seal_self_grant, served_area};
-    use hushos_core::{FamilyGuard, ServedAcceptance};
+    use hushos_core::{FamilyGuard, GroupForget, GroupPin, ServedAcceptance};
     let f = family();
     let accept = |ledger: &hushos_core::AreaLedger, guard: FamilyGuard| match ledger.accept_served(
         me(2),
@@ -105,11 +105,28 @@ fn a_folder_opened_here_raises_the_guard_an_acceptance_hands_back() {
     // A guard held from before the folder opened rises to it.
     let raised = accept(&ledger, FamilyGuard::Held { pin: plain.clone() }).expect("a raised guard");
     assert_eq!(raised, guard);
-    // The wipe, with that raised guard never stored: an unreadable guard refuses and forgets
-    // nothing; held at the plain one, the wipe hands back the guard to store first, folder included.
+    // The wipe, with that raised guard never stored. Over the floor an unreadable guard drops
+    // nothing and hands back the floor's guard; a held guard that is no pin is refused.
     let forget = |held: FamilyGuard| ledger.forget_group(f.group_id.clone(), held, CHECKED.into());
-    assert!(forget(FamilyGuard::Unreadable).is_err());
-    assert_eq!(forget(FamilyGuard::Held { pin: plain }).unwrap(), Some(guard.clone()));
-    // Forgotten: nothing accepted this session any more, nothing to store.
-    assert_eq!(forget(FamilyGuard::Absent).unwrap(), None);
+    let store_first = |guard: &GroupPin, unreadable| GroupForget {
+        forgotten: false,
+        guard: Some(guard.clone()),
+        unreadable,
+    };
+    assert_eq!(forget(FamilyGuard::Unreadable).unwrap(), store_first(&guard, true));
+    let junk = GroupPin { roster_digest: "junk".into(), ..plain.clone() };
+    assert!(forget(FamilyGuard::Held { pin: junk.clone() }).is_err());
+    // Held at the plain one: nothing dropped, the guard to store first, folder included, the same
+    // however often it is asked; stored, the wipe goes through, and then nothing is left.
+    assert_eq!(forget(FamilyGuard::Held { pin: plain.clone() }).unwrap(), store_first(&guard, false));
+    assert_eq!(forget(FamilyGuard::Held { pin: plain }).unwrap(), store_first(&guard, false));
+    assert_eq!(
+        forget(FamilyGuard::Held { pin: guard.clone() }).unwrap(),
+        GroupForget { forgotten: true, guard: None, unreadable: false }
+    );
+    let gone = GroupForget { forgotten: false, guard: None, unreadable: false };
+    assert_eq!(forget(FamilyGuard::Absent).unwrap(), gone);
+    // With no floor an unreadable guard does not hold the wipe up; one that is no pin is refused.
+    assert_eq!(forget(FamilyGuard::Unreadable).unwrap(), gone);
+    assert!(forget(FamilyGuard::Held { pin: junk }).is_err());
 }

@@ -671,8 +671,9 @@ export type GroupRequests = {
      * Let go of a family this session holds (a `not-member` wipe, or a join
      * committed here and not kept on the device). `guard` is the family guard
      * this device holds (groupAccept's), `checkedAt` the time a guard made
-     * here records: the result's `guard` is the one to store before the app
-     * deletes anything (docs/optional-verification.md 2.8).
+     * here records. The result says whether it forgot, or hands back the guard
+     * to store, nothing dropped, before asking again
+     * (docs/optional-verification.md 2.8).
      */
     groupForget: { groupId: string; guard?: GroupPin | 'unreadable' | null; checkedAt: string };
     groupStoreSeal: { userId: string; groupId: string; store: DeviceStore; value: unknown };
@@ -792,9 +793,10 @@ export type GroupResults = {
                * anything new; null otherwise (nothing to write). Never lower than the one held.
                * Write it before the record, without waiting for the settings save (a crash
                * then leaves it at or above the record, never below); write nothing under this
-               * acceptance until it is stored (reading may go on). A not-member wipe stores
-               * the guard groupForget returns first: a `not-member` answer or a fork hands
-               * none back, and groupForget's covers what the session accepted.
+               * acceptance until it is stored (reading may go on). Store it merged into what
+               * the device holds (mergePin, never lower, under the account's lock), never
+               * over it. A `not-member` answer or a fork hands none back: groupForget drops
+               * nothing until the guard it hands back is stored and it is asked again.
                */
               guard: GroupPin | null;
               /* What vouched for the family in this acceptance (AcceptedRosters.checked). */
@@ -872,14 +874,19 @@ export type GroupResults = {
     groupTrustAs: { pin: ContactPin };
     identityConsent: { consent: string };
     /*
-     * `guard`: the family guard to store before anything is wiped: the held
-     * one moved on to the highest chain this session accepted for the family
-     * (its floor) with the folders opened here, when that records anything
-     * new (guardAfter), so an acceptance whose guard was never stored is not
-     * lost with the session's state; null when there is nothing to store. An
-     * unreadable guard refuses (GUARD_UNREADABLE) and nothing is forgotten.
+     * Store before delete, enforced here: when the held guard does not cover
+     * the highest chain this session accepted for the family (its floor),
+     * nothing is dropped and `guard` is the one to store, the held one moved
+     * on to that floor with the folders opened here (guardAfter); the app
+     * stores it (merged into what it holds, never lower) and asks again. Only
+     * a held guard that covers the floor, or no floor, forgets: `guard` is
+     * then null and `forgotten` says whether this session held anything of
+     * the family. `unreadable`: the held guard could not be read and there is
+     * a floor, so `guard` is the floor's alone, to store once the entry reads
+     * again or the person resets it (2.8); with no floor an unreadable guard
+     * does not hold the wipe up.
      */
-    groupForget: { forgotten: boolean; guard: GroupPin | null };
+    groupForget: { forgotten: boolean; guard: GroupPin | null; unreadable: boolean };
     groupStoreSeal: { envelope: string };
     /* `unreadable`: sealed under another account root (a master-key rotation) or not this group's. */
     groupStoreOpen: { value: unknown } | { unreadable: true };
@@ -1647,6 +1654,9 @@ function sameEntryKeys(a: RosterMember, b: RosterMember) {
 const USED_JOIN = 'This join code was already used to join. Compare it again.';
 /* A device whose family guard could not be read (2.8): never first use, and no join on it. */
 export const GUARD_UNREADABLE = 'HushOS couldn’t check this right now.';
+
+/* The check time of the floor's pin when it is only a mark (admission): acceptance reads none. */
+const FLOOR_CHECKED_AT = '1970-01-01T00:00:00.000Z';
 const sameMark = (a: JoinMark, b: JoinMark) =>
     a.rosterVersion === b.rosterVersion && a.code.join(' ') === b.code.join(' ');
 
@@ -2687,6 +2697,10 @@ export function createGroupSession(host: GroupHost) {
         const { groupId, userId, pins, pairMarks, cache, marks } = marked;
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+        // The session's floor (the highest chain committed here, kept through a refusal that
+        // uncommitted it) is a mark too, its pin among the pins, as acceptance holds it.
+        const floor = ledger.floor(groupId);
+        const floorPin = floor ? await pinAfter([], floor, FLOOR_CHECKED_AT) : null;
         let chain;
         try {
             chain = await acceptRosters({
@@ -2694,8 +2708,8 @@ export function createGroupSession(host: GroupHost) {
                 firstKeys: input.served.firstKeys,
                 // With no mark, over the served first keys on first use: for the code only, or for
                 // the record a first use keeps; only the acceptance that carries one commits.
-                anchor: marks ? null : 'first-use',
-                pins,
+                anchor: marks || floorPin ? null : 'first-use',
+                pins: floorPin ? [...pins, floorPin] : pins,
                 rosters: input.served.rosters.map(unwire),
                 successions: input.served.successions.map(unwire),
                 mlDsaKeys: { ...input.served.signerKeys },
@@ -4010,24 +4024,32 @@ export function createGroupSession(host: GroupHost) {
             case 'groupForget': {
                 const { guard: held, checkedAt } = message.input;
                 const groupId = uuid(message.input.groupId, 'group id');
-                if (held === 'unreadable') throw new CryptoError(GUARD_UNREADABLE);
+                // A held guard that is no pin is refused, floor or not.
+                const heldPin = held && held !== 'unreadable' ? checkGroupPin(groupId, held) : null;
+                for (;;) {
+                    const floor = ledger.floor(groupId);
+                    if (!floor) break;
+                    const pin = await pinAfter([], floor, checkedAt);
+                    // An acceptance committed while this ran: work it out again over the new floor.
+                    if (ledger.floor(groupId) !== floor) continue;
+                    const guard = guardAfter(
+                        groupId,
+                        heldPin,
+                        pin,
+                        [...areasOf(groupId)].map(([workspaceId, area]) => ({
+                            groupId,
+                            workspaceId,
+                            version: area.version,
+                        })),
+                    );
+                    if (held === 'unreadable')
+                        return { forgotten: false, guard: guard ?? pin, unreadable: true };
+                    if (guard) return { forgotten: false, guard, unreadable: false };
+                    break;
+                }
                 const known = chains.has(groupId) || opened.has(groupId) || forked.has(groupId);
-                // The guard to store first: what this session accepted, beyond the one held.
-                const floor = ledger.floor(groupId);
-                const guard = floor
-                    ? guardAfter(
-                          groupId,
-                          held ? checkGroupPin(groupId, held) : null,
-                          await pinAfter([], floor, checkedAt),
-                          [...areasOf(groupId)].map(([workspaceId, area]) => ({
-                              groupId,
-                              workspaceId,
-                              version: area.version,
-                          })),
-                      )
-                    : null;
                 forgetGroup(groupId);
-                return { forgotten: known, guard };
+                return { forgotten: known, guard: null, unreadable: false };
             }
             case 'groupStoreSeal':
                 return storeSeal(message.input);

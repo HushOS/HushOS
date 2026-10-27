@@ -321,12 +321,13 @@ async function specs(): Promise<Spec[]> {
             through: 2,
             expected: refused(UNSIGNED),
         },
+        // The chain held here is a mark that vouches, as acceptance holds its floor: the code.
         {
             name: 'a-chain-this-session-holds-is-a-mark',
             held: 'chain',
             history: 'main',
             through: 3,
-            expected: refused(UNCHECKED),
+            expected: code(2, honest),
         },
         {
             name: 'a-fork-this-session-holds-is-a-mark',
@@ -463,6 +464,8 @@ export async function previewDoc(): Promise<Json> {
                 f.removalFork.rosters,
                 f.removalFork.successions,
             ),
+            // removal's rosters with its succession (tied at roster 5) not served: the same roster 5 under key 1.
+            removalBare: historyJson(f.removal.keys[0]!.publicKey, f.removal.rosters, []),
             succOther: historyJson(
                 f.succ.keys[0]!.publicKey,
                 f.succOther.rosters,
@@ -1311,14 +1314,23 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                 break;
             }
             case 'forget': {
-                // The not-member wipe: the held guard in, the guard to store first out (2.8).
-                const result: GroupResults['groupForget'] = await call(session, 'groupForget', {
-                    groupId: GROUP,
-                    guard,
-                    checkedAt: SESSION_NOW,
-                });
-                if (storing && result.guard) guard = result.guard;
-                outcome = { status: 'forgotten', guard: guardJson(result.guard) };
+                // The not-member wipe: the held guard in (or an unreadable one), and either
+                // forgotten or, with nothing dropped, the guard to store before asking again (2.8).
+                try {
+                    const result: GroupResults['groupForget'] = await call(session, 'groupForget', {
+                        groupId: GROUP,
+                        guard: step.guard === 'unreadable' ? 'unreadable' : guard,
+                        checkedAt: SESSION_NOW,
+                    });
+                    if (storing && result.guard) guard = result.guard;
+                    outcome = {
+                        status: result.guard ? 'store-first' : 'forgotten',
+                        guard: guardJson(result.guard),
+                        unreadable: result.unreadable,
+                    };
+                } catch (error) {
+                    outcome = refusal(error);
+                }
                 break;
             }
             default:

@@ -72,8 +72,9 @@ const ANCHOR_SITES = [
     'packages/crypto/src/session-groups.ts › acceptRun: (shorthand)',
     // The join's admission (preview, check, first use, and each join's own re-check): verifies
     // over the served first keys on first use only to work out the code the person compares or
-    // the roster a first use's record keeps, and commits, keeps and marks nothing.
-    "packages/crypto/src/session-groups.ts › admission: marks ? null : 'first-use'",
+    // the roster a first use's record keeps, only where nothing (the session floor included)
+    // marks the family, and commits, keeps and marks nothing.
+    "packages/crypto/src/session-groups.ts › admission: marks || floorPin ? null : 'first-use'",
 ].sort();
 
 function modules(dir: string): string[] {

@@ -430,6 +430,23 @@ export async function afterAccept(
 }
 
 /*
+ * The worker lets go of a family (docs/optional-verification.md 2.8): it drops
+ * nothing while the guard it hands back is not stored, and the caller deletes
+ * nothing of the family unless this says the worker forgot it. No family guard
+ * is kept on the web yet: PR 4 stores the guard handed back (merged into the
+ * stored one, never lower, under the account's lock) between the two calls;
+ * until then it is handed straight back, as no store could hold it.
+ */
+export async function forgetInWorker(ctx: GroupContext, groupId: string): Promise<boolean> {
+    const checkedAt = new Date().toISOString();
+    const first = await ctx.rpc('groupForget', { groupId, checkedAt });
+    if (first.guard === null) return true;
+    const again = await ctx.rpc('groupForget', { groupId, guard: first.guard, checkedAt });
+    // An acceptance committed in between: the wipe waits for the next answer.
+    return again.guard === null;
+}
+
+/*
  * Only after a 404 `not-member` (groups-server 0.9): never on a bare 404, a
  * 501, or anything a Drive route answers. What this device kept of the family
  * goes: the worker's chain, seeds and keys, the record, outbox and pending
@@ -440,9 +457,7 @@ export async function afterAccept(
  */
 export async function wipeGroup(ctx: GroupContext, groupId: string, areas: readonly string[] = []) {
     const row = await ctx.store.chain(ctx.userId, groupId);
-    // No family guard is kept on the web yet: PR 4 (docs/optional-verification.md 8) passes the
-    // held one and stores the guard this returns before anything below is deleted.
-    await ctx.rpc('groupForget', { groupId, checkedAt: new Date().toISOString() });
+    if (!(await forgetInWorker(ctx, groupId))) return;
     await ctx.store.forgetGroup(ctx.userId, groupId);
     await ctx.deleteMirrors([...new Set([...(row?.areas ?? []), ...areas])]);
 }

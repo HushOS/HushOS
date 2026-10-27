@@ -610,13 +610,17 @@ impl Runner {
                 json!({})
             }
             Step::Forget(group) => {
-                ledger
-                    .forget_group(
-                        group.clone(),
-                        hushos_core::FamilyGuard::Absent,
-                        "2026-10-15T00:00:00.000Z".into(),
-                    )
-                    .unwrap();
+                {
+                    // As an app with a working guard store: store each guard handed back, then ask again.
+                    let mut held = hushos_core::FamilyGuard::Absent;
+                    while let Some(pin) = ledger
+                        .forget_group(group.clone(), held, "2026-10-15T00:00:00.000Z".into())
+                        .unwrap()
+                        .guard
+                    {
+                        held = hushos_core::FamilyGuard::Held { pin };
+                    }
+                }
                 if self.opened_by.remove(group) {
                     for node in NODES {
                         self.forget_pending(node);

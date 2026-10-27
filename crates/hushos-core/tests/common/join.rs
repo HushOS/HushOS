@@ -259,7 +259,8 @@ fn specs() -> Vec<Spec> {
         },
         Spec {
             held: Some(Held::Chain),
-            ..spec("a-chain-this-session-holds-is-a-mark", "main", 3, refused(Some(UNCHECKED)))
+            // The chain held here is a mark that vouches, as acceptance holds its floor: the code.
+            ..spec("a-chain-this-session-holds-is-a-mark", "main", 3, code(2, honest.clone()))
         },
         Spec {
             held: Some(Held::Fork),
@@ -341,6 +342,8 @@ pub fn preview_doc() -> Value {
         "dead": history_json(&f.dead.key(1), &f.dead.rosters, &f.dead.successions),
         "removal": history_json(&f.removal.key(1), &f.removal.rosters, &f.removal.successions),
         "removalFork": history_json(&f.removal_fork.key(1), &f.removal_fork.rosters, &f.removal_fork.successions),
+        // removal's rosters with its succession (tied at roster 5) not served: the same roster 5 under key 1.
+        "removalBare": history_json(&f.removal.key(1), &f.removal.rosters, &[]),
         "succOther": history_json(&f.succ.key(1), &f.succ_other.0, &f.succ_other.1),
     });
     let rotated = {
@@ -1242,6 +1245,10 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                         "of": match of { ForkOf::Roster => "roster", ForkOf::GroupKey => "group-key" },
                         "version": version,
                     }),
+                    // Short of the session's floor: a run that lost a race (the web's lost race, thrown).
+                    Ok(ServedAcceptance::Overtaken { split }) => {
+                        json!({ "status": "overtaken", "split": split })
+                    }
                     Ok(_) => json!({ "status": "not-accepted" }),
                     Err(error) => json!({ "status": "refused", "message": error.to_string() }),
                 }
@@ -1276,15 +1283,19 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
             },
             "forget" => {
                 // The not-member wipe: the held guard in, the guard to store first out (2.8).
-                let held = match &guard {
-                    Some(pin) => FamilyGuard::Held { pin: pin.clone() },
-                    None => FamilyGuard::Absent,
+                // The not-member wipe: the held guard in (or an unreadable one), and either
+                // forgotten or, with nothing dropped, the guard to store before asking again (2.8).
+                let held = match (&guard, step["guard"].as_str()) {
+                    (_, Some("unreadable")) => FamilyGuard::Unreadable,
+                    (Some(pin), _) => FamilyGuard::Held { pin: pin.clone() },
+                    (None, _) => FamilyGuard::Absent,
                 };
                 match ledger.forget_group(GROUP.into(), held, SESSION_NOW.into()) {
-                    Ok(next) => {
-                        let outcome = json!({ "status": "forgotten", "guard": guard_json(&next) });
-                        if storing && next.is_some() {
-                            guard = next;
+                    Ok(forget) => {
+                        let status = if forget.guard.is_some() { "store-first" } else { "forgotten" };
+                        let outcome = json!({ "status": status, "guard": guard_json(&forget.guard), "unreadable": forget.unreadable });
+                        if storing && forget.guard.is_some() {
+                            guard = forget.guard;
                         }
                         outcome
                     }

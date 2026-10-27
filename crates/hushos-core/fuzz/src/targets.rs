@@ -843,14 +843,14 @@ fn join_draws_kind(value: &Value) -> Option<Value> {
     Some(ok(json!(positions)))
 }
 
-const SESSION_HISTORIES: [&str; 7] =
-    ["main", "other", "succ", "madeUp", "removal", "removalFork", "succOther"];
+const SESSION_HISTORIES: [&str; 8] =
+    ["main", "other", "succ", "madeUp", "removal", "removalFork", "removalBare", "succOther"];
 const SESSION_SETTINGS: [&str; 5] = ["none", "pin-main-2", "not-open", "checked-before", "checked-malformed"];
 const GUARDS: [&str; 4] = ["none", "pin-main-2", "unreadable", "held"];
 const FORGED: [&str; 4] = ["outbox", "other-family", "earlier-version", "newer-version"];
 
 /* One step of a `join_session` input, with only the fields its op reads; None when it does not fit. */
-fn session_step(step: &Value, at: usize, lengths: &[u64; 7]) -> Option<Value> {
+fn session_step(step: &Value, at: usize, lengths: &[u64; 8]) -> Option<Value> {
     let served = |step: &Value| -> Option<Value> {
         let served = step.get("served")?;
         let history = text(served, "history")?;
@@ -918,7 +918,7 @@ fn session_step(step: &Value, at: usize, lengths: &[u64; 7]) -> Option<Value> {
             json!({ "op": op, "restore": step.get("restore").map_or(Some(false), Value::as_bool)? })
         }
         "restore" => json!({ "op": op, "from": earlier("from")? }),
-        "forget" => stored(json!({ "op": op }))?,
+        "forget" => guarded(json!({ "op": op }))?,
         "holds" | "guard" => json!({ "op": op }),
         _ => return None,
     })
@@ -1099,19 +1099,38 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
                 assert!(!marks.is_empty(), "step {at}: a first use over a family check");
             }
         }
-        // A wipe hands back the guard of what this session accepted beyond the one held.
-        if let ("forget", Some((_, version))) = (op, &committed) {
-            if guard.as_ref().is_none_or(|held| held["rosterVersion"].as_u64().unwrap() < *version) {
-                assert!(
-                    outcome["guard"]["rosterVersion"].as_u64().is_some_and(|at| at >= *version),
-                    "step {at}: a wipe lost an acceptance whose guard was not stored"
-                );
+        // A wipe drops nothing while the guard held does not hold what this session accepted:
+        // it hands back the guard to store, which does; only once it is held does it forget.
+        // (A cut chain is not compared: whether it holds the other is not the oracle's to say.)
+        let uncut = |mark: &Option<Mark>| mark.as_ref().is_none_or(|(served, _)| served["cut"].is_null());
+        if op == "forget" && status != "refused" && uncut(&committed) && uncut(&guard_from) {
+            let blind = step["guard"] == "unreadable";
+            match &committed {
+                None => assert_eq!(status, "forgotten", "step {at}: a wipe held up by nothing to store"),
+                Some((from, version)) => {
+                    let covered = !blind
+                        && guard.is_some()
+                        && guard_from.as_ref().is_some_and(|(served, through)| {
+                            let mut chain = served.clone();
+                            chain["through"] = json!(through);
+                            session_holds_mark(base, &chain, from, *version)
+                        });
+                    if covered {
+                        assert_eq!(status, "forgotten", "step {at}: a wipe held up by nothing to store");
+                    } else {
+                        assert!(
+                            status == "store-first"
+                                && outcome["unreadable"] == blind
+                                && outcome["guard"]["rosterVersion"]
+                                    .as_u64()
+                                    .is_some_and(|at| at >= *version),
+                            "step {at}: a wipe that would lose an acceptance whose guard was not stored"
+                        );
+                    }
+                }
             }
         }
         if outcome.get("guard").is_some_and(|next| !next.is_null()) {
-            if op == "forget" {
-                assert!(committed.is_some(), "step {at}: a wipe handed back a guard of nothing accepted");
-            }
             let from =
                 if op == "forget" { committed.as_ref().unwrap().0.clone() } else { step["served"].clone() };
             // The pin it records is under the key its roster is under, as the history says.
@@ -1123,7 +1142,7 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
                     "step {at}: a guard under another key than its roster's"
                 );
             }
-            if step["guard"] == "held" || op == "forget" {
+            if step["guard"] == "held" || (op == "forget" && step["guard"] != "unreadable") {
                 if let Some(held) = &guard {
                     assert!(guard_covers(&outcome["guard"], held), "step {at}: the guard went back");
                 }
@@ -1201,7 +1220,7 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
             "restore" if status != "skipped" => {
                 pending = Some(after[step["from"].as_u64().unwrap() as usize].clone());
             }
-            "forget" => {
+            "forget" if status == "forgotten" => {
                 joined = false;
                 committed = None;
                 used.clear();
