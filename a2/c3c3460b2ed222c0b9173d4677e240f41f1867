@@ -1,0 +1,57 @@
+bun.lock
+  s_1b09e77c5a7766::t_72a9b71de94072 284
+compose.yaml
+  s_1b09e77c5a7766::t_8ffa3763046ee5 163-165
+docs/groups-design.md
+  s_1b09e77c5a7766::t_7e663eb25cfc39 334-335,484
+docs/self-hosting.md
+  s_1b09e77c5a7766::t_de68ca06c82747 77,87,214,726
+packages/db/drizzle/20261026140033_group_dissolve_notices/migration.sql
+  s_1b09e77c5a7766::t_e19e44fae8cb98 1-26
+packages/db/drizzle/20261026140033_group_dissolve_notices/snapshot.json
+  s_1b09e77c5a7766::t_afcbf641e33d9d 1-13873
+packages/db/src/dissolve-notices.ts
+  s_1b09e77c5a7766::t_c0b3813d65c1bc 1-188
+packages/db/src/groups.dissolve-notices-off.test.ts
+  s_1b09e77c5a7766::t_fa6371581a486f 1-54
+packages/db/src/groups.dissolve-notices.test.ts
+  s_1b09e77c5a7766::t_7676c8911bd839 1-584
+packages/db/src/groups.ts
+  s_1b09e77c5a7766::t_f0d762bbb43868 15,1954-1955,3428-3429
+packages/db/src/schema/groups.ts
+  s_1b09e77c5a7766::t_2b688876179dff 413-456
+packages/emails/scripts/render.tsx
+  s_1b09e77c5a7766::t_34cf6848aefcbf 2,215-258
+packages/emails/src/rendered/family-dissolved.ts
+  s_1b09e77c5a7766::t_fa8cde84214151 1-15
+packages/emails/src/service.ts
+  s_1b09e77c5a7766::t_582ca50d27c645 6,285-315
+packages/emails/src/templates/family-dissolved.tsx
+  s_1b09e77c5a7766::t_55431fa57eff59 1-293
+packages/jobs/Dockerfile
+  s_1b09e77c5a7766::t_d9a14316889569 30
+packages/jobs/package.json
+  s_1b09e77c5a7766::t_5e3387ee8215c8 21
+packages/jobs/src/client.ts
+  s_1b09e77c5a7766::t_587e178db86768 29,59,157-169
+packages/jobs/src/jobs/groups.ts
+  s_1b09e77c5a7766::t_f1ad8f32a387f7 2-3,48-115
+packages/jobs/src/worker.ts
+  s_1b09e77c5a7766::t_60818b42a1ab60 11,14,105-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2c3c3460b2ed222c0b9173d4677e240f41f1867",
+  "prompts": {},
+  "sessions": {
+    "s_1b09e77c5a7766": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-acc7951dce3977cb4",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
