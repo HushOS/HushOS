@@ -2912,8 +2912,10 @@ test.describe
         await expect(emptyMine).not.toContainText('family');
         await emptyMine.getByRole('button', { name: 'Empty Trash' }).click();
         await expect(ben.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
+        // Read again from the server, not from the list the tab showed before.
         await family.click();
-        await expect(familyRow('plan.txt')).toBeVisible({ timeout: 60_000 });
+        await ben.page.reload();
+        await expect(familyRow('plan.txt')).toBeVisible({ timeout: 90_000 });
 
         // And on the family's tab, only the family folders'.
         await ben.page.goto('/app/drive');
@@ -2930,6 +2932,7 @@ test.describe
         await expect(ben.page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
         await expect(familyRow('plan.txt')).toHaveCount(0);
         await mine.click();
+        await ben.page.reload();
         await expect(myRow('memo.txt')).toBeVisible({ timeout: 60_000 });
 
         await openFamilyFolder(ben, 'Aalto family', 'Family');

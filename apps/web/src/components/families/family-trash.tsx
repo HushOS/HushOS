@@ -49,9 +49,11 @@ function familyTrashQueryOptions(space: ReturnType<typeof useFamilySpace>) {
                         folder: state.name ?? 'Family folder',
                     });
             }
-            return rows.sort((a, b) =>
-                (b.node.trashedAt ?? '').localeCompare(a.node.trashedAt ?? ''),
-            );
+            // Newest first, by time. The API client can hand the time back as a Date rather than
+            // the ISO string the type says, and sorting it as a string threw on two or more items.
+            const at = (row: Row) =>
+                row.node.trashedAt ? new Date(row.node.trashedAt).getTime() : 0;
+            return rows.sort((a, b) => at(b) - at(a));
         },
         staleTime: 15_000,
         retry: 1,
