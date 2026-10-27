@@ -94,9 +94,14 @@ describe('join sessions the core ran', () => {
         expect(steps).toBeGreaterThanOrEqual(40);
     }, 60_000);
 
-    it('open here as the core sealed them: its joins record joins, and its kept escalation holds', async () => {
-        const { joined, hidden } = await openCross(doc.joinPreviews, doc.joinSessions.cross);
+    it('open here as the core sealed them: its joins records join, and its kept escalation holds', async () => {
+        const { joined, firstJoined, hidden } = await openCross(
+            doc.joinPreviews,
+            doc.joinSessions.cross,
+        );
         expect(joined).toMatchObject({ status: 'accepted', rosterVersion: 3 });
+        // The core's first use (version 4, the roster it took) finishes the join here.
+        expect(firstJoined).toMatchObject({ status: 'accepted', rosterVersion: 2 });
         expect(hidden).toEqual(doc.joinSessions.cross.heldHidden);
     });
 });

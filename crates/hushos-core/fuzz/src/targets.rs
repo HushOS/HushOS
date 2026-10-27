@@ -679,6 +679,8 @@ pub fn pins(value: &Value) -> Option<Value> {
         "roster_call_session" => return roster_call_session_kind(value),
         "settings" => return settings_kind(value),
         "area_open" => return area_open_kind(value),
+        "pair_code" => return pair_code_kind(value),
+        "joins_record" => return joins_record_kind(value),
         _ => return None,
     })
 }
@@ -841,11 +843,14 @@ fn join_draws_kind(value: &Value) -> Option<Value> {
     Some(ok(json!(positions)))
 }
 
-const SESSION_HISTORIES: [&str; 4] = ["main", "other", "succ", "madeUp"];
+const SESSION_HISTORIES: [&str; 8] =
+    ["main", "other", "succ", "madeUp", "removal", "removalFork", "removalBare", "succOther"];
+const SESSION_SETTINGS: [&str; 5] = ["none", "pin-main-2", "not-open", "checked-before", "checked-malformed"];
+const GUARDS: [&str; 4] = ["none", "pin-main-2", "unreadable", "held"];
 const FORGED: [&str; 4] = ["outbox", "other-family", "earlier-version", "newer-version"];
 
 /* One step of a `join_session` input, with only the fields its op reads; None when it does not fit. */
-fn session_step(step: &Value, at: usize, lengths: &[u64; 4]) -> Option<Value> {
+fn session_step(step: &Value, at: usize, lengths: &[u64; 8]) -> Option<Value> {
     let served = |step: &Value| -> Option<Value> {
         let served = step.get("served")?;
         let history = text(served, "history")?;
@@ -862,16 +867,40 @@ fn session_step(step: &Value, at: usize, lengths: &[u64; 4]) -> Option<Value> {
         fits.then(|| json!({ "history": history, "through": through, "cut": cut }))
     };
     let earlier = |key: &str| number(step, key).filter(|i| (*i as usize) < at);
+    // The family guard a step hands the core (none when absent); one of GUARDS, else no fit.
+    // `stored: false`: the guard write after this step failed (none kept); a boolean, else no fit.
+    let stored = |mut out: Value| -> Option<Value> {
+        match step.get("stored") {
+            None | Some(Value::Bool(true)) => {}
+            Some(Value::Bool(false)) => out["stored"] = json!(false),
+            Some(_) => return None,
+        }
+        Some(out)
+    };
+    let guarded = |out: Value| -> Option<Value> {
+        let mut out = stored(out)?;
+        match step.get("guard") {
+            None => {}
+            Some(Value::String(guard)) if GUARDS.contains(&guard.as_str()) => {
+                out["guard"] = json!(guard);
+            }
+            Some(_) => return None,
+        }
+        Some(out)
+    };
     let op = text(step, "op")?;
     Some(match op.as_str() {
-        "show" | "sync" => json!({ "op": op, "served": served(step)? }),
+        "show" => json!({ "op": op, "served": served(step)? }),
+        "sync" | "first-use" => guarded(json!({ "op": op, "served": served(step)? }))?,
         "check" => {
             let words =
                 text(step, "words").filter(|w| ["right", "misheard", "blank"].contains(&w.as_str()))?;
             json!({ "op": op, "session": earlier("session")?, "words": words, "served": served(step)? })
         }
         "accept" => match (step.get("matched"), text(step, "record")) {
-            (Some(_), None) => json!({ "op": op, "matched": earlier("matched")?, "served": served(step)? }),
+            (Some(_), None) => {
+                guarded(json!({ "op": op, "matched": earlier("matched")?, "served": served(step)? }))?
+            }
             (None, Some(record)) => {
                 let fits = match record.strip_prefix("own:") {
                     Some(i) => i.parse::<usize>().is_ok_and(|i| i < at && i.to_string() == record[4..]),
@@ -880,33 +909,40 @@ fn session_step(step: &Value, at: usize, lengths: &[u64; 4]) -> Option<Value> {
                 if !fits {
                     return None;
                 }
-                json!({ "op": op, "record": record, "served": served(step)? })
+                guarded(json!({ "op": op, "record": record, "served": served(step)? }))?
             }
             _ => return None,
         },
-        "relaunch" | "lock" => json!({ "op": op, "restore": step.get("restore")?.as_bool()? }),
+        // No `restore` restores nothing, as the shared scenarios write it.
+        "relaunch" | "lock" => {
+            json!({ "op": op, "restore": step.get("restore").map_or(Some(false), Value::as_bool)? })
+        }
         "restore" => json!({ "op": op, "from": earlier("from")? }),
-        "holds" | "forget" => json!({ "op": op }),
+        "forget" => guarded(json!({ "op": op }))?,
+        "holds" | "guard" => json!({ "op": op }),
         _ => return None,
     })
 }
 
 /*
- * A session of joining as an app drives it: `settings` (`none` or
- * `pin-main-2`) and up to sixteen `steps` (the shared session scenarios'
- * ops: show, check, accept, sync, holds, lock, relaunch, restore, forget)
- * over the core's join histories, positions from the fixtures' draws: every
- * step's outcome, which the worker must match. Invariants (session_rules):
- * held positions never move until a match, after a restore too, which only
- * ever holds more; the first wrong pair is calm and every later one the
- * alarm until a match; a check of a showing from before a lock is refused;
- * the escalation is kept exactly while something is held; nothing joins
- * without a match, and a match joins once per unlock.
+ * A session of joining as an app drives it: `settings` (SESSION_SETTINGS)
+ * and up to sixteen `steps` (the shared session scenarios' ops: show, check,
+ * first-use, accept, sync, holds, guard, lock, relaunch, restore, forget; a
+ * `guard` on each sync, first use and accept) over the core's join
+ * histories, positions from the fixtures' draws: every step's outcome, which
+ * the worker must match. Invariants (session_rules): held positions never
+ * move until a match, after a restore too, which only ever holds more; the
+ * first wrong pair is calm and every later one the alarm until a match; a
+ * check of a showing from before a lock is refused; the escalation is kept
+ * exactly while something is held; nothing joins without a match or a first
+ * use, and each joins once per unlock; a first use only with no mark at all;
+ * an unreadable guard never accepts; a first use commits only through its
+ * record's rosters; the guard handed back never falls below the one held.
  */
 fn join_session_kind(value: &Value) -> Option<Value> {
     use crate::join;
     let base = &fixtures::core_join()["joinPreviews"];
-    let settings = text(value, "settings").filter(|s| ["none", "pin-main-2"].contains(&s.as_str()))?;
+    let settings = text(value, "settings").filter(|s| SESSION_SETTINGS.contains(&s.as_str()))?;
     let lengths =
         SESSION_HISTORIES.map(|h| base["histories"][h]["rosters"].as_array().map_or(0, Vec::len) as u64);
     let steps = value.get("steps")?.as_array()?;
@@ -920,8 +956,67 @@ fn join_session_kind(value: &Value) -> Option<Value> {
         .collect::<Option<Vec<_>>>()?;
     let scenario = json!({ "name": "fuzz", "settings": settings, "steps": steps });
     let run = join::run_session(base, &scenario);
-    session_rules(&settings, &steps, &run.outcomes);
+    session_rules(base, &settings, &steps, &run.outcomes);
     Some(ok(json!(run.outcomes)))
+}
+
+/*
+ * The group key version a pin at roster `version` of `history` is under: one above every
+ * succession tied at or below that roster (a roster that drops a holder ties its succession to
+ * itself, and a pin there records the new key). Worked out from the history, never from what an
+ * acceptance said. The web's sessionKeyVersion.
+ */
+pub fn session_key_version(history: &Value, version: u64) -> u64 {
+    1 + successions_of(history).filter(|s| s.last_roster_version <= version).count() as u64
+}
+
+/* A history's successions, parsed, with their statements. */
+fn successions_of(history: &Value) -> impl Iterator<Item = GroupKeySuccession> + '_ {
+    history["successions"].as_array().unwrap().iter().map(|s| {
+        group_succession_parse(base64url_decode(s["statement"].as_str().unwrap().into()).unwrap()).unwrap()
+    })
+}
+
+/*
+ * Whether a chain served (`history`, `through`, `cut`) of the join histories `base` holds a mark
+ * (`from` the chain it came from, `version` the roster it reaches): through it, over the same
+ * first keys, the same roster statements through its version and the same succession statements
+ * into every key up to the one the mark's roster is under (session_key_version of the mark's own
+ * history); later successions are the served chain's to add (a cut chain is not compared).
+ * Statements, not signatures: ML-DSA signs at random, so one roster re-signed is the same roster
+ * to acceptance. The oracle session_rules holds every acceptance to; the web's sessionHoldsMark.
+ */
+pub fn session_holds_mark(base: &Value, served: &Value, from: &Value, version: u64) -> bool {
+    if !served["cut"].is_null() || !from["cut"].is_null() {
+        return true;
+    }
+    let key = session_key_version(&base["histories"][from["history"].as_str().unwrap()], version);
+    let of = |history: &str| {
+        let history = &base["histories"][history];
+        let statements = |key: &str| {
+            history[key].as_array().unwrap().iter().map(|s| s["statement"].as_str().unwrap().to_string())
+        };
+        let rosters: Vec<String> = statements("rosters").take(version as usize).collect();
+        let mut successions: Vec<String> = statements("successions")
+            .zip(successions_of(history))
+            .filter(|(_, succession)| succession.new_version <= key)
+            .map(|(statement, _)| statement)
+            .collect();
+        successions.sort();
+        (history["firstKeys"].clone(), rosters, successions)
+    };
+    served["through"].as_u64().unwrap() >= version
+        && of(served["history"].as_str().unwrap()) == of(from["history"].as_str().unwrap())
+}
+
+/* Whether guard `next` holds at least what `held` holds: roster, group key, every folder's floor. */
+fn guard_covers(next: &Value, held: &Value) -> bool {
+    let at = |guard: &Value, key: &str| guard[key].as_u64().unwrap_or(0);
+    at(next, "rosterVersion") >= at(held, "rosterVersion")
+        && at(next, "keyVersion") >= at(held, "keyVersion")
+        && held["areas"].as_object().is_none_or(|areas| {
+            areas.iter().all(|(area, floor)| next["areas"][area].as_u64() >= floor.as_u64())
+        })
 }
 
 /*
@@ -930,7 +1025,7 @@ fn join_session_kind(value: &Value) -> Option<Value> {
  * what the app last stored (each check's escalation), which a lock or a
  * relaunch restores, and `after` what was stored after each step.
  */
-fn session_rules(settings: &str, steps: &[Value], outcomes: &[Value]) {
+fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Value]) {
     use std::collections::{HashMap, HashSet};
     #[derive(Clone, Default)]
     struct Book {
@@ -947,9 +1042,119 @@ fn session_rules(settings: &str, steps: &[Value], outcomes: &[Value]) {
     let mut shown_in: HashMap<usize, usize> = HashMap::new();
     let mut joined = false;
     let mut used: HashSet<usize> = HashSet::new();
+    // The marks with keys this device holds, each a history and the roster it reaches: the
+    // settings pin, a guard handed (pin-main-2, or the held one from the step that handed it
+    // back), the chain committed in this unlock, a first use's joins record.
+    type Mark = (Value, u64);
+    let main_2: Mark = (json!({ "history": "main", "cut": null }), 2);
+    let mut guard: Option<Value> = None;
+    let mut guard_from: Option<Mark> = None;
+    let mut committed: Option<Mark> = None;
+    let holds_mark =
+        |served: &Value, (from, version): &Mark| session_holds_mark(base, served, from, *version);
     for (at, (step, outcome)) in steps.iter().zip(outcomes).enumerate() {
         let status = &outcome["status"];
         let op = step["op"].as_str().unwrap();
+        let handed = match step["guard"].as_str() {
+            Some("held") => guard.is_some(),
+            None | Some("none") => false,
+            Some(_) => true,
+        };
+        let from = match (op, step["matched"].as_u64(), step["record"].as_str()) {
+            ("accept", Some(i), _) => Some(i as usize),
+            ("accept", None, Some(record)) => record.strip_prefix("own:").and_then(|i| i.parse().ok()),
+            _ => None,
+        };
+        let mut marks: Vec<Mark> = vec![];
+        if settings == "pin-main-2" {
+            marks.push(main_2.clone());
+        }
+        if step["guard"] == "pin-main-2" {
+            marks.push(main_2.clone());
+        }
+        if let (Some("held"), Some(mark)) = (step["guard"].as_str(), &guard_from) {
+            marks.push(mark.clone());
+        }
+        if let Some(mark) = &committed {
+            marks.push(mark.clone());
+        }
+        if let Some(i) = from.filter(|i| outcomes[*i]["status"] == "first-use") {
+            marks.push((steps[i]["served"].clone(), outcomes[i]["rosterVersion"].as_u64().unwrap()));
+        }
+        if step["guard"] == "unreadable" {
+            assert!(status != "accepted" && status != "first-use", "step {at}: an unreadable guard accepted");
+        }
+        if status == "accepted" || status == "first-use" {
+            for mark in &marks {
+                assert!(holds_mark(&step["served"], mark), "step {at}: accepted past a mark");
+            }
+        }
+        if op == "first-use" && status == "first-use" {
+            assert!(
+                settings != "not-open" && settings != "checked-malformed",
+                "step {at}: a first use without settings that hold"
+            );
+            // A family check fixes no keys: with nothing else, it leaves no first use either.
+            if settings == "checked-before" {
+                assert!(!marks.is_empty(), "step {at}: a first use over a family check");
+            }
+        }
+        // A wipe drops nothing while the guard held does not hold what this session accepted:
+        // it hands back the guard to store, which does; only once it is held does it forget.
+        // (A cut chain is not compared: whether it holds the other is not the oracle's to say.)
+        let uncut = |mark: &Option<Mark>| mark.as_ref().is_none_or(|(served, _)| served["cut"].is_null());
+        if op == "forget" && status != "refused" && uncut(&committed) && uncut(&guard_from) {
+            let blind = step["guard"] == "unreadable";
+            match &committed {
+                None => assert_eq!(status, "forgotten", "step {at}: a wipe held up by nothing to store"),
+                Some((from, version)) => {
+                    let covered = !blind
+                        && guard.is_some()
+                        && guard_from.as_ref().is_some_and(|(served, through)| {
+                            let mut chain = served.clone();
+                            chain["through"] = json!(through);
+                            session_holds_mark(base, &chain, from, *version)
+                        });
+                    if covered {
+                        assert_eq!(status, "forgotten", "step {at}: a wipe held up by nothing to store");
+                    } else {
+                        assert!(
+                            status == "store-first"
+                                && outcome["unreadable"] == blind
+                                && outcome["guard"]["rosterVersion"]
+                                    .as_u64()
+                                    .is_some_and(|at| at >= *version),
+                            "step {at}: a wipe that would lose an acceptance whose guard was not stored"
+                        );
+                    }
+                }
+            }
+        }
+        if outcome.get("guard").is_some_and(|next| !next.is_null()) {
+            let from =
+                if op == "forget" { committed.as_ref().unwrap().0.clone() } else { step["served"].clone() };
+            // The pin it records is under the key its roster is under, as the history says.
+            if from["cut"].is_null() {
+                let history = &base["histories"][from["history"].as_str().unwrap()];
+                let key = session_key_version(history, outcome["guard"]["rosterVersion"].as_u64().unwrap());
+                assert_eq!(
+                    outcome["guard"]["keyVersion"], key,
+                    "step {at}: a guard under another key than its roster's"
+                );
+            }
+            if step["guard"] == "held" || (op == "forget" && step["guard"] != "unreadable") {
+                if let Some(held) = &guard {
+                    assert!(guard_covers(&outcome["guard"], held), "step {at}: the guard went back");
+                }
+            }
+            if step["stored"] != false {
+                guard = Some(outcome["guard"].clone());
+                guard_from = Some((from, outcome["guard"]["rosterVersion"].as_u64().unwrap()));
+            }
+        }
+        if (op == "accept" || op == "sync") && status == "accepted" {
+            committed = Some((step["served"].clone(), outcome["rosterVersion"].as_u64().unwrap()));
+        }
         // A restore folds in only what is not held here: only ever more held.
         if op == "show" || (op == "check" && status != "skipped") {
             if let Some(restored) = pending.take() {
@@ -991,20 +1196,17 @@ fn session_rules(settings: &str, steps: &[Value], outcomes: &[Value]) {
                 }
             }
             "accept" if status == "accepted" => {
-                let from = match (step["matched"].as_u64(), step["record"].as_str()) {
-                    (Some(i), _) => i as usize,
-                    (None, Some(record)) => record
-                        .strip_prefix("own:")
-                        .and_then(|i| i.parse().ok())
-                        .unwrap_or_else(|| panic!("step {at}: a forged joins record joined")),
-                    _ => unreachable!(),
-                };
-                assert_eq!(outcomes[from]["status"], "matched", "step {at}: a join without a match");
+                let from = from.unwrap_or_else(|| panic!("step {at}: a forged joins record joined"));
+                let joined_from = &outcomes[from];
+                assert!(
+                    joined_from["status"] == "matched" || joined_from["status"] == "first-use",
+                    "step {at}: a join without a match"
+                );
                 assert!(used.insert(from), "step {at}: a match joined twice in one unlock");
                 joined = true;
             }
-            // Without a settings pin, only a join gives this device a mark.
-            "sync" if status == "accepted" && settings == "none" => {
+            // Without a settings pin or a guard, only a join gives this device a mark.
+            "sync" if status == "accepted" && settings != "pin-main-2" && !handed => {
                 assert!(joined, "step {at}: a family accepted before any join")
             }
             "relaunch" | "lock" => {
@@ -1012,13 +1214,15 @@ fn session_rules(settings: &str, steps: &[Value], outcomes: &[Value]) {
                 pending = (step["restore"] == true).then(|| kept.clone());
                 book = Book::default();
                 joined = false;
+                committed = None;
                 used.clear();
             }
             "restore" if status != "skipped" => {
                 pending = Some(after[step["from"].as_u64().unwrap() as usize].clone());
             }
-            "forget" => {
+            "forget" if status == "forgotten" => {
                 joined = false;
+                committed = None;
                 used.clear();
             }
             _ => {}
@@ -1649,6 +1853,17 @@ fn settings_kind(value: &Value) -> Option<Value> {
     if users.len() > 8 || groups.len() > 8 || text.len() > 65_536 || !settings_fits(&text) {
         return None;
     }
+    // Probes are account and family ids as the apps hold them: canonical lowercase UUIDs.
+    let probe_id = |id: &String| {
+        id.len() == 36
+            && id.bytes().enumerate().all(|(at, b)| match at {
+                8 | 13 | 18 | 23 => b == b'-',
+                _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+            })
+    };
+    if !users.iter().chain(&groups).all(probe_id) {
+        return None;
+    }
     let mut verdict = settings_document_verdict(text.as_bytes(), &users, &groups);
     if verdict["status"] == "refused" {
         return Some(refused());
@@ -1749,4 +1964,164 @@ fn area_open_kind(value: &Value) -> Option<Value> {
         );
     }
     Some(ok(outcome))
+}
+
+/*
+ * A pair code (docs/optional-verification.md 3.4): with `rosterDigest`, as
+ * pair_code_of works it out over any `rosterDigest`, `groupKey`,
+ * `groupKeyVersion`, `userId` and `otherUserId`; else as person `me` (1 to 5)
+ * of the roster-call family works it out with person `other` over the
+ * family's chain, holding the keys of person `as` (`me` when absent).
+ * Invariants: two equal ids are refused; the code is the same with the ids
+ * swapped (over the chain: the same code and roster when the other person
+ * works it out); a device holding keys other than its own entry's gets no
+ * code.
+ */
+fn pair_code_kind(value: &Value) -> Option<Value> {
+    use crate::roster_calls::pair_run_over;
+    if value.get("rosterDigest").is_some() {
+        let roster_digest = text(value, "rosterDigest")?;
+        let group_key = shape::group_key(value.get("groupKey")?)?;
+        let version = number(value, "groupKeyVersion")?;
+        let (user_id, other_user_id) = (text(value, "userId")?, text(value, "otherUserId")?);
+        let code = pair_code_of(&roster_digest, &group_key, version, &user_id, &other_user_id);
+        return Some(either(code, |code| {
+            assert_ne!(user_id, other_user_id, "a pair code of one member with themselves");
+            let swapped = pair_code_of(&roster_digest, &group_key, version, &other_user_id, &user_id);
+            assert_eq!(swapped.ok().as_ref(), Some(&code), "a pair code that hangs on the order");
+            json!(code)
+        }));
+    }
+    let person = |key: &str| {
+        let raw = if key == "as" && value.get("as").is_none() { value.get("me") } else { value.get(key) };
+        shape::unsigned(raw?).filter(|n| (1..=5).contains(n))
+    };
+    let (me, other, holding) = (person("me")?, person("other")?, person("as")?);
+    let doc = fixtures::core_roster_calls();
+    let outcome = pair_run_over(doc, &json!({ "me": me, "other": other, "as": holding }));
+    if outcome["status"] == "refused" {
+        return Some(refused());
+    }
+    assert_ne!(me, other, "a pair code of one member with themselves");
+    if holding != me {
+        assert_ne!(outcome["status"], "code", "a pair code over keys this device does not hold");
+    }
+    if outcome["status"] == "code" && holding == me {
+        let theirs = pair_run_over(doc, &json!({ "me": other, "other": me, "as": other }));
+        assert!(
+            theirs["status"] == "code"
+                && theirs["rosterVersion"] == outcome["rosterVersion"]
+                && theirs["code"] == outcome["code"],
+            "two members shown different pair codes"
+        );
+    }
+    Some(ok(outcome))
+}
+
+/*
+ * Any JSON `record`, sealed as person 2's joins record of the join family
+ * through the fixtures-only sealer and read back by an acceptance joining
+ * over `served` (`history`, `through`), settings none, no guard: the
+ * outcome, which the web must match. Invariants: only a record of this
+ * family at version 3 or 4 joins, with a join mark or (at 4) a first-use pin;
+ * a first use joins only over the roster and first keys its pin names, at or
+ * above its roster, and is never reported checked; a join mark always is.
+ */
+fn joins_record_kind(value: &Value) -> Option<Value> {
+    use crate::join;
+    let base = &fixtures::core_join()["joinPreviews"];
+    let record = value.get("record")?;
+    let served = value.get("served").filter(|served| served.is_object())?;
+    let history = text(served, "history").filter(|h| SESSION_HISTORIES.contains(&h.as_str()))?;
+    let rosters = base["histories"][&history]["rosters"].as_array()?;
+    let through = number(served, "through").filter(|n| (1..=rosters.len() as u64).contains(n))?;
+    let step = json!({
+        "op": "accept",
+        "record": "value",
+        "value": record,
+        "served": { "history": history, "through": through, "cut": null },
+    });
+    let run = join::run_session(base, &json!({ "name": "fuzz", "settings": "none", "steps": [step] }));
+    let outcome = &run.outcomes[0];
+    if outcome["status"] == "refused" {
+        return Some(refused());
+    }
+    if outcome["status"] == "accepted" {
+        let version = record["v"].as_f64();
+        assert!(
+            record.is_object()
+                && (version == Some(3.0) || version == Some(4.0))
+                && record["groupId"] == crate::groups::GROUP,
+            "a joins record of no version or family joined"
+        );
+        let first = record.get("firstUse").filter(|first| version == Some(4.0) && first.is_object());
+        if let Some(first) = first {
+            assert!(record.get("joinMark").is_none(), "a record with a join mark and a first use joined");
+            assert!(outcome["checked"].is_null(), "a first use reported checked");
+            let at = first["rosterVersion"].as_u64().unwrap();
+            assert!(outcome["rosterVersion"].as_u64().unwrap() >= at, "a first use joined short of its pin");
+            assert_eq!(
+                first["keyVersion"],
+                session_key_version(&base["histories"][&history], at),
+                "a first use joined under another key than its pin's roster is under"
+            );
+            let statement =
+                base64url_decode(rosters[at as usize - 1]["statement"].as_str().unwrap().into()).unwrap();
+            assert!(
+                json!(roster_digest(statement)) == first["rosterDigest"]
+                    && base["histories"][&history]["firstKeys"]["ed25519PublicKey"]
+                        == first["firstEd25519PublicKey"],
+                "a first use joined over another history than its pin's"
+            );
+        } else {
+            assert!(!outcome["checked"].is_null(), "a join mark joined unchecked");
+        }
+    }
+    Some(ok(outcome.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* The session oracle over the join histories: statements decide, never their signatures. */
+    #[test]
+    fn a_mark_is_held_by_its_statements_and_the_successions_below_it() {
+        let base = &fixtures::core_join()["joinPreviews"];
+        let chain =
+            |history: &str, through: u64| json!({ "history": history, "through": through, "cut": null });
+        // removalFork re-signs removal's first three rosters (ML-DSA signs at random): the same chain through 3.
+        assert!(session_holds_mark(base, &chain("removalFork", 4), &chain("removal", 3), 3));
+        // succOther has succ's rosters through 3 but another succession below 3: not that chain.
+        assert!(!session_holds_mark(base, &chain("succOther", 3), &chain("succ", 3), 3));
+        // Made-up first keys, and a chain short of the mark, never hold it.
+        assert!(!session_holds_mark(base, &chain("madeUp", 3), &chain("main", 2), 2));
+        assert!(!session_holds_mark(base, &chain("main", 1), &chain("main", 2), 2));
+        assert!(session_holds_mark(base, &chain("main", 5), &chain("main", 2), 2));
+    }
+
+    /* A mark holds every group key its roster is under; a later one is allowed. */
+    #[test]
+    fn a_mark_is_held_only_with_every_group_key_its_roster_is_under() {
+        // A copy of a history with its successions taken out: the same rosters under fewer keys.
+        let mut base = fixtures::core_join()["joinPreviews"].clone();
+        for (bare, of) in [("removalBare", "removal"), ("succBare", "succ")] {
+            let mut copy = base["histories"][of].clone();
+            copy["successions"] = json!([]);
+            base["histories"][bare] = copy;
+        }
+        let chain =
+            |history: &str, through: u64| json!({ "history": history, "through": through, "cut": null });
+        let holds = |served: Value, from: Value, version| session_holds_mark(&base, &served, &from, version);
+        // removal's succession is tied at roster 5 (the roster that drops p3), so its pin at 5 is
+        // under key 2: a chain without that succession does not hold it.
+        assert!(!holds(chain("removalBare", 5), chain("removal", 5), 5));
+        // The reverse: a mark under key 1 at 5, and a chain that adds the succession after it.
+        assert!(holds(chain("removal", 5), chain("removalBare", 5), 5));
+        // succ's succession is tied at roster 2: the same at a mark there.
+        assert!(!holds(chain("succBare", 3), chain("succ", 2), 2));
+        assert!(holds(chain("succ", 3), chain("succBare", 2), 2));
+        // Below the roster a succession is tied at, it is not the mark's to hold.
+        assert!(holds(chain("removalBare", 5), chain("removal", 4), 4));
+    }
 }

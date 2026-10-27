@@ -3,6 +3,7 @@ import { fingerprint } from './fingerprint';
 import { CryptoError } from './errors';
 import {
     checkGroupPin,
+    guardAfter,
     keyCommitment,
     pinKeysOfServed,
     pinTrust,
@@ -235,5 +236,57 @@ describe('group pins', () => {
         ])
             expect(() => checkGroupPin(GROUP, broken)).toThrow(CryptoError);
         expect(() => checkGroupPin(GROUP.toUpperCase(), pin)).toThrow('Invalid group id.');
+    });
+});
+
+describe('the family guard (docs/optional-verification.md 2.8)', () => {
+    const GROUP = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+    const AREA = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c';
+    const at = (rosterVersion: number, keyVersion: number, areas: Record<string, number> = {}) => ({
+        firstEd25519PublicKey: encode(key(1)),
+        firstMlDsaPublicKeyDigest: encode(key(2)),
+        checkedAt: '2026-10-15T00:00:00.000Z',
+        keyVersion,
+        groupKeyDigest: encode(key(10 + keyVersion)),
+        rosterVersion,
+        rosterDigest: encode(key(20 + rosterVersion)),
+        areas,
+    });
+
+    test('moves on with each acceptance and the folders opened here, and never goes back', () => {
+        // None held: the accepted pin, with what this device opened.
+        expect(
+            guardAfter(GROUP, null, at(3, 1), [{ groupId: GROUP, workspaceId: AREA, version: 1 }]),
+        ).toEqual(at(3, 1, { [AREA]: 1 }));
+        // A later roster and key: the guard moves there, keeping its own floors.
+        expect(guardAfter(GROUP, at(3, 1, { [AREA]: 2 }), at(5, 2))).toEqual(
+            at(5, 2, { [AREA]: 2 }),
+        );
+        // The same chain, and a folder opened at a later version: only the floor rises.
+        expect(
+            guardAfter(GROUP, at(5, 2, { [AREA]: 1 }), at(5, 2), [
+                { groupId: GROUP, workspaceId: AREA, version: 2 },
+            ]),
+        ).toEqual(at(5, 2, { [AREA]: 2 }));
+        // Nothing new: nothing to write.
+        expect(guardAfter(GROUP, at(5, 2, { [AREA]: 2 }), at(5, 2))).toBeNull();
+        // An older pin never lowers it, and is not covered either: the guard holds no digest at
+        // the pin's versions, so it cannot show the pin is on its history.
+        expect(guardAfter(GROUP, at(5, 2), at(3, 1))).toBe('ahead');
+        expect(guardAfter(GROUP, at(5, 2), at(5, 1))).toBe('ahead');
+        // Crossed versions (a later roster under an earlier key, either way): two histories.
+        expect(guardAfter(GROUP, at(3, 1), at(2, 2))).toBe('conflict');
+        expect(guardAfter(GROUP, at(2, 2), at(3, 1))).toBe('conflict');
+        // One that disagrees never replaces it, and is no coverage either (a wipe drops nothing
+        // over it): another roster or group key at one version, or other first keys.
+        expect(guardAfter(GROUP, at(5, 2), { ...at(5, 2), rosterDigest: encode(key(99)) })).toBe(
+            'conflict',
+        );
+        expect(guardAfter(GROUP, at(5, 2), { ...at(5, 2), groupKeyDigest: encode(key(98)) })).toBe(
+            'conflict',
+        );
+        expect(
+            guardAfter(GROUP, at(5, 2), { ...at(6, 2), firstEd25519PublicKey: encode(key(9)) }),
+        ).toBe('conflict');
     });
 });

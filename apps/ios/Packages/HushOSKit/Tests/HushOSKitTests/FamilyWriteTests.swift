@@ -373,7 +373,7 @@ struct FamilyRotation {
 
     init(_ family: FamilyFixture) throws {
         func chain(_ rosters: [SignedGroupStatement]) throws -> AcceptedRosters {
-            guard case .accepted(let chain) = try acceptRosters(groupId: family.groupId, firstKeys: try family.firstKeys, firstKeysChecked: true, pins: [], rosters: rosters,
+            guard case .accepted(let chain) = try acceptRosters(groupId: family.groupId, firstKeys: try family.firstKeys, anchor: .created, pins: [], rosters: rosters,
                                                                 successions: [], mlDsaKeys: try family.signerKeys, me: family.creator.own, cache: nil)
             else { throw FamilyFailure(message: "the creator's chain didn't accept") }
             return chain

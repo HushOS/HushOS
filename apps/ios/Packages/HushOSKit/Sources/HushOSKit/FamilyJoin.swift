@@ -350,7 +350,7 @@ extension FamilySync {
         var overtaken = 0
         while true {
             let result = try ledger.acceptJoining(me: me, groupId: groupId, record: records.read(userId: userId, groupId: groupId)?.envelope,
-                                                  served: served, matched: matched)
+                                                  served: served, matched: matched, guard: .absent)
             switch result {
             case .recordUnreadable:
                 records.delete(userId: userId, groupId: groupId)
@@ -368,12 +368,12 @@ extension FamilySync {
                 return .waiting
             case .fork(let of, let version, let sides):
                 return .fork(Self.fork(of: of, version: version, sides: sides))
-            case .accepted(let chain, let record, let pin):
+            case .accepted(let chain, let record, let pin, _):  // The guard (docs/optional-verification.md 2.8) is stored from PR 5.
                 do {
                     try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion,
                                                                                         areas: Array(chain.areaKeys().keys).sorted()))
                 } catch {
-                    ledger.forgetGroup(groupId: groupId)
+                    _ = forgetInCore(groupId)
                     throw error
                 }
                 let state = try await afterAcceptance(groupId, chain: chain, pin: pin, reset: false)

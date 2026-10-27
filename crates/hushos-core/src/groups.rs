@@ -1583,6 +1583,7 @@ pub fn areas_to_rotate(chain: Arc<AcceptedRosters>, members: Vec<RosterMember>) 
 pub(crate) mod tests {
     use super::*;
     use crate::bytes::random;
+    use crate::group_trust::GroupAnchor;
     use crate::identity::{identity_create, identity_open};
 
     pub(crate) const GROUP: &str = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a";
@@ -2096,7 +2097,7 @@ pub(crate) mod tests {
         match crate::group_trust::accept_rosters(
             GROUP.into(),
             h.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             h.rosters.clone(),
             h.successions.clone(),
@@ -3291,7 +3292,7 @@ pub(crate) mod tests {
         let refused = crate::group_trust::accept_rosters(
             GROUP.into(),
             over.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             over.rosters.clone(),
             vec![],
@@ -3398,7 +3399,7 @@ pub(crate) mod tests {
         match crate::group_trust::accept_rosters(
             GROUP.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             signed,
             vec![],

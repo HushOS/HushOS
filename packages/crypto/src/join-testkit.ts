@@ -9,6 +9,7 @@ import {
     CHECKED,
     GROUP,
     OTHER_GROUP,
+    groupKeyAt,
     history,
     mlDsaKeysOf,
     pattern,
@@ -21,6 +22,8 @@ import {
     groupKeyPair,
     rosterDigest,
     signGroup,
+    signGroupSuccession,
+    signRoster,
     type GroupPublicKey,
     type SignedGroupStatement,
 } from './groups';
@@ -82,6 +85,15 @@ type Family = {
     other: History;
     succ: History;
     dead: History;
+    /*
+     * Person 3, a holder, at 2; person 2 let in at 3 (on first use), billing at 4; person 3
+     * removed at 5 with every folder rotated and a succession tied to it.
+     */
+    removal: History;
+    /* The same to 3, then another 4 and 5 (person 2 with members): another history above 3. */
+    removalFork: History;
+    /* succ's rosters 1 and 2, then a succession to another key 2 (seed 7) and roster 3 under it. */
+    succOther: { rosters: SignedGroupStatement[]; successions: SignedGroupStatement[] };
 };
 
 async function joinWith(p1: Person, p2: Person, roles: ('billing' | 'members')[]) {
@@ -114,7 +126,46 @@ export function family() {
         const dead = await history('family', { format: 2 });
         await dead.roster(p1, [owner]);
         await dead.roster(p1, [owner]);
-        return { p1, p2, p3, main, other, succ, dead };
+        const removalOf = async (later: ('billing' | 'members')[]) => {
+            const h = await history('family', { format: 2 });
+            const holder = p3.entry(['members']);
+            await h.roster(p1, [owner]);
+            await h.roster(p1, [owner, holder]);
+            await h.roster(p1, [owner, holder, p2.entry([])]);
+            await h.roster(p1, [owner, holder, p2.entry(later)]);
+            await h.roster(p1, [owner, p3.entry(['members'], 1, 'left'), p2.entry(later)]);
+            await h.succession(p1);
+            return h;
+        };
+        const removal = await removalOf(['billing']);
+        const removalFork = await removalOf(['members']);
+        const other7 = await groupKeyAt(7);
+        const key1 = succ.keys[0]!;
+        const away = await signGroupSuccession(
+            {
+                groupId: GROUP,
+                oldVersion: 1,
+                newVersion: 2,
+                oldEd25519PublicKey: key1.publicKey.ed25519PublicKey,
+                oldMlDsaPublicKey: key1.publicKey.mlDsaPublicKey,
+                newEd25519PublicKey: other7.publicKey.ed25519PublicKey,
+                newMlDsaPublicKey: other7.publicKey.mlDsaPublicKey,
+                lastRosterVersion: 2,
+                lastRosterDigest: await rosterDigest(succ.rosters[1]!.statement),
+                signerUserId: p1.userId,
+            },
+            key1,
+            p1.signer,
+        );
+        const succOther = {
+            rosters: [
+                succ.rosters[0]!,
+                succ.rosters[1]!,
+                await signRoster(succ.statements[2]!, other7, p1.signer),
+            ],
+            successions: [away],
+        };
+        return { p1, p2, p3, main, other, succ, dead, removal, removalFork, succOther };
     })();
     return built;
 }
@@ -270,12 +321,13 @@ async function specs(): Promise<Spec[]> {
             through: 2,
             expected: refused(UNSIGNED),
         },
+        // The chain held here is a mark that vouches, as acceptance holds its floor: the code.
         {
             name: 'a-chain-this-session-holds-is-a-mark',
             held: 'chain',
             history: 'main',
             through: 3,
-            expected: refused(UNCHECKED),
+            expected: code(2, honest),
         },
         {
             name: 'a-fork-this-session-holds-is-a-mark',
@@ -313,11 +365,14 @@ async function specs(): Promise<Spec[]> {
 
 let id = 0;
 type Session = ReturnType<typeof sessionOf>;
-function call<K extends 'groupAccept' | 'groupJoinPreview' | 'groupJoinCheck' | 'groupForget'>(
-    session: Session,
-    operation: K,
-    input: Json,
-) {
+function call<
+    K extends
+        | 'groupAccept'
+        | 'groupJoinPreview'
+        | 'groupJoinCheck'
+        | 'groupJoinFirstUse'
+        | 'groupForget',
+>(session: Session, operation: K, input: Json) {
     return session.handle({ id: ++id, operation, input } as GroupMessage) as Promise<
         GroupResults[K]
     >;
@@ -399,6 +454,23 @@ export async function previewDoc(): Promise<Json> {
             succ: historyJson(f.succ.keys[0]!.publicKey, f.succ.rosters, f.succ.successions),
             madeUp: historyJson(made.publicKey, remade, []),
             dead: historyJson(f.dead.keys[0]!.publicKey, f.dead.rosters, f.dead.successions),
+            removal: historyJson(
+                f.removal.keys[0]!.publicKey,
+                f.removal.rosters,
+                f.removal.successions,
+            ),
+            removalFork: historyJson(
+                f.removalFork.keys[0]!.publicKey,
+                f.removalFork.rosters,
+                f.removalFork.successions,
+            ),
+            // removal's rosters with its succession (tied at roster 5) not served: the same roster 5 under key 1.
+            removalBare: historyJson(f.removal.keys[0]!.publicKey, f.removal.rosters, []),
+            succOther: historyJson(
+                f.succ.keys[0]!.publicKey,
+                f.succOther.rosters,
+                f.succOther.successions,
+            ),
         },
         signerKeys: mlDsaKeysOf(f.p1, f.p2, f.p3),
         pinMain2: await pinOf(f.main, 2, [f.p1, f.p2]),
@@ -452,6 +524,18 @@ export function servedOf(doc: Json, served: Json): ServedChain {
 function settingsOf(session: Session, doc: Json, which: string, userId: string) {
     if (which === 'not-open') return;
     if (which === 'none') session.useSettings(userId, { groups: {} });
+    // A family check record with no code (the migration's `before`, a mark but no pair mark), or
+    // one that is no pair mark at all.
+    else if (which === 'checked-before')
+        session.useSettings(userId, {
+            groups: {},
+            familyChecks: { [GROUP]: { how: 'before', rosterVersion: 2 } },
+        });
+    else if (which === 'checked-malformed')
+        session.useSettings(userId, {
+            groups: {},
+            familyChecks: { [GROUP]: { rosterVersion: 2, with: 'someone', code: 'words' } },
+        });
     else if (which === 'pin-main-2')
         session.useSettings(userId, { groups: { [GROUP]: doc.pinMain2 as GroupPin } });
     else throw new Error(`settings ${which}`);
@@ -882,9 +966,15 @@ function typedFor(code: string[], hidden: number[], words: string) {
     throw new Error(`words ${words}`);
 }
 
-/* A joins record no match of this account's sealed: an app's (the outbox store), another family's, the data layer's version 2, a newer version's. */
-export async function forgedRecord(kind: string) {
+/*
+ * A joins record no match of this account's sealed: an app's (the outbox
+ * store), another family's, the data layer's version 2, a version this release
+ * does not know (5); or `value`, any JSON sealed as this account's joins record
+ * of the family (the fuzz kind joins_record).
+ */
+export async function forgedRecord(kind: string, value?: unknown) {
     const f = await family();
+    if (kind === 'value') return sealDeviceRecord(ROOT.slice(), f.p2.userId, GROUP, 'joins', value);
     const mark = { rosterVersion: 2, code: await adminCode(f.main, 2, 1) };
     const record = (groupId: string, v: number) => ({
         v,
@@ -897,10 +987,10 @@ export async function forgedRecord(kind: string) {
         'other-family': ['joins', OTHER_GROUP, record(OTHER_GROUP, 3)],
         // The data layer's version 2 (before the escalation moved here): one compare again.
         'earlier-version': ['joins', GROUP, record(GROUP, 2)],
-        'newer-version': ['joins', GROUP, record(GROUP, 4)],
+        'newer-version': ['joins', GROUP, record(GROUP, 5)],
     };
-    const [store, groupId, value] = at[kind]!;
-    return sealDeviceRecord(ROOT.slice(), f.p2.userId, groupId, store as 'outbox', value);
+    const [store, groupId, forged] = at[kind]!;
+    return sealDeviceRecord(ROOT.slice(), f.p2.userId, groupId, store as 'outbox', forged);
 }
 
 /* What a refusal reads as, or an overtaken run. */
@@ -916,6 +1006,8 @@ function acceptanceJson(result: GroupResults['groupAccept']): Json {
             status: 'accepted',
             rosterVersion: result.view.rosterVersion,
             checkedAt: result.pin!.checkedAt,
+            checked: result.checked ?? null,
+            guard: guardJson(result.guard),
         };
     if (result.status === 'fork') {
         const { of, version, sides } = result.fork;
@@ -928,6 +1020,52 @@ function acceptanceJson(result: GroupResults['groupAccept']): Json {
             code: result.code,
             hidden: result.hidden,
         };
+    return { status: result.status };
+}
+
+/*
+ * The family guard a step names (docs/optional-verification.md 2.8): none, the pin at main's
+ * roster 2, unreadable, or the one this device holds (`held`: the latest an acceptance returned,
+ * as the app stores it before the record).
+ */
+function guardOf(doc: Json, which: unknown, held: GroupPin | null): GroupPin | 'unreadable' | null {
+    if (which === undefined || which === 'none') return null;
+    if (which === 'pin-main-2') return doc.pinMain2 as GroupPin;
+    if (which === 'unreadable') return 'unreadable';
+    if (which === 'held') return held;
+    throw new Error(`a guard ${JSON.stringify(which)}`);
+}
+
+/* A guard as both twins write it in an outcome: where it stands, or null when none was returned. */
+function guardJson(guard: GroupPin | null | undefined): Json | null {
+    return guard
+        ? { rosterVersion: guard.rosterVersion, keyVersion: guard.keyVersion, areas: guard.areas }
+        : null;
+}
+
+/* A first use's outcome as both twins write it, with its record's check time. */
+async function firstUseJson(
+    result: GroupResults['groupJoinFirstUse'],
+    userId: string,
+): Promise<Json> {
+    if (result.status === 'first-use') {
+        const value = (await openDeviceRecord(
+            ROOT.slice(),
+            userId,
+            GROUP,
+            'joins',
+            result.joinsRecord,
+        )) as { firstUse: { checkedAt: string } };
+        return {
+            status: 'first-use',
+            rosterVersion: result.rosterVersion,
+            checkedAt: value.firstUse.checkedAt,
+        };
+    }
+    if (result.status === 'fork') {
+        const { of, version, sides } = result.fork;
+        return { status: 'fork', of, version, sides };
+    }
     return { status: result.status };
 }
 
@@ -987,6 +1125,13 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
     let kept: string | null = null;
     const keptAfter: (string | null)[] = [];
     let pending: string | null = null;
+    // The family guard this device holds: the latest an acceptance returned, never cleared.
+    let guard: GroupPin | null = null;
+    // A step with `stored: false` is one whose guard write failed: the guard handed back is not kept.
+    let storing = true;
+    const keep = (result: GroupResults['groupAccept']) => {
+        if (storing && result.status === 'accepted' && result.guard) guard = result.guard;
+    };
     const take = () => {
         const holds = pending;
         pending = null;
@@ -994,6 +1139,7 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
     };
     for (const [at, step] of (scenario.steps as Json[]).entries()) {
         let outcome: Json;
+        storing = step.stored !== false;
         switch (step.op) {
             case 'show': {
                 try {
@@ -1065,6 +1211,23 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                 }
                 break;
             }
+            case 'first-use': {
+                try {
+                    const result = await call(session, 'groupJoinFirstUse', {
+                        userId,
+                        groupId: GROUP,
+                        served: sessionServed(doc, step.served),
+                        record: null,
+                        guard: guardOf(doc, step.guard, guard),
+                        now: SESSION_NOW,
+                    });
+                    if (result.status === 'first-use') records.set(at, result.joinsRecord);
+                    outcome = await firstUseJson(result, userId);
+                } catch (error) {
+                    outcome = refusal(error);
+                }
+                break;
+            }
             case 'accept': {
                 const joinsRecord =
                     typeof step.matched === 'number'
@@ -1073,7 +1236,7 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                           ? undefined
                           : step.record.startsWith('own:')
                             ? records.get(Number(step.record.slice(4)))
-                            : await forgedRecord(step.record);
+                            : await forgedRecord(step.record, step.value);
                 if (joinsRecord === undefined) {
                     outcome = { status: SKIPPED };
                     break;
@@ -1086,7 +1249,9 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                         record: null,
                         checkedAt: SESSION_NOW,
                         joining: { joinsRecord },
+                        guard: guardOf(doc, step.guard, guard),
                     });
+                    keep(result);
                     if (result.status === 'changed') showings.set(at, result);
                     outcome = acceptanceJson(result);
                 } catch (error) {
@@ -1102,11 +1267,19 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                         served: sessionServed(doc, step.served),
                         record: null,
                         checkedAt: SESSION_NOW,
+                        guard: guardOf(doc, step.guard, guard),
                     });
+                    keep(result);
                     outcome =
                         result.status === 'accepted'
-                            ? { status: 'accepted', rosterVersion: result.view.rosterVersion }
-                            : { status: 'not-accepted' };
+                            ? {
+                                  status: 'accepted',
+                                  rosterVersion: result.view.rosterVersion,
+                                  guard: guardJson(result.guard),
+                              }
+                            : result.status === 'fork'
+                              ? { status: 'fork', of: result.fork.of, version: result.fork.version }
+                              : { status: 'not-accepted' };
                 } catch (error) {
                     outcome = refusal(error);
                 }
@@ -1114,6 +1287,9 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
             }
             case 'holds':
                 outcome = { status: kept !== null ? 'kept' : 'none' };
+                break;
+            case 'guard':
+                outcome = guard ? { status: 'held', ...guardJson(guard) } : { status: 'none' };
                 break;
             case 'relaunch':
             case 'lock': {
@@ -1138,8 +1314,23 @@ export async function runSession(doc: Json, scenario: Json): Promise<SessionRun>
                 break;
             }
             case 'forget': {
-                await call(session, 'groupForget', { groupId: GROUP });
-                outcome = { status: 'forgotten' };
+                // The not-member wipe: the held guard in (or an unreadable one), and either
+                // forgotten or, with nothing dropped, the guard to store before asking again (2.8).
+                try {
+                    const result: GroupResults['groupForget'] = await call(session, 'groupForget', {
+                        groupId: GROUP,
+                        guard: step.guard === 'unreadable' ? 'unreadable' : guard,
+                        checkedAt: SESSION_NOW,
+                    });
+                    if (storing && result.guard) guard = result.guard;
+                    outcome = {
+                        status: result.guard ? 'store-first' : 'forgotten',
+                        guard: guardJson(result.guard),
+                        unreadable: result.unreadable,
+                    };
+                } catch (error) {
+                    outcome = refusal(error);
+                }
                 break;
             }
             default:
@@ -1173,6 +1364,7 @@ export async function sessionFixture(doc: Json, file: Json) {
             if (!stepSays(run.outcomes, at, step.expect))
                 throw new Error(`${scenario.name} step ${at}: ${JSON.stringify(run.outcomes[at])}`);
         if (scenario.name === 'a-match-joins-once') cross.joinsRecord = run.records.get(1);
+        if (scenario.name === 'a-first-use-joins-once') cross.firstUseRecord = run.records.get(0);
         if (scenario.name === 'the-escalation-kept-across-a-relaunch') {
             cross.holds = run.holds;
             cross.heldHidden = run.outcomes[0]!.hidden;
@@ -1197,6 +1389,18 @@ export async function openCross(doc: Json, cross: Json) {
             joining: { joinsRecord: cross.joinsRecord },
         }),
     );
+    // The other twin's first use: its record finishes the join here, against the roster it took.
+    const firstUse = await sessionFor(doc, 'none');
+    const firstJoined = acceptanceJson(
+        await call(firstUse, 'groupAccept', {
+            userId,
+            groupId: GROUP,
+            served: sessionServed(doc, { history: 'main', through: 2 }),
+            record: null,
+            checkedAt: SESSION_NOW,
+            joining: { joinsRecord: cross.firstUseRecord },
+        }),
+    );
     const relaunched = await sessionFor(doc, 'none');
     const shown = await call(relaunched, 'groupJoinPreview', {
         userId,
@@ -1205,7 +1409,7 @@ export async function openCross(doc: Json, cross: Json) {
         record: null,
         holds: cross.holds,
     });
-    return { joined, hidden: shown.status === 'code' ? shown.hidden : null };
+    return { joined, firstJoined, hidden: shown.status === 'code' ? shown.hidden : null };
 }
 
 /*

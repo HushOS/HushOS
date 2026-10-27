@@ -5,6 +5,7 @@ import {
     acceptRosters,
     type AcceptedRosters,
     type AcceptInput,
+    type GroupAnchor,
     type GroupChainCache,
 } from './group-trust';
 import { GROUP, READER, mlDsaKeysOf, person, verdictOf, type Person } from './group-testkit';
@@ -41,7 +42,7 @@ function inputOf(c: Case): AcceptInput {
     return {
         groupId: GROUP,
         firstKeys: c.firstKeys,
-        firstKeysChecked: c.firstKeysChecked,
+        anchor: ((c as { anchor?: GroupAnchor | null }).anchor ?? null) as GroupAnchor | null,
         pins: c.pins as unknown as GroupPin[],
         rosters: (c.rosters as Served[]).map(signed),
         successions: (c.successions as Served[]).map(signed),

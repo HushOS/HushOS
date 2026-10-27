@@ -1,5 +1,8 @@
 import Foundation
 import HushOSCore
+import os
+
+private let familyLog = Logger(subsystem: "com.hushos.app", category: "family")
 
 /*
  * Syncing one family on this phone (docs/groups-mobile-plan.md, iOS 1; the web's
@@ -416,13 +419,13 @@ public actor FamilySync: FamilyJudge {
             let me = try await vault.ownIdentities()
             let checkedAt = Self.checkTime(now())
             var served = try await fetchServed(groupId, after: row?.rosterVersion ?? 0)
-            var answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, checkedAt: checkedAt)
+            var answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
             if case .fetchFromVersionOne = answer {
                 served = try await fetchServed(groupId, after: 0)
-                answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, checkedAt: checkedAt)
+                answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
             }
             switch answer {
-            case .accepted(let chain, let record, let pin):
+            case .accepted(let chain, let record, let pin, _):  // The guard (docs/optional-verification.md 2.8) is stored from PR 5.
                 let areas = Array(chain.areaKeys().keys).sorted()
                 try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
                 return .accepted(chain, pin)
@@ -640,7 +643,7 @@ public actor FamilySync: FamilyJudge {
      */
     func wipe(_ groupId: String) async {
         let areas = knownAreas(groupId)
-        ledger.forgetGroup(groupId: groupId)
+        guard forgetInCore(groupId) else { return }
         records.delete(userId: userId, groupId: groupId)
         await vault.forgetWorkspaces(areas)
         identities[groupId] = nil
@@ -844,7 +847,8 @@ public actor FamilySync: FamilyJudge {
         FamilyFork(memberList: of == .roster, version: version, sides: sides.map { side in
             FamilyFork.Side(digest: side.digest, from: side.from.map { source in
                 switch source {
-                case .pin: "your account’s earlier check"
+                // `.pair`: a family check in the settings (docs/optional-verification.md 3.4); its own words come with PR 5.
+                case .pin, .pair: "your account’s earlier check"
                 case .cache: "this device’s earlier check"
                 case .join: "the join code you compared"
                 case .served: "what the server shows now"
@@ -854,6 +858,27 @@ public actor FamilySync: FamilyJudge {
     }
 
     /* A check time as pins carry it: ISO 8601 UTC to the millisecond, as the web's toISOString. */
+    /*
+     * The core lets go of a family (docs/optional-verification.md 2.8): it drops nothing while the
+     * guard it hands back is not stored, and nothing of the family is deleted here unless this says
+     * it forgot. No family guard is kept on this phone yet: PR 5 stores the guard handed back
+     * (merged into the stored one, never lower, under the account's lock) between the two calls;
+     * until then it is handed straight back, as no store could hold it.
+     */
+    func forgetInCore(_ groupId: String) -> Bool {
+        let at = Self.checkTime(now())
+        do {
+            let first = try ledger.forgetGroup(groupId: groupId, guard: .absent, checkedAt: at)
+            guard let pin = first.guard else { return true }
+            let again = try ledger.forgetGroup(groupId: groupId, guard: .held(pin: pin), checkedAt: at)
+            if again.guard != nil { familyLog.notice("A family wipe waits: an acceptance landed while it ran.") }
+            return again.guard == nil
+        } catch {
+            familyLog.error("A family wipe was refused: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+
     static func checkTime(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

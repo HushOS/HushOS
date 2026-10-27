@@ -111,6 +111,25 @@ pub const OLDER_CHAIN: &str = "This device already holds a later member list for
 /// hard warning); acceptance with the session's committed chain as a mark
 /// (core step 3, `accept_served`) answers the fork before this.
 pub const SPLIT_CHAIN: &str = "This family’s member list was shown differently to this device.";
+/// An acceptance of a family [`AreaLedger::forget_group`] let go of after the
+/// acceptance began: what it verified was against what the wipe dropped, so
+/// nothing of it is committed, uncommitted or kept, and it is never tried again
+/// within the call (an account error). The web's `FAMILY_FORGOTTEN`.
+pub const FAMILY_FORGOTTEN: &str =
+    "This family was removed from this device while it was being checked. Sync again.";
+/// A wipe ([`AreaLedger::forget_group`]) whose held guard disagrees with the
+/// session's floor (other first keys, or another roster or group key at one
+/// version): two histories this device accepted. Nothing is dropped, so the
+/// floor stays a mark. The web's `GUARD_CONFLICT`.
+pub const GUARD_CONFLICT: &str =
+    "This family looks different from what this device already checked, so nothing of it was removed.";
+/// A wipe ([`AreaLedger::forget_group`]) whose held guard is past the
+/// session's floor (a later roster or group key): it holds digests only at its
+/// own versions, so it cannot show the floor is on its history. Nothing is
+/// dropped; the app accepts up to the guard first (which checks the history
+/// between them, and reports a fork), then wipes. The web's `GUARD_AHEAD`.
+pub const GUARD_AHEAD: &str =
+    "This device already checked a later member list for this family. Sync it first, then remove it.";
 
 /// Settings served as none after settings that opened, within one unlock.
 pub(crate) const OLDER_SETTINGS: &str =
@@ -176,6 +195,29 @@ pub struct AreaOpened {
     pub reason: Option<AreaBlock>,
     /// The area as a pin may record it ([`crate::merge_pin`]): the only way an area enters one.
     pub pin_area: Arc<crate::device_record::OpenedArea>,
+}
+
+/* Forget a family as an app does with a guard store that works: store each guard handed back, then ask again. */
+#[cfg(test)]
+pub(crate) fn forget_fully(ledger: &AreaLedger, group_id: &str) {
+    let mut held = crate::device_record::FamilyGuard::Absent;
+    while let Some(pin) =
+        ledger.forget_group(group_id.into(), held, "2026-10-15T00:00:00.000Z".into()).unwrap().guard
+    {
+        held = crate::device_record::FamilyGuard::Held { pin };
+    }
+}
+
+/// What [`AreaLedger::forget_group`] did: `forgotten` (whether this session
+/// held anything of the family) when it forgot, with `guard` none; or nothing
+/// dropped, and `guard` the family guard to store before asking again
+/// (`unreadable` when the held guard could not be read: the floor's alone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct GroupForget {
+    pub forgotten: bool,
+    pub guard: Option<GroupPin>,
+    pub unreadable: bool,
 }
 
 /// A node key envelope as a listing serves it, with its previous one while a rotation runs.
@@ -321,6 +363,11 @@ struct State {
      * clear do, so a run that lost to a later commit can never take an older chain.
      */
     floors: HashMap<String, Arc<AcceptedRosters>>,
+    /*
+     * Per family, bumped by every forget_group and kept through it (a new state, a new generation,
+     * starts it again): an acceptance commits only into the family as it found it (commit_served).
+     */
+    forgets: HashMap<String, u64>,
     /* Joining (join.rs): the hidden positions issued per code, the family's wrong pair, the joins records used. */
     joins: crate::join::JoinBook,
     /*
@@ -342,6 +389,8 @@ pub(crate) struct Settings {
     pub(crate) pins: HashMap<String, HeldPin>,
     /* The contacts object's members in document order: the only pins a roster call or join code reads. */
     pub(crate) contacts: Vec<(String, serde_json::Value)>,
+    /* By family id, the family check records as filed (`familyChecks`): read only when acceptance takes the family's marks. */
+    pub(crate) checks: HashMap<String, serde_json::Value>,
     pub(crate) opened: bool,
     /*
      * The highest settings version opened in this unlock (0: none opened): a document below it is
@@ -349,6 +398,10 @@ pub(crate) struct Settings {
      */
     pub(crate) settings_version: u64,
 }
+
+/* What a settings document gives the ledger: the group pins, the contacts in order, the family checks. */
+pub(crate) type SettingsParts =
+    (HashMap<String, HeldPin>, Vec<(String, serde_json::Value)>, HashMap<String, serde_json::Value>);
 
 /* A family's settings pin as held: the raw JSON a document carried, or one the fixtures handed in typed. */
 #[derive(Clone)]
@@ -364,6 +417,34 @@ fn slot(workspace_id: &str, node_id: &str) -> Slot {
 
 fn refused(message: &str) -> CoreError {
     input(message)
+}
+
+/*
+ * Why `chain` may not be committed over `held` (a family's floor, or the chain
+ * committed now), or none when it extends it: it must reach as far
+ * (OLDER_CHAIN otherwise: a roster or a group key short of it) and pass
+ * through it, its roster digest at the held roster version and its group key
+ * at the held key version (SPLIT_CHAIN otherwise: another history beside it).
+ * The roster alone is not enough: two successions to other keys at one roster
+ * version leave the roster digest the same. The web's `overtakenBy`.
+ */
+fn overtaken_by(held: &AcceptedRosters, chain: &AcceptedRosters) -> Option<&'static str> {
+    if held.roster.roster_version > chain.roster.roster_version {
+        return Some(OLDER_CHAIN);
+    }
+    let at = |version: u64| version.checked_sub(1).and_then(|at| usize::try_from(at).ok());
+    let digest = at(held.roster.roster_version).and_then(|at| chain.roster_digests.get(at));
+    if digest != Some(&held.roster_digest) {
+        return Some(SPLIT_CHAIN);
+    }
+    if held.group_key_version > chain.group_key_version {
+        return Some(OLDER_CHAIN);
+    }
+    let key = at(held.group_key_version).and_then(|at| chain.group_keys.get(at));
+    if key != Some(&held.group_key) {
+        return Some(SPLIT_CHAIN);
+    }
+    None
 }
 
 fn ctx(
@@ -572,26 +653,13 @@ impl State {
 
     fn commit(&mut self, chain: Arc<AcceptedRosters>) -> CoreResult<()> {
         // The family's floor first: the highest chain committed this session, which a refusal's
-        // uncommit leaves in place, so no chain below it (or beside it) is ever committed again.
-        if let Some(floor) = self.floors.get(&chain.group_id) {
-            if floor.roster.roster_version > chain.roster.roster_version {
-                return Err(refused(OLDER_CHAIN));
-            }
-            if floor.roster.roster_version == chain.roster.roster_version
-                && floor.roster_digest != chain.roster_digest
-            {
-                return Err(refused(SPLIT_CHAIN));
-            }
-        }
-        if let Some(held) = self.chains.get(&chain.group_id) {
-            if held.roster.roster_version > chain.roster.roster_version {
-                return Err(refused(OLDER_CHAIN));
-            }
-            // Another roster at the very version held: a split view, never committed over it.
-            if held.roster.roster_version == chain.roster.roster_version
-                && held.roster_digest != chain.roster_digest
-            {
-                return Err(refused(SPLIT_CHAIN));
+        // uncommit leaves in place, so no chain below it (or beside it) is ever committed again;
+        // then the chain committed now. The whole of each, its group key included, checked here
+        // again: a run verified against an earlier floor commits nothing beside a later one.
+        for held in [self.floors.get(&chain.group_id), self.chains.get(&chain.group_id)].into_iter().flatten()
+        {
+            if let Some(refusal) = overtaken_by(held, &chain) {
+                return Err(refused(refusal));
             }
         }
         let group_id = chain.group_id.clone();
@@ -608,10 +676,13 @@ impl State {
             }
         }
         self.forked.remove(&group_id);
-        let higher = self
-            .floors
-            .get(&group_id)
-            .is_none_or(|floor| floor.roster.roster_version < chain.roster.roster_version);
+        // The floor moves to a later roster, or to a later group key at the same roster (a
+        // succession the roster that dropped a holder ties to itself, served after it).
+        let higher = self.floors.get(&group_id).is_none_or(|floor| {
+            floor.roster.roster_version < chain.roster.roster_version
+                || (floor.roster.roster_version == chain.roster.roster_version
+                    && floor.group_key_version < chain.group_key_version)
+        });
         if higher {
             self.floors.insert(group_id.clone(), Arc::clone(&chain));
         }
@@ -646,6 +717,8 @@ impl State {
         self.chains.remove(group_id);
         self.forked.remove(group_id);
         self.floors.remove(group_id);
+        // An acceptance begun before this commits nothing (commit_served).
+        *self.forgets.entry(group_id.to_string()).or_default() += 1;
         self.seeds.retain(|(group, _), _| group != group_id);
         // A join that committed and then could not be kept may run again; the hidden positions stay.
         self.joins.forget(group_id);
@@ -1260,6 +1333,9 @@ pub struct AreaLedger {
     state: Mutex<State>,
     /* Draws standing in for the system CSPRNG, for the shared fixtures and the fuzz targets only (with_draws). */
     draws: Option<Mutex<std::collections::VecDeque<u32>>>,
+    /* Run once by the next acceptance verified, before it commits, outside the lock (once_verified). */
+    #[cfg(test)]
+    verified: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /*
@@ -1279,7 +1355,12 @@ fn fresh_state() -> State {
 
 impl Default for AreaLedger {
     fn default() -> Self {
-        AreaLedger { state: Mutex::new(fresh_state()), draws: None }
+        AreaLedger {
+            state: Mutex::new(fresh_state()),
+            draws: None,
+            #[cfg(test)]
+            verified: Mutex::new(None),
+        }
     }
 }
 
@@ -1360,10 +1441,78 @@ impl AreaLedger {
         Ok(())
     }
 
-    /// A family the person no longer reads: the keys of the areas it opened, and all it knew of them.
-    /// Another family's chain listing those areas touches nothing.
-    pub fn forget_group(&self, group_id: String) {
-        self.lock().forget_group(&group_id);
+    /// A family the person no longer reads (a `not-member` wipe, or a join
+    /// committed here and not kept on the device): the keys of the areas it
+    /// opened, and all it knew of them. Another family's chain listing those
+    /// areas touches nothing.
+    ///
+    /// Store before delete, enforced here (docs/optional-verification.md 2.8):
+    /// `guard` is the family guard this device holds and `checked_at` the time
+    /// a guard made here records. When the held guard does not cover the
+    /// highest chain this session accepted for the family (its floor), nothing
+    /// is dropped and [`GroupForget::guard`] is the one to store: the held one
+    /// moved on to that floor with the folders opened here (`guard_after`'s
+    /// rule). The app stores it, merged into what it holds and never lower,
+    /// and asks again. Only a held guard that covers the floor, or no floor,
+    /// forgets: only one equal to the floor at the floor's own roster and key
+    /// versions. A held guard that is no pin is refused. One that disagrees
+    /// with the floor (another roster or group key at one version, crossed
+    /// versions, other first keys) is refused ([`GUARD_CONFLICT`]); one past
+    /// it, which cannot show the floor is on its history, is refused
+    /// ([`GUARD_AHEAD`]) until acceptance brings the floor up to it. Either
+    /// way nothing is dropped. An unreadable
+    /// one does not hold the wipe up with no floor; with one, nothing is
+    /// dropped and the floor's guard comes back with `unreadable`, to store
+    /// once the entry reads again or the person resets it.
+    pub fn forget_group(
+        &self,
+        group_id: String,
+        guard: crate::device_record::FamilyGuard,
+        checked_at: String,
+    ) -> CoreResult<GroupForget> {
+        use crate::device_record::FamilyGuard;
+        uuid(&group_id, "group id")?;
+        let (held, unreadable) = match guard {
+            FamilyGuard::Absent => (None, false),
+            FamilyGuard::Unreadable => (None, true),
+            FamilyGuard::Held { pin } => {
+                (Some(crate::group_trust::group_pin_check(group_id.clone(), pin)?), false)
+            }
+        };
+        // Worked out and forgotten under one lock: no acceptance commits in between.
+        let mut state = self.lock();
+        if let Some(floor) = state.floors.get(&group_id).cloned() {
+            let pin = crate::group_trust::pin_after(vec![], floor, checked_at)?;
+            let to_store = match crate::device_record::guard_after(
+                &group_id,
+                held.as_ref(),
+                &pin,
+                state.opened_areas(&group_id),
+            )? {
+                crate::device_record::GuardAfter::Store(pin) => Some(pin),
+                crate::device_record::GuardAfter::Covered => None,
+                // A held guard that disagrees with the floor covers nothing: two histories this
+                // device accepted. Wiping would erase the floor, the only evidence of one of them.
+                crate::device_record::GuardAfter::Conflict => return Err(refused(GUARD_CONFLICT)),
+                // Past the floor: no proof the floor is on the guard's history.
+                crate::device_record::GuardAfter::Ahead => return Err(refused(GUARD_AHEAD)),
+            };
+            if unreadable {
+                return Ok(GroupForget {
+                    forgotten: false,
+                    guard: Some(to_store.unwrap_or(pin)),
+                    unreadable: true,
+                });
+            }
+            if to_store.is_some() {
+                return Ok(GroupForget { forgotten: false, guard: to_store, unreadable: false });
+            }
+        }
+        let known = state.chains.contains_key(&group_id)
+            || state.opened.contains_key(&group_id)
+            || state.forked.contains(&group_id);
+        state.forget_group(&group_id);
+        Ok(GroupForget { forgotten: known, guard: None, unreadable: false })
     }
 
     /// Every key, wiped: a lock or a sign-out.
@@ -1915,7 +2064,27 @@ impl AreaLedger {
         filed.sort_by(|a, b| a.0.cmp(&b.0));
         let opened = pins.is_some();
         let pins = pins.unwrap_or_default().into_iter().map(|(id, pin)| (id, HeldPin::Typed(pin))).collect();
-        self.set_settings(&user_id, opened, 0, pins, filed, None)
+        self.set_settings(&user_id, opened, 0, (pins, filed, HashMap::new()), None)
+    }
+
+    /// The family check records of the settings held for `user_id`
+    /// (`familyChecks`, as a document carries it: JSON text of an object by
+    /// family id), set beside what [`AreaLedger::use_settings`] set. For the
+    /// shared fixtures only: apps hand the ledger envelopes, whose documents
+    /// carry their own.
+    #[cfg(feature = "fixtures")]
+    #[doc(hidden)]
+    pub fn use_family_checks(&self, user_id: String, checks: String) -> CoreResult<()> {
+        let checks: serde_json::Value =
+            serde_json::from_str(&checks).map_err(|_| refused("These family checks are not JSON."))?;
+        let mut state = self.lock();
+        let held = state
+            .settings
+            .as_mut()
+            .filter(|held| held.user_id.eq_ignore_ascii_case(&user_id))
+            .ok_or_else(|| refused(OPEN_SETTINGS))?;
+        held.checks = checks.as_object().map(|map| map.clone().into_iter().collect()).unwrap_or_default();
+        Ok(())
     }
 
     /*
@@ -1928,8 +2097,7 @@ impl AreaLedger {
         user_id: &str,
         opened: bool,
         settings_version: u64,
-        pins: HashMap<String, HeldPin>,
-        contacts: Vec<(String, serde_json::Value)>,
+        (pins, contacts, checks): SettingsParts,
         session: Option<(u64, &[u8])>,
     ) -> CoreResult<()> {
         let mut state = self.lock();
@@ -1947,8 +2115,14 @@ impl AreaLedger {
         if held.is_some_and(|held| held.opened && (!opened || settings_version < held.settings_version)) {
             return Err(refused(OLDER_SETTINGS));
         }
-        state.settings =
-            Some(Settings { user_id: user_id.to_lowercase(), opened, pins, contacts, settings_version });
+        state.settings = Some(Settings {
+            user_id: user_id.to_lowercase(),
+            opened,
+            pins,
+            contacts,
+            checks,
+            settings_version,
+        });
         Ok(())
     }
 
@@ -2048,7 +2222,17 @@ impl AreaLedger {
     #[cfg(feature = "fixtures")]
     #[doc(hidden)]
     pub fn with_draws(draws: Vec<u32>) -> Arc<AreaLedger> {
-        Arc::new(AreaLedger { state: Mutex::new(fresh_state()), draws: Some(Mutex::new(draws.into())) })
+        Arc::new(AreaLedger {
+            state: Mutex::new(fresh_state()),
+            draws: Some(Mutex::new(draws.into())),
+            #[cfg(test)]
+            verified: Mutex::new(None),
+        })
+    }
+
+    /* The areas this session opened for the family, at the versions opened: what a guard folds in. */
+    pub(crate) fn opened_areas(&self, group_id: &str) -> Vec<Arc<crate::device_record::OpenedArea>> {
+        self.lock().opened_areas(group_id)
     }
 
     /* Whether this session holds the family: a committed chain, or a fork (the worker's `marks` counts both). */
@@ -2056,7 +2240,41 @@ impl AreaLedger {
         let state = self.lock();
         state.chains.contains_key(group_id) || state.forked.contains(group_id)
     }
+}
 
+impl State {
+    /* The session (`generation`) and the family (`epoch`) an acceptance began with, both still here. */
+    fn still_began(&self, group_id: &str, generation: u64, epoch: u64) -> CoreResult<()> {
+        if self.generation != generation || self.account.is_none() {
+            return Err(refused(NOT_THIS_ACCOUNT));
+        }
+        if self.forgets.get(group_id).copied().unwrap_or(0) != epoch {
+            return Err(refused(FAMILY_FORGOTTEN));
+        }
+        Ok(())
+    }
+
+    /* The family's areas opened here, as a pin may record them (the ledger's opened_areas). */
+    fn opened_areas(&self, group_id: &str) -> Vec<Arc<crate::device_record::OpenedArea>> {
+        self.opened
+            .get(group_id)
+            .map(|areas| {
+                areas
+                    .iter()
+                    .map(|(workspace_id, area)| {
+                        crate::device_record::OpenedArea::new(
+                            group_id.into(),
+                            workspace_id.clone(),
+                            area.version,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl AreaLedger {
     /* The unlocked account as an acceptance runs for it: user id, signing key, store key and generation. */
     pub(crate) fn served_account(&self) -> Option<ServedAccount> {
         let state = self.lock();
@@ -2093,6 +2311,27 @@ impl AreaLedger {
     }
 
     /*
+     * The family's check record, from the settings the account last used (the worker's
+     * familyCheckOf): whether there is one (any value but none or a JSON null) and the pair mark
+     * acceptance holds it as. A record without a `code` (the migration's `before` record) is a mark
+     * but no pair mark; anything else is a pair mark, refused for this family alone when it is not
+     * one. Refused (OPEN_SETTINGS) before any settings.
+     */
+    pub(crate) fn family_check(
+        &self,
+        user_id: &str,
+        group_id: &str,
+    ) -> CoreResult<CoreResult<(bool, Vec<crate::group_trust::PairMark>)>> {
+        let state = self.lock();
+        let settings = state
+            .settings
+            .as_ref()
+            .filter(|held| held.user_id.eq_ignore_ascii_case(user_id))
+            .ok_or_else(|| refused(OPEN_SETTINGS))?;
+        Ok(crate::ledger_settings::family_check_of(&settings.checks, group_id))
+    }
+
+    /*
      * The account's contact pin of `user_id`, from the settings it last used: the worker's
      * contactPin (the first member whose key and `userId` both lowercase to the id); none without.
      */
@@ -2110,20 +2349,25 @@ impl AreaLedger {
 
     /*
      * An acceptance's commit, under the lock: still the account it began with
-     * (`NOT_THIS_ACCOUNT` after a lock, a sign-out or another account), never
-     * below or beside the family's floor (`OLDER_CHAIN`, `SPLIT_CHAIN`: a run
-     * another overtook, even one a refusal uncommitted since), then commit.
+     * (`NOT_THIS_ACCOUNT` after a lock, a sign-out or another account), still
+     * the family it began with (`FAMILY_FORGOTTEN` after forget_group since
+     * `epoch`), never below or beside the family's floor (`OLDER_CHAIN`,
+     * `SPLIT_CHAIN`: a run another overtook, even one a refusal uncommitted
+     * since, its group key included), then commit.
      */
     pub(crate) fn commit_served(
         &self,
         chain: Arc<AcceptedRosters>,
         generation: u64,
+        epoch: u64,
     ) -> CoreResult<Zeroizing<[u8; 32]>> {
         let mut state = self.lock();
         let store_key = state.store_key.clone().filter(|_| state.generation == generation);
         let Some(store_key) = store_key else {
             return Err(refused(NOT_THIS_ACCOUNT));
         };
+        // A family let go of since the run began: committing would take it back after its wipe.
+        state.still_began(&chain.group_id, generation, epoch)?;
         state.commit(chain)?;
         // The record is sealed under the key held now (a master-key rotation meanwhile included).
         Ok(store_key)
@@ -2224,33 +2468,55 @@ impl AreaLedger {
         versions
     }
 
-    /* `NOT_THIS_ACCOUNT` unless the account and session an acceptance began in are still open (the worker's stillTheSession). */
-    pub(crate) fn still_the_session(&self, generation: u64) -> CoreResult<()> {
-        let state = self.lock();
-        if state.generation != generation || state.account.is_none() {
-            return Err(refused(NOT_THIS_ACCOUNT));
-        }
-        Ok(())
+    /*
+     * `NOT_THIS_ACCOUNT` unless the account and session an acceptance began in are still open (the
+     * worker's stillTheSession), then `FAMILY_FORGOTTEN` unless the family was not let go of since
+     * it began at `epoch` (stillTheFamily).
+     */
+    pub(crate) fn still_the_session(&self, group_id: &str, generation: u64, epoch: u64) -> CoreResult<()> {
+        self.lock().still_began(group_id, generation, epoch)
+    }
+
+    /* The family's epoch now (forget_group bumps it): an acceptance takes it when it begins. */
+    pub(crate) fn family_epoch(&self, group_id: &str) -> u64 {
+        self.lock().forgets.get(group_id).copied().unwrap_or(0)
     }
 
     /*
      * A refusal (`fork` none: a fork stays a fork) or a fork (`Some(true)`) of an
-     * acceptance, under the account and session it began in; otherwise
-     * `NOT_THIS_ACCOUNT`, and nothing of the family is touched.
+     * acceptance, under the account and session it began in and of the family
+     * as it began (`epoch`); otherwise `NOT_THIS_ACCOUNT` or `FAMILY_FORGOTTEN`,
+     * and nothing of the family is touched.
      */
     pub(crate) fn uncommit_served(
         &self,
         group_id: &str,
         generation: u64,
+        epoch: u64,
         fork: Option<bool>,
     ) -> CoreResult<()> {
         let mut state = self.lock();
-        if state.generation != generation || state.account.is_none() {
-            return Err(refused(NOT_THIS_ACCOUNT));
-        }
+        state.still_began(group_id, generation, epoch)?;
         let fork = fork.unwrap_or_else(|| state.forked.contains(group_id));
         state.uncommit(group_id, fork);
         Ok(())
+    }
+
+    /*
+     * Interleavings for the tests: `then` runs once, when the next acceptance has verified its
+     * chain and before it commits (another acceptance, a wipe), as a thread would run meanwhile.
+     */
+    #[cfg(test)]
+    pub(crate) fn once_verified(&self, then: impl FnOnce() + Send + 'static) {
+        *self.verified.lock().unwrap() = Some(Box::new(then));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verified_hook(&self) {
+        let then = self.verified.lock().unwrap().take();
+        if let Some(then) = then {
+            then();
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -2263,7 +2529,7 @@ impl AreaLedger {
 mod tests {
     use super::*;
     use crate::drive::{node_open, node_wrap, previous_root_key_wrap};
-    use crate::group_trust::{accept_rosters, RosterChain};
+    use crate::group_trust::{accept_rosters, GroupAnchor, RosterChain};
     use crate::groups::tests::{
         area_key_at, group_seed_at, ml_dsa_keys, reader, Person, AREA, AREA_SEED, GROUP, OTHER_AREA_SEED,
         OTHER_GROUP,
@@ -2298,7 +2564,13 @@ mod tests {
 
     /* The same for the family `group_id`, whose rosters may list AREA too (another family's chain). */
     fn chain_of(group_id: &str, rows: Vec<Vec<Row>>) -> Arc<AcceptedRosters> {
-        let owner = Person::new(1);
+        // One owner per test (a test runs on a thread of its own), so its chains share their
+        // rosters where their rows agree: a later chain passes through an earlier one, as a
+        // commit needs (overtaken_by).
+        thread_local! {
+            static OWNER: Person = Person::new(1);
+        }
+        let owner = OWNER.with(Person::clone);
         let entry = owner.entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active);
         let mut signed: Vec<crate::groups::SignedGroupStatement> = vec![];
         for (index, rows) in rows.into_iter().enumerate() {
@@ -2348,7 +2620,7 @@ mod tests {
         match accept_rosters(
             group_id.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             signed,
             vec![],
@@ -2647,7 +2919,7 @@ mod tests {
         // The same chain again (another one at its version would be below or beside the floor).
         refused.commit(held).unwrap();
         assert!(refused.require_writable(AREA.into()).is_ok());
-        refused.forget_group(GROUP.into());
+        crate::area_ledger::forget_fully(&refused, GROUP);
         assert!(!refused.is_area(AREA.into()));
         assert!(refused.key_at_epoch(AREA.into(), node(ROOT), 1).is_none());
         ledger.clear();
@@ -2742,11 +3014,11 @@ mod tests {
         let folder = ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1).unwrap();
         // Its chain refused, or forgotten, without ever being committed here: nothing changes.
         ledger.uncommit(OTHER_GROUP.into(), false);
-        ledger.forget_group(OTHER_GROUP.into());
+        crate::area_ledger::forget_fully(&ledger, OTHER_GROUP);
         assert!(ledger.require_writable(AREA.into()).is_ok());
         // Committed listing the area, then forgotten: the folder's keys stay, and it is written again.
         ledger.commit(chain_of(OTHER_GROUP, vec![vec![Row::Key(1)]])).unwrap();
-        ledger.forget_group(OTHER_GROUP.into());
+        crate::area_ledger::forget_fully(&ledger, OTHER_GROUP);
         assert_eq!(ledger.key_at_epoch(AREA.into(), node(2), 1).unwrap(), folder.key);
         assert_eq!(ledger.key_at_epoch(AREA.into(), node(ROOT), 1).unwrap(), root_key(1));
         assert!(ledger.new_node_key(AREA.into(), node(3), node(2), 1, 1).is_ok());
@@ -2849,7 +3121,7 @@ mod tests {
             key_envelope: folder.key_envelope.clone(),
         };
         ledger.rotate_key(AREA.into(), rotating, 2).unwrap();
-        ledger.forget_group(GROUP.into());
+        crate::area_ledger::forget_fully(&ledger, GROUP);
         // Back in the family: the walk's fresh key is gone, nothing goes under it, nothing commits it.
         ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
         open(&ledger, 2, 2);
@@ -2978,7 +3250,7 @@ mod tests {
         let chain = match accept_rosters(
             GROUP.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             signed,
             vec![],
@@ -3612,7 +3884,7 @@ mod tests {
         );
         // Forgetting the family forgets its fork too.
         reading.uncommit(GROUP.into(), true);
-        reading.forget_group(GROUP.into());
+        crate::area_ledger::forget_fully(&reading, GROUP);
         assert_eq!(message(verdict_of(&reading, 4, record.clone())), NOT_THIS_FAMILYS);
         // This account's own record is judged by its own keys, whatever the roster says.
         let own = reading_ledger(&f, &rotated, 2, 2);

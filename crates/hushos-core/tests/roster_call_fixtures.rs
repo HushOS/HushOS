@@ -59,3 +59,74 @@ fn this_core_s_settings_and_family_folders_say_what_they_declare() {
     let doc = common::settings_areas::fixture();
     common::settings_areas::check(&doc);
 }
+
+/*
+ * The family guard an acceptance hands back (docs/optional-verification.md 2.8) carries the
+ * folders opened on this device: person 2 opens a family folder at version 2, and the next
+ * acceptance's guard has that floor (none without it); with that guard held, the same chain
+ * again records nothing new and hands none back.
+ */
+#[test]
+fn a_folder_opened_here_raises_the_guard_an_acceptance_hands_back() {
+    use common::groups::CHECKED;
+    use common::roster_calls::{family, ledger_with, me, served_of};
+    use common::settings_areas::{cases, seal_self_grant, served_area};
+    use hushos_core::{FamilyGuard, GroupForget, GroupPin, ServedAcceptance};
+    let f = family();
+    let accept = |ledger: &hushos_core::AreaLedger, guard: FamilyGuard| match ledger.accept_served(
+        me(2),
+        f.group_id.clone(),
+        None,
+        served_of(f.h.key(1), f.h.rosters.clone()),
+        guard,
+        CHECKED.into(),
+    ) {
+        Ok(ServedAcceptance::Accepted { guard, .. }) => guard,
+        other => panic!("{other:?}"),
+    };
+    // Nothing opened: the guard is the chain's pin, no floors.
+    let plain = accept(&ledger_with(2, None, None, false, false), FamilyGuard::Absent).expect("a guard");
+    assert!(plain.areas.is_empty(), "{plain:?}");
+    let ledger = ledger_with(2, None, None, false, false);
+    let spec = cases()["areas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "a-current-self-grant-alone")
+        .unwrap();
+    let opened = ledger
+        .open_family_area(f.group_id.clone(), served_area(2, spec, Some(&seal_self_grant(2, spec))), 1)
+        .unwrap();
+    let guard = accept(&ledger, FamilyGuard::Absent).expect("a guard");
+    assert_eq!(guard.areas.values().copied().collect::<Vec<_>>(), vec![opened.opened.version]);
+    assert_eq!(opened.opened.version, 2);
+    // Held, the same chain and folders again: nothing new to write.
+    assert_eq!(accept(&ledger, FamilyGuard::Held { pin: guard.clone() }), None);
+    // A guard held from before the folder opened rises to it.
+    let raised = accept(&ledger, FamilyGuard::Held { pin: plain.clone() }).expect("a raised guard");
+    assert_eq!(raised, guard);
+    // The wipe, with that raised guard never stored. Over the floor an unreadable guard drops
+    // nothing and hands back the floor's guard; a held guard that is no pin is refused.
+    let forget = |held: FamilyGuard| ledger.forget_group(f.group_id.clone(), held, CHECKED.into());
+    let store_first = |guard: &GroupPin, unreadable| GroupForget {
+        forgotten: false,
+        guard: Some(guard.clone()),
+        unreadable,
+    };
+    assert_eq!(forget(FamilyGuard::Unreadable).unwrap(), store_first(&guard, true));
+    let junk = GroupPin { roster_digest: "junk".into(), ..plain.clone() };
+    assert!(forget(FamilyGuard::Held { pin: junk.clone() }).is_err());
+    // Held at the plain one: nothing dropped, the guard to store first, folder included, the same
+    // however often it is asked; stored, the wipe goes through, and then nothing is left.
+    assert_eq!(forget(FamilyGuard::Held { pin: plain.clone() }).unwrap(), store_first(&guard, false));
+    assert_eq!(forget(FamilyGuard::Held { pin: plain }).unwrap(), store_first(&guard, false));
+    assert_eq!(
+        forget(FamilyGuard::Held { pin: guard.clone() }).unwrap(),
+        GroupForget { forgotten: true, guard: None, unreadable: false }
+    );
+    let gone = GroupForget { forgotten: false, guard: None, unreadable: false };
+    assert_eq!(forget(FamilyGuard::Absent).unwrap(), gone);
+    // With no floor an unreadable guard does not hold the wipe up; one that is no pin is refused.
+    assert_eq!(forget(FamilyGuard::Unreadable).unwrap(), gone);
+    assert!(forget(FamilyGuard::Held { pin: junk }).is_err());
+}

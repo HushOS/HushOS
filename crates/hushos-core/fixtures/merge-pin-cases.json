@@ -187,12 +187,64 @@
                 "checkedAt": "2026-06-01T00:00:00.000Z",
                 "keyVersion": 1,
                 "groupKeyDigest": "key1",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "behind"
+        },
+        {
+            "name": "crossed-later-roster-earlier-group-key",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
                 "rosterVersion": 6,
                 "rosterDigest": "roster6",
                 "areas": {}
             },
             "opened": [],
-            "expected": "behind"
+            "expected": "conflict"
+        },
+        {
+            "name": "crossed-earlier-roster-later-group-key",
+            "groupId": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+            "current": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 1,
+                "groupKeyDigest": "key1",
+                "rosterVersion": 6,
+                "rosterDigest": "roster6",
+                "areas": {}
+            },
+            "next": {
+                "firstEd25519PublicKey": "Zmlyc3Q",
+                "firstMlDsaPublicKeyDigest": "ZGlnZXN0",
+                "checkedAt": "2026-06-01T00:00:00.000Z",
+                "keyVersion": 2,
+                "groupKeyDigest": "key2",
+                "rosterVersion": 5,
+                "rosterDigest": "roster5",
+                "areas": {}
+            },
+            "opened": [],
+            "expected": "conflict"
         },
         {
             "name": "conflict-roster",

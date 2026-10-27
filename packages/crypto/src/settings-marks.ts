@@ -1,5 +1,6 @@
 import { CryptoError } from './errors';
 import { openSettings, type ContactPin, type Settings, type SettingsEnvelope } from './contacts';
+import type { PairMark } from './group-trust';
 import type { GroupPin } from './pins';
 
 /*
@@ -17,10 +18,16 @@ export const OLDER_SETTINGS =
 
 export type SettingsMarks = {
     userId: string;
-    /* `{ ...settings.groups }`: each family's pin as filed, checked (checkGroupPin) only when acceptance reads it. */
+    /* `{ ...settings.groups }` when it is an object: each family's pin as filed, checked (checkGroupPin) only when acceptance reads it. */
     pins: Record<string, GroupPin>;
     /* `{ ...settings.contacts }`: the only pins an admission or a join code reads. */
     contacts: Record<string, ContactPin>;
+    /*
+     * `{ ...settings.familyChecks }` when it is an object: each family's check record as filed
+     * (docs/optional-verification.md 3.4), read only when acceptance takes
+     * that family's marks (familyCheckOf).
+     */
+    checks: Record<string, unknown>;
     /* Whether they came from a settings document that opened, not from "none". */
     opened: boolean;
     /* The highest settings version opened in this unlock (0: none): an older copy served again is refused. */
@@ -38,6 +45,17 @@ export function refuseDowngrade(held: SettingsMarks | null, userId: string) {
 }
 
 /*
+ * A member read as the core reads `groups` and `familyChecks`: an object's own
+ * members, and nothing from anything else (spreading an array or a string would
+ * file its items under "0", "1", …).
+ */
+function plainObject(value: unknown): Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+}
+
+/*
  * The marks after `settings` (null: none stored) opened at `settingsVersion`,
  * or refused as a downgrade: none after settings that opened, or a document
  * older than the highest one opened in this unlock (a server serving 6, then
@@ -46,7 +64,7 @@ export function refuseDowngrade(held: SettingsMarks | null, userId: string) {
 export function settingsMarks(
     held: SettingsMarks | null,
     userId: string,
-    settings: { groups?: unknown; contacts?: unknown } | null,
+    settings: { groups?: unknown; contacts?: unknown; familyChecks?: unknown } | null,
     settingsVersion = 0,
 ): SettingsMarks {
     if (settings === null) refuseDowngrade(held, userId);
@@ -54,8 +72,9 @@ export function settingsMarks(
         throw new CryptoError(OLDER_SETTINGS);
     return {
         userId,
-        pins: { ...(settings?.groups as Record<string, GroupPin> | undefined) },
+        pins: { ...(plainObject(settings?.groups) as Record<string, GroupPin>) },
         contacts: { ...(settings?.contacts as Record<string, ContactPin> | undefined) },
+        checks: { ...plainObject(settings?.familyChecks) },
         opened: settings !== null,
         settingsVersion: settings === null ? 0 : settingsVersion,
     };
@@ -80,6 +99,29 @@ export function contactPinOf(
         if (typeof filed === 'string' && filed.toLowerCase() === wanted) return pin as ContactPin;
     }
     return null;
+}
+
+/*
+ * The family's check record as filed: whether there is one (any value but
+ * none or a JSON null), and the pair mark acceptance holds it as. A record
+ * without a `code` (the migration's `before` record, docs/optional-verification.md
+ * 7.2) is a mark but no pair mark; anything else (an array too, as the core
+ * reads it) is handed to acceptance as a pair mark, which refuses that family
+ * alone when it is malformed.
+ */
+export function familyCheckOf(
+    marks: SettingsMarks,
+    groupId: string,
+): { checked: boolean; pairMarks: PairMark[] } {
+    const record = Object.hasOwn(marks.checks, groupId) ? marks.checks[groupId] : null;
+    if (record === null || record === undefined) return { checked: false, pairMarks: [] };
+    if (typeof record === 'object' && !Array.isArray(record) && !Object.hasOwn(record, 'code'))
+        return { checked: true, pairMarks: [] };
+    const { rosterVersion, with: other, code } = record as Record<string, unknown>;
+    return {
+        checked: true,
+        pairMarks: [{ rosterVersion, with: other, code } as PairMark],
+    };
 }
 
 /* The family's settings pin as filed: null for none or a JSON null (acceptance filters both out). */

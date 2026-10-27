@@ -1364,6 +1364,1370 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "a-first-use-joins-once",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 2,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 2,
+                        "checkedAt": "2026-10-18T12:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "This join code was already used to join. Compare it again."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-needs-the-head-to-let-them-in",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 1
+                    },
+                    "expect": {
+                        "status": "not-admitted"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 4
+                    },
+                    "expect": {
+                        "status": "not-admitted"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 2,
+                    "served": {
+                        "history": "main",
+                        "through": 4
+                    },
+                    "expect": {
+                        "status": "not-admitted"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-finishes-against-the-roster-it-took",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "other",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-rejoin-is-decided-by-the-marks",
+            "settings": "pin-main-2",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5,
+                        "checkedAt": "2026-10-15T00:00:00.000Z"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "checkedAt": "2026-10-15T00:00:00.000Z"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "the-guard-is-a-mark-a-wipe-keeps",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "unreadable",
+                    "expect": {
+                        "status": "refused",
+                        "message": "HushOS couldn’t check this right now."
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "other",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "unreadable",
+                    "expect": {
+                        "status": "refused",
+                        "message": "HushOS couldn’t check this right now."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "guard": "pin-main-2",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                }
+            ]
+        },
+        {
+            "name": "no-first-use-before-settings-open",
+            "settings": "not-open",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Open your settings first."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-family-check-is-a-mark-that-fixes-no-keys",
+            "settings": "checked-before",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These group keys have not been checked: compare the join code first."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-check-record-that-is-no-pair-mark-refuses-the-family",
+            "settings": "checked-malformed",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 2
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "Invalid pair mark."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "the-guard-advances-and-a-replay-below-it-is-refused",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 5
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-guard-not-stored-is-handed-back-by-the-wipe-which-drops-nothing-until-it-is",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 3,
+                        "keyVersion": 1
+                    }
+                },
+                {
+                    "op": "forget",
+                    "stored": false,
+                    "expect": {
+                        "status": "store-first",
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        },
+                        "unreadable": false
+                    }
+                },
+                {
+                    "op": "forget",
+                    "stored": false,
+                    "expect": {
+                        "status": "store-first",
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        },
+                        "unreadable": false
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 3,
+                        "keyVersion": 1
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "overtaken",
+                        "split": false
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "store-first",
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        },
+                        "unreadable": false
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This is an older member list than this device has seen."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "the-session-floor-is-a-mark-for-first-use",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "main",
+                        "through": 3,
+                        "cut": "bad-signature"
+                    },
+                    "expect": {
+                        "status": "refused"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                }
+            ]
+        },
+        {
+            "name": "an-unreadable-guard-holds-the-wipe-only-over-a-floor",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "forget",
+                    "guard": "unreadable",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null,
+                        "unreadable": false
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 1,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "forget",
+                    "guard": "unreadable",
+                    "stored": false,
+                    "expect": {
+                        "status": "store-first",
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 1,
+                            "areas": {}
+                        },
+                        "unreadable": true
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-later-group-key-at-the-same-roster-moves-the-floor",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removalBare",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removalBare",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removal",
+                        "through": 5
+                    },
+                    "guard": "held",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "store-first",
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-record-binds-its-first-keys",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "madeUp",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "refused",
+                        "message": "These are not the group keys this person checked."
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checked": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-first-use-record-binds-its-group-key",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "checked": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-guard-that-disagrees-with-the-floor-holds-the-wipe-and-drops-nothing",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 3,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This family looks different from what this device already checked, so nothing of it was removed."
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This family looks different from what this device already checked, so nothing of it was removed."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "held",
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-guard-crossed-with-the-floor-is-two-histories-and-holds-the-wipe",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 1
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This family looks different from what this device already checked, so nothing of it was removed."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-guard-ahead-of-the-floor-holds-the-wipe-even-from-another-history",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 4
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 4
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "removal",
+                        "through": 4
+                    },
+                    "guard": "none",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 4,
+                        "guard": {
+                            "rosterVersion": 4,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This device already checked a later member list for this family. Sync it first, then remove it."
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This device already checked a later member list for this family. Sync it first, then remove it."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 4
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
         }
     ]
 }

@@ -20,7 +20,8 @@
 use crate::bytes::{decode, encode};
 use crate::canonical::{ascending, bytes_of, digest_of, integer, uuid};
 use crate::contacts::{
-    digest_base64url, digest_hex, identity_fingerprint, key_digest, pin_verified, same_key_digest,
+    digest_base64url, digest_hex, identity_fingerprint, key_digest, pin_trust, same_key_digest, PinKeys,
+    PinTrust,
 };
 use crate::error::{input, CoreError, CoreResult};
 use crate::groups::{
@@ -223,6 +224,7 @@ pub struct AcceptedRosters {
     pub(crate) own_entry_behind_at: Vec<u64>,
     pub(crate) dead_branches: Vec<DeadBranch>,
     pub(crate) cache: GroupChainCache,
+    pub(crate) checked: Option<FamilyChecked>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -317,6 +319,62 @@ impl AcceptedRosters {
     pub fn cache(&self) -> GroupChainCache {
         self.cache.clone()
     }
+    /// Whether this person vouched for the family in this acceptance, and
+    /// through which roster (docs/optional-verification.md 3.3): they created
+    /// it, compared a join code, or compared a pair code with another member
+    /// (a pair mark held). Worked out by acceptance from its anchor and the
+    /// marks, never passed in; none for a first-use chain and for one accepted
+    /// on marks alone. Not kept in the cache.
+    pub fn checked(&self) -> Option<FamilyChecked> {
+        self.checked.clone()
+    }
+}
+
+/// What vouches for a family's version 1 keys when nothing marks it on this
+/// device (docs/optional-verification.md 3.3), replacing `first_keys_checked`.
+/// With any mark the marks decide the version 1 keys and an anchor vouches for
+/// nothing; with no mark and no anchor nothing is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum GroupAnchor {
+    /// The app holds the seed of this creation, and the served first keys are its public key.
+    Created,
+    /// The join code the person compared (the join mark, which must then be given).
+    Join,
+    /// Nothing: the served keys are taken because nothing contradicts them, only
+    /// on the join path, only with no mark at all (no pair mark either), and only
+    /// for a reader whose entry is active at the head of the served chain.
+    FirstUse,
+}
+
+/// A family check this person made (docs/optional-verification.md 3.4): the
+/// pair code they compared with member `with` over the roster at
+/// `roster_version`. Held as a mark: the chain must hold a roster there over
+/// which the pair code of this account and `with` is `code`, else the hard
+/// warning, and a chain short of it is a rollback. Never a join mark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PairMark {
+    pub roster_version: u64,
+    pub with: String,
+    pub code: Vec<String>,
+}
+
+/// How a family was vouched for in an acceptance ([`AcceptedRosters::checked`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum CheckedHow {
+    Created,
+    Join,
+    Compared,
+}
+
+/// [`AcceptedRosters::checked`]: how, and through which roster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FamilyChecked {
+    pub how: CheckedHow,
+    pub roster_version: u64,
 }
 
 /// Where a mark came from: a pin, this device's cache, or the chain served.
@@ -325,8 +383,10 @@ impl AcceptedRosters {
 pub enum MarkSource {
     Pin,
     Cache,
-    /// The newcomer's join mark (`accept_rosters_joining`).
+    /// The newcomer's join mark (`accept_rosters_joining`), or a first use's joins record.
     Join,
+    /// A family check this person made ([`PairMark`]).
+    Pair,
     Served,
 }
 
@@ -346,16 +406,56 @@ pub struct JoinMark {
     pub code: Vec<String>,
 }
 
-fn check_join_mark(mark: &JoinMark) -> CoreResult<()> {
-    if mark.code.len() != 12
-        || !mark
-            .code
+fn twelve_words(code: &[String]) -> bool {
+    code.len() == 12
+        && code
             .iter()
             .all(|word| (3..=8).contains(&word.len()) && word.bytes().all(|c| c.is_ascii_lowercase()))
-    {
+}
+
+fn check_join_mark(mark: &JoinMark) -> CoreResult<()> {
+    if !twelve_words(&mark.code) {
         return Err(input("Invalid join mark."));
     }
     integer(mark.roster_version, "join mark")?;
+    Ok(())
+}
+
+/*
+ * A family check record as the settings document carries it, as a pair mark (the worker hands
+ * the raw value to acceptance, whose checkPairMark refuses what is not one): `with` a string and
+ * `code` twelve words, else invalid; `rosterVersion` a safe integer from 1, else invalid.
+ */
+pub(crate) fn pair_mark_of(value: &serde_json::Value) -> CoreResult<PairMark> {
+    let invalid = || input("Invalid pair mark.");
+    let with = value.get("with").and_then(serde_json::Value::as_str).ok_or_else(invalid)?;
+    let code: Vec<String> = value
+        .get("code")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(invalid)?
+        .iter()
+        .map(|word| word.as_str().map(str::to_string))
+        .collect::<Option<_>>()
+        .ok_or_else(invalid)?;
+    if !twelve_words(&code) {
+        return Err(invalid());
+    }
+    let roster_version = value
+        .get("rosterVersion")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|n| n.fract() == 0.0 && *n >= 1.0 && *n <= crate::signatures::MAX_SAFE_INTEGER as f64)
+        .ok_or_else(invalid)? as u64;
+    let mark = PairMark { roster_version, with: with.to_string(), code };
+    check_pair_mark(&mark)?;
+    Ok(mark)
+}
+
+fn check_pair_mark(mark: &PairMark) -> CoreResult<()> {
+    if !twelve_words(&mark.code) {
+        return Err(input("Invalid pair mark."));
+    }
+    integer(mark.roster_version, "pair mark")?;
+    uuid(&mark.with, "user id")?;
     Ok(())
 }
 
@@ -380,15 +480,80 @@ pub fn join_code(
     input.extend(decode("rosterDigest", digest_of(&roster_digest, "roster digest")?, Some(32))?);
     input.extend(decode("groupKeyDigest", &group_key_digest_of(&group_key)?, Some(32))?);
     input.extend(integer(group_key_version, "group key version")?.to_be_bytes());
-    let hash = sha2::Sha256::digest(&input);
+    Ok(code_words(&sha2::Sha256::digest(&input)))
+}
+
+/* The top 132 bits of a hash as twelve 11-bit words of the BIP-39 English list, as fingerprint words are read. */
+fn code_words(hash: &[u8]) -> Vec<String> {
     let list = crate::recovery::wordlist();
     let bit = |index: usize| (hash[index / 8] >> (7 - index % 8)) & 1;
-    Ok((0..12)
+    (0..12)
         .map(|word| {
             let value = (0..11).fold(0usize, |value, offset| (value << 1) | bit(word * 11 + offset) as usize);
             list[value].to_string()
         })
-        .collect())
+        .collect()
+}
+
+/// The pair code two members compare to check each other and their view of
+/// the family (docs/optional-verification.md 3.4): SHA-256 of
+/// "hushos/group/pair-code/v1" || rosterDigest || groupKeyDigest ||
+/// groupKeyVersion as 8 bytes big-endian || lowerId || higherId, read as the
+/// join code is (twelve words, 132 bits). The ids are the two lowercase
+/// account ids, sorted, 36 ASCII bytes each, so the code of one pair is never
+/// another pair's: a server labelling a planted entry with another member's
+/// name gets other words. Its own domain: a pair code never stands for a join
+/// code, nor the reverse. Two equal ids are refused. The web's `pairCodeOf`
+/// gives the same words; [`pair_code`] is what a screen shows.
+const PAIR_CODE_DOMAIN: &str = "hushos/group/pair-code/v1";
+
+pub fn pair_code_of(
+    roster_digest: &str,
+    group_key: &GroupPublicKey,
+    group_key_version: u64,
+    user_id: &str,
+    other_user_id: &str,
+) -> CoreResult<Vec<String>> {
+    use sha2::Digest as _;
+    let mut ids = [uuid(user_id, "user id")?.to_string(), uuid(other_user_id, "user id")?.to_string()];
+    ids.sort();
+    if ids[0] == ids[1] {
+        return Err(input("A pair code is between two members."));
+    }
+    let mut input = PAIR_CODE_DOMAIN.as_bytes().to_vec();
+    input.extend(decode("rosterDigest", digest_of(roster_digest, "roster digest")?, Some(32))?);
+    input.extend(decode("groupKeyDigest", &group_key_digest_of(group_key)?, Some(32))?);
+    input.extend(integer(group_key_version, "group key version")?.to_be_bytes());
+    input.extend(ids[0].as_bytes());
+    input.extend(ids[1].as_bytes());
+    Ok(code_words(&sha2::Sha256::digest(&input)))
+}
+
+/* The group key version the roster at `version` is under: one above every succession tied to an earlier roster. */
+fn key_version_at<'a>(ties: impl Iterator<Item = &'a u64>, version: u64) -> u64 {
+    1 + ties.filter(|tie| **tie < version).count() as u64
+}
+
+/// The pair code of `user_id` and `other_user_id` over the roster at
+/// `version` on an accepted chain, under the group key it is under. Checks
+/// no entry: [`pair_code`] is what a screen shows.
+pub fn pair_code_at(
+    chain: &AcceptedRosters,
+    version: u64,
+    user_id: &str,
+    other_user_id: &str,
+) -> CoreResult<Vec<String>> {
+    if version < 1 || version > chain.roster_digests.len() as u64 {
+        return Err(input("This member list is not on the family’s history."));
+    }
+    let key_version = key_version_at(chain.cache.successions.iter().map(|s| &s.last_roster_version), version);
+    pair_code_of(
+        &chain.roster_digests[version_index(version)],
+        &chain.group_keys[version_index(key_version)],
+        key_version,
+        user_id,
+        other_user_id,
+    )
 }
 
 /// One side of a conflict between marks: a digest, who holds it, and the
@@ -689,7 +854,7 @@ fn ml_dsa_digest(public_key: &str) -> Option<String> {
 }
 
 /* Whether the served identity is exactly the one an entry names: X25519, Ed25519, both digests, key version. */
-fn served_is_entry(served: &ServedKeys, entry: &RosterMember) -> bool {
+pub(crate) fn served_is_entry(served: &ServedKeys, entry: &RosterMember) -> bool {
     served.key_version == entry.key_version && served_keys_are_entry(served, entry)
 }
 
@@ -720,6 +885,8 @@ const NOT_GROUP_SIGNED: &str = "This roster is not signed by the group key.";
 const NO_SUCCESSION: &str = "A group key succession is missing.";
 const NOT_NEW_KEY: &str = "This group key succession does not replace the key with a new one.";
 const NOT_CHECKED: &str = "These are not the group keys this person checked.";
+/// Refused when [`GroupAnchor::FirstUse`] vouches for a chain whose head has no active entry for the reader.
+pub const NOT_LET_IN: &str = "This account is not in this family yet.";
 const NOT_BY_OLD_KEY: &str = "This group key succession is not signed by the key it replaces.";
 const NOT_TIED: &str = "This group key succession is not tied to a roster on the member list.";
 const OUT_OF_ORDER: &str = "This group key succession is out of order.";
@@ -1254,9 +1421,9 @@ fn by_digest<T>(
 /// Accepts a group's roster chain (2.4, 2.5, 2.7; the web's `acceptRosters`):
 ///
 /// - `first_keys` are the version 1 group keys as served. They must be the
-///   ones every pin and the cache name; with neither, `first_keys_checked`
-///   must say the person just compared the words over them, or nothing is
-///   accepted;
+///   ones every pin and the cache name; with neither, `anchor` must vouch for
+///   them ([`GroupAnchor`]; `FirstUse` only with no pair mark either, and only
+///   for a reader whose entry is active at the head), or nothing is accepted;
 /// - `pins` are every group pin this person holds and `cache` this device's
 ///   record of what it verified ([`AcceptedRosters::cache`]): the person's
 ///   marks;
@@ -1279,7 +1446,7 @@ fn by_digest<T>(
 pub fn accept_rosters(
     group_id: String,
     first_keys: GroupPublicKey,
-    first_keys_checked: bool,
+    anchor: Option<GroupAnchor>,
     pins: Vec<GroupPin>,
     rosters: Vec<SignedGroupStatement>,
     successions: Vec<SignedGroupStatement>,
@@ -1290,7 +1457,7 @@ pub fn accept_rosters(
     accept_rosters_joining(
         group_id,
         first_keys,
-        first_keys_checked,
+        anchor,
         pins,
         rosters,
         successions,
@@ -1298,17 +1465,20 @@ pub fn accept_rosters(
         me,
         cache,
         None,
+        vec![],
     )
 }
 
-/// `accept_rosters` with the newcomer's join mark ([`JoinMark`]): the join code
-/// they compared with the admitting admin's screen, held as one of their marks.
+/// `accept_rosters` with the newcomer's join mark ([`JoinMark`]: the join code
+/// they compared with the admitting admin's screen; with anchor
+/// [`GroupAnchor::Join`], or none beside the marks that decide) and the family
+/// checks the person made ([`PairMark`]), each held as one of their marks.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::too_many_arguments)]
 pub fn accept_rosters_joining(
     group_id: String,
     first_keys: GroupPublicKey,
-    first_keys_checked: bool,
+    anchor: Option<GroupAnchor>,
     pins: Vec<GroupPin>,
     rosters: Vec<SignedGroupStatement>,
     successions: Vec<SignedGroupStatement>,
@@ -1316,11 +1486,12 @@ pub fn accept_rosters_joining(
     me: OwnIdentities,
     cache: Option<GroupChainCache>,
     join_mark: Option<JoinMark>,
+    pair_marks: Vec<PairMark>,
 ) -> CoreResult<RosterChain> {
     match accept(
         &group_id,
         first_keys,
-        first_keys_checked,
+        anchor,
         pins,
         &rosters,
         &successions,
@@ -1328,6 +1499,7 @@ pub fn accept_rosters_joining(
         Some(&me),
         cache,
         join_mark.as_ref(),
+        &pair_marks,
     ) {
         Ok((chain, _)) => Ok(RosterChain::Accepted { chain: Arc::new(chain) }),
         Err(Stop::Fork(of, version, sides)) => Ok(RosterChain::Fork { of, version, sides }),
@@ -1360,7 +1532,7 @@ fn first_keys_mark(ed25519_public_key: &str, ml_dsa_public_key_digest: Option<&s
 fn accept(
     group_id: &str,
     first_keys: GroupPublicKey,
-    first_keys_checked: bool,
+    anchor: Option<GroupAnchor>,
     pins: Vec<GroupPin>,
     rosters: &[SignedGroupStatement],
     successions: &[SignedGroupStatement],
@@ -1368,6 +1540,7 @@ fn accept(
     me: Option<&OwnIdentities>,
     cache: Option<GroupChainCache>,
     join_mark: Option<&JoinMark>,
+    pair_marks: &[PairMark],
 ) -> Result<(AcceptedRosters, BTreeMap<u64, CoreError>), Stop> {
     uuid(group_id, "group id")?;
     let pins =
@@ -1375,6 +1548,18 @@ fn accept(
     let cached = cache.map(|cache| check_cache(group_id, cache)).transpose()?;
     if let Some(mark) = join_mark {
         check_join_mark(mark)?;
+    }
+    for mark in pair_marks {
+        check_pair_mark(mark)?;
+    }
+    // A join is anchored by the code compared; a join mark comes with a join, or beside the marks
+    // that decide (a rejoin), never with another anchor.
+    let joining = anchor == Some(GroupAnchor::Join);
+    if (joining && join_mark.is_none()) || (join_mark.is_some() && !joining && anchor.is_some()) {
+        return Err(input("A join is anchored by the join code compared, and only a join is.").into());
+    }
+    if !pair_marks.is_empty() && me.is_none() {
+        return Err(input("Invalid pair mark.").into());
     }
 
     // (1) The person's marks: the pins' and the cache's rosters, group keys and version 1 keys.
@@ -1443,7 +1628,14 @@ fn accept(
     }
     let successions = by_digest(successions, parse_succession)?;
     // The served version 1 keys must be the ones the marks agree on, or, with no mark at all, the
-    // ones the person just checked the words over.
+    // ones the anchor vouches for. First use vouches only where nothing at all marks the family: a
+    // family check is a mark too, though it fixes no first keys.
+    let first_use = first_marks.is_empty() && anchor == Some(GroupAnchor::FirstUse) && pair_marks.is_empty();
+    let vouched = match anchor {
+        None => false,
+        Some(GroupAnchor::FirstUse) => first_use,
+        Some(_) => true,
+    };
     match first_marks.first() {
         Some(mark) => {
             let served = first_keys_mark(
@@ -1454,7 +1646,7 @@ fn accept(
                 return Err(input(NOT_CHECKED).into());
             }
         }
-        None if !first_keys_checked => {
+        None if !vouched => {
             return Err(input("These group keys have not been checked: compare the join code first.").into())
         }
         None => {}
@@ -1565,8 +1757,7 @@ fn accept(
         let digest = chain_digest(mark.roster_version);
         // The group key that roster is under: one above every succession tied to an earlier roster.
         let key_version =
-            1 + state.verified.values().filter(|out| out.last_roster_version < mark.roster_version).count()
-                as u64;
+            key_version_at(state.verified.values().map(|out| &out.last_roster_version), mark.roster_version);
         let code = join_code(digest.clone(), state.keys[version_index(key_version)].clone(), key_version)?;
         if code != mark.code {
             return Err(Stop::Fork(
@@ -1585,6 +1776,46 @@ fn accept(
                     },
                 ]),
             ));
+        }
+    }
+    // The pair marks: each family check this person made, by its code over the roster compared and
+    // the two accounts (this one, and the member compared with), in version order.
+    let mut by_version: Vec<&PairMark> = pair_marks.iter().collect();
+    by_version.sort_by_key(|mark| mark.roster_version);
+    for mark in by_version {
+        if mark.roster_version > head {
+            return Err(input(OLDER).into());
+        }
+        let digest = chain_digest(mark.roster_version);
+        let key_version =
+            key_version_at(state.verified.values().map(|out| &out.last_roster_version), mark.roster_version);
+        let reader = me.expect("checked above").user_id.as_str();
+        let code =
+            pair_code_of(&digest, &state.keys[version_index(key_version)], key_version, reader, &mark.with)?;
+        if code != mark.code {
+            return Err(Stop::Fork(
+                ForkOf::Roster,
+                mark.roster_version,
+                sides(vec![
+                    MarkSide {
+                        digest: mark.code.join(" "),
+                        from: vec![MarkSource::Pair],
+                        signer_user_id: None,
+                    },
+                    MarkSide {
+                        digest: digest.clone(),
+                        from: vec![MarkSource::Served],
+                        signer_user_id: verified_signers.get(&digest).cloned(),
+                    },
+                ]),
+            ));
+        }
+    }
+    // First use takes the served version 1 keys only for a reader the head admits.
+    if first_use {
+        let head_roster = &state.held.last().expect("a roster").roster;
+        if !me.and_then(|me| head_roster.entry(&me.user_id)).is_some_and(|entry| entry.active_with(None)) {
+            return Err(input(NOT_LET_IN).into());
         }
     }
     // Group key marks: each the chain's; beyond it, a rollback (or a succession withheld).
@@ -1715,6 +1946,19 @@ fn accept(
         own_entry_behind_at,
         dead_branches,
         cache,
+        checked: match (anchor, join_mark) {
+            (Some(GroupAnchor::Created), _) => {
+                Some(FamilyChecked { how: CheckedHow::Created, roster_version: 1 })
+            }
+            (_, Some(mark)) => {
+                Some(FamilyChecked { how: CheckedHow::Join, roster_version: mark.roster_version })
+            }
+            _ => pair_marks
+                .iter()
+                .map(|mark| mark.roster_version)
+                .min()
+                .map(|roster_version| FamilyChecked { how: CheckedHow::Compared, roster_version }),
+        },
     };
     Ok((chain, state.refused))
 }
@@ -1726,10 +1970,12 @@ fn extend(
     successions: &[SignedGroupStatement],
     ml_dsa_keys: &HashMap<String, String>,
 ) -> CoreResult<(AcceptedRosters, BTreeMap<u64, CoreError>)> {
+    // The cache is the mark: its first keys are the chain's own, vouched for when it was first
+    // accepted, so no anchor is passed.
     match accept(
         &chain.group_id,
         chain.group_keys[0].clone(),
-        true,
+        None,
         vec![],
         rosters,
         successions,
@@ -1737,6 +1983,7 @@ fn extend(
         None,
         Some(chain.cache.clone()),
         None,
+        &[],
     ) {
         Ok(result) => Ok(result),
         Err(Stop::Fork(..)) => Err(input(NOT_FOLLOWING)),
@@ -1901,27 +2148,33 @@ pub struct VerifiedPin {
     pub trusted_via: Option<String>,
 }
 
-/// A new member's entry, only from the keys their words check confirmed: a
-/// version 3 pin of them that verifies, and a served identity whose four keys
-/// are the pinned ones (the lattice keys by digest) and whose keys statement
-/// holds. Anything else and nobody is added. Not exported to the apps (Core
-/// 6): an admission takes the pin from settings the ledger opened itself
-/// ([`crate::AreaLedger::admit_body`]), never one an app built.
+/// A new member's entry, only from keys this person's devices pinned: a
+/// version 3 pin of them, verified (a words check) or first-seen
+/// (docs/optional-verification.md 3.3: the keys served when they were let
+/// in), and a served identity whose four keys are the pinned ones (the
+/// lattice keys by digest) and whose keys statement holds. Never from a pin
+/// trusted through a group, which is that group's word. Anything else and
+/// nobody is added; which roles such an entry may carry is the caller's rule
+/// (3.6). Not exported to the apps (Core 6): an admission takes the pin from
+/// settings the ledger opened itself ([`crate::AreaLedger::admit_body`]),
+/// never one an app built.
 pub fn roster_entry_new(
     pin: VerifiedPin,
     served: PublicIdentity,
     roles: Vec<GroupRole>,
     roster_version: u64,
 ) -> CoreResult<RosterMember> {
-    // A pin trusted through a group is that group's word, not a words check of the newcomer.
+    // A pin trusted through a group is that group's word, not a pin of the newcomer.
+    let trust = pin_trust(PinKeys {
+        key_version: Some(pin.key_version),
+        encryption_public_key: pin.encryption_public_key.clone(),
+        signing_public_key: pin.signing_public_key.clone(),
+        ml_dsa_public_key_hash: Some(pin.ml_dsa_public_key_hash.clone()),
+        kem_public_key_hash: Some(pin.kem_public_key_hash.clone()),
+        fingerprint: pin.fingerprint.clone(),
+    });
     let checked = pin.trusted_via.is_none()
-        && pin_verified(
-            pin.encryption_public_key.clone(),
-            pin.signing_public_key.clone(),
-            Some(pin.ml_dsa_public_key_hash.clone()),
-            Some(pin.kem_public_key_hash.clone()),
-            pin.fingerprint.clone(),
-        )
+        && matches!(trust, PinTrust::Verified | PinTrust::Seen)
         && identity_verify_keys(pin.user_id.clone(), served.clone())
         && served.encryption_public_key == pin.encryption_public_key
         && served.signing_public_key == pin.signing_public_key
@@ -2861,7 +3114,7 @@ mod tests {
     }
 
     struct Over {
-        checked: bool,
+        checked: Option<GroupAnchor>,
         pins: Vec<GroupPin>,
         rosters: Option<Vec<SignedGroupStatement>>,
         successions: Option<Vec<SignedGroupStatement>>,
@@ -2874,7 +3127,7 @@ mod tests {
     impl Default for Over {
         fn default() -> Self {
             Over {
-                checked: true,
+                checked: Some(GroupAnchor::Created),
                 pins: vec![],
                 rosters: None,
                 successions: None,
@@ -3032,7 +3285,7 @@ mod tests {
             chain.roster_digests,
             f.h.rosters.iter().map(|r| digest(&r.statement)).collect::<Vec<_>>()
         );
-        refused(newcomer(&f, Over { checked: false, ..Over::default() }), "have not been checked");
+        refused(newcomer(&f, Over { checked: None, ..Over::default() }), "have not been checked");
     }
 
     #[test]
@@ -3157,7 +3410,7 @@ mod tests {
                 &f,
                 Over {
                     pins: vec![pin_of(&f.h, 2, &f.keys)],
-                    checked: false,
+                    checked: None,
                     rosters: Some(fabricated),
                     ..Over::default()
                 },
@@ -4057,7 +4310,7 @@ mod tests {
                 &keys,
                 Over {
                     pins,
-                    checked: false,
+                    checked: None,
                     rosters: Some(rosters),
                     successions: Some(successions),
                     ..Over::default()
@@ -4355,7 +4608,6 @@ mod tests {
             Over {
                 cache: Some(three.cache.clone()),
                 rosters: Some(vec![f.h.rosters[3].clone()]),
-                checked: false,
                 ..Over::default()
             },
         ));
@@ -4625,6 +4877,43 @@ mod tests {
         let wrong_words =
             VerifiedPin { fingerprint: "0000 0000 0000 0000 0000 0000 0000 0000 0000 0000".into(), ..pin };
         assert!(roster_entry_new(wrong_words, adult.served(), vec![], 4).is_err());
+    }
+
+    #[test]
+    fn a_new_member_s_entry_comes_from_a_first_seen_pin_of_the_served_keys_and_never_from_a_group_s_word() {
+        // docs/optional-verification.md 3.3: the keys served when they were let in, pinned first-seen.
+        let (adult, outsider) = (Person::new(2), Person::new(5));
+        let seen = VerifiedPin { fingerprint: String::new(), ..verified_pin(&adult) };
+        assert_eq!(
+            roster_entry_new(seen.clone(), adult.served(), vec![GroupRole::Members], 4).unwrap(),
+            adult.entry(&[GroupRole::Members], 4, MemberStatus::Active)
+        );
+        // Not the served identity's keys, or a statement that does not hold: nobody is added.
+        assert!(roster_entry_new(seen.clone(), outsider.served(), vec![], 4).is_err());
+        let mut swapped = adult.served();
+        swapped.encryption_public_key = outsider.served().encryption_public_key;
+        assert!(roster_entry_new(seen.clone(), swapped, vec![], 4).is_err());
+        let unsigned = PublicIdentity { keys_signature: outsider.served().keys_signature, ..adult.served() };
+        assert!(roster_entry_new(seen.clone(), unsigned, vec![], 4).is_err());
+        // A pin trusted through a family is the family's word, first-seen or verified.
+        let via = Some(GROUP.to_string());
+        assert!(roster_entry_new(
+            VerifiedPin { trusted_via: via.clone(), ..seen.clone() },
+            adult.served(),
+            vec![],
+            4
+        )
+        .is_err());
+        assert!(roster_entry_new(
+            VerifiedPin { trusted_via: via, ..verified_pin(&adult) },
+            adult.served(),
+            vec![],
+            4
+        )
+        .is_err());
+        // A fingerprint over other keys is neither verified nor first-seen.
+        let other = VerifiedPin { fingerprint: verified_pin(&outsider).fingerprint, ..seen };
+        assert!(roster_entry_new(other, adult.served(), vec![], 4).is_err());
     }
 
     #[test]
@@ -5835,7 +6124,7 @@ mod tests {
             accept_rosters_joining(
                 GROUP.into(),
                 h.key(1),
-                true,
+                Some(GroupAnchor::Join),
                 vec![],
                 h.rosters.clone(),
                 h.successions.clone(),
@@ -5843,6 +6132,7 @@ mod tests {
                 reader(),
                 None,
                 Some(mark),
+                vec![],
             )
         };
         assert!(matches!(accept_with(mark.clone()), Ok(RosterChain::Accepted { .. })));
@@ -6273,7 +6563,7 @@ mod tests {
             accept_rosters(
                 GROUP.into(),
                 h.key(1),
-                true,
+                Some(GroupAnchor::Created),
                 vec![],
                 vec![],
                 vec![],
@@ -6336,7 +6626,7 @@ mod tests {
         accept_rosters(
             GROUP.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             rosters,
             vec![],
@@ -6550,7 +6840,7 @@ mod tests {
         let chain = accept_rosters(
             GROUP.into(),
             group_public_key(group_seed_at(1)).unwrap(),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             vec![signed],
             vec![],

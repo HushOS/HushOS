@@ -341,8 +341,10 @@ export function documents(target: Target): Uint8Array[] {
                     };
                     const other = '00000002-abcd-4abc-8abc-abcdefabcdef';
                     const familyPin = g.cases.flatMap((k: Json) => k.input.pins)[0];
+                    const pairWords = coreRosterCalls().pairCodes[0].outcome.code;
                     const probe = {
-                        users: [user, user.toUpperCase(), other],
+                        // Canonical ids only (the documents file them in any case).
+                        users: [user, other],
                         groups: [GROUP, other],
                     };
                     const text = (doc: Json) => JSON.stringify(doc);
@@ -370,6 +372,39 @@ export function documents(target: Target): Uint8Array[] {
                             groups: { [GROUP]: { junk: 1 } },
                         },
                         { version: 2, contacts: null, groups: [familyPin] },
+                        // Family check records (docs/optional-verification.md 3.4): a pair mark, the
+                        // migration's `before`, malformed ones, an array, and checks of another shape.
+                        {
+                            version: 2,
+                            contacts: {},
+                            groups: { [GROUP]: familyPin },
+                            familyChecks: {
+                                [GROUP]: {
+                                    rosterVersion: 2,
+                                    with: other,
+                                    code: pairWords,
+                                    checkedAt: '2026-10-18T12:00:00.000Z',
+                                },
+                                [other]: { how: 'before', rosterVersion: 2 },
+                            },
+                        },
+                        {
+                            version: 2,
+                            contacts: {},
+                            familyChecks: {
+                                [GROUP]: { rosterVersion: 2, with: 'someone', code: 'words' },
+                                [other]: [],
+                            },
+                        },
+                        {
+                            version: 2,
+                            contacts: {},
+                            familyChecks: {
+                                [GROUP]: { rosterVersion: 0, with: other, code: pairWords },
+                                [other]: null,
+                            },
+                        },
+                        { version: 2, contacts: {}, familyChecks: [{ rosterVersion: 2 }] },
                         { version: 2.0, contacts: [] },
                         { version: 3, contacts: {} },
                         { version: 2 },
@@ -415,6 +450,73 @@ export function documents(target: Target): Uint8Array[] {
                     grant: { key: [0, 1] },
                     selfGrant: null,
                 }),
+                // Pair codes: every pair of the roster-call documents, swapped ids, one member with
+                // themselves, a device holding another's keys, someone never admitted, and the bare
+                // code over each roster of that family.
+                ...(() => {
+                    const d = coreRosterCalls();
+                    const ids = [
+                        '00000001-abcd-4abc-8abc-abcdefabcdef',
+                        '00000002-abcd-4abc-8abc-abcdefabcdef',
+                    ];
+                    return [
+                        ...d.pairCodes.map((k: Json) =>
+                            json({ kind: 'pair_code', me: k.me, other: k.other }),
+                        ),
+                        json({ kind: 'pair_code', me: 1, other: 2, as: 2 }),
+                        json({ kind: 'pair_code', me: 2, other: 3, as: 1 }),
+                        json({ kind: 'pair_code', me: 2, other: 2 }),
+                        json({ kind: 'pair_code', me: 5, other: 1 }),
+                        ...(d.family.rosters as Json[]).flatMap((roster: Json, at: number) =>
+                            [ids, [ids[1], ids[0]], [ids[0], ids[0]]].map(([userId, otherUserId]) =>
+                                json({
+                                    kind: 'pair_code',
+                                    rosterDigest: sha256(bytes(roster.statement)).toString(
+                                        'base64url',
+                                    ),
+                                    groupKey: d.family.firstKeys,
+                                    groupKeyVersion: at + 1,
+                                    userId,
+                                    otherUserId,
+                                }),
+                            ),
+                        ),
+                    ];
+                })(),
+                // Joins records sealed as the join fixtures' person 2 keeps them: a first use at
+                // roster 2 and a join mark there, read back over histories that hold them and ones
+                // that do not, both at once, a first use that is no object, other versions and families.
+                ...(() => {
+                    const d = coreJoin().joinPreviews;
+                    const at = '2026-10-18T12:00:00.000Z';
+                    const code = d.cases.find((k: Json) => k.name === 'admitted-at-roster-2')
+                        .expected.code;
+                    const joinMark = { rosterVersion: 2, code };
+                    const firstUse = d.pinMain2;
+                    const records = [
+                        { v: 4, groupId: GROUP, firstUse },
+                        { v: 3, groupId: GROUP, joinMark, checkedAt: at },
+                        { v: 4, groupId: GROUP, joinMark, checkedAt: at },
+                        { v: 4, groupId: GROUP, firstUse, joinMark, checkedAt: at },
+                        { v: 4, groupId: GROUP, firstUse: [], joinMark, checkedAt: at },
+                        { v: 3, groupId: GROUP, firstUse },
+                        { v: 4, groupId: GROUP, firstUse: { ...firstUse, rosterVersion: 3 } },
+                        { v: 5, groupId: GROUP, firstUse },
+                        { v: 4, groupId: '00000002-abcd-4abc-8abc-abcdefabcdef', firstUse },
+                        null,
+                    ];
+                    const served = [
+                        { history: 'main', through: 2 },
+                        { history: 'main', through: 5 },
+                        { history: 'madeUp', through: 3 },
+                        { history: 'other', through: 3 },
+                    ];
+                    return records.flatMap((record, i) =>
+                        (i < 2 ? served : served.slice(1, 2)).map((where) =>
+                            json({ kind: 'joins_record', record, served: where }),
+                        ),
+                    );
+                })(),
                 // Each twin's chain records as the device record cases hold them, and no record.
                 ...[coreLedger(), webLedger()].flatMap((f: Json) =>
                     f.deviceRecords.cases
@@ -459,6 +561,33 @@ export function documents(target: Target): Uint8Array[] {
                             ),
                         }),
                     ),
+                // Marks across histories that share statements but not signatures (ML-DSA signs at
+                // random): removal's first three rosters continue as removalFork's (accepted, no
+                // mark passed), succ's three as succOther's (another succession below 3: the fork).
+                ...(
+                    [
+                        ['removal', 3, 'removalFork', 4],
+                        ['succ', 3, 'succOther', 3],
+                    ] as const
+                ).flatMap(([took, at, then, through]) => [
+                    json({
+                        kind: 'join_session',
+                        settings: 'none',
+                        steps: [
+                            { op: 'first-use', served: { history: took, through: at } },
+                            { op: 'accept', matched: 0, served: { history: then, through } },
+                        ],
+                    }),
+                    json({
+                        kind: 'join_session',
+                        settings: 'none',
+                        steps: [
+                            { op: 'first-use', served: { history: took, through: at } },
+                            { op: 'accept', matched: 0, served: { history: took, through: at } },
+                            { op: 'sync', served: { history: then, through }, guard: 'held' },
+                        ],
+                    }),
+                ]),
                 // "They match" and the join on the same served chain, right and misheard.
                 ...(
                     [

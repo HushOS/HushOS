@@ -38,8 +38,10 @@ import {
     foldInEntry,
     groupIntegrityOf,
     groupWriterTrust,
+    pairCodeOf,
     pinAfter,
     type AcceptInput,
+    type GroupAnchor,
     type AcceptedRosters,
     type GroupChainCache,
     type ServedIdentity,
@@ -520,7 +522,7 @@ export type History = Awaited<ReturnType<typeof history>>;
  */
 export const READER = {
     me: { userId: 'ffffffff-ffff-4fff-8fff-ffffffffffff', identities: [] as ServedKeys[] },
-    firstKeysChecked: true,
+    anchor: 'created' as GroupAnchor | null,
     pins: [] as GroupPin[],
     cache: null as GroupChainCache | null,
 };
@@ -543,6 +545,8 @@ export function inputOf(
         successions: [...h.successions],
         mlDsaKeys: mlDsaKeysOf(...people),
         ...READER,
+        // A join mark is held only by a join: the anchor it comes with.
+        ...(over.joinMark ? { anchor: 'join' as const } : {}),
         ...over,
     };
 }
@@ -693,6 +697,7 @@ export type CaseVerdict =
           root?: 'current' | 'uncommitted' | 'refused';
           deadBranches?: { version: number; signerUserId: string }[];
           ownEntryBehindAt?: number[];
+          checked?: { how: string; rosterVersion: number } | null;
       }
     | { status: 'fork'; of: 'roster' | 'group-key'; version: number; sides: number }
     | { status: 'refused' };
@@ -785,7 +790,7 @@ export async function groupCases(): Promise<GroupCase[]> {
         });
         cases.push({
             name: 'unchecked-first-keys',
-            input: { ...fromOne(h), firstKeysChecked: false },
+            input: { ...fromOne(h), anchor: null },
             expected: refused,
         });
         // The person's marks: a pin naming another roster 2; two pins at 2 that disagree; a group
@@ -1600,7 +1605,7 @@ export async function groupCases(): Promise<GroupCase[]> {
         const pin2 = await pinOf(h, 2, everyone);
         cases.push({
             name: 'unsigned-chain-vs-pin',
-            input: { ...fromOne(h), pins: [pin2], firstKeysChecked: false, rosters: fabricated },
+            input: { ...fromOne(h), pins: [pin2], anchor: null, rosters: fabricated },
             expected: refused,
         });
         const two = await acceptedTo(h, 2, everyone);
@@ -1609,7 +1614,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 cache: two.cache,
-                firstKeysChecked: false,
+                anchor: null,
                 rosters: [
                     unsigned(
                         rosterStatement({
@@ -1664,7 +1669,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [await pinOf(h, 3, everyone)],
-                firstKeysChecked: false,
+                anchor: null,
                 successions: [...h.successions, early],
             },
             expected: accepted(3),
@@ -1679,7 +1684,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [atTwo],
-                firstKeysChecked: false,
+                anchor: null,
                 rosters: h.rosters.slice(0, 2),
                 successions: [early],
             },
@@ -1691,7 +1696,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [await pinOf(h, 3, everyone)],
-                firstKeysChecked: false,
+                anchor: null,
                 successions: [early],
             },
             expected: refused,
@@ -1702,7 +1707,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [await pinOf(h, 3, everyone)],
-                firstKeysChecked: false,
+                anchor: null,
                 rosters: [
                     ...h.rosters.slice(0, 2),
                     await signRoster(h.statements[2]!, await groupKeyAt(7), organizer.signer),
@@ -1717,7 +1722,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [await pinOf(h, 3, everyone)],
-                firstKeysChecked: false,
+                anchor: null,
                 rosters: [
                     ...h.rosters.slice(0, 2),
                     await signRoster(
@@ -1737,7 +1742,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [await pinOf(h, 3, everyone)],
-                firstKeysChecked: false,
+                anchor: null,
                 rosters: [
                     ...h.rosters.slice(0, 2),
                     await signRoster(
@@ -1793,7 +1798,11 @@ export async function groupCases(): Promise<GroupCase[]> {
         const atTwo = await rosterDigest(h.rosters[1]!.statement);
         const key1 = h.keys[0]!.publicKey;
         const mark = { rosterVersion: 2, code: await joinCode(atTwo, key1, 1) };
-        const joining = (joinMark: typeof mark) => ({ ...fromOne(h), joinMark });
+        const joining = (joinMark: typeof mark) => ({
+            ...fromOne(h),
+            anchor: 'join' as const,
+            joinMark,
+        });
         cases.push({ name: 'join-mark-holds', input: joining(mark), expected: accepted(2) });
         cases.push({
             name: 'join-mark-other-roster',
@@ -1841,6 +1850,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             name: 'join-mark-after-succession',
             input: {
                 ...fromOne(after),
+                anchor: 'join' as const,
                 joinMark: {
                     rosterVersion: 3,
                     code: await joinCode(atThree, after.keys[1]!.publicKey, 2),
@@ -1852,6 +1862,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             name: 'join-mark-after-succession-first-key',
             input: {
                 ...fromOne(after),
+                anchor: 'join' as const,
                 joinMark: {
                     rosterVersion: 3,
                     code: await joinCode(atThree, after.keys[0]!.publicKey, 1),
@@ -1864,6 +1875,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             name: 'join-mark-at-succession-tie',
             input: {
                 ...fromOne(after),
+                anchor: 'join' as const,
                 joinMark: {
                     rosterVersion: 2,
                     code: await joinCode(
@@ -1900,6 +1912,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             name: 'join-mark-made-up-first-keys-succession',
             input: {
                 ...fromOne(after),
+                anchor: 'join' as const,
                 firstKeys: made.publicKey,
                 rosters: [
                     ...(await Promise.all(after.rosters.slice(0, 2).map(remade))),
@@ -2392,7 +2405,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [pin2],
-                firstKeysChecked: false,
+                anchor: null,
                 firstKeys: serverKey.publicKey,
                 rosters: [madeUp],
                 successions: [],
@@ -2533,7 +2546,7 @@ export async function groupCases(): Promise<GroupCase[]> {
             input: {
                 ...fromOne(h),
                 pins: [held],
-                firstKeysChecked: false,
+                anchor: null,
                 rosters: h.rosters.slice(0, 2),
                 successions: [],
             },
@@ -3120,6 +3133,231 @@ export async function groupCases(): Promise<GroupCase[]> {
             expected: refused,
         });
     }
+    // docs/optional-verification.md 3.3 and 3.4: what each anchor vouches for, first use, and the
+    // pair marks a family check leaves. Roster 2 admits the adult and the child together, roster
+    // 3 the holder; the adult reads.
+    {
+        const h = await history();
+        await h.roster(organizer, [owner]);
+        await h.roster(organizer, [owner, adult.entry([]), child.entry([])]);
+        await h.roster(organizer, [owner, adult.entry([]), child.entry([]), holder.entry([])]);
+        const asAdult = { userId: adult.userId, identities: [servedKeysOf(adult)] };
+        const asHolder = { userId: holder.userId, identities: [servedKeysOf(holder)] };
+        const key1 = h.keys[0]!.publicKey;
+        const at = async (version: number) => rosterDigest(h.rosters[version - 1]!.statement);
+        const pairAt = async (version: number, a: Person, b: Person) =>
+            pairCodeOf(await at(version), key1, 1, a.userId, b.userId);
+        const checked = (how: string, rosterVersion: number) => ({ how, rosterVersion });
+        const made = await groupKeyAt(7);
+        // The same roster bytes and signers' signatures, group-signed again by a key the server made.
+        const madeUp = await Promise.all(
+            h.rosters.map(async (at) => ({
+                ...at,
+                signature: await signGroup(at.statement, made),
+            })),
+        );
+        const pin2 = await pinOf(h, 2, everyone);
+        const pin3 = await pinOf(h, 3, everyone);
+        const firstUse = (over: Partial<AcceptInput> = {}) => ({
+            ...fromOne(h),
+            anchor: 'first-use' as const,
+            me: asAdult,
+            ...over,
+        });
+        cases.push({
+            name: 'anchor-created-is-checked',
+            input: fromOne(h),
+            expected: { ...accepted(3), checked: checked('created', 1) },
+        });
+        cases.push({
+            name: 'anchor-join-is-checked-through-its-roster',
+            input: {
+                ...fromOne(h),
+                anchor: 'join',
+                joinMark: { rosterVersion: 2, code: await joinCode(await at(2), key1, 1) },
+            },
+            expected: { ...accepted(3), checked: checked('join', 2) },
+        });
+        cases.push({
+            name: 'anchor-first-use-takes-the-served-keys-unchecked',
+            input: firstUse(),
+            expected: { ...accepted(3), checked: null },
+        });
+        cases.push({
+            name: 'anchor-first-use-for-a-reader-not-let-in',
+            input: firstUse({ me: READER.me }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'anchor-first-use-before-the-head-lets-them-in',
+            input: firstUse({ me: asHolder, rosters: h.rosters.slice(0, 2) }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'anchor-first-use-made-up-keys-taken',
+            input: firstUse({ firstKeys: made.publicKey, rosters: madeUp }),
+            expected: { ...accepted(3), checked: null },
+        });
+        cases.push({
+            name: 'anchor-first-use-beside-a-pin-vouches-for-nothing',
+            input: firstUse({ pins: [pin2], firstKeys: made.publicKey, rosters: madeUp }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'anchor-first-use-beside-a-pin-the-pin-decides',
+            input: firstUse({ pins: [pin2] }),
+            expected: { ...accepted(3), checked: null },
+        });
+        cases.push({
+            name: 'anchor-first-use-beside-a-cache-vouches-for-nothing',
+            input: firstUse({
+                cache: (await acceptedTo(h, 2, everyone)).cache,
+                firstKeys: made.publicKey,
+                rosters: madeUp,
+            }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'anchor-first-use-beside-a-family-check-vouches-for-nothing',
+            input: firstUse({
+                pairMarks: [
+                    { rosterVersion: 2, with: child.userId, code: await pairAt(2, adult, child) },
+                ],
+            }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'anchor-join-without-its-code',
+            input: { ...fromOne(h), anchor: 'join' },
+            expected: refused,
+        });
+        cases.push({
+            name: 'join-mark-under-another-anchor',
+            input: {
+                ...fromOne(h),
+                anchor: 'first-use',
+                me: asAdult,
+                joinMark: { rosterVersion: 2, code: await joinCode(await at(2), key1, 1) },
+            },
+            expected: refused,
+        });
+        cases.push({
+            name: 'join-mark-beside-a-pin-is-checked',
+            input: {
+                ...fromOne(h),
+                anchor: null,
+                pins: [pin3],
+                joinMark: { rosterVersion: 2, code: await joinCode(await at(2), key1, 1) },
+            },
+            expected: { ...accepted(3), checked: checked('join', 2) },
+        });
+        const compared = (over: Partial<AcceptInput>) => ({
+            ...fromOne(h),
+            anchor: null,
+            pins: [pin3],
+            me: asAdult,
+            ...over,
+        });
+        cases.push({
+            name: 'pair-mark-holds-and-checks',
+            input: compared({
+                pairMarks: [
+                    { rosterVersion: 2, with: child.userId, code: await pairAt(2, adult, child) },
+                ],
+            }),
+            expected: { ...accepted(3), checked: checked('compared', 2) },
+        });
+        cases.push({
+            name: 'pair-mark-over-another-roster',
+            input: compared({
+                pairMarks: [
+                    { rosterVersion: 2, with: child.userId, code: await pairAt(3, adult, child) },
+                ],
+            }),
+            expected: fork('roster', 2),
+        });
+        // A↔B and A↔C over one roster: the server labelling the child as the holder gets other words.
+        cases.push({
+            name: 'pair-mark-of-another-pair-at-one-roster',
+            input: compared({
+                pairMarks: [
+                    { rosterVersion: 3, with: child.userId, code: await pairAt(3, adult, holder) },
+                ],
+            }),
+            expected: fork('roster', 3),
+        });
+        cases.push({
+            name: 'pair-mark-beyond-the-chain',
+            input: compared({
+                rosters: h.rosters.slice(0, 2),
+                pins: [pin2],
+                pairMarks: [
+                    { rosterVersion: 3, with: child.userId, code: await pairAt(3, adult, child) },
+                ],
+            }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'pair-code-passed-as-a-join-mark',
+            input: {
+                ...fromOne(h),
+                anchor: 'join',
+                joinMark: { rosterVersion: 2, code: await pairAt(2, adult, child) },
+            },
+            expected: fork('roster', 2),
+        });
+        cases.push({
+            name: 'join-code-passed-as-a-pair-mark',
+            input: compared({
+                pairMarks: [
+                    {
+                        rosterVersion: 2,
+                        with: child.userId,
+                        code: await joinCode(await at(2), key1, 1),
+                    },
+                ],
+            }),
+            expected: fork('roster', 2),
+        });
+        cases.push({
+            name: 'pair-mark-with-oneself',
+            input: compared({
+                pairMarks: [
+                    { rosterVersion: 2, with: adult.userId, code: await pairAt(2, adult, child) },
+                ],
+            }),
+            expected: refused,
+        });
+        // After a first use the pin is a mark like any: another roster at its version is the hard
+        // warning, and a chain short of it is refused (pins from a first-use start).
+        const firstAt3 = await acceptRosters(firstUse());
+        if (firstAt3.status !== 'accepted') throw new Error('first use at 3');
+        const firstPin = await pinAfter([], firstAt3, CHECKED);
+        // Another roster 3, admitting the outsider beside the holder.
+        const rival3 = await signRoster(
+            {
+                ...h.statements[2]!,
+                members: sortedMembers([...h.statements[2]!.members, outsider.entry([], 3)]),
+            },
+            h.keys[0]!,
+            organizer.signer,
+        );
+        cases.push({
+            name: 'first-use-pin-against-another-roster-at-its-version',
+            input: firstUse({ pins: [firstPin], rosters: [...h.rosters.slice(0, 2), rival3] }),
+            expected: fork('roster', 3),
+        });
+        cases.push({
+            name: 'first-use-pin-against-a-shorter-chain',
+            input: firstUse({ pins: [firstPin], rosters: h.rosters.slice(0, 2) }),
+            expected: refused,
+        });
+        cases.push({
+            name: 'first-use-pin-against-other-first-keys',
+            input: firstUse({ pins: [firstPin], firstKeys: made.publicKey, rosters: madeUp }),
+            expected: refused,
+        });
+    }
     return cases;
 }
 
@@ -3299,6 +3537,7 @@ export async function verdictOf(
             keyHistory: chain.keyHistory,
             deadBranches: chain.deadBranches,
             cache: chain.cache,
+            checked: chain.checked,
             ...(record ? { record: await recordVerdict(chain, record) } : {}),
             ...(next ? { next: await nextVerdict(chain, next, input.mlDsaKeys) } : {}),
             ...(root ? { root: await rootVerdict(chain, root) } : {}),
