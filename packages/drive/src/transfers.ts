@@ -475,6 +475,8 @@ export function createTransferManager(options: TransferManagerOptions) {
     } = options;
     const uploads = new Map<string, Internal>();
     const order: string[] = [];
+    /* Begins on their way to the server: the upload id each will answer, or null if it fails. */
+    const beginning = new Map<Internal, { workspaceId: string; answer: Promise<string | null> }>();
     const listeners = new Set<() => void>();
     /*
      * Key epochs come from the server in ranges, one range per workspace per
@@ -1117,8 +1119,10 @@ export function createTransferManager(options: TransferManagerOptions) {
             // Padded: the object has the chunks of its bucket, which may be more than the file needs.
             set(u, { total: prepared.ciphertextSize, chunkCount: prepared.chunkCount });
             let begun: Awaited<ReturnType<DriveApi['beginUpload']>>;
+            // Known while on its way, so a release can wait for the reservation it makes.
+            let answer: Promise<string | null> | undefined;
             try {
-                begun = await api.beginUpload(workspaceId, {
+                const request = api.beginUpload(workspaceId, {
                     node,
                     versionId: u.versionId,
                     versionIdSeed: seeds.version,
@@ -1134,6 +1138,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                     // transaction (UploadMove).
                     ...(u.item.move && { moveOf: u.item.move.of }),
                 });
+                answer = request.then(
+                    (result) => result.upload.id,
+                    () => null,
+                );
+                beginning.set(u, { workspaceId, answer });
+                begun = await request;
             } catch (error) {
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
@@ -1145,6 +1155,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                 if (!(await keyChangeRefused(u, generation, error as DriveApiError, parent)))
                     return;
                 continue;
+            } finally {
+                if (answer && beginning.get(u)?.answer === answer) beginning.delete(u);
             }
             sealed = { nodeEnvelopes, prepared, begun };
         }
@@ -2247,22 +2259,31 @@ export function createTransferManager(options: TransferManagerOptions) {
     /*
      * Another tab is signing out and waits on this one: every upload here stops at once, as
      * invalidate does, and then what each had reserved is released while the session still
-     * answers (the worker's state for it, and the server's reservation, which would otherwise
-     * hold quota until it expires). Never longer than FORGET_TIMEOUT_MS, and nothing is written
+     * answers. The server's reservations (which would otherwise hold quota until they expire)
+     * are aborted at once, those of begins still on their way as soon as they answer, apart
+     * from the worker's state for each, which is dropped beside them: a worker that hangs
+     * never holds up the network. Never longer than FORGET_TIMEOUT_MS, and nothing is written
      * to the journal, which that tab deletes.
      */
     async function releaseAll() {
         const held = [...uploads.values()];
+        const begins = [...beginning.values()];
         invalidate();
+        const abort = (workspaceId: string, uploadId: string) =>
+            api.abortUpload(workspaceId, uploadId).catch(() => {});
         await Promise.race([
-            Promise.allSettled(
-                held.map(async (u) => {
+            Promise.allSettled([
+                ...held.flatMap((u) => (u.uploadId ? [abort(workspaceOf(u), u.uploadId)] : [])),
+                ...begins.map(({ workspaceId, answer }) =>
+                    answer.then((uploadId) =>
+                        uploadId ? abort(workspaceId, uploadId) : undefined,
+                    ),
+                ),
+                ...held.map(async (u) => {
                     await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
                     await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
-                    if (u.uploadId)
-                        await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
                 }),
-            ),
+            ]),
             new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
         ]);
     }

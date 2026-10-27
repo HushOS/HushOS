@@ -132,6 +132,8 @@ function harness(
         /* Held until it resolves: the attach, and the encrypt of a chunk index, still on their way. */
         attachHold?: () => Promise<void>;
         encryptHold?: (index: number) => Promise<void> | undefined;
+        /* The worker's cancel of an upload, held until it resolves (a worker that hangs). */
+        cancelHold?: () => Promise<void>;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -269,6 +271,7 @@ function harness(
                 }
             }
             case 'driveUploadCancel': {
+                await options.cancelHold?.();
                 const set = flying.get((input as CryptoRequests['driveUploadCancel']).objectId);
                 const count = set?.size ?? 0;
                 for (const finish of Array.from(set ?? []))
@@ -1954,6 +1957,47 @@ describe('queued rows and stashed copies', () => {
         expect([...h.server.aborted].sort()).toEqual(['up-1', 'up-2']);
         expect(writes).toEqual([]);
         expect(h.manager.getState().uploads).toHaveLength(0);
+    });
+
+    test('a release waits for a begin still on its way, and aborts what it reserved before it says released', async () => {
+        const h = harness();
+        const begin = h.api.beginUpload;
+        let answer!: () => void;
+        const held = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        h.api.beginUpload = async (ws, input) => {
+            await held;
+            return begin(ws, input);
+        };
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(100);
+        let released = false;
+        const releasing = h.manager.releaseAll().then(() => (released = true));
+        await settle(50);
+        expect(released).toBe(false);
+        // The server answers the begin while the other tab still waits on this one.
+        answer();
+        await releasing;
+        // Aborted before the release was reported, so before that tab ends the session (the
+        // upload's own late begin aborts it once more, harmlessly).
+        expect(h.server.aborted).toContain('up-1');
+    });
+
+    test('a worker that hangs does not hold up releasing the server’s reservations', async () => {
+        const h = harness({
+            send: () => new Promise(() => {}),
+            cancelHold: () => new Promise(() => {}),
+        });
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        void h.manager.releaseAll();
+        await settle(50);
+        expect(h.server.aborted).toEqual(['up-1']);
     });
 
     test('a copy without bytes on this device is reported lost, its reservation released, no file picker offered', async () => {
