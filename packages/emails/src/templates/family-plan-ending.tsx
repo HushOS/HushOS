@@ -177,7 +177,7 @@ export default function FamilyPlanEnding({
                         >
                             {reason === 'payer-left'
                                 ? 'You’re no longer in the family you pay for. Its plan is set to end with the current period, so it won’t renew. Nothing is refunded for the rest of that period.'
-                                : 'The family you pay for was dissolved: it has no members left. Its plan is set to end with the period you paid for, so it won’t renew. Nothing is refunded for the rest of that period.'}
+                                : 'The family you pay for was dissolved: it has no members left. Its plan is set to end with the current period, so it won’t renew. Nothing is refunded for the rest of that period.'}
                         </Text>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
