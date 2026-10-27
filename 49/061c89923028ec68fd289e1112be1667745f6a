@@ -1,0 +1,106 @@
+DESIGN.md
+  h_f7ba60a6997566 315,427,429,506
+apps/web/src/components/app-sidebar.tsx
+  h_f7ba60a6997566 44,439-464,497
+apps/web/src/components/email-step.tsx
+  h_f7ba60a6997566 2,7,22-31,166,335-336,338,341-346,356-406,408-409
+apps/web/src/components/families/create-family-dialog.tsx
+  h_f7ba60a6997566 40-44,53,60-61,69-71,107-113,173,184
+apps/web/src/components/families/no-family.tsx
+  h_f7ba60a6997566 11,35,41-44,46-47,57,59,61-62,64,75-78,148-149
+apps/web/src/lib/api.server.ts
+  h_f7ba60a6997566 1250-1258
+apps/web/src/lib/billing-api.ts
+  h_f7ba60a6997566 14
+apps/web/src/lib/billing.ts
+  h_f7ba60a6997566 29
+apps/web/src/lib/family-signup.test.ts
+  h_f7ba60a6997566 1-348
+apps/web/src/lib/family-signup.ts
+  h_f7ba60a6997566 1-206
+apps/web/src/lib/groups/copy.test.ts
+  h_f7ba60a6997566 2,33-48
+apps/web/src/lib/groups/copy.ts
+  h_f7ba60a6997566 59-62,146-147
+apps/web/src/lib/plans.ts
+  h_f7ba60a6997566 184-185,233
+apps/web/src/routes/_authenticated/app/_drive/family/index.tsx
+  h_f7ba60a6997566 2,16-17,37,77
+apps/web/src/routes/_authenticated/app/billing.tsx
+  h_f7ba60a6997566 2,32,402-403,758
+apps/web/src/routes/_authenticated/app/route.tsx
+  h_f7ba60a6997566 24-31,116-117,121-122,134-156,159,170
+apps/web/src/routes/pricing/route.tsx
+  h_f7ba60a6997566 27-28,676-679,681-688,692-693,695-720,723-728,736-755,766,777,804-809
+apps/web/src/routes/register/index.tsx
+  h_f7ba60a6997566 12,17
+apps/web/src/routes/register/route.tsx
+  h_f7ba60a6997566 7-9,11-14
+bun.lock
+  h_f7ba60a6997566 144
+docs/families-shared-pool.md
+  h_f7ba60a6997566 27,250,275-277
+docs/self-hosting.md
+  h_f7ba60a6997566 585
+e2e/families.spec.ts
+  h_f7ba60a6997566 1727-1781,1783-1784,1786,1789,1793,1795,1801-1828,1831,1833-1863,1865-1953,2266,2376,3216
+packages/auth/src/protocol.ts
+  h_f7ba60a6997566 8-12
+packages/auth/src/server.ts
+  h_f7ba60a6997566 232-234
+packages/billing/package.json
+  h_f7ba60a6997566 26
+packages/billing/src/api.ts
+  h_f7ba60a6997566 201-210,390-391
+packages/billing/src/endings.ts
+  h_f7ba60a6997566 1625,1630
+packages/billing/src/groups.ts
+  h_f7ba60a6997566 1961-1964,2047-2051,2053,2065,2072-2073
+packages/billing/src/server.test.ts
+  h_f7ba60a6997566 1,993-994,996-998,2094-2326,2353-2393,3219-3238,3330-3365,3510-3515,3760-3789,3799,3823,3828,3833,3839,3841-3842,3863,4302,4306,4381,4409,4434,4440,4480,4511-4512,4518,4531,4535,9003
+packages/billing/src/server.ts
+  h_f7ba60a6997566 37,128,131,135-136,151-165,174-208,369-372,374,384-389,579-581,583-589,976-981
+packages/db/drizzle/20261027044529_signup_intent_currency/migration.sql
+  h_f7ba60a6997566 1
+packages/db/drizzle/20261027044529_signup_intent_currency/snapshot.json
+  h_f7ba60a6997566 1-13720
+packages/db/src/auth.test.ts
+  h_f7ba60a6997566 13,86,252-271
+packages/db/src/auth.ts
+  h_f7ba60a6997566 155
+packages/db/src/billing.test.ts
+  h_f7ba60a6997566 5,496-517
+packages/db/src/billing.ts
+  h_f7ba60a6997566 379,385-402
+packages/db/src/groups.one-family.test.ts
+  h_f7ba60a6997566 12,361-364
+packages/db/src/groups.ts
+  h_f7ba60a6997566 577-602,1232-1233,1330-1332
+packages/db/src/readiness.ts
+  h_f7ba60a6997566 14
+packages/db/src/schema/auth.ts
+  h_f7ba60a6997566 23
+packages/db/src/schema/billing.ts
+  h_f7ba60a6997566 91-92
+packages/groups/src/protocol.test.ts
+  h_f7ba60a6997566 1-20
+packages/groups/src/protocol.ts
+  h_f7ba60a6997566 122-137
+packages/groups/src/server.billing.test.ts
+  h_f7ba60a6997566 335,340-342
+packages/groups/src/server.test.ts
+  h_f7ba60a6997566 853-903,934,943-944,979-983,999,1031-1071
+packages/groups/src/server.ts
+  h_f7ba60a6997566 67-68,129-136,1229-1232,1282-1284,1411-1412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "49061c89923028ec68fd289e1112be1667745f6a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
