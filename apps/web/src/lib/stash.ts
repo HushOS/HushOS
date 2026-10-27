@@ -32,8 +32,13 @@ export type StashRoot = Pick<
 >;
 
 export type SealedStash = UploadStash & {
-    /* Seals and writes the bytes, returning the stash's name, or null when they can't be kept. */
-    put(bytes: Uint8Array): Promise<string | null>;
+    /*
+     * Seals and writes the bytes, returning the stash's name, or null when they can't be kept.
+     * With `guard`, only for that account and only while `current()` holds, checked again
+     * after every step: bytes read for one account are never sealed for another, and a stash
+     * that stopped being current while it was written is deleted rather than kept.
+     */
+    put(bytes: Uint8Array, guard?: StashGuard): Promise<string | null>;
     /* Deletes every stash; rejects when it could not, so sign-out can say so. */
     forget(): Promise<void>;
     /* Deletes the stash when an explicit lock happened since it was written. */
@@ -44,6 +49,9 @@ export type SealedStash = UploadStash & {
      */
     dropPlaintext(): Promise<void>;
 };
+
+/* What a copy took when it began: the account it is for, and whether it is still that session. */
+export type StashGuard = { account: string; current: () => boolean };
 
 const notFound = (error: unknown) =>
     error instanceof DOMException && error.name === 'NotFoundError';
@@ -134,9 +142,14 @@ export function createSealedStash(options: {
         options.written.clear();
     }
     const stash: SealedStash = {
-        async put(bytes) {
+        async put(bytes, guard) {
             const userId = options.account();
             if (!userId) return null;
+            const current = () =>
+                !guard || (options.account() === guard.account && guard.current());
+            if (guard && userId !== guard.account) return null;
+            if (!current()) return null;
+            const stale = () => new Error('The copy is no longer this session’s.');
             const name = crypto.randomUUID();
             try {
                 await stash.settle();
@@ -144,18 +157,23 @@ export function createSealedStash(options: {
                 // Marked before anything reaches the disk: a wipe that can't get there then fails.
                 options.written.set();
                 const parts = await options.seal(userId, name, bytes);
+                if (!current()) throw stale();
                 const handle = await (await directory(true)).getFileHandle(name, { create: true });
+                if (!current()) throw stale();
                 const writable = await handle.createWritable();
                 try {
                     for (const part of parts) await writable.write(part as BufferSource);
                     // Wiped meanwhile (a lock, sign-out): this stash must not outlive it.
                     if (generation !== started) throw new Error('The stash was cleared.');
+                    if (!current()) throw stale();
                 } catch (error) {
                     await writable.abort().catch(() => {});
                     throw error;
                 }
                 await writable.close();
+                if (!current()) throw stale();
                 await remember(options.lockRevision());
+                if (!current()) throw stale();
                 return name;
             } catch {
                 await stash.remove(name).catch(() => {});
@@ -267,9 +285,14 @@ if (stashAvailable())
     });
 
 /* Writes the bytes and returns the stash's name, or null when this browser cannot keep them. */
-export async function stashBytes(bytes: Uint8Array): Promise<string | null> {
+export async function stashBytes(bytes: Uint8Array, guard?: StashGuard): Promise<string | null> {
     if (!stashAvailable()) return null;
-    return uploadStash.put(bytes);
+    return uploadStash.put(bytes, guard);
+}
+
+/* Deletes one stash: a copy refused after its bytes were stashed. */
+export async function forgetStashed(name: string) {
+    if (stashAvailable()) await uploadStash.remove(name);
 }
 
 /* At sign-out: every stash goes. Rejects when it could not, so the wipe is reported and retried. */
