@@ -116,7 +116,19 @@ function Stack({ looks, tilted }: { looks: Record<string, Look>; tilted: boolean
                                     transform: `translate(-50%, -50%) ${place}`,
                                 }}
                             >
-                                <span className="absolute top-1/2 right-[calc(100%+24px)] -translate-y-1/2 text-[13px] font-semibold whitespace-nowrap text-foreground sm:text-sm">
+                                {/*
+                                 * Tilted, the slab's top-left corner is its leftmost point on screen, so
+                                 * the name hangs off that corner, out along the diagonal, which the tilt
+                                 * lays level. Beside the left edge it would drop to the slab below.
+                                 */}
+                                <span
+                                    className={cn(
+                                        'absolute text-[13px] font-semibold whitespace-nowrap text-foreground sm:text-sm',
+                                        tilted
+                                            ? 'top-0 left-0 [transform:translate(-50%,-50%)_translate(-44px,-40px)]'
+                                            : 'top-1/2 right-[calc(100%+24px)] -translate-y-1/2',
+                                    )}
+                                >
                                     {layer.short}
                                 </span>
                             </div>
