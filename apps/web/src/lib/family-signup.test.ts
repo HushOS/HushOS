@@ -1,7 +1,7 @@
 import type { FamilyPlan, Plan } from '@hushos/billing/api';
 import { checkGroupName } from '@hushos/groups/protocol';
 import { describe, expect, test } from 'vitest';
-import { defaultFamilyName, familyLanding, familyStanding } from './family-signup';
+import { defaultFamilyName, familyLanding, familyStanding, firstLanding } from './family-signup';
 
 const personal = (prices: Record<string, number>): Plan => ({
     id: 'plus-month',
@@ -165,5 +165,71 @@ describe('familyLanding', () => {
             to: '/app/family',
             search: { create: usdOnly.id, currency: 'usd' },
         });
+    });
+});
+
+describe('firstLanding', () => {
+    type Deps = Parameters<typeof firstLanding>[0];
+    /* The readings an account just signed up for Family Pro would get, each one replaceable. */
+    function deps(overrides: Partial<Deps> = {}) {
+        const forgotten: unknown[] = [];
+        const all: Deps = {
+            summary: async () => ({ intendedPlan: null, intendedFamily: everywhere.id }),
+            capabilities: async () => ({ groups: true }),
+            catalogue: async () => catalogue,
+            hint: async () => india,
+            families: async () => [],
+            forget: async () => {
+                forgotten.push(true);
+            },
+            ...overrides,
+        };
+        return { all, forgotten };
+    }
+
+    test('a family tier opens Create a family with it, and is forgotten once', async () => {
+        const { all, forgotten } = deps();
+        expect(await firstLanding(all)).toEqual({
+            kind: 'go',
+            to: { to: '/app/family', search: { create: everywhere.id, currency: 'inr' } },
+        });
+        expect(forgotten).toHaveLength(1);
+    });
+
+    test('a personal plan goes on to its checkout, and nothing is forgotten', async () => {
+        const { all, forgotten } = deps({
+            summary: async () => ({ intendedPlan: 'plus-month', intendedFamily: null }),
+        });
+        expect(await firstLanding(all)).toEqual({ kind: 'checkout', plan: 'plus-month' });
+        expect(forgotten).toHaveLength(0);
+    });
+
+    test('with no summary, nothing happens and the tier is kept for the next visit', async () => {
+        const { all, forgotten } = deps({
+            summary: async () => {
+                throw new Error('offline');
+            },
+        });
+        expect(await firstLanding(all)).toEqual({ kind: 'stay' });
+        expect(forgotten).toHaveLength(0);
+    });
+
+    test('someone waiting to join a family lands on Family, without the tier', async () => {
+        const { all } = deps({ families: async () => [member('accepted')] });
+        expect(await firstLanding(all)).toEqual({ kind: 'go', to: { to: '/app/family' } });
+    });
+
+    test('where families aren’t served, it goes to Plans without asking for the families', async () => {
+        let asked = false;
+        const { all, forgotten } = deps({
+            capabilities: async () => ({ groups: false }),
+            families: async () => {
+                asked = true;
+                return [];
+            },
+        });
+        expect(await firstLanding(all)).toEqual({ kind: 'go', to: { to: '/app/billing' } });
+        expect(asked).toBe(false);
+        expect(forgotten).toHaveLength(1);
     });
 });

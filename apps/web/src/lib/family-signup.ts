@@ -1,4 +1,4 @@
-import type { Catalogue, FamilyPlan } from '@hushos/billing/api';
+import type { BillingSummary, Catalogue, FamilyPlan } from '@hushos/billing/api';
 import { DEFAULT_CURRENCY } from '@hushos/billing/protocol';
 import { checkGroupName, GROUP_NAME_MAX } from '@hushos/groups/protocol';
 import { pickCurrency, type LocaleHint } from '@/lib/currency';
@@ -121,4 +121,51 @@ export function familyLanding(input: {
     const currency = plan && familySignupCurrency(input.catalogue, plan, input.hint);
     if (!plan || !currency) return { to: '/app/billing' };
     return { to: '/app/family', search: { create: plan.id, currency } };
+}
+
+/* What the first landing after setup reads, and how it forgets the tier: injected, for tests. */
+export type FirstLandingDeps = {
+    summary: () => Promise<Pick<BillingSummary, 'intendedPlan' | 'intendedFamily'>>;
+    capabilities: () => Promise<{ groups?: boolean }>;
+    catalogue: () => Promise<Pick<Catalogue, 'plans' | 'families'>>;
+    hint: () => Promise<LocaleHint | null>;
+    families: () => Promise<readonly Membership[]>;
+    forget: () => Promise<unknown>;
+};
+
+export type FirstLanding =
+    | { kind: 'stay' }
+    | { kind: 'checkout'; plan: string }
+    | { kind: 'go'; to: FamilyLanding };
+
+/*
+ * The first landing once an account is set up and unlocked (the app layout runs it on every
+ * visit): a personal plan chosen at signup goes on to its checkout; a family tier goes where
+ * familyLanding says, once, the server forgetting it so the next visit goes where the person
+ * chooses. Without a summary nothing happens, and the next visit tries again.
+ */
+export async function firstLanding(deps: FirstLandingDeps): Promise<FirstLanding> {
+    const summary = await deps.summary().catch(() => null);
+    if (summary?.intendedFamily) {
+        const settle = <T>(reading: Promise<T>) => reading.catch(() => undefined);
+        const [capabilities, catalogue, hint] = await Promise.all([
+            settle(deps.capabilities()),
+            settle(deps.catalogue()),
+            settle(deps.hint()),
+        ]);
+        const groupsEnabled = capabilities?.groups === true;
+        const families = groupsEnabled ? await settle(deps.families()) : undefined;
+        const to = familyLanding({
+            tier: summary.intendedFamily,
+            groupsEnabled,
+            families,
+            catalogue: catalogue ?? { plans: [], families: [] },
+            hint,
+        });
+        await deps.forget().catch(() => {});
+        return { kind: 'go', to };
+    }
+    return summary?.intendedPlan
+        ? { kind: 'checkout', plan: summary.intendedPlan }
+        : { kind: 'stay' };
 }

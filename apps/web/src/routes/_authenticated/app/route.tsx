@@ -1,4 +1,4 @@
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { SearchIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { authClient } from '@/lib/auth-client';
@@ -28,7 +28,7 @@ import {
     storageQueryOptions,
 } from '@/lib/queries';
 import { capabilitiesQueryOptions, familiesQueryOptions } from '@/lib/families-shell';
-import { familyLanding } from '@/lib/family-signup';
+import { firstLanding } from '@/lib/family-signup';
 import { sessionQueryOptions } from '@/lib/session';
 import { useIsTablet } from '@/hooks/use-mobile';
 import { passesThrough } from '@/lib/own-keys';
@@ -51,29 +51,6 @@ export const Route = createFileRoute('/_authenticated/app')({
     gcTime: 0,
     component: AppLayout,
 });
-
-/* Where a family tier chosen at signup lands (familyLanding), read as things stand now. */
-async function familyLandingFor(queryClient: QueryClient, tier: string, userId: string) {
-    function read<T>(reading: Promise<T>) {
-        return reading.catch(() => undefined);
-    }
-    const [capabilities, catalogue, hint] = await Promise.all([
-        read(queryClient.fetchQuery(capabilitiesQueryOptions)),
-        read(queryClient.fetchQuery(catalogueQueryOptions)),
-        read(queryClient.fetchQuery(localeHintQueryOptions)),
-    ]);
-    const groupsEnabled = capabilities?.groups === true;
-    const families = groupsEnabled
-        ? await read(queryClient.fetchQuery(familiesQueryOptions(userId)))
-        : undefined;
-    return familyLanding({
-        tier,
-        groupsEnabled,
-        families,
-        catalogue: catalogue ?? { plans: [], families: [] },
-        hint,
-    });
-}
 
 function AppLayout() {
     const router = useRouter();
@@ -152,29 +129,30 @@ function AppLayout() {
                 if (needsBackup)
                     await router.navigate({ to: '/setup/recovery-key', replace: true });
                 await queryClient.invalidateQueries(storageQueryOptions);
-                const billing = await queryClient.fetchQuery(billingQueryOptions).catch(() => null);
+                const landing = await firstLanding({
+                    summary: () => queryClient.fetchQuery(billingQueryOptions),
+                    capabilities: () => queryClient.fetchQuery(capabilitiesQueryOptions),
+                    catalogue: () => queryClient.fetchQuery(catalogueQueryOptions),
+                    hint: () => queryClient.fetchQuery(localeHintQueryOptions),
+                    families: () => queryClient.fetchQuery(familiesQueryOptions(current.id)),
+                    // By the server, and in the summary kept here, which the next landing reads.
+                    forget: async () => {
+                        await billingApi.forgetIntendedFamily();
+                        queryClient.setQueryData(
+                            billingQueryOptions.queryKey,
+                            (summary) => summary && { ...summary, intendedFamily: null },
+                        );
+                    },
+                });
                 if (!active) return;
-                // A family tier from the pricing page: Create a family with it, once.
-                if (billing?.intendedFamily) {
-                    const landing = await familyLandingFor(
-                        queryClient,
-                        billing.intendedFamily,
-                        current.id,
-                    );
-                    // Forgotten first, so the next visit goes where the person chooses: by the
-                    // server, and in the summary kept here, which the next landing would read.
-                    await billingApi.forgetIntendedFamily().catch(() => {});
-                    queryClient.setQueryData(
-                        billingQueryOptions.queryKey,
-                        (summary) => summary && { ...summary, intendedFamily: null },
-                    );
-                    if (active) await router.navigate({ ...landing, replace: true });
+                if (landing.kind === 'go') {
+                    await router.navigate({ ...landing.to, replace: true });
                     return;
                 }
-                if (!billing?.intendedPlan) return;
+                if (landing.kind !== 'checkout') return;
                 setCheckingOut(true);
                 try {
-                    const { url } = await billingApi.checkout(billing.intendedPlan);
+                    const { url } = await billingApi.checkout(landing.plan);
                     if (url) {
                         window.location.assign(url);
                         return;
@@ -185,7 +163,7 @@ function AppLayout() {
                 if (active)
                     await router.navigate({
                         to: '/app/billing',
-                        search: { plan: billing.intendedPlan },
+                        search: { plan: landing.plan },
                         replace: true,
                     });
             })
