@@ -1,0 +1,31 @@
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_82a40156bc4902 381
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_6574f8add600c0 31,156-165,169,184-186,197,397
+apps/web/src/components/portal-link.tsx
+  s_566b8e0c4467a4::t_b61139e96f54e0 30
+apps/web/src/lib/family-trash.test.ts
+  s_566b8e0c4467a4::t_f2864195b0db31 1-61
+apps/web/src/lib/family-trash.ts
+  s_566b8e0c4467a4::t_76697e7e158542 1-72
+apps/web/src/routes/_authenticated/app/_drive/trash.tsx
+  s_566b8e0c4467a4::t_12ef20d98deffd 44
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_55f605f0d76743 2938-3000
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e62d952778a08e0cd20b39f4e11f28e44e8aa915",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
