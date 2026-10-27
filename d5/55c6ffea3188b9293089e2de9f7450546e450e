@@ -1,0 +1,25 @@
+apps/web/src/lib/contact-guard.ts
+  s_566b8e0c4467a4::t_d2c6a2ce17af0f 40-46,133-134,137-142
+apps/web/src/lib/contacts.first-use.test.ts
+  s_566b8e0c4467a4::t_14bf83c8af5a34 124-129,145-160,618-656
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_667b5a4355d057 438-439,450,683-684,686-692,694,698-703,776,797,835-850,962,1392,1435
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_558a48fb31a51b 127,132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d555c6ffea3188b9293089e2de9f7450546e450e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
