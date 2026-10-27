@@ -49,6 +49,10 @@ export class DeviceNotCleared extends Error {
  * DeviceNotCleared when anything stayed.
  */
 export async function clearDevice() {
+    // Nothing is queued to upload from here until a sign-in (a removed browser's own path here).
+    await import('@/lib/device-session')
+        .then(({ deviceSession }) => deviceSession.signedOut())
+        .catch((error: unknown) => console.error('Uploads could not be shut here.', error));
     const results = await Promise.allSettled([clearDrive()]);
     results.push(
         ...(await Promise.allSettled([
@@ -89,6 +93,10 @@ export const STOP_UPLOADS_MS = 5_000;
  */
 export async function signOut() {
     announceSignOut();
+    // From here nothing new is queued to upload, nor anything begun before now.
+    await import('@/lib/device-session')
+        .then(({ deviceSession }) => deviceSession.signedOut())
+        .catch((error: unknown) => console.error('Uploads could not be shut here.', error));
     // While this tab is still unlocked: no family key-change retry may sync now, since a sync
     // opens the families' store (hushos-groups) that forgetDevice is deleting, and could hold
     // up its deletion or make it again.

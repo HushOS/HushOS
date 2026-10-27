@@ -163,10 +163,27 @@ export type UploadStash = {
     sweep?(keep: Set<string>): Promise<void>;
 };
 
+/*
+ * Which session of the account uploads are for (the app's device session): `open` is false
+ * from a sign-out until the next sign-in, and `generation` moves on at every sign-out, so work
+ * that began before one (a copy still reading its bytes) can be told apart from work after.
+ */
+export type UploadSession = { open(): boolean; generation(): number };
+
+/* An enqueue refused because the person signed out of this browser after it began. */
+export class SignedOutError extends Error {
+    constructor() {
+        super('You signed out of this browser, so this wasn’t added.');
+        this.name = 'SignedOutError';
+    }
+}
+
 export type TransferManagerOptions = {
     rpc: Rpc;
     api: DriveApi;
     journal?: UploadJournal;
+    /* Without one, every enqueue is taken (tests, and pages with no account). */
+    session?: UploadSession;
     stash?: UploadStash;
     /*
      * Opens the keys a restored upload needs, parents first, and returns the parent
@@ -1567,7 +1584,18 @@ export function createTransferManager(options: TransferManagerOptions) {
         };
     }
 
-    function enqueue(inputs: EnqueueInput[]) {
+    /*
+     * Queues `inputs`. `from` is the session generation the caller took when its work began
+     * (a copy reading its bytes, a move): if the person signed out since, or is signed out
+     * now, nothing is queued, so nothing is journaled after sign-out deleted the journal.
+     */
+    function enqueue(inputs: EnqueueInput[], from?: { generation: number }) {
+        const session = options.session;
+        if (
+            session &&
+            (!session.open() || (from !== undefined && from.generation !== session.generation()))
+        )
+            throw new SignedOutError();
         const ids: string[] = [];
         for (const input of inputs) {
             const id = crypto.randomUUID();

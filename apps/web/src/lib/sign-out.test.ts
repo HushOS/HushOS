@@ -49,6 +49,8 @@ vi.mock('@/lib/groups/store', () => ({ deleteGroupDevice: stores.groups }));
 vi.mock('@/lib/auth-client', () => ({ authClient: auth }));
 vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
 vi.mock('@/lib/session', () => ({ forgetSession }));
+const session = vi.hoisted(() => ({ signedOut: vi.fn() }));
+vi.mock('@/lib/device-session', () => ({ deviceSession: session }));
 const loadPage = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/load-page', () => ({ loadPage }));
 const announced = vi.hoisted(() => vi.fn());
@@ -545,6 +547,8 @@ describe('signing out, before the device is cleared', () => {
         const first = (mock: { mock: { invocationCallOrder: number[] } }) =>
             mock.mock.invocationCallOrder[0]!;
         expect(first(announced)).toBeLessThan(first(auth.logout));
+        // Nothing new is queued to upload from before the uploads are stopped.
+        expect(first(session.signedOut)).toBeLessThan(first(stores.uploads));
         expect(first(auth.logout)).toBeLessThan(first(stores.browser));
         expect(first(auth.logout)).toBeLessThan(first(stores.groups));
     });

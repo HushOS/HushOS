@@ -1,6 +1,7 @@
 import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { copySignatureForms } from '@hushos/drive/trust';
 import type { QueryClient } from '@tanstack/react-query';
+import { deviceSession } from '@/lib/device-session';
 import { driveClient, folderQueryOptions, invalidateFolders, nextName } from '@/lib/drive';
 import { openReader, readAll } from '@/lib/previews';
 import type { MemoryFile } from '@hushos/drive/transfers';
@@ -34,6 +35,8 @@ export async function saveCopy(
     source: 'link' | 'drive',
     onProgress?: (done: number) => void,
 ) {
+    // A sign-out while this reads and seals the bytes means none of it is queued afterwards.
+    const from = { generation: deviceSession.generation() };
     const listing = await queryClient.fetchQuery(folderQueryOptions(destination.id));
     const taken = new Set(listing.children.map((child) => child.name));
     let done = 0;
@@ -64,16 +67,19 @@ export async function saveCopy(
             // Sealed to the stash first: the upload moves the bytes to the worker, after which
             // this page no longer holds them.
             const stash = await stashBytes(bytes);
-            transfers.enqueue([
-                {
-                    file,
-                    parent: into,
-                    name,
-                    origin: 'copy',
-                    signAs: copySignatureForms(node, source),
-                    stash: stash ?? undefined,
-                },
-            ]);
+            transfers.enqueue(
+                [
+                    {
+                        file,
+                        parent: into,
+                        name,
+                        origin: 'copy',
+                        signAs: copySignatureForms(node, source),
+                        stash: stash ?? undefined,
+                    },
+                ],
+                from,
+            );
         } finally {
             await reader.close();
         }

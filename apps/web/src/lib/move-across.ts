@@ -2,6 +2,7 @@ import { contentSize, type DriveNode } from '@hushos/drive/client';
 import type { MemoryFile } from '@hushos/drive/transfers';
 import { copySignatureForms } from '@hushos/drive/trust';
 import type { QueryClient } from '@tanstack/react-query';
+import { deviceSession } from '@/lib/device-session';
 import { driveApi } from '@/lib/drive-api';
 import {
     clientFor,
@@ -91,6 +92,8 @@ export async function moveAcross(
     destination: DriveNode,
     options: { onProgress?: (done: number) => void } = {},
 ) {
+    // A sign-out while this reads and seals the bytes means none of it is queued afterwards.
+    const from = { generation: deviceSession.generation() };
     const into = clientFor(destination.workspaceId);
     const listing = await queryClient.fetchQuery(
         folderQueryOptions(destination.id, destination.workspaceId),
@@ -122,25 +125,28 @@ export async function moveAcross(
             };
             // Sealed to the stash first, so a reload continues the move rather than losing it.
             const stash = await stashBytes(bytes);
-            [id] = transfers.enqueue([
-                {
-                    file,
-                    parent,
-                    name,
-                    origin: 'copy',
-                    // Signed as the person moving it, as a copy is: a family folder's writer
-                    // becomes the mover (docs/families-shared-pool.md 3.8).
-                    signAs: copySignatureForms(node, 'drive'),
-                    stash: stash ?? undefined,
-                    move: {
-                        of: {
-                            workspaceId: node.workspaceId,
-                            nodeId: node.id,
-                            versionId: version.id,
+            [id] = transfers.enqueue(
+                [
+                    {
+                        file,
+                        parent,
+                        name,
+                        origin: 'copy',
+                        // Signed as the person moving it, as a copy is: a family folder's writer
+                        // becomes the mover (docs/families-shared-pool.md 3.8).
+                        signAs: copySignatureForms(node, 'drive'),
+                        stash: stash ?? undefined,
+                        move: {
+                            of: {
+                                workspaceId: node.workspaceId,
+                                nodeId: node.id,
+                                versionId: version.id,
+                            },
                         },
                     },
-                },
-            ]) as [string];
+                ],
+                from,
+            ) as [string];
         } finally {
             await reader.close();
         }
