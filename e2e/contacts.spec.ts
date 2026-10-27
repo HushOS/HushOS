@@ -81,9 +81,19 @@ test('a lookup shows the other person’s fingerprint, and a pin survives a relo
     await expect(alice.getByText(/added$/)).toBeVisible();
     const row = alice.locator(`[data-contact="${bobEmail}"]`);
     await expect(row).toBeVisible();
-    // The key pinned is the one checked, and it can be checked again later.
+    // The key pinned is the one checked, and it can be checked again later. That opens on the
+    // words, not the email form; only a lookup that fails brings the form back, still holding
+    // the address, so it can be corrected.
+    const lookup = '**/api/auth/contacts/lookup';
+    await alice.route(lookup, (route) =>
+        route.continue({ postData: JSON.stringify({ email: 'nobody-here@hushos.local' }) }),
+    );
     await row.getByRole('button', { name: /^More for/ }).click();
     await alice.getByRole('menuitem', { name: 'Check it’s them' }).click();
+    await expect(sheet.getByRole('alert')).toContainText(/No HushOS account/);
+    await expect(sheet.getByLabel('Email')).toHaveValue(bobEmail);
+    await alice.unroute(lookup);
+    await sheet.getByRole('button', { name: 'Look up' }).click();
     await expect(sheet.locator('[data-fingerprint-words]')).toHaveAttribute(
         'data-fingerprint-words',
         bobWords,

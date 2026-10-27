@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ShieldAlertIcon, ShieldCheckIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { FingerprintWords } from '@/components/fingerprint-words';
+import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,7 +50,11 @@ export function CheckContact({
     const queryClient = useQueryClient();
     const id = useId();
     const [email, setEmail] = useState(initialEmail);
-    const [looking, setLooking] = useState(false);
+    // Opened on someone's address, the lookup runs before anything shows: the email form only
+    // appears if it fails, so the address can be corrected (a phone's password manager would
+    // otherwise light up on a field nobody is meant to type in).
+    const [asking, setAsking] = useState(!initialEmail);
+    const [looking, setLooking] = useState(Boolean(initialEmail));
     const [adding, setAdding] = useState(false);
     const [found, setFound] = useState<Lookup | null>(null);
     const [error, setError] = useState('');
@@ -66,6 +71,7 @@ export function CheckContact({
         } catch (cause) {
             cue('error');
             setError(cause instanceof Error ? cause.message : 'Check the address and try again.');
+            setAsking(true);
         } finally {
             setLooking(false);
         }
@@ -117,6 +123,21 @@ export function CheckContact({
         writer !== undefined &&
         found !== null &&
         found.contact.userId.toLowerCase() !== writer.toLowerCase();
+
+    if (!found && !asking)
+        return (
+            <div className="flex flex-col gap-4">
+                <output className="flex min-h-11 items-center gap-2 text-sm text-muted-foreground">
+                    <Spinner className="size-4" />
+                    Getting their words
+                </output>
+                <div className="flex justify-end">
+                    <Button type="button" variant="outline" onClick={onCancel}>
+                        Cancel
+                    </Button>
+                </div>
+            </div>
+        );
 
     if (!found)
         return (
