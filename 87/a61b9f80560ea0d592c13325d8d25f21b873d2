@@ -1,0 +1,25 @@
+apps/web/src/lib/move-across.ts
+  s_566b8e0c4467a4::t_46638c2fdffa5c 16,19,93-94,125-137,139-140
+apps/web/src/lib/save-copy.test.ts
+  s_566b8e0c4467a4::t_fb13436d85c92c 2,4-5,8-12,14-22,24-45,54,56-144,147-186,188-206,208-217
+apps/web/src/lib/save-copy.ts
+  s_566b8e0c4467a4::t_81f41b373cd1bc 4,8-9,32-70,78-79,109-115
+apps/web/src/lib/stash.ts
+  s_566b8e0c4467a4::t_5d7a91a939f03f 35-41,53-55,145,148-152,160,162,168,174,176,288,290-295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87a61b9f80560ea0d592c13325d8d25f21b873d2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
