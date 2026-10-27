@@ -218,8 +218,8 @@ export type ReferralSummary = {
     signup: RewardTotals;
     /* Storage earned when invited accounts first paid for a plan. */
     paid: RewardTotals;
-    /* For a creator with an affiliate record: their code, sign-ups and earnings. */
-    affiliate: AffiliateView | null;
+    /* Every creator this account runs, oldest first, each with its code, sign-ups and earnings; most run none. */
+    affiliates: AffiliateView[];
 };
 
 export type EarningTotals = Record<string, { unpaid: number; paid: number }>;

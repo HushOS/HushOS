@@ -419,18 +419,13 @@ export async function linkAllPendingAffiliates() {
     return rows.length;
 }
 
-/*
- * The creator an account sees on its own page. An account can be linked to
- * more than one; until the product says which, it is always the oldest.
- */
-export async function getAffiliateForUser(userId: string) {
-    const [row] = await db
+/* Every creator an account runs, as its own page lists them: the oldest first. */
+export async function listAffiliatesForUser(userId: string) {
+    return db
         .select()
         .from(affiliates)
         .where(eq(affiliates.userId, userId))
-        .orderBy(affiliates.createdAt, affiliates.id)
-        .limit(1);
-    return row ?? null;
+        .orderBy(affiliates.createdAt, affiliates.id);
 }
 
 export async function findAffiliateByDiscount(providerDiscountId: string) {

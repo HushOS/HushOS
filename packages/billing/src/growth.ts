@@ -97,7 +97,7 @@ export async function getReferralSummary(userId: string): Promise<ReferralSummar
     const summary = await growthRepository.getReferralSummary(userId);
     // A creator enrolled under this account's email before it existed becomes its own here.
     await growthRepository.linkPendingAffiliates(userId);
-    const affiliate = await growthRepository.getAffiliateForUser(userId);
+    const affiliates = await growthRepository.listAffiliatesForUser(userId);
     return {
         code: summary.code,
         url: `${appEnv.APP_ORIGIN}/r/${summary.code}`,
@@ -114,7 +114,7 @@ export async function getReferralSummary(userId: string): Promise<ReferralSummar
             bonusBytes: settings.paidBonusBytes.toString(),
             capBytes: settings.paidCapBytes.toString(),
         },
-        affiliate: affiliate ? await view(affiliate) : null,
+        affiliates: await Promise.all(affiliates.map(view)),
     };
 }
 

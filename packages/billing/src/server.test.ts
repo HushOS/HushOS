@@ -2279,7 +2279,7 @@ describe('affiliates', () => {
         expect(affiliate).toMatchObject({ userId: null, pendingEmail: 'later@hushos.test' });
         // Someone else reading their own page, or the operator reading the list, links nothing.
         const stranger = await createTestAccount();
-        expect((await growth.getReferralSummary(stranger.userId)).affiliate).toBeNull();
+        expect((await growth.getReferralSummary(stranger.userId)).affiliates).toEqual([]);
         expect((await growth.listAffiliates())[0]).toMatchObject({
             userId: null,
             pendingEmail: 'later@hushos.test',
@@ -2301,18 +2301,71 @@ describe('affiliates', () => {
             userId: account.userId,
             pendingEmail: null,
         });
-        expect((await growth.getReferralSummary(account.userId)).affiliate?.id).toBe(affiliate.id);
+        expect(
+            (await growth.getReferralSummary(account.userId)).affiliates.map((a) => a.id),
+        ).toEqual([affiliate.id]);
     });
 
     test('a pending email is linked when its account reads its own page, with no step at sign-up', async () => {
         const affiliate = await later();
         // The account arrives with nothing run for it: a link at sign-up that failed, or never ran.
         const account = await createTestAccount({ email: 'later@hushos.test' });
-        expect((await growth.getReferralSummary(account.userId)).affiliate?.id).toBe(affiliate.id);
+        expect(
+            (await growth.getReferralSummary(account.userId)).affiliates.map((a) => a.id),
+        ).toEqual([affiliate.id]);
         expect((await growth.listAffiliates())[0]).toMatchObject({
             userId: account.userId,
             pendingEmail: null,
         });
+    });
+
+    test('an account behind two creators sees both on its page, oldest first, each with its own earnings', async () => {
+        const first = await creator();
+        // The second is enrolled for an email whose account does not exist yet.
+        const second = await growth.createAffiliate({
+            name: 'Second channel',
+            slug: 'second',
+            code: 'SECOND10',
+            percentOff: 10,
+            duration: 'once',
+            commissionBps: 1000,
+            userEmail: 'fan@hushos.test',
+        });
+        const fan = await createTestAccount({ email: 'fan@hushos.test' });
+        await growth.updateAffiliate(first.id, { userEmail: 'fan@hushos.test' });
+        const buyer = await createTestAccount();
+        await growthRepository.recordEarning({
+            affiliateId: first.id,
+            orderId: 'order_first',
+            userId: buyer.userId,
+            currency: 'usd',
+            netAmount: 1000,
+            commissionBps: 2000,
+        });
+        await growthRepository.recordEarning({
+            affiliateId: second.id,
+            orderId: 'order_second',
+            userId: buyer.userId,
+            currency: 'eur',
+            netAmount: 500,
+            commissionBps: 1000,
+        });
+        // The second is still pending: reading the page links it, into the same list.
+        const read = await growth.getReferralSummary(fan.userId);
+        expect(read.affiliates.map((a) => [a.id, a.userId, a.pendingEmail])).toEqual([
+            [first.id, fan.userId, null],
+            [second.id, fan.userId, null],
+        ]);
+        // The operator edits the older one, so its row is now the newest in the table.
+        await growth.updateAffiliate(first.id, { notes: 'Paid monthly' });
+        const { affiliates } = await growth.getReferralSummary(fan.userId);
+        expect(affiliates.map((a) => a.id)).toEqual([first.id, second.id]);
+        expect(affiliates.map((a) => a.stats.earnings)).toEqual([
+            { usd: { unpaid: 200, paid: 0 } },
+            { eur: { unpaid: 50, paid: 0 } },
+        ]);
+        // Someone else's page lists neither.
+        expect((await growth.getReferralSummary(buyer.userId)).affiliates).toEqual([]);
     });
 
     test('unlinking clears the linked account and a pending email alike', async () => {
@@ -2323,7 +2376,7 @@ describe('affiliates', () => {
             userId: null,
             pendingEmail: null,
         });
-        expect((await growth.getReferralSummary(owner.userId)).affiliate).toBeNull();
+        expect((await growth.getReferralSummary(owner.userId)).affiliates).toEqual([]);
         await growth.updateAffiliate(affiliate.id, { userEmail: 'someone@hushos.test' });
         expect(await growth.updateAffiliate(affiliate.id, { userEmail: null })).toMatchObject({
             userId: null,
@@ -2331,7 +2384,7 @@ describe('affiliates', () => {
         });
         // A cancelled email is not linked later, when an account with it does sign up.
         const someone = await createTestAccount({ email: 'someone@hushos.test' });
-        expect((await growth.getReferralSummary(someone.userId)).affiliate).toBeNull();
+        expect((await growth.getReferralSummary(someone.userId)).affiliates).toEqual([]);
         expect((await growth.listAffiliates())[0]).toMatchObject({ userId: null });
     });
 
@@ -2348,7 +2401,7 @@ describe('affiliates', () => {
         const moved = await growth.updateAffiliate(affiliate.id, { userEmail: 'new@hushos.test' });
         expect(moved).toMatchObject({ userId: null, pendingEmail: 'new@hushos.test' });
         // The old account no longer sees the creator's earnings.
-        expect((await growth.getReferralSummary(owner.userId)).affiliate).toBeNull();
+        expect((await growth.getReferralSummary(owner.userId)).affiliates).toEqual([]);
     });
 
     test('removing an affiliate deletes the discount at Polar, and waits while commission is owed', async () => {
