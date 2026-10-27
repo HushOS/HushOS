@@ -7,8 +7,8 @@
  * leave, by name.
  *
  * A new place that keeps anything about an account, or about what it did, is
- * registered here, or it outlives sign-out. device-data.test.ts reads the
- * source for storage names and fails on any found neither here nor in KEPT.
+ * registered here, or it outlives sign-out, and the file that touches it is
+ * listed in STORAGE_OWNERS (device-data.test.ts holds the source to both).
  * While the account is only locked, what is kept should be sealed under a key
  * the unlocked account alone has (the rollback marks, the stash, families);
  * say so beside the entry when it is not.
@@ -86,6 +86,62 @@ export const KEPT = {
     // selectors and offsets under random keys, nothing of the account.
     session: ['hushos-device-removed', 'tsr-scroll-restoration-v1_3'],
 } as const;
+
+/*
+ * The session and sign-up cookies: HttpOnly, set by the server and cleared by
+ * it (Max-Age=0) when it ends the session (packages/auth/src/http.ts).
+ */
+export const SERVER_COOKIES = ['hushos-session', 'hushos-enrollment'] as const;
+
+type Domain = 'local' | 'session' | 'databases' | 'files' | 'cookies';
+/*
+ * The only files that reach browser storage, and the names each may use, by
+ * where they live: the registered wrappers. device-data.test.ts fails on raw
+ * storage access in any other file, on a name a file uses that it does not
+ * declare here (literal, template or imported constant), and on a declared
+ * name that is not in ACCOUNT_DATA, KEPT or SERVER_COOKIES for the same place.
+ * A name ending in ':' is a prefix.
+ */
+export const STORAGE_OWNERS: Record<string, Partial<Record<Domain, readonly string[]>>> = {
+    'apps/web/src/components/drive/folder-view.tsx': {
+        local: ['hushos.drive.view', 'hushos.folder-sort'],
+    },
+    'apps/web/src/components/drive/json-view.tsx': { local: ['hushos-json-view'] },
+    'apps/web/src/components/ui/sidebar.tsx': { cookies: ['sidebar_state'] },
+    'apps/web/src/lib/theme.ts': { cookies: ['hushos-theme', 'hushos-contrast', 'sidebar_state'] },
+    'apps/web/src/lib/sounds.ts': { local: ['hushos-sounds'] },
+    'apps/web/src/lib/return-to.ts': { local: ['hushos.return'] },
+    'apps/web/src/lib/rollback-marks.ts': {
+        local: [
+            'hushos.marks:',
+            'hushos.settings-seen:',
+            'hushos.settings-document-seen:',
+            'hushos.identity-seen:',
+        ],
+    },
+    'apps/web/src/lib/stash.ts': {
+        files: ['upload-stash-sealed', 'upload-stash-revision', 'upload-stash'],
+        local: ['hushos-stash-written'],
+    },
+    'apps/web/src/lib/family-checkout.ts': { session: ['hushos.family-checkout'] },
+    'apps/web/src/routes/join/route.tsx': { session: ['hushos.invite'] },
+    'apps/web/src/lib/link-sent.ts': { session: ['hushos-link-sent'] },
+    'apps/web/src/lib/groups/store.ts': { databases: ['hushos-groups', 'hushos-drive-mirror:'] },
+    'apps/web/src/lib/groups/client.ts': { databases: [] },
+    'apps/web/src/lib/spaces.ts': { databases: [] },
+    'apps/web/src/lib/drive.ts': { databases: [] },
+    'apps/web/src/lib/transfers.ts': { databases: [] },
+    'packages/auth/src/store.ts': { local: ['hushos-device-unlock'] },
+    'packages/auth/src/client.ts': { local: [], session: ['hushos-device-removed'] },
+    'packages/auth/src/with-storage-events.ts': { local: [] },
+    'packages/auth/src/device-storage.ts': {
+        databases: ['hushos-device-keys', 'hushos-device-identity'],
+    },
+    'packages/auth/src/http.ts': { cookies: ['hushos-session', 'hushos-enrollment'] },
+    'packages/drive/src/mirror.ts': { databases: ['hushos-drive-mirror'] },
+    'packages/drive/src/journal.ts': { databases: ['hushos-drive'] },
+    'packages/drive/src/connection.ts': { databases: [] },
+};
 
 /*
  * Deletes one database, failing (so the caller says so and tries again) when
