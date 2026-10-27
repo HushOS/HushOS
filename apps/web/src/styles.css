@@ -309,6 +309,9 @@
     }
     * {
         @apply border-border outline-ring;
+        /* Thin scrollbars everywhere (dialogs, menus, lists), with the field edge as the thumb, no track. */
+        scrollbar-width: thin;
+        scrollbar-color: var(--input) transparent;
     }
     html {
         text-rendering: optimizeLegibility;
