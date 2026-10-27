@@ -574,6 +574,32 @@ export async function familyOf(userId: string) {
 }
 
 /*
+ * The family `userId` is waiting to join (accepted, not let in yet), if any, and not one that
+ * has dissolved since: being let in would make it their family, so they can't make another
+ * meanwhile (one family per account).
+ */
+async function waitingFamily(tx: Tx | typeof db, userId: string) {
+    const [row] = await tx
+        .select({ groupId: groups.id, name: groups.name })
+        .from(groupMemberships)
+        .innerJoin(groups, eq(groups.id, groupMemberships.groupId))
+        .where(
+            and(
+                eq(groupMemberships.userId, userId),
+                eq(groupMemberships.groupKind, 'family'),
+                eq(groupMemberships.state, 'accepted'),
+                isNull(groups.dissolvedAt),
+            ),
+        )
+        .limit(1);
+    return row ?? null;
+}
+
+export async function waitingFamilyOf(userId: string) {
+    return waitingFamily(db, userId);
+}
+
+/*
  * Whether someone waiting to join `groupId` (accepted, not admitted) is
  * active in another family: route 17 asks before it charges for a place, and
  * only after the caller is known to manage the group, so it tells nobody else.
@@ -1202,6 +1228,8 @@ export type CreateResult =
      * which, or null when the index refused a family that landed after the check.
      */
     | { status: 'in-family'; family: { groupId: string; name: string } | null }
+    /* The creator is waiting to join a family (accepted, not let in): it would be their one. */
+    | { status: 'waiting-to-join'; family: { groupId: string; name: string } }
     | { status: 'invalid'; reason: string };
 
 /*
@@ -1298,6 +1326,9 @@ export async function createGroup(input: {
                 const family =
                     input.kind === 'family' ? await activeFamily(tx, input.creatorUserId) : null;
                 if (family) refuse({ status: 'in-family', family });
+                const waiting =
+                    input.kind === 'family' ? await waitingFamily(tx, input.creatorUserId) : null;
+                if (waiting) refuse({ status: 'waiting-to-join', family: waiting });
                 if (input.ownedLimit !== undefined) {
                     // Only groups they are still in: one handed on and left is no longer theirs.
                     const [owned] = await tx

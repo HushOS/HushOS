@@ -9,6 +9,7 @@ import {
     createTestFamily,
     createTestIdentity,
     resetDatabase,
+    setTestMember,
 } from '../test/helpers';
 import { db } from './client';
 import * as groups from './groups';
@@ -357,8 +358,10 @@ describe('letting someone in', () => {
             tokenHash: await invited(ortega.groupId, maya.userId, sam),
             userId: sam.userId,
         });
-        // Since accepting, Sam made a family of their own.
-        await created(sam, 'family', 'Lindqvist family');
+        // Since accepting, Sam is in another family (let in there: written directly, as making
+        // one while waiting is refused).
+        const lindqvist = await created(await person(), 'family', 'Lindqvist family');
+        await setTestMember({ groupId: lindqvist.groupId, userId: sam.userId, state: 'active' });
         expect(await groups.waitingButInFamily(ortega.groupId, sam.userId)).toBe(true);
         expect(await groups.appendChain(admission(ortega, maya.userId, sam.userId))).toEqual({
             status: 'in-family',

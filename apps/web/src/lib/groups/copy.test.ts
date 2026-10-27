@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { GroupApiError } from './api';
 import { errorCopy, wrongWordsCopy } from './copy';
 
 describe('the hidden words typed wrong', () => {
@@ -26,6 +27,22 @@ describe('a request the client gave up on', () => {
         // Anything else the worker or the server said is still said as it was.
         expect(errorCopy(new Error('Open the family’s folders first, then try again.'))).toBe(
             'Open the family’s folders first, then try again.',
+        );
+    });
+});
+
+describe('creating a family while waiting to join one', () => {
+    test('names the family they wait to join, never as one they’re already in', () => {
+        const waiting = new GroupApiError('', 409, 'in-family', {
+            reason: 'waiting',
+            family: { groupId: 'g1', name: 'Ortega family' },
+        });
+        expect(errorCopy(waiting)).toBe(
+            'You’re joining Ortega family already. Leave that invitation first, then you can create your own.',
+        );
+        const unnamed = new GroupApiError('', 409, 'in-family', { reason: 'waiting' });
+        expect(errorCopy(unnamed)).toBe(
+            'You’re joining a family already. Leave that invitation first, then you can create your own.',
         );
     });
 });

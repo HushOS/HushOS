@@ -819,6 +819,60 @@ describe('one family per account (families-shared-pool 3.2)', () => {
         ]);
     });
 
+    test('someone waiting to join a family can’t create another: they’d be refused once let in', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        await accepted(ortega, sam);
+        const { body } = await familyBody(sam);
+        const refused = await groups.createGroup(sam.userId, body).then(
+            () => null,
+            (error: unknown) => error,
+        );
+        expect(refused).toBeInstanceOf(groups.GroupError);
+        expect(refused).toMatchObject({
+            code: 'in-family',
+            status: 409,
+            message:
+                'You’re joining Ortega family already. Leave that invitation first, then you can create your own.',
+            data: { reason: 'waiting', family: { groupId: ortega.groupId, name: 'Ortega family' } },
+        });
+        expect((await groupsRepository.listGroupsFor(sam.userId)).map((g) => g.id)).toEqual([
+            ortega.groupId,
+        ]);
+        // Once they withdraw from it, they may make their own.
+        await groups.leave(sam.userId, ortega.groupId);
+        await expect(groups.createGroup(sam.userId, body)).resolves.toMatchObject({
+            group: { id: body.id },
+        });
+    });
+
+    test('waiting to join is refused before the creation’s statements are read', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        await accepted(ortega, sam);
+        const { body } = await familyBody(sam);
+        // Statements no device would sign: refused for the waiting, never reaching the checks.
+        const garbled = { ...body, roster: { ...body.roster, statement: 'AA' } };
+        expect(await refusal(groups.createGroup(sam.userId, garbled))).toEqual({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'waiting', family: { groupId: ortega.groupId, name: 'Ortega family' } },
+        });
+    });
+
+    test('a family that dissolved while they waited holds nobody back', async () => {
+        const ortega = await family();
+        const sam = await member();
+        await accepted(ortega, sam);
+        await groups.leave(ortega.organizer.userId, ortega.groupId);
+        const { body } = await familyBody(sam);
+        await expect(groups.createGroup(sam.userId, body)).resolves.toMatchObject({
+            group: { id: body.id },
+        });
+    });
+
     test('opening an invitation says which family you are in; accepting is refused and leaves nothing waiting', async () => {
         const ortega = await family();
         await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
@@ -846,7 +900,7 @@ describe('one family per account (families-shared-pool 3.2)', () => {
         });
     });
 
-    test('letting in someone who made a family since accepting is refused before the call is checked, and only to its managers', async () => {
+    test('letting in someone who joined another family since accepting is refused before the call is checked, and only to its managers', async () => {
         const ortega = await family();
         const sam = await member();
         await accepted(ortega, sam);
@@ -855,7 +909,8 @@ describe('one family per account (families-shared-pool 3.2)', () => {
                 (p) => ({ userId: p.userId, inFamily: p.inFamily }),
             );
         expect(await waiting()).toEqual([{ userId: sam.userId, inFamily: false }]);
-        await family(sam);
+        // Waiting, Sam can't make a family, but can accept another and be let in there first.
+        await admitted(await family(), sam);
         // The waiting list says so before anyone checks words (never which family).
         expect(await waiting()).toEqual([{ userId: sam.userId, inFamily: true }]);
         const before = await head(ortega.groupId);
@@ -888,13 +943,13 @@ describe('one family per account under races', () => {
         const ortega = await family();
         await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
         const sam = await member();
-        await accepted(ortega, sam);
         const built = await familyBody(sam);
         /*
-         * Sam's creation passes every check, its one-family check included, then waits on its
-         * area commitment, which this session has written and not committed. Meanwhile Ortega
-         * family lets Sam in; then the commitment is let go, and the creation's membership
-         * meets the index.
+         * Sam's creation passes every check, its one-family checks included, then waits on its
+         * area commitment, which this session has written and not committed. Meanwhile Sam
+         * accepts Ortega family's invitation and is let in; then the commitment is let go, and
+         * the creation's membership meets the index. (Waiting to join before creating is
+         * refused up front: see 'one family per account'.)
          */
         const blocker = new Client({ connectionString: process.env.DATABASE_URL });
         await blocker.connect();
@@ -910,6 +965,7 @@ describe('one family per account under races', () => {
             );
             creating = refusal(groups.createGroup(sam.userId, built.body));
             expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            await accepted(ortega, sam);
             const { at, call } = await nextRoster(ortega, ortega.organizer, [
                 ...entries(ortega.h),
                 sam.who.entry([]),
@@ -938,6 +994,47 @@ describe('one family per account under races', () => {
         });
         expect(await groupsRepository.getGroupRow(built.groupId)).toBeNull();
         expect((await groupsRepository.familyOf(sam.userId))?.groupId).toBe(ortega.groupId);
+    });
+});
+
+describe('waiting to join, under races', () => {
+    test('a family made as its creator accepts an invitation: the repository, under their lock, refuses it', async () => {
+        const ortega = await family();
+        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
+        const sam = await member();
+        const built = await familyBody(sam);
+        /*
+         * The route's early check finds Sam waiting for nothing; the creation then queues on
+         * Sam's own row, which this session holds while it writes Sam's acceptance of Ortega
+         * family (as accepting does) and commits. The repository's check, under that lock, is
+         * the one left to see it.
+         */
+        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+        await blocker.connect();
+        let creating: Promise<unknown> | undefined;
+        try {
+            await blocker.query('begin');
+            await blocker.query('select id from users where id = $1 for update', [sam.userId]);
+            creating = groups.createGroup(sam.userId, built.body).then(
+                () => null,
+                (error: unknown) => error,
+            );
+            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            await blocker.query(
+                `insert into group_memberships (group_id, group_kind, user_id, state, roles, accepted_at)
+                 values ($1, 'family', $2, 'accepted', '{}', now())`,
+                [ortega.groupId, sam.userId],
+            );
+            await blocker.query('commit');
+        } finally {
+            await blocker.end();
+        }
+        expect(await creating).toMatchObject({
+            code: 'in-family',
+            status: 409,
+            data: { reason: 'waiting', family: { groupId: ortega.groupId, name: 'Ortega family' } },
+        });
+        expect(await groupsRepository.getGroupRow(built.groupId)).toBeNull();
     });
 });
 

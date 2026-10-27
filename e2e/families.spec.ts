@@ -1843,6 +1843,45 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
     });
 });
 
+test.describe.serial('Family for someone waiting to join one', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('offers to finish joining, never Create a family, which would be refused once let in', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        const ines = await person(browser, 'Inês Ortega');
+        // Accepted and not let in, as route 2 lists it (an invitation needs a family with a plan
+        // where plans are sold, so the list is answered here).
+        const groupId = randomUUID();
+        await ines.page.route(
+            (url) => url.pathname === '/api/groups',
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({
+                          json: {
+                              groups: [
+                                  {
+                                      id: groupId,
+                                      kind: 'family',
+                                      name: 'Ortega family',
+                                      state: 'accepted',
+                                  },
+                              ],
+                          },
+                      })
+                    : route.continue(),
+        );
+        await ines.page.goto('/app/family');
+        const page = ines.page.locator('[data-no-family]');
+        await expect(
+            page.getByRole('link', { name: 'Continue joining Ortega family' }),
+        ).toHaveAttribute('href', `/app/families/${groupId}/join`, { timeout: 60_000 });
+        await expect(page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await ines.page.context().close();
+    });
+});
+
 test.describe.serial('Pricing for someone waiting to join a family', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 

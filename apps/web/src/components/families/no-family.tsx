@@ -72,7 +72,10 @@ export function NoFamily({
                         : 'A family shares folders, and everyone in it is checked before they join. You can be in one family.'
                 }
             >
-                <Button onClick={() => setCreating(true)}>Create a family</Button>
+                {/* Not while waiting to join one: once let in it is theirs, and a second is refused. */}
+                {waiting.length === 0 && (
+                    <Button onClick={() => setCreating(true)}>Create a family</Button>
+                )}
             </PageHeader>
             <div className="flex max-w-3xl flex-col gap-9 px-5 pb-10 sm:px-8">
                 {notices.length > 0 && <NoticeList notices={notices} nameOf={nameOf} />}

@@ -56,6 +56,10 @@ export function joinInFamilyCopy(yours: string, invitedTo: string, expiresAt: st
     return `You’re in ${yours}. To join ${invitedTo}, leave yours first, from its page. This invitation stays open until ${until}.`;
 }
 
+/* Create a family, for someone waiting to join one (accepted, not let in yet). */
+export const createWhileWaitingCopy = (family: string | null) =>
+    `You’re joining ${family ?? 'a family'} already. Leave that invitation first, then you can create your own.`;
+
 /* Create a family, for someone already in one. */
 export const createInFamilyCopy = (yours: string) =>
     `You’re in ${yours}. Leave it before you create another.`;
@@ -139,6 +143,8 @@ export function refusalCopy(
             // Let them in: the newcomer's other family is never named to this one.
             if (stringField(data, 'reason') === 'newcomer')
                 return 'They’ve joined another family since they accepted. They can join yours once they leave it.';
+            if (stringField(data, 'reason') === 'waiting')
+                return createWhileWaitingCopy(familyField(data)?.name ?? null);
             const yours = familyField(data);
             return yours
                 ? createInFamilyCopy(yours.name)
