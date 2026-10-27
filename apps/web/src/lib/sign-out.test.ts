@@ -1,6 +1,7 @@
 import { renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import type * as DeviceData from '@/lib/device-data';
 
 /*
  * What a removed browser clears (docs/devices-design.md, step 1). The auth client
@@ -47,10 +48,22 @@ vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
 vi.mock('@/lib/session', () => ({ forgetSession }));
 const loadPage = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/load-page', () => ({ loadPage }));
-vi.mock('@/lib/device-data', () => ({ forgetBrowserData: stores.browser }));
+const announced = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/device-data', async (importOriginal) => ({
+    ...(await importOriginal<typeof DeviceData>()),
+    forgetBrowserData: stores.browser,
+    announceSignOut: announced,
+}));
 
-const { clearDevice, forgetDevice, leaveApp, signOut, NAVIGATE_TIMEOUT_MS, SIGN_OUT_TIMEOUT_MS } =
-    await import('./sign-out');
+const {
+    clearDevice,
+    forgetDevice,
+    leaveApp,
+    signOut,
+    NAVIGATE_TIMEOUT_MS,
+    SIGN_OUT_TIMEOUT_MS,
+    STOP_UPLOADS_MS,
+} = await import('./sign-out');
 const { useAuthView } = await import('./auth-view');
 const {
     afterSignOut,
@@ -475,5 +488,38 @@ describe('signing out, before the device is cleared', () => {
         });
         await signOut();
         expect(order).toEqual(['stop (unlocked: maya)', 'families store deleted']);
+    });
+
+    test('other tabs hear of it first, then the session ends, then the device is cleared', async () => {
+        await signOut();
+        const first = (mock: { mock: { invocationCallOrder: number[] } }) =>
+            mock.mock.invocationCallOrder[0]!;
+        expect(first(announced)).toBeLessThan(first(auth.logout));
+        expect(first(auth.logout)).toBeLessThan(first(stores.browser));
+        expect(first(auth.logout)).toBeLessThan(first(stores.mirror));
+    });
+
+    test('a database delete that never answers never keeps the server session from ending', async () => {
+        const never = new Promise<undefined>(() => {});
+        stores.browser.mockReturnValue(never);
+        stores.groups.mockReturnValue(never);
+        void signOut();
+        await vi.waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    });
+
+    test('uploads that never stop hold the session up only so long', async () => {
+        vi.useFakeTimers();
+        try {
+            stores.transfers.mockReturnValue(new Promise(() => {}));
+            const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+            void signOut();
+            await vi.advanceTimersByTimeAsync(STOP_UPLOADS_MS - 10);
+            expect(auth.logout).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(20);
+            expect(auth.logout).toHaveBeenCalledOnce();
+            expect(logged).toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

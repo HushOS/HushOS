@@ -1,7 +1,7 @@
 import type { useRouter } from '@tanstack/react-router';
 import { authClient } from '@/lib/auth-client';
 import { holdAuthView } from '@/lib/auth-view';
-import { forgetBrowserData } from '@/lib/device-data';
+import { announceSignOut, forgetBrowserData, within } from '@/lib/device-data';
 import { forgetReturn } from '@/lib/return-to';
 import { forgetSession } from '@/lib/session';
 import { holdSignIn, markSignedOut } from '@/lib/sign-in-gate';
@@ -57,18 +57,33 @@ async function clearDrive() {
     if (failed) throw failed.reason;
 }
 
-/* Signing out of this browser: whatever the device cleanup does, the session and device key go. */
+/* How long signing out lets uploads stop, while the session can still release them. */
+export const STOP_UPLOADS_MS = 5_000;
+
+/*
+ * Signing out of this browser. Other tabs hear of it first, then uploads stop while the
+ * session still answers (the server releases what they reserved), never longer than
+ * STOP_UPLOADS_MS. The session is revoked before anything local is deleted: deleting can wait
+ * on a database another tab holds, and nothing on this device may keep the server session
+ * alive. Then, whatever the logout did, everything this browser kept for the account goes.
+ */
 export async function signOut() {
-    // First, while this tab is still unlocked: no family key-change retry may sync now, since a
-    // sync opens the families' store (hushos-groups) that forgetDevice is deleting, and could
-    // hold up its deletion or make it again.
+    announceSignOut();
+    // While this tab is still unlocked: no family key-change retry may sync now, since a sync
+    // opens the families' store (hushos-groups) that forgetDevice is deleting, and could hold
+    // up its deletion or make it again.
     await import('@/lib/drive')
         .then(({ stopSpaces }) => stopSpaces())
         .catch((error: unknown) => console.error('Family work could not be stopped here.', error));
+    await within(
+        import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
+        STOP_UPLOADS_MS,
+        'Uploads took too long to stop.',
+    ).catch((error: unknown) => console.error('Uploads were not all stopped here.', error));
     try {
-        await forgetDevice();
-    } finally {
         await authClient.logout();
+    } finally {
+        await forgetDevice();
     }
 }
 

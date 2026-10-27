@@ -14,7 +14,14 @@ import {
     IDBVersionChangeEvent,
 } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { ACCOUNT_DATA, forgetBrowserData, KEPT, watchSignOutElsewhere } from './device-data';
+import {
+    ACCOUNT_DATA,
+    deleteDatabase,
+    forgetBrowserData,
+    KEPT,
+    onSignedOutElsewhere,
+    watchSignOutElsewhere,
+} from './device-data';
 
 /*
  * The owner's rule: once someone signs out, this browser holds nothing of
@@ -147,26 +154,82 @@ describe('signing out of this browser', () => {
         expect(localStorage.getItem('hushos-stash-written')).toBe('1');
     });
 
-    test('another tab’s sign-out takes this tab’s session entries with it; a lock does not', () => {
+    test('tells every other tab, with no saved unlock ever written here', async () => {
+        // Saving the device key failed at sign-in: there is no entry whose removal other tabs see.
+        expect(localStorage.getItem('hushos-device-unlock')).toBeNull();
+        const otherTab = new BroadcastChannel('hushos-signed-out');
+        const heard = new Promise(
+            (resolve) => (otherTab.onmessage = (event) => resolve(event.data)),
+        );
+        await forgetBrowserData({ files: async () => fileRoot([]).root });
+        expect(await heard).toBe('signed-out');
+        otherTab.close();
+    });
+
+    test('a tab that hears another sign out drops its session entries and its uploads', async () => {
         const stop = watchSignOutElsewhere();
+        const uploadsDropped = vi.fn();
+        const stopListening = onSignedOutElsewhere(uploadsDropped);
         try {
             sessionStorage.setItem('hushos-link-sent', '{"email":"maya@example.com"}');
             sessionStorage.setItem('hushos.invite', 'token');
-            const event = (newValue: string | null) =>
-                window.dispatchEvent(
-                    new StorageEvent('storage', {
-                        key: 'hushos-device-unlock',
-                        newValue,
-                        storageArea: localStorage,
-                    }),
-                );
-            // A lock in another tab writes the entry with no device: nothing goes.
-            event('{"state":{"device":null,"lockRevision":9},"version":1}');
-            expect(keys(sessionStorage)).toEqual(['hushos-link-sent', 'hushos.invite']);
-            event(null);
-            expect(keys(sessionStorage)).toEqual([]);
+            sessionStorage.setItem('hushos-device-removed', '1');
+            // The other tab's sign-out, as it says it: no hand-made event.
+            const { announceSignOut } = await import('./device-data');
+            announceSignOut();
+            await vi.waitFor(() => expect(uploadsDropped).toHaveBeenCalledOnce());
+            expect(keys(sessionStorage)).toEqual(['hushos-device-removed']);
         } finally {
+            stopListening();
             stop();
+        }
+    });
+});
+
+describe('deleting a database', () => {
+    /* A factory whose deletes never answer, as one queued behind a stalled delete gets. */
+    function silentFactory() {
+        const asked: string[] = [];
+        vi.stubGlobal('indexedDB', {
+            deleteDatabase: (name: string) => {
+                asked.push(name);
+                return {};
+            },
+        });
+        return asked;
+    }
+
+    test('gives up when the browser never answers, counted from when it was asked', async () => {
+        vi.useFakeTimers();
+        try {
+            silentFactory();
+            const deletion = deleteDatabase('hushos-drive', 1_000);
+            const settled = vi.fn();
+            deletion.catch(settled);
+            await vi.advanceTimersByTimeAsync(999);
+            expect(settled).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(2);
+            expect(settled).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    test('a second ask waits on the first instead of queueing behind it, within its own deadline', async () => {
+        vi.useFakeTimers();
+        try {
+            const asked = silentFactory();
+            const first = deleteDatabase('hushos-groups', 1_000).catch((error: Error) => error);
+            await vi.advanceTimersByTimeAsync(600);
+            const second = deleteDatabase('hushos-groups', 1_000).catch((error: Error) => error);
+            await vi.advanceTimersByTimeAsync(500);
+            expect(await first).toBeInstanceOf(Error);
+            expect(asked).toEqual(['hushos-groups']);
+            await vi.advanceTimersByTimeAsync(600);
+            expect(await second).toBeInstanceOf(Error);
+            expect(asked).toEqual(['hushos-groups']);
+        } finally {
+            vi.useRealTimers();
         }
     });
 });

@@ -1,9 +1,10 @@
 /*
  * Everything this browser keeps for an account, in one place. Signing out
  * (lib/sign-out.ts), and learning this browser was removed, delete all of it:
- * a browser someone signed out of holds nothing of theirs. The parts that
- * write these (uploads, the mirror, families) are stopped first by their own
- * owners in clearDevice; this then deletes what they leave, by name.
+ * a browser someone signed out of holds nothing of theirs. Other tabs are told
+ * first (announceSignOut), the parts that write these (uploads, the mirror,
+ * families) are stopped by their own owners, and this then deletes what they
+ * leave, by name.
  *
  * A new place that keeps anything about an account, or about what it did, is
  * registered here, or it outlives sign-out. device-data.test.ts reads the
@@ -87,29 +88,44 @@ export const KEPT = {
 } as const;
 
 /*
- * Deletes one database, failing (so the caller tries again) if another tab
- * holds it open past `patience`: those tabs close on `versionchange`, so this
- * waits for them rather than give up at the first `blocked`.
+ * Deletes one database, failing (so the caller says so and tries again) when
+ * it has not gone within `patience` of being asked, however the browser
+ * answers: another tab holding it open (those close on `versionchange`), or
+ * no answer at all, as a delete queued behind one that stalled gets. One
+ * delete per database at a time: a second ask waits on the first rather than
+ * queue behind it, each within its own deadline.
  */
+const deletes = new WeakMap<IDBFactory, Map<string, Promise<void>>>();
 export function deleteDatabase(name: string, patience = 5_000) {
-    return new Promise<void>((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(name);
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        request.onsuccess = () => {
-            clearTimeout(timer);
-            resolve();
-        };
-        request.onerror = () => {
-            clearTimeout(timer);
-            reject(request.error ?? new Error('Device storage could not be cleared.'));
-        };
-        request.onblocked = () => {
-            timer ??= setTimeout(
-                () => reject(new Error('Device storage is busy in another tab.')),
-                patience,
-            );
-        };
+    let deleting = deletes.get(indexedDB);
+    if (!deleting) deletes.set(indexedDB, (deleting = new Map()));
+    let pending = deleting.get(name);
+    if (!pending) {
+        const started = new Promise<void>((resolve, reject) => {
+            const request = indexedDB.deleteDatabase(name);
+            request.onsuccess = () => resolve();
+            request.onerror = () =>
+                reject(request.error ?? new Error('Device storage could not be cleared.'));
+        });
+        pending = started;
+        deleting.set(name, started);
+        const list = deleting;
+        started
+            .finally(() => {
+                if (list.get(name) === started) list.delete(name);
+            })
+            .catch(() => {});
+    }
+    return within(pending, patience, 'Device storage is busy in another tab.');
+}
+
+/* `work`, or a rejection once `ms` have passed from now, whichever comes first. */
+export function within<T>(work: Promise<T>, ms: number, message: string) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
     });
+    return Promise.race([work, late]).finally(() => clearTimeout(timer));
 }
 
 type FileRoot = Pick<FileSystemDirectoryHandle, 'removeEntry'>;
@@ -186,6 +202,7 @@ export async function forgetBrowserData(options: { files?: () => Promise<FileRoo
                 return Promise.reject(new Error('No private file system here.'));
             return navigator.storage.getDirectory();
         });
+    announceSignOut();
     const results = await Promise.allSettled([
         (async () =>
             forgetKeys(
@@ -202,18 +219,48 @@ export async function forgetBrowserData(options: { files?: () => Promise<FileRoo
 }
 
 /*
- * Another tab signed out (the saved unlock's entry went, which only a sign-out
- * or a removal does): this tab's sessionStorage goes too, since no other tab
- * can reach it. Installed once, in the browser.
+ * Signing out tells every other tab of this browser, before anything is
+ * deleted: it is the only way their sessionStorage goes (no other tab can
+ * reach it), and their uploads must stop writing to the journal this tab is
+ * about to delete. Said on a BroadcastChannel of its own, so it does not rest
+ * on a storage event for the saved unlock, which a browser that never saved
+ * one never fires.
  */
+const SIGNED_OUT = 'hushos-signed-out';
+export function announceSignOut() {
+    try {
+        const channel = new BroadcastChannel(SIGNED_OUT);
+        channel.postMessage('signed-out');
+        channel.close();
+    } catch {
+        /* No BroadcastChannel: other tabs still lock on the saved unlock's storage event. */
+    }
+}
+
+const elsewhere = new Set<() => void>();
+/* Work a tab drops when another signs out (its uploads, lib/transfers.ts). */
+export function onSignedOutElsewhere(listener: () => void) {
+    elsewhere.add(listener);
+    return () => void elsewhere.delete(listener);
+}
+
+/* Installed once in every tab (lib/auth-client.ts). */
 export function watchSignOutElsewhere() {
-    if (typeof window === 'undefined') return () => {};
-    const local = storageOf('localStorage');
-    const onStorage = (event: StorageEvent) => {
-        if (event.storageArea !== local) return;
-        if (event.key === null || (event.key === 'hushos-device-unlock' && event.newValue === null))
-            forgetSessionData();
+    let channel: BroadcastChannel;
+    try {
+        channel = new BroadcastChannel(SIGNED_OUT);
+    } catch {
+        return () => {};
+    }
+    channel.onmessage = () => {
+        forgetSessionData();
+        for (const listener of elsewhere) {
+            try {
+                listener();
+            } catch (error) {
+                console.error('Part of another tab’s sign-out could not be followed here.', error);
+            }
+        }
     };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    return () => channel.close();
 }

@@ -8,6 +8,7 @@ import {
 import type { QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { onSignedOutElsewhere } from '@/lib/device-data';
 import { renderThumbnail } from '@/lib/thumbnails';
 import {
     clientFor,
@@ -135,6 +136,9 @@ export const transfers = createTransferManager({
         for (const listener of listeners) listener(event);
     },
 });
+
+// Another tab signed out: uploads here stop, and nothing writes the journal it deletes back.
+onSignedOutElsewhere(() => transfers.invalidate());
 
 /*
  * A move's copy is in place (lib/move-across.ts): the server deleted the source

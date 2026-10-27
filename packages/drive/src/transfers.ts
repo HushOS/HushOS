@@ -2199,9 +2199,27 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
     }
 
+    /*
+     * Another tab signed out: every upload here is dropped without touching the journal (that
+     * tab deletes it). Each upload's generation moves on, and every step that writes the
+     * journal checks its own first, so an answer that lands later (a begin, a part, a
+     * completion) writes nothing back: a begun upload is aborted instead.
+     */
+    function invalidate() {
+        for (const u of uploads.values()) {
+            u.generation++;
+            clearBackoff(u);
+            u.inFlight.clear();
+        }
+        uploads.clear();
+        order.length = 0;
+        emit();
+    }
+
     return {
         enqueue,
         forgetAll,
+        invalidate,
         pause,
         resume,
         retry,
