@@ -1,0 +1,33 @@
+apps/web/src/lib/device-data.test.ts
+  s_566b8e0c4467a4::t_8c24c948752c6c 19,164,168,171,173-190,195-202,204-244
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_3860b05bcae028 279-280,297-307,310-318,320,322,326-374,381-386,388-390,392-406,408
+apps/web/src/lib/sign-out.test.ts
+  s_566b8e0c4467a4::t_1893bb68e486a4 555-569
+apps/web/src/lib/sign-out.ts
+  s_566b8e0c4467a4::t_33e56a77df5350 88-93,96-97,113
+apps/web/src/lib/transfers.ts
+  s_566b8e0c4467a4::t_da77381a19c1d1 143-145
+docs/opaque-auth-design.md
+  s_566b8e0c4467a4::t_ae192c56544787 161
+packages/drive/src/transfers.test.ts
+  s_566b8e0c4467a4::t_ca13b00fe1782e 1938-1958
+packages/drive/src/transfers.ts
+  s_566b8e0c4467a4::t_abe54c74b60fb8 2247-2269,2274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1740987e4776a5e026bd9f9afae61adf2afce2ab",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
