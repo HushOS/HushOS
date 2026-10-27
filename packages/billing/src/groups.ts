@@ -2107,8 +2107,9 @@ export async function createGroupPortalSession(user: BillingUser, groupId: strin
  * keeps the reason), or takes that back. Cancelling stays open to a payer who left, as the
  * portal does: they can always stop paying. Resuming needs them in the family holding
  * `billing`, so a family that has gone (dissolved, or the payer left) is never billed again
- * from here. Either way Polar is read back before the answer, so the page shows what Polar
- * holds, not what was asked.
+ * from here: checked first, and again under the plan's claim, since a payer whose plan is set
+ * to end may leave or be removed in between (setGroupPlanEnding). Either way Polar is read
+ * back before the answer, so the page shows what Polar holds, not what was asked.
  */
 export async function cancelGroupPlan(
     user: BillingUser,
@@ -2135,19 +2136,36 @@ export async function resumeGroupPlan(user: BillingUser, groupId: string) {
     const live = await billingRepository.getLiveGroupSubscription(groupId);
     if (!live) throw new BillingError('This family has no plan.', 404);
     if (!live.cancelAtPeriodEnd) throw new BillingError('This plan isn’t set to end.', 409);
-    await setGroupPlanEnding(groupId, live.id, { cancel_at_period_end: false });
+    // Asked again under the claim: the payer may have left, or been removed, since the checks
+    // above (a plan set to end doesn't keep its payer in), and a resume then would bill them.
+    await setGroupPlanEnding(groupId, live.id, { cancel_at_period_end: false }, async () => {
+        await requirePayer(groupId, user.id);
+        await familyOf(groupId, user.id, 'billing');
+        const now = await billingRepository.getLiveGroupSubscription(groupId);
+        if (!now || now.id !== live.id || !now.cancelAtPeriodEnd)
+            throw new BillingError(
+                'This plan changed a moment ago. Look at it again before changing it.',
+                409,
+            );
+    });
     return { billing: await getGroupBilling(user, groupId) };
 }
 
 /*
  * Under the family's one plan-change claim, as raises, upgrades and the dissolve job are, so a
- * cancel never crosses a raise nor a resume the dissolve job's cancel. Polar's 409
- * `SubscriptionLocked` (the bank still holds a charge) is the same "in progress" answer.
+ * cancel never crosses a raise nor a resume the dissolve job's cancel. `recheck` runs first
+ * under the claim, for what may have changed since the caller looked. A payer's departure
+ * takes the plan's rows FOR UPDATE and refuses while the claim is held (payerChangeInFlight),
+ * so the claim and a departure are ordered one way or the other: a departure first is seen by
+ * `recheck`; one during the Polar call is refused. The group's lock is never taken across the
+ * call: its error path reconciles, which takes that lock. Polar's 409 `SubscriptionLocked`
+ * (the bank still holds a charge) is the same "in progress" answer.
  */
 async function setGroupPlanEnding(
     groupId: string,
     subscriptionId: string,
     body: models.SubscriptionUpdate,
+    recheck?: () => Promise<void>,
 ) {
     await withPlanChange(
         subscriptionId,
@@ -2155,6 +2173,7 @@ async function setGroupPlanEnding(
             throw new BillingError(BUSY, 409);
         },
         async () => {
+            await recheck?.();
             try {
                 await polar().subscriptions.update(subscriptionId, body);
             } catch (error) {

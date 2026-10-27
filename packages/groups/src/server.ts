@@ -776,6 +776,18 @@ function headView(head: groupsRepository.Head): Head {
     };
 }
 
+/*
+ * The family's payer is leaving or being removed while a change to its plan holds the plan's
+ * claim (a resume, a raise, the dissolve job): billing's own "in progress" sentence.
+ */
+function planBusy() {
+    return new GroupError(
+        'busy',
+        'Another change to this plan is in progress. Try again in a moment.',
+        409,
+    );
+}
+
 /* A chain write's answer: the new head, or the refusal as the route's error. */
 function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: boolean } {
     switch (result.status) {
@@ -880,6 +892,8 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             throw forbidden();
         case 'not-member':
             throw notMember();
+        case 'busy':
+            throw planBusy();
         case 'unavailable':
             throw unavailable();
         case 'invalid':
@@ -2257,6 +2271,8 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
                 'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support.',
                 409,
             );
+        case 'busy':
+            throw planBusy();
         case 'unavailable':
             throw unavailable();
     }

@@ -314,7 +314,12 @@ export type ChainResult =
                * The area root still carries a previous envelope: a key change is under way that
                * no running Drive rotation accounts for. Re-read the area; an operator clears it.
                */
-              | 'root-mid-rotation';
+              | 'root-mid-rotation'
+              /*
+               * The member being removed pays for the family's plan, and a change to that plan
+               * holds its claim right now (payerChangeInFlight): try again in a moment.
+               */
+              | 'busy';
       }
     /*
      * Membership moved under the call (someone left, was declined or deleted
@@ -1510,6 +1515,15 @@ export async function appendChain(input: {
                         return refuse({ status: 'seats', used, limit });
                 }
 
+                // Removing the family's payer waits for a change to its plan under way (a resume
+                // that read them as the payer would otherwise bill someone removed).
+                if (
+                    group.kind === 'family' &&
+                    route.kind === 'remove' &&
+                    (await payerChangeInFlight(tx, groupId, route.userId))
+                )
+                    return refuse({ status: 'busy' });
+
                 // 4. The chain the caller checked against must still be the chain.
                 if (group.chainRevision !== input.expectedRevision)
                     return refuse(await staleResult(tx, groupId, roster, succession));
@@ -1887,6 +1901,8 @@ export async function storeGrants(input: {
 export type LeaveResult =
     | { status: 'left' | 'dissolved' }
     | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' }
+    /* The leaver pays for the family's plan and a change to it is under way: try again soon. */
+    | { status: 'busy' }
     /* `mustDissolve`, and the leave would not dissolve the family: nothing was written. */
     | { status: 'not-last' };
 
@@ -1914,6 +1930,37 @@ async function billedPlan(tx: Tx | typeof db, groupId: string) {
 }
 
 /*
+ * Whether `userId` pays for the family's plan while a change to that plan holds its claim
+ * (claimPlanChange: a raise, an upgrade, a cancel or resume, the dissolve job). A payer's
+ * departure waits for it: a resume that read them as the payer before they left would
+ * otherwise start billing again for someone who has gone. The plan's rows are locked FOR
+ * UPDATE, so a claim either landed before this (and the departure is refused, `busy`) or is
+ * taken after the departure commits (and the change sees them gone). A plain read would let
+ * the two cross. Only with billing on.
+ */
+async function payerChangeInFlight(tx: Tx, groupId: string, userId: string) {
+    if (billingEnv.BILLING_PROVIDER === 'none') return false;
+    const [customer] = await tx
+        .select({ payerUserId: groupBillingCustomers.payerUserId })
+        .from(groupBillingCustomers)
+        .where(eq(groupBillingCustomers.groupId, groupId));
+    if (customer?.payerUserId !== userId) return false;
+    const plans = await tx
+        .select({
+            claimed: sql<boolean>`coalesce(${groupBillingSubscriptions.changeClaimUntil} > now(), false)`,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groupBillingSubscriptions.endedAt),
+            ),
+        )
+        .for('update');
+    return plans.some((plan) => plan.claimed);
+}
+
+/*
  * A member's departure, under the group's lock (taken by the caller, with the
  * areas): the `billing` holder or the last `members` holder may not go while
  * others remain; the last active member dissolves the group; anyone else loses
@@ -1938,6 +1985,7 @@ async function depart(tx: Tx, groupId: string, userId: string): Promise<LeaveRes
         await leave();
         return { status: 'left' };
     }
+    if (await payerChangeInFlight(tx, groupId, userId)) return { status: 'busy' };
     const others = await othersOf(tx, groupId, userId);
     if (others.length === 0) {
         if (await billedPlan(tx, groupId)) return { status: 'billed' };
@@ -2108,7 +2156,9 @@ export async function previewLeave(groupId: string, userId: string): Promise<Lea
 export async function departAllForDeletion(
     tx: Tx,
     userId: string,
-): Promise<{ status: 'ok' } | { status: 'organizer' | 'last-holder' | 'billed'; groupId: string }> {
+): Promise<
+    { status: 'ok' } | { status: 'organizer' | 'last-holder' | 'billed' | 'busy'; groupId: string }
+> {
     const memberships = await tx
         .select({ groupId: groupMemberships.groupId })
         .from(groupMemberships)
@@ -2132,7 +2182,8 @@ export async function departAllForDeletion(
         if (
             result.status === 'organizer' ||
             result.status === 'last-holder' ||
-            result.status === 'billed'
+            result.status === 'billed' ||
+            result.status === 'busy'
         )
             return { status: result.status, groupId };
     }

@@ -1091,19 +1091,24 @@ export async function deleteAccount(input: {
     userId: string;
     credentialVersion: number;
     sessionTokenHash: Buffer;
-}): Promise<boolean | 'group-holder' | 'unavailable'> {
+}): Promise<boolean | 'group-holder' | 'busy' | 'unavailable'> {
     class Holder extends Error {}
+    // They pay for a family's plan and a change to it holds its claim (payerChangeInFlight).
+    class Busy extends Error {}
     // Thrown, never returned, so the departures above roll back with it.
     class Refused extends Error {}
     try {
         return await db.transaction(async (tx) => {
             if (!(await sessionIsCurrent(tx, input))) return false;
-            if ((await departAllForDeletion(tx, input.userId)).status !== 'ok') throw new Holder();
+            const departed = await departAllForDeletion(tx, input.userId);
+            if (departed.status === 'busy') throw new Busy();
+            if (departed.status !== 'ok') throw new Holder();
             if (!(await deleteAccountRow(tx, input))) throw new Refused();
             return true;
         });
     } catch (error) {
         if (error instanceof Holder) return 'group-holder';
+        if (error instanceof Busy) return 'busy';
         if (error instanceof Refused) return false;
         // It locks groups, areas and the account: a deadlock with a group write is retried.
         const code = pgCode(error);

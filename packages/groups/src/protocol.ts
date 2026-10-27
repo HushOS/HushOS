@@ -14,6 +14,8 @@ export type GroupErrorCode =
     | 'left-due'
     | 'members-changed'
     | 'stale'
+    /* The family's payer departs while a change to its plan holds the plan's claim: try again. */
+    | 'busy'
     | 'seats'
     | 'organizer'
     | 'payer'

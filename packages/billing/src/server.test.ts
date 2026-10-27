@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type * as HushosDb from '@hushos/db';
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { EndPersonalPlanJob } from './endings';
 import { PolarClientError } from '@polar-sh/sdk';
@@ -974,6 +975,15 @@ const fakeClient = {
 vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     const real = await importOriginal<typeof PolarSdk>();
     return { ...real, createPolar: () => fakeClient };
+});
+
+/*
+ * The repositories as they are, but as plain objects, so a test can make one call do something
+ * first (a payer leaving at the moment a change takes the plan's claim). Nothing else differs.
+ */
+vi.mock('@hushos/db', async (importOriginal) => {
+    const real = await importOriginal<typeof HushosDb>();
+    return { ...real, billingRepository: { ...real.billingRepository } };
 });
 
 /* The plan-ending mail a dissolved family's payer was sent, in order (its words are the template's). */
@@ -5891,6 +5901,64 @@ describe('cancelling and resuming a family plan in HushOS', () => {
         });
         expect(endings()).toEqual([]);
         expect(await ending(groupId)).toBe(true);
+    });
+
+    /* The payer holds only `billing`, so another `billing` and `members` holder lets them leave. */
+    async function payerWhoCanLeave() {
+        const family = await familyOnPlan({ members: 1 });
+        await setTestMember({
+            groupId: family.groupId,
+            userId: family.payer.id,
+            state: 'active',
+            roles: ['billing'],
+        });
+        await setTestMember({
+            groupId: family.groupId,
+            userId: family.others[0]!.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        await billing.cancelGroupPlan(family.payer, family.groupId);
+        polar.calls = [];
+        return family;
+    }
+
+    test('a payer who leaves just before a resume takes the claim is never billed again', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        const claim = billingRepository.claimPlanChange;
+        // Past the resume's first checks: the payer leaves, then the claim is taken.
+        const spy = vi
+            .spyOn(billingRepository, 'claimPlanChange')
+            .mockImplementationOnce(async (...args) => {
+                expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({
+                    status: 'left',
+                });
+                return claim(...args);
+            });
+        try {
+            await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+                status: 404,
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(endings()).toEqual([]);
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('a payer who tries to leave while a resume is at Polar is told to wait, and stays', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        let leave: unknown = null;
+        polar.beforeCancel = async () => {
+            leave = await groupsRepository.leaveGroup(groupId, payer.id);
+        };
+        await billing.resumeGroupPlan(payer, groupId);
+        expect(leave).toEqual({ status: 'busy' });
+        expect(subscription.cancel_at_period_end).toBe(false);
+        expect(await ending(groupId)).toBe(false);
+        const members = await groupsRepository.listMembers(groupId);
+        expect(members.find((member) => member.userId === payer.id)?.state).toBe('active');
     });
 
     test('a family with no live plan has nothing to cancel', async () => {

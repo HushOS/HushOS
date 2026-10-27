@@ -1938,6 +1938,12 @@ export async function finishAccountDeletion(
         );
     if (deleted === 'unavailable')
         throw new AuthError(`${stopped} account could not be deleted just now. Try again.`, 503);
+    // A change to the family plan they pay for was under way: the departure waits for it.
+    if (deleted === 'busy')
+        throw new AuthError(
+            `${stopped} account was not deleted: another change to your family’s plan is in progress. Try again in a moment.`,
+            409,
+        );
     if (!deleted) throw failure();
     return { success: true };
 }

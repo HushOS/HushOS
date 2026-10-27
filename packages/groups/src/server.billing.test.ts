@@ -1222,6 +1222,46 @@ describe('admission with billing on', () => {
             billing.setEndPersonalPlanQueue(undefined);
         }
     });
+
+    /*
+     * A payer whose plan is set to end may be removed (it no longer counts as paid for). While a
+     * change to that plan holds its claim (a resume at Polar, say), the removal waits: a resume
+     * that read them as the payer would otherwise bill someone just removed.
+     */
+    test('removing the family’s payer while a change to the plan holds its claim is refused, and goes once it ends', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        expect(
+            await billingRepository.setGroupPayer(fam.groupId, fam.organizer.userId, plain.userId),
+        ).toBe(true);
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(fam.groupId);
+        const claim = await billingRepository.claimPlanChange(subscription.id, 60_000);
+        expect(claim).not.toBeNull();
+        const call = await removal(fam, [plain], []);
+        expect(
+            await refusal(
+                groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, call),
+            ),
+        ).toMatchObject({ code: 'busy', status: 409 });
+        expect(await state(fam.groupId, plain.userId)).toBe('active');
+        await billingRepository.releasePlanChange(subscription.id, claim!);
+        await groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, call);
+        expect(await state(fam.groupId, plain.userId)).toBe('removed');
+    });
+
+    test('someone who doesn’t pay leaves while a change to the plan holds its claim', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        const claim = await billingRepository.claimPlanChange(subscription.id, 60_000);
+        expect(claim).not.toBeNull();
+        expect(await groups.leave(plain.userId, fam.groupId)).toEqual({ state: 'left' });
+        expect(await state(fam.groupId, plain.userId)).toBe('left');
+    });
 });
 
 /* A new family folder's call (route 21): its roster row, root, self-grant and the creator's grant. */
