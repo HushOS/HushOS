@@ -181,6 +181,8 @@ export type FamilyOffer = {
     name: string;
     /* "2 TB". */
     storage: string;
+    /* The currency it is priced in: the one asked for, or the default where it has none. */
+    currency: string;
     /* "$20 a month", or a yearly plan as yearlyPrice writes it: "$16 a month". */
     price: string;
     /*
@@ -228,6 +230,7 @@ export function familyOffers(
                 plan,
                 name: familyTierName(plan),
                 storage: formatQuota(plan.quotaBytes),
+                currency: price.currency,
                 price: byYear ? byYear.price : `${money(price.base)} a month`,
                 billed: byYear?.byMonth
                     ? `Billed ${money(price.base)} yearly, plus ${extra} for each extra member.`

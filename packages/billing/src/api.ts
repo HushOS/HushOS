@@ -199,6 +199,12 @@ export type BillingSummary = {
     /* A plan chosen at signup and not yet taken to checkout. */
     intendedPlan: string | null;
     /*
+     * A family tier chosen at signup (one the pricing page offers) and not yet opened: the app
+     * lands on Create a family with it once, then forgets it (forgetIntendedFamily). Named
+     * whether or not this server serves families, so the app can send them to Plans instead.
+     */
+    intendedFamily: string | null;
+    /*
      * The family whose plan this person's storage comes from, while their own
      * files draw from its pool; no personal plan can be bought meanwhile.
      */
@@ -363,4 +369,6 @@ export interface BillingApi {
     sync(): Promise<BillingSummary>;
     cancel(input: { reason?: CancellationReason; comment?: string }): Promise<BillingSummary>;
     resume(): Promise<BillingSummary>;
+    /* The family tier chosen at signup has been opened; it isn't offered again. */
+    forgetIntendedFamily(): Promise<{ success: true }>;
 }

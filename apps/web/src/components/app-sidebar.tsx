@@ -41,6 +41,7 @@ import {
     Trash2Icon,
     ContactIcon,
     FoldersIcon,
+    UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
@@ -435,6 +436,32 @@ function FamilyFolders({ userId, pathname }: { userId: string; pathname: string 
     );
 }
 
+/*
+ * Family for someone in no family, or only waiting to join one, where families are served: it
+ * opens Account → Family (/app/family), where they create one or finish joining. In a family,
+ * the family's name heads the sidebar instead (FamilyHeader).
+ */
+function FamilyPlace({ userId, pathname }: { userId: string; pathname: string }) {
+    const enabled = useGroupsEnabled();
+    const families = useQuery({ ...familiesQueryOptions(userId), enabled });
+    if (!enabled || families.isPending || activeFamily(families.data)) return null;
+    return (
+        <SidebarMenu className="mt-0.5" data-family-place>
+            <SidebarMenuItem>
+                <SidebarMenuButton
+                    render={<Link to="/app/family" />}
+                    isActive={under('/app/family')(pathname)}
+                    tooltip="Family"
+                    className={cn(quiet, collapsed)}
+                >
+                    <UsersIcon aria-hidden="true" />
+                    <span>Family</span>
+                </SidebarMenuButton>
+            </SidebarMenuItem>
+        </SidebarMenu>
+    );
+}
+
 export function AppSidebar({
     user,
 }: {
@@ -467,6 +494,7 @@ export function AppSidebar({
                 </SidebarGroup>
                 <SidebarGroup className={group}>
                     <NavGroup items={organise} pathname={pathname} small />
+                    <FamilyPlace userId={user.id} pathname={pathname} />
                 </SidebarGroup>
                 {user.role === 'admin' && (
                     <SidebarGroup className="border-t border-rule p-0 pt-4">

@@ -1,4 +1,5 @@
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
+import { defaultFamilyName } from '@/lib/family-signup';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Segmented, SettingsGroup } from '@/components/settings';
@@ -759,6 +760,7 @@ function BillingPage() {
                     open={creating !== null}
                     onOpenChange={(open) => !open && setCreating(null)}
                     plan={creating ? { plan: creating, currency: familyCurrency } : undefined}
+                    defaultName={creating ? defaultFamilyName(user.name) : undefined}
                     personalPlan={personalPlanEnding(
                         summary.data?.subscription,
                         'the family’s plan starts',

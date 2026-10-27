@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
 import { getStorageAllowance } from './auth';
+import { pendingReferralCode } from './growth';
 import * as billing from './billing';
 import { db } from './client';
 import { accountIntents, billingSubscriptions, storageEntitlements } from './schema';
@@ -491,6 +492,19 @@ describe('signup intents', () => {
         expect((await billing.getPendingIntent(userId))?.planProductId).toBe('prod_pro');
         await billing.consumeIntent(userId);
         expect(await billing.getPendingIntent(userId)).toBeNull();
+    });
+
+    test('dropping the plan keeps the code that came with it for the next checkout', async () => {
+        const { userId } = await createTestAccount();
+        await db.insert(accountIntents).values({
+            userId,
+            planProductId: 'prod_family_pro',
+            referralCode: 'FRIEND25',
+            source: 'referral',
+        });
+        await billing.dropIntendedPlan(userId);
+        expect((await billing.getPendingIntent(userId))?.planProductId).toBeNull();
+        expect(await pendingReferralCode(userId)).toBe('FRIEND25');
     });
 });
 

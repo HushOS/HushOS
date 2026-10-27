@@ -122,12 +122,15 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
             hasCustomer: false,
             subscription: null,
             intendedPlan: null,
+            intendedFamily: null,
             family: null,
         };
-    const [summary, intent, plans, pooled] = await Promise.all([
+    const [summary, intent, plans, families, pooled] = await Promise.all([
         billingRepository.getBillingSummary(user.id),
         billingRepository.getPendingIntent(user.id),
         listCatalogue().then((catalogue) => catalogue.plans),
+        // Read from the one cached product list even where families aren't served (below).
+        getFamilyCatalogue().then(offeredFamilies),
         billingRepository.getPooledFamily(user.id),
     ]);
     const live = livePlan(summary.subscription);
@@ -142,6 +145,12 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
         plans.some((plan) => plan.id === intent.planProductId)
             ? intent.planProductId
             : null;
+    // A family tier picked on the pricing page: the app opens Create a family with it, or, where
+    // families aren't served (any more), Plans. Whether they're in a family is the app's to check.
+    const intendedFamily =
+        intent?.planProductId && families.some((plan) => plan.id === intent.planProductId)
+            ? intent.planProductId
+            : null;
     const family = pooled
         ? {
               name: pooled.name,
@@ -150,7 +159,22 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
                   null,
           }
         : null;
-    return { enabled: true, ...summary, intendedPlan, family };
+    return { enabled: true, ...summary, intendedPlan, intendedFamily, family };
+}
+
+/*
+ * The family tier chosen at signup has been opened (the app's first landing after signup), so
+ * it isn't offered again on the next visit. A personal plan is left for its checkout, which
+ * consumes it; a code that came with either stays for the next checkout.
+ */
+export async function forgetIntendedFamily(user: BillingUser) {
+    if (!billingEnabled()) return;
+    const [intent, plans] = await Promise.all([
+        billingRepository.getPendingIntent(user.id),
+        listCatalogue().then((catalogue) => catalogue.plans),
+    ]);
+    if (!intent?.planProductId || plans.some((plan) => plan.id === intent.planProductId)) return;
+    await billingRepository.dropIntendedPlan(user.id);
 }
 
 /*

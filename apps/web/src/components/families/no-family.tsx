@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
+import { defaultFamilyName } from '@/lib/family-signup';
 import { personalPlanEnding } from '@/lib/plans';
 import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
 import type { GroupSummary } from '@/lib/groups/api';
@@ -31,13 +32,19 @@ export function NoFamily({
     notices,
     nameOf,
     create,
+    accountName,
 }: {
     userId: string;
     families: readonly GroupSummary[];
     notices: readonly GroupNotice[];
     nameOf: (groupId: string) => string | undefined;
-    /* A family tier chosen on Plans: Create a family opens with it, and goes on to its checkout. */
+    /*
+     * A family tier chosen on Plans or the pricing page, or at signup: Create a family opens
+     * with it, and goes on to its checkout.
+     */
     create?: { planId: string; currency?: string };
+    /* The account's name, for the name a family made with a chosen tier starts with. */
+    accountName?: string;
 }) {
     const waiting = families.filter((at) => at.kind === 'family' && at.state === 'accepted');
     const invitations = useQuery(myInvitationsQueryOptions(userId));
@@ -133,6 +140,8 @@ export function NoFamily({
                     if (!next) setDismissed(true);
                 }}
                 plan={plan}
+                // With a tier chosen the name is filled in, so one click goes on to checkout.
+                defaultName={plan ? defaultFamilyName(accountName) : undefined}
                 personalPlan={personalPlanEnding(
                     personal.data?.subscription,
                     'the family’s plan starts',

@@ -2073,6 +2073,44 @@ describe('a personal plan whose payment failed, or that is paused', () => {
     });
 });
 
+describe('a family tier chosen at sign-up', () => {
+    const userOfId = (userId: string) => ({ id: userId, name: 'Test', email: 'x@hushos.test' });
+    const intend = (userId: string, plan: string, referral: string | null = null) =>
+        rawSql(
+            `insert into account_intents (user_id, plan_product_id, referral_code, source) values ('${userId}', '${plan}', ${referral ? `'${referral}'` : 'null'}, 'pricing')`,
+        );
+
+    test('is named until the app has opened it, and forgetting it keeps the code that came with it', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, PRO_FAMILY, 'FRIEND25');
+        const before = await billing.getSummary(userOfId(userId));
+        expect(before).toMatchObject({ intendedFamily: PRO_FAMILY, intendedPlan: null });
+        await billing.forgetIntendedFamily(userOfId(userId));
+        expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBeNull();
+        expect(await growthRepository.pendingReferralCode(userId)).toBe('FRIEND25');
+    });
+
+    test('a family plan no longer offered, or a personal plan, is never named', async () => {
+        const old = await createTestAccount();
+        // The single Family plan from before the tiers: still sold to its subscribers, not offered.
+        await intend(old.userId, FAMILY);
+        expect((await billing.getSummary(userOfId(old.userId))).intendedFamily).toBeNull();
+        const personal = await createTestAccount();
+        await intend(personal.userId, MAX);
+        expect(await billing.getSummary(userOfId(personal.userId))).toMatchObject({
+            intendedPlan: MAX,
+            intendedFamily: null,
+        });
+    });
+
+    test('forgetting it leaves a personal plan for its checkout', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, MAX);
+        await billing.forgetIntendedFamily(userOfId(userId));
+        expect((await billing.getSummary(userOfId(userId))).intendedPlan).toBe(MAX);
+    });
+});
+
 describe('affiliates', () => {
     const creator = () =>
         growth.createAffiliate({
