@@ -9,6 +9,7 @@ import {
     memo,
     type ReactNode,
     type RefObject,
+    type TableHTMLAttributes,
     useEffect,
     useLayoutEffect,
     useMemo,
@@ -62,6 +63,22 @@ function NamedImage({ alt, src }: ImgHTMLAttributes<HTMLImageElement>) {
             <span>{alt || 'Image'}</span>
             {host && <span className="rt-image-host">{host}</span>}
         </span>
+    );
+}
+
+/*
+ * A table in a box of its own that scrolls sideways, so a wide one stays inside the page. The
+ * box takes focus, so the keyboard can scroll it too.
+ */
+function ScrollingTable({
+    node: _node,
+    ...props
+}: TableHTMLAttributes<HTMLTableElement> & { node?: Element }) {
+    return (
+        // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a box that scrolls must be reachable by keyboard
+        <section className="rt-table" aria-label="Table" tabIndex={0}>
+            <table {...props} />
+        </section>
     );
 }
 
@@ -123,11 +140,12 @@ function normaliseLanguage(language: string | null) {
     return aliases[language] ?? language;
 }
 
-/* Markdown swaps links, images and fences; highlighted code keeps Shiki's own <pre>. */
+/* Markdown swaps links, images, fences and tables; highlighted code keeps Shiki's own <pre>. */
 const markdownComponents: Partial<Components> = {
     a: SafeLink as Components['a'],
     img: NamedImage as Components['img'],
     pre: FencedCode as Components['pre'],
+    table: ScrollingTable as Components['table'],
 };
 const codeComponents: Partial<Components> = {};
 
