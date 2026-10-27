@@ -2,7 +2,7 @@ import type { AffiliateInput, AffiliateView } from '@hushos/billing/api';
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { PlusIcon } from 'lucide-react';
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { CopyValue } from '@/components/copy-value';
 import { Spinner } from '@/components/motion';
@@ -446,6 +446,7 @@ function AffiliateDialog({
                         affiliate={affiliate}
                         fieldError={fieldError}
                         onLeave={leave}
+                        onSaved={onSaved}
                     />
                     {error && (
                         <p role="alert" className="text-[13px] text-destructive">
@@ -484,6 +485,7 @@ function Field({
     wide,
     hint,
     error,
+    action,
     children,
 }: {
     id: string;
@@ -491,13 +493,18 @@ function Field({
     wide?: boolean;
     hint?: string;
     error?: string;
+    /* A quiet control at the end of the label's line. */
+    action?: React.ReactNode;
     children: React.ReactNode;
 }) {
     return (
         <div className={cn('flex min-w-0 flex-col gap-1.5', wide && 'sm:col-span-2')}>
-            <label htmlFor={id} className="text-[13px] font-semibold">
-                {label}
-            </label>
+            <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor={id} className="text-[13px] font-semibold">
+                    {label}
+                </label>
+                {action}
+            </div>
             {children}
             {error ? (
                 <p id={`${id}-note`} role="alert" className="text-[13px] text-destructive">
@@ -549,6 +556,7 @@ function AccountField({
     onBlur,
     error,
     placeholder,
+    action,
 }: {
     id: string;
     value: string;
@@ -556,6 +564,7 @@ function AccountField({
     onBlur: () => void;
     error?: string;
     placeholder: string;
+    action?: React.ReactNode;
 }) {
     const [open, setOpen] = useState(false);
     const typed = value.trim();
@@ -563,9 +572,13 @@ function AccountField({
     const search = useQuery({
         ...adminAccountsQueryOptions({ q: query }),
         enabled: open && query.length >= 2,
-        placeholderData: keepPreviousData,
     });
-    const accounts = typed.length >= 2 ? (search.data?.accounts.slice(0, 6) ?? []) : [];
+    // Only the answer for what the field holds now: a list for an earlier search could be
+    // picked with Enter before the new one arrives, and fill in someone else's email.
+    const accounts =
+        typed.length >= 2 && query === typed && !search.isPlaceholderData
+            ? (search.data?.accounts.slice(0, 6) ?? [])
+            : [];
     return (
         <Field
             id={id}
@@ -573,6 +586,7 @@ function AccountField({
             wide
             hint="An email with no account yet is linked when that person signs up."
             error={error}
+            action={action}
         >
             <Autocomplete
                 items={accounts}
@@ -586,13 +600,20 @@ function AccountField({
                 <AutocompleteInput
                     id={id}
                     className={small}
-                    type="email"
+                    // Text, not email: the list's Home and End keys set the caret, which an
+                    // email input refuses with an error.
+                    type="text"
                     inputMode="email"
                     autoComplete="off"
                     spellCheck={false}
                     placeholder={placeholder}
                     onFocus={() => setOpen(true)}
-                    onBlur={onBlur}
+                    // Closed with the field: a search still on its way must not open the list
+                    // over whatever has focus now.
+                    onBlur={() => {
+                        setOpen(false);
+                        onBlur();
+                    }}
                     // The line below is always there: the hint, or the error in its place.
                     aria-describedby={`${id}-note`}
                     aria-invalid={error ? true : undefined}
@@ -616,6 +637,76 @@ function AccountField({
     );
 }
 
+/*
+ * Takes the creator's account away, at once and apart from Save: "Unlink" for
+ * a linked account, after asking, since its email may not be at hand to link
+ * it again; "Cancel" for an email still waiting for its account, which is shown.
+ */
+function AccountUnlink({
+    affiliate,
+    onSaved,
+}: {
+    affiliate: AffiliateView;
+    onSaved: () => Promise<unknown>;
+}) {
+    const [asking, setAsking] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const linked = Boolean(affiliate.userId);
+    async function unlink() {
+        setBusy(true);
+        try {
+            await growthApi.updateAffiliate(affiliate.id, { userEmail: null });
+            await onSaved();
+            toast.add({
+                type: 'success',
+                title: linked ? 'Account unlinked' : 'No longer waiting for that email',
+            });
+        } catch (error) {
+            toast.add({ type: 'error', title: 'That didn’t work', description: message(error) });
+        } finally {
+            setBusy(false);
+            setAsking(false);
+        }
+    }
+    return (
+        <>
+            <Button
+                type="button"
+                variant="link"
+                className="text-[13px] text-muted-foreground hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3"
+                disabled={busy}
+                aria-label={
+                    linked ? 'Unlink their account' : `Cancel linking ${affiliate.pendingEmail}`
+                }
+                onClick={() => (linked ? setAsking(true) : void unlink())}
+            >
+                {linked ? 'Unlink' : 'Cancel'}
+            </Button>
+            <AlertDialog open={asking} onOpenChange={(next) => !busy && setAsking(next)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Unlink their account?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {affiliate.name} stops seeing their code and earnings in their Drive.
+                            You can link an account again by its email.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={busy}>Keep it</AlertDialogCancel>
+                        <AlertDialogAction
+                            variant="destructive"
+                            disabled={busy}
+                            onClick={() => void unlink()}
+                        >
+                            {busy ? 'Unlinking…' : 'Unlink'}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
+    );
+}
+
 /* Every field of a creator in a compact grid: one row on a wide screen, stacked on a phone. */
 function AffiliateFields({
     id,
@@ -624,6 +715,7 @@ function AffiliateFields({
     affiliate,
     fieldError,
     onLeave,
+    onSaved,
 }: {
     id: string;
     form: AffiliateDraft;
@@ -631,6 +723,7 @@ function AffiliateFields({
     affiliate?: AffiliateView;
     fieldError: (field: DraftField) => string | undefined;
     onLeave: (field: DraftField) => void;
+    onSaved: () => Promise<unknown>;
 }) {
     const set = <K extends keyof AffiliateDraft>(key: K, value: AffiliateDraft[K]) =>
         onChange((current) => ({ ...current, [key]: value }));
@@ -758,6 +851,11 @@ function AffiliateFields({
                         : affiliate?.userId
                           ? 'Linked. Another email changes it.'
                           : 'Optional: name or email'
+                }
+                action={
+                    affiliate && (affiliate.userId || affiliate.pendingEmail) ? (
+                        <AccountUnlink affiliate={affiliate} onSaved={onSaved} />
+                    ) : undefined
                 }
             />
             <Field id={`${id}-notes`} label="Notes" wide>

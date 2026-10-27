@@ -177,6 +177,8 @@ const polar = {
     beforeProductChange: null as (() => Promise<void>) | null,
     /* Runs once as Polar takes the next raise: an upgrade landing mid-flight. */
     beforeRaise: null as (() => Promise<void>) | null,
+    /* Runs once as Polar takes the next new discount: a sign-up landing mid-enrolment. */
+    beforeDiscountCreate: null as (() => Promise<void>) | null,
     /* Runs once just after the next subscription read: a change landing behind it. */
     afterGet: null as (() => void | Promise<void>) | null,
     /*
@@ -556,6 +558,9 @@ const fakeClient = {
     discounts: {
         async create(body: { code: string; basis_points: number; duration: string }) {
             polar.calls.push(`discounts.create:${body.code}`);
+            const hook = polar.beforeDiscountCreate;
+            polar.beforeDiscountCreate = null;
+            await hook?.();
             // The id is minted from the first code and never changes, however the code does.
             const id = `disc_${body.code.toLowerCase()}`;
             polar.discounts.push({ id, ...body });
@@ -1082,6 +1087,7 @@ beforeEach(async () => {
     polar.raiseLeavesOrder = false;
     polar.cutFailures = 0;
     polar.beforeCut = null;
+    polar.beforeDiscountCreate = null;
     polar.ordersFail = false;
     polar.beforeProductChange = null;
     polar.ignoresMoves = false;
@@ -2257,8 +2263,8 @@ describe('affiliates', () => {
         expect(await growth.listAffiliates()).toHaveLength(1);
     });
 
-    test('an email with no account yet is kept, and linked when an account with it signs up', async () => {
-        const affiliate = await growth.createAffiliate({
+    const later = () =>
+        growth.createAffiliate({
             name: 'Later',
             slug: 'later',
             code: 'LATER10',
@@ -2267,20 +2273,66 @@ describe('affiliates', () => {
             commissionBps: 1000,
             userEmail: ' Later@HushOS.test ',
         });
+
+    test('an email with no account yet is kept as pending, and nobody else takes it', async () => {
+        const affiliate = await later();
         expect(affiliate).toMatchObject({ userId: null, pendingEmail: 'later@hushos.test' });
-        // Someone else signing up takes nothing.
+        // Someone else reading their own page, or the operator reading the list, links nothing.
         const stranger = await createTestAccount();
-        expect(await growth.linkNewAccount(stranger.userId)).toBe(0);
         expect((await growth.getReferralSummary(stranger.userId)).affiliate).toBeNull();
-        const later = await createTestAccount({ email: 'later@hushos.test' });
-        expect(await growth.linkNewAccount(later.userId)).toBe(1);
         expect((await growth.listAffiliates())[0]).toMatchObject({
-            userId: later.userId,
+            userId: null,
+            pendingEmail: 'later@hushos.test',
+        });
+    });
+
+    test('an account that signs up while Polar creates the discount is still linked, when the list is read', async () => {
+        // The email is resolved before Polar is asked and the row written after it answers:
+        // an account committed in between finds nothing to link at sign-up.
+        let joined: { userId: string } | null = null;
+        polar.beforeDiscountCreate = async () => {
+            joined = await createTestAccount({ email: 'later@hushos.test' });
+        };
+        const affiliate = await later();
+        expect(affiliate).toMatchObject({ userId: null, pendingEmail: 'later@hushos.test' });
+        const account = joined!;
+        // The dialog refreshes the list after saving: that heals it.
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            userId: account.userId,
             pendingEmail: null,
         });
-        expect((await growth.getReferralSummary(later.userId)).affiliate?.id).toBe(affiliate.id);
-        // Linked once: signing up is not a second claim, and the link is not moved.
-        expect(await growth.linkNewAccount(later.userId)).toBe(0);
+        expect((await growth.getReferralSummary(account.userId)).affiliate?.id).toBe(affiliate.id);
+    });
+
+    test('a pending email is linked when its account reads its own page, with no step at sign-up', async () => {
+        const affiliate = await later();
+        // The account arrives with nothing run for it: a link at sign-up that failed, or never ran.
+        const account = await createTestAccount({ email: 'later@hushos.test' });
+        expect((await growth.getReferralSummary(account.userId)).affiliate?.id).toBe(affiliate.id);
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            userId: account.userId,
+            pendingEmail: null,
+        });
+    });
+
+    test('unlinking clears the linked account and a pending email alike', async () => {
+        const owner = await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        await growth.updateAffiliate(affiliate.id, { userEmail: 'owner@hushos.test' });
+        expect(await growth.updateAffiliate(affiliate.id, { userEmail: null })).toMatchObject({
+            userId: null,
+            pendingEmail: null,
+        });
+        expect((await growth.getReferralSummary(owner.userId)).affiliate).toBeNull();
+        await growth.updateAffiliate(affiliate.id, { userEmail: 'someone@hushos.test' });
+        expect(await growth.updateAffiliate(affiliate.id, { userEmail: null })).toMatchObject({
+            userId: null,
+            pendingEmail: null,
+        });
+        // A cancelled email is not linked later, when an account with it does sign up.
+        const someone = await createTestAccount({ email: 'someone@hushos.test' });
+        expect((await growth.getReferralSummary(someone.userId)).affiliate).toBeNull();
+        expect((await growth.listAffiliates())[0]).toMatchObject({ userId: null });
     });
 
     test('editing the account: an existing email links at once, an unknown one replaces the link with a pending one, none keeps it', async () => {

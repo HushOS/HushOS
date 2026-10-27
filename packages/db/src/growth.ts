@@ -385,9 +385,12 @@ export async function findAffiliateByHandle(handle: string, except?: string) {
 }
 
 /*
- * A new account whose email an operator gave a creator before it existed:
- * link every such creator to it. The email is the one the account verified
- * before it was created, so only the address's owner can take the link.
+ * Creators an operator gave an email before its account existed, linked once
+ * it does. Done when the links are read, not at sign-up: an account made while
+ * the operator's save waits on the provider exists before the row it should
+ * link to, and a step at sign-up that failed would never run again. Every
+ * account verified its email before it was created, so only the address's
+ * owner can take the link. This one is for one account, reading its own page.
  */
 export async function linkPendingAffiliates(userId: string) {
     const rows = await db
@@ -405,8 +408,28 @@ export async function linkPendingAffiliates(userId: string) {
     return rows.length;
 }
 
+/* Every pending creator whose account now exists: the operator's list reads this first. */
+export async function linkAllPendingAffiliates() {
+    const rows = await db
+        .update(affiliates)
+        .set({ userId: sql`${users.id}`, pendingEmail: null, updatedAt: new Date() })
+        .from(users)
+        .where(and(eq(users.normalizedEmail, affiliates.pendingEmail), isNull(affiliates.userId)))
+        .returning({ id: affiliates.id });
+    return rows.length;
+}
+
+/*
+ * The creator an account sees on its own page. An account can be linked to
+ * more than one; until the product says which, it is always the oldest.
+ */
 export async function getAffiliateForUser(userId: string) {
-    const [row] = await db.select().from(affiliates).where(eq(affiliates.userId, userId));
+    const [row] = await db
+        .select()
+        .from(affiliates)
+        .where(eq(affiliates.userId, userId))
+        .orderBy(affiliates.createdAt, affiliates.id)
+        .limit(1);
     return row ?? null;
 }
 

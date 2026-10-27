@@ -95,6 +95,8 @@ async function view(row: Awaited<ReturnType<typeof growthRepository.getAffiliate
 export async function getReferralSummary(userId: string): Promise<ReferralSummary> {
     const settings = referralSettings();
     const summary = await growthRepository.getReferralSummary(userId);
+    // A creator enrolled under this account's email before it existed becomes its own here.
+    await growthRepository.linkPendingAffiliates(userId);
     const affiliate = await growthRepository.getAffiliateForUser(userId);
     return {
         code: summary.code,
@@ -214,6 +216,8 @@ export async function rememberCoupon(userId: string, code: string) {
 }
 
 export async function listAffiliates() {
+    // Pending emails whose accounts now exist are linked before the operator sees them.
+    await growthRepository.linkAllPendingAffiliates();
     const rows = await growthRepository.listAffiliates();
     return rows.map((row) => ({
         id: row.id,
@@ -245,11 +249,6 @@ async function accountForEmail(email: string | null | undefined) {
     if (!normalized) return { userId: null, pendingEmail: null };
     const userId = await growthRepository.findUserIdByEmail(normalized);
     return userId ? { userId, pendingEmail: null } : { userId: null, pendingEmail: normalized };
-}
-
-/* A new account: any creator an operator gave its email before it existed is now theirs. */
-export async function linkNewAccount(userId: string) {
-    return growthRepository.linkPendingAffiliates(userId);
 }
 
 function validate(input: AffiliateInput) {

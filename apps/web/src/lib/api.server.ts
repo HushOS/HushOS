@@ -772,13 +772,6 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 useLogger().set({ growth: { failure: describeFailure(error) } });
                 useLogger().error(new Error('Referral attribution failed.'));
             }
-            // A creator an operator enrolled under this email before the account existed.
-            try {
-                await growth.linkNewAccount(user.id);
-            } catch (error) {
-                useLogger().set({ growth: { failure: describeFailure(error) } });
-                useLogger().error(new Error('Linking an affiliate failed.'));
-            }
             return { user };
         },
     )
