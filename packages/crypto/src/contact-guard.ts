@@ -24,7 +24,12 @@ const ID_INFO = 'hushos/contact-guard/id/v1';
 const DOMAIN = 'hushos/contact-guard';
 const VERSION = 1;
 
-export type GuardRowKind = 'entry' | 'pending';
+/*
+ * `check` is one row per account (apps/web lib/contact-guard.ts): it proves
+ * which settings key the account's rows are sealed under, so rows sealed
+ * under another one are never read as none.
+ */
+export type GuardRowKind = 'entry' | 'pending' | 'check';
 
 const refused = () => new CryptoError('This saved contact record could not be opened.');
 

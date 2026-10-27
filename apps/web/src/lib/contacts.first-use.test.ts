@@ -289,9 +289,11 @@ describe('a change with no signed chain', () => {
         const looked = await lookupContact(query, ME, MAYA_EMAIL);
         expect(looked).toMatchObject({ changed: true, wasVerified: true, verified: false });
 
-        // A check over the new keys is a Continue that is also verified.
-        await pinContact(query, ME, looked);
+        // A check over the new keys is a Continue that is also verified, and what was shared
+        // with her waits to be sealed to them.
+        expect((await pinContact(query, ME, looked)).resealShares).toBe(true);
         expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('verified');
+        expect(await resealPending(ME)).toEqual([MAYA]);
         expect(await trustGrantee(ME, MAYA, after)).toMatchObject({
             encryptionPublicKey: after.encryptionPublicKey,
         });
@@ -371,6 +373,79 @@ describe('the guard (2.8)', () => {
         w.server.served.set(MAYA_EMAIL, w.maya);
         await w.replace({ ...held, contacts: {} });
         expect((await addContact(query, ME, MAYA_EMAIL)).outcome).toBe('added');
+    });
+
+    test('a pin that came with the settings is kept in the guard before it opens or judges anything', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        // A new device of this account: the settings hold Maya, its guard holds nothing.
+        await deleteContactGuard(w.guardName);
+        expect(await w.real.entry(ME, MAYA)).toBeNull();
+        // Listing what she shared opens it, and the guard keeps the keys it opened under.
+        expect((await trustGranter(granter(w.maya))).signingPublicKey).toBe(
+            w.maya.signingPublicKey,
+        );
+        expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(w.maya.signingPublicKey);
+
+        // Another device continues to new keys; here that is the notice, never taken silently.
+        const after = await startOver(w);
+        await w.replace({
+            ...(await w.stored()),
+            contacts: {
+                [MAYA]: {
+                    ...(await w.stored()).contacts[MAYA]!,
+                    ...(await pinOfServed(
+                        {
+                            ...after,
+                            mlDsaPublicKey: after.mlDsaPublicKey!,
+                            kemPublicKey: after.kemPublicKey!,
+                        },
+                        'seen',
+                    )),
+                },
+            },
+        });
+        await expect(trustGranter(granter(after))).rejects.toBeInstanceOf(AccountChangedError);
+
+        // Verdicts the same way: on a new device, what Maya wrote is judged only once the guard
+        // keeps her, and a move of her pin elsewhere afterwards judges nothing as hers.
+        const again = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await deleteContactGuard(again.guardName);
+        expect((await trustedSigners(ME))[MAYA]).toMatchObject({
+            current: again.maya.signingPublicKey,
+        });
+        expect((await again.real.entry(ME, MAYA))!.signingPublicKey).toBe(
+            again.maya.signingPublicKey,
+        );
+        const moved = await startOver(again);
+        await again.replace({
+            ...(await again.stored()),
+            contacts: {
+                [MAYA]: {
+                    ...(await again.stored()).contacts[MAYA]!,
+                    ...(await pinOfServed(
+                        {
+                            ...moved,
+                            mlDsaPublicKey: moved.mlDsaPublicKey!,
+                            kemPublicKey: moved.kemPublicKey!,
+                        },
+                        'seen',
+                    )),
+                },
+            },
+        });
+        expect((await trustedSigners(ME))[MAYA]).toMatchObject({
+            current: again.maya.signingPublicKey,
+        });
+
+        // A guard write that fails judges nothing and opens nothing on that pin.
+        const full = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await deleteContactGuard(full.guardName);
+        full.fail.commit = new DOMException('full', 'QuotaExceededError');
+        await expect(trustedSigners(ME)).rejects.toThrow(GUARD_UNSAVED);
+        await expect(trustGranter(granter(full.maya))).rejects.toThrow(GUARD_UNSAVED);
     });
 
     test('a lost settings answer shares nothing on the act, and the next act finishes it silently', async () => {
@@ -540,6 +615,77 @@ describe('another device saving between the read and the save', () => {
     });
 });
 
+describe('a check another device saves while this one rewrites the pin', () => {
+    /* Maya's pin over the keys served now, verified, as another device's They match writes it. */
+    const verifiedOf = async (served: ContactIdentity, base: object = {}) => ({
+        userId: MAYA,
+        email: MAYA_EMAIL,
+        name: 'Maya Lindqvist',
+        pinnedAt: new Date().toISOString(),
+        ...base,
+        ...(await pinOfServed(
+            {
+                ...served,
+                mlDsaPublicKey: served.mlDsaPublicKey!,
+                kemPublicKey: served.kemPublicKey!,
+            },
+            'verified',
+        )),
+    });
+
+    test('is kept when a pin from before post-quantum keys becomes first-seen', async () => {
+        const w = await world();
+        // A pin from before post-quantum identities: the classical keys only.
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: 'words-from-before',
+        };
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy } } as never);
+        const checked = await verifiedOf(w.maya);
+        w.server.beforeNextSave = async () =>
+            w.replace({ ...(await w.stored()), contacts: { [MAYA]: checked } });
+        expect(await trustGrantee(ME, MAYA, w.maya)).toMatchObject({
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+        });
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('verified');
+        expect((await w.real.entry(ME, MAYA))!.verified).toBe(true);
+    });
+
+    test('carries over to the keys a followed succession leads to', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const next = { ...(await startOver(w)), keyVersion: 2 };
+        auth.contactSuccession.mockResolvedValue({
+            links: [
+                {
+                    oldEncryptionPublicKey: w.maya.encryptionPublicKey,
+                    oldSigningPublicKey: w.maya.signingPublicKey,
+                    oldMlDsaPublicKey: w.maya.mlDsaPublicKey!,
+                },
+            ],
+        });
+        auth.rpc.mockImplementation(async (operation, input) =>
+            operation === 'identityVerifyChain' ? { valid: true } : w.device.call(operation, input),
+        );
+        // Another device checks Maya's old keys while this one follows her to the new ones.
+        const checked = await verifiedOf(w.maya, { firstSeen: 'added' });
+        w.server.beforeNextSave = async () =>
+            w.replace({ ...(await w.stored()), contacts: { [MAYA]: checked } });
+        expect((await trustGranter(granter(next), { explicit: true })).signingPublicKey).toBe(
+            next.signingPublicKey,
+        );
+        const pin = (await w.stored()).contacts[MAYA]!;
+        expect(pin.signingPublicKey).toBe(next.signingPublicKey);
+        expect(await pinTrust(pin)).toBe('verified');
+        expect(pin.previousSigningKeys).toEqual([w.maya.signingPublicKey]);
+    });
+});
+
 describe('listing what was shared, and opening it', () => {
     test('a share from someone never met opens as it is listed, and pins them first-seen', async () => {
         const w = await world();
@@ -631,11 +777,24 @@ describe('a signed succession', () => {
             next.signingPublicKey,
         );
         expect((await w.stored()).contacts[MAYA]!.signingPublicKey).toBe(next.signingPublicKey);
+        // What was shared with her waits to be sealed to the new keys, and a check made now
+        // still says so, so They match runs that reseal (check-contact.tsx).
+        expect(await resealPending(ME)).toEqual([MAYA]);
+        w.server.served.set(MAYA_EMAIL, next);
+        // Her keys statement is over key version 1 in this fixture; the chain is what is tested.
+        auth.rpc.mockImplementation(async (operation, input) =>
+            operation === 'identityVerifyChain' || operation === 'identityVerifyKeys'
+                ? { valid: true }
+                : w.device.call(operation, input),
+        );
+        const looked = await lookupContact(query, ME, MAYA_EMAIL);
+        expect(looked).toMatchObject({ changed: false });
+        expect((await pinContact(query, ME, looked)).resealShares).toBe(true);
     });
 });
 
 describe('another tab of this browser', () => {
-    test('a Continue made in another tab rebuilds who wrote what here', async () => {
+    test('a Continue made in another tab rebuilds who wrote what here, the catalogue included', async () => {
         const w = await world();
         const client = new QueryClient();
         bindContactsToQueries(client);
@@ -673,6 +832,9 @@ describe('another tab of this browser', () => {
                 },
                 held.revision,
             );
+            // The catalogue behind Home, search and tags is judged again too, not only listings.
+            const rechecked = vi.fn();
+            const stop = contacts.onGuardMovedElsewhere(rechecked);
             const channel = new BroadcastChannel('hushos-contact-guard');
             channel.postMessage({ userId: ME, contactId: MAYA });
             channel.close();
@@ -681,6 +843,8 @@ describe('another tab of this browser', () => {
                     current: after.signingPublicKey,
                 }),
             );
+            await vi.waitFor(() => expect(rechecked).toHaveBeenCalledTimes(1));
+            stop();
         } finally {
             bindContactsToQueries(undefined as never);
         }
@@ -715,6 +879,49 @@ describe('the guard at rest', () => {
         await expect(w.real.pending(ME, MAYA)).rejects.toThrow();
         await w.device.unlock();
         expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(w.maya.signingPublicKey);
+    });
+
+    test('rows sealed under another settings key are never read as none: everyone pauses', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const held = (await w.real.entry(ME, MAYA))!;
+        // The server serves a settings key of its own (a fork, or settings withheld from this
+        // device), and a later document under it in which Maya's pin is other keys.
+        const { settingsKey } = await w.device.call('settingsKeyCreate', { userId: ME });
+        expect(settingsKey).toBeDefined();
+        const planted = await startOver(w);
+        await w.replace({
+            version: 2,
+            contacts: {
+                [MAYA]: {
+                    userId: MAYA,
+                    email: MAYA_EMAIL,
+                    name: 'Maya Lindqvist',
+                    pinnedAt: new Date().toISOString(),
+                    ...(await pinOfServed(
+                        {
+                            ...planted,
+                            mlDsaPublicKey: planted.mlDsaPublicKey!,
+                            kemPublicKey: planted.kemPublicKey!,
+                        },
+                        'seen',
+                    )),
+                },
+            },
+        } as never);
+        // Looked up under the new key, her row would just be missing: that must not read as none.
+        await expect(w.real.entry(ME, MAYA)).rejects.toThrow();
+        await expect(w.real.pending(ME, MAYA)).rejects.toThrow();
+        await expect(trustGrantee(ME, MAYA, planted)).rejects.toThrow(GUARD_UNREADABLE);
+        await expect(trustGranter(granter(planted))).rejects.toThrow(GUARD_UNREADABLE);
+        // Someone the guard never held pauses too: nothing is first use over a guard it can't read.
+        const sam = await person('a1a1a1a1-0000-4000-8000-000000000003', 'sam@example.com', 'Sam');
+        await expect(trustGranter(granter(sam))).rejects.toThrow(GUARD_UNREADABLE);
+        // And nothing is written beside the old rows under the new key.
+        await expect(w.real.commit(ME, MAYA, { ...held, revision: 1 }, 0)).rejects.toThrow();
+        await expect(
+            w.real.putPending(ME, MAYA, { target: 'x', revision: 1, at: new Date().toISOString() }),
+        ).rejects.toThrow();
     });
 
     test('a guard kept in the clear is sealed on the first unlock and its plaintext deleted', async () => {

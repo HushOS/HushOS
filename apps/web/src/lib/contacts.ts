@@ -543,6 +543,16 @@ async function settingsKeyMade(userId: string) {
  */
 let guardWrites = 0;
 const GUARD_CHANNEL = 'hushos-contact-guard';
+/*
+ * What else is judged over the guard and must be judged again when another
+ * tab moves it: the catalogue's verdicts behind Home, search and tags
+ * (lib/drive.ts registers its recheck here, as afterTrustChanged runs it).
+ */
+const movedElsewhere = new Set<() => void>();
+export function onGuardMovedElsewhere(listener: () => void) {
+    movedElsewhere.add(listener);
+    return () => void movedElsewhere.delete(listener);
+}
 const guardChannel =
     typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(GUARD_CHANNEL);
 guardChannel?.addEventListener('message', (event: MessageEvent) => {
@@ -553,10 +563,12 @@ guardChannel?.addEventListener('message', (event: MessageEvent) => {
     void boundQueryClient?.invalidateQueries({ queryKey: contactKeys.settings(data.userId) });
     void boundQueryClient?.invalidateQueries({ queryKey: ['contacts', 'standing'] });
     void boundQueryClient?.invalidateQueries({ queryKey: ['contacts', 'sharee'] });
-    // What Drive drew was judged over the guard as it was (lib/integrity.ts afterTrustChanged).
+    // What Drive drew was judged over the guard as it was (lib/integrity.ts afterTrustChanged):
+    // every listing, and the catalogue behind Home, search and tags.
     void boundQueryClient?.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'drive' && query.queryKey[1] !== 'open',
     });
+    for (const listener of movedElsewhere) listener();
 });
 function guardMoved(moved: { userId: string; contactId: string } | null) {
     guardWrites++;
@@ -737,6 +749,39 @@ async function rememberKeys(
 }
 
 /*
+ * Pins that came with the settings and that this device's guard holds
+ * nothing for yet (a new device, a browser signed back into): each is written
+ * to the guard before anything uses it (2.8), so a later change made on
+ * another device (a Continue, a stale copy) is met here as a change, never
+ * taken as first use. A write that fails fails the caller: nothing is judged
+ * or shown as theirs on a pin the guard could not keep. Returns the entries
+ * as stored afterwards.
+ */
+async function rememberSynced(
+    userId: string,
+    contacts: Record<string, Pin>,
+    entries: Map<string, GuardEntry>,
+) {
+    const missing: Pin[] = [];
+    for (const pin of Object.values(contacts)) {
+        if (entries.has(pin.userId.toLowerCase())) continue;
+        const trust = await pinTrust(pin);
+        if (trust === 'verified' || trust === 'seen') missing.push(pin);
+    }
+    if (!missing.length) return entries;
+    await withGuardLock(userId, async () => {
+        for (const pin of missing)
+            if ((await guardFor(userId, pin.userId, pin)) === null)
+                await rememberKeys(userId, pin.userId, null, pin);
+    });
+    try {
+        return await contactGuard().store.entries(userId);
+    } catch (error) {
+        throw new GuardUnreadableError(error);
+    }
+}
+
+/*
  * One act that changes whom this device trusts (2.8, "Committing an act"): a
  * pending record naming the exact keys it moves to, the settings saved, then
  * the guard entry at the next revision with the pending record deleted, in
@@ -912,26 +957,16 @@ async function stand(
                 ? { kind: 'not-upgraded', pin }
                 : changed();
         if (!act) return { kind: 'ok', pin: upgraded, entry, followed: false };
-        const key = found!.key;
         const before = pin;
+        // Only over the pin it was worked out from, by every key: another device may have moved
+        // first, and a pin of these keys it saved meanwhile (checked, say) is kept as it is.
         ({ pin, entry } = await commitTrust(
             boundQueryClient,
             userId,
             contactId,
             entry,
             upgraded,
-            (settings) => {
-                const current = settings.contacts[key];
-                // Only over the pin it was worked out from: another device may have moved first.
-                if (
-                    !current ||
-                    current.encryptionPublicKey !== before.encryptionPublicKey ||
-                    current.signingPublicKey !== before.signingPublicKey
-                )
-                    throw new TrustMovedError();
-                settings.contacts[key] = { ...current, ...upgraded };
-                return settings;
-            },
+            (settings) => withPinIf(settings, upgraded, before),
         ));
         trust = 'seen';
     }
@@ -967,24 +1002,36 @@ async function stand(
         await keysPassedThrough(from, links),
     );
     if (!act) return { kind: 'ok', pin: next, entry, followed: true };
-    const key = found!.key;
+    const at = new Date();
+    const passed = await keysPassedThrough(from, links);
     ({ pin, entry } = await commitTrust(
         boundQueryClient,
         userId,
         contactId,
         entry,
         next,
-        (settings) => {
-            const current = settings.contacts[key];
-            // Only from the keys the chain was checked from: another device may have moved first.
-            if (
-                !current ||
-                current.encryptionPublicKey !== from.encryptionPublicKey ||
-                current.signingPublicKey !== from.signingPublicKey
-            )
-                throw new TrustMovedError();
-            settings.contacts[key] = { ...current, ...next };
-            return settings;
+        async (settings) => {
+            const current = pinOf(settings.contacts, contactId)?.pin ?? null;
+            // Another device followed it first: its pin is kept as it is, a check included.
+            if (current !== null && (await sameKeys(current, next)))
+                return withoutRemoval(settings, contactId);
+            // Only from the keys the chain was checked from, by every key.
+            if (current === null || !(await sameKeys(current, from))) throw new TrustMovedError();
+            // What the chain carries over is the source pin's standing as it is now: a check
+            // another device made of these keys meanwhile stays a check after the succession.
+            return withPinOnce(
+                settings,
+                await pinAfterSuccession(
+                    current,
+                    {
+                        ...served,
+                        mlDsaPublicKey: served.mlDsaPublicKey!,
+                        kemPublicKey: served.kemPublicKey!,
+                    },
+                    at,
+                    passed,
+                ),
+            );
         },
     ));
     return { kind: 'ok', pin, entry, followed: true };
@@ -1452,6 +1499,8 @@ export async function contactStandings(userId: string) {
     } catch (error) {
         throw new GuardUnreadableError(error);
     }
+    // "Verified" is shown over a pin only once this device's guard keeps it.
+    entries = await rememberSynced(userId, loaded.settings.contacts, entries);
     const out = new Map<string, { verified: boolean; changed: boolean }>();
     for (const pin of Object.values(loaded.settings.contacts)) {
         const held = await agreement(entries.get(pin.userId.toLowerCase()) ?? null, pin);
@@ -1633,8 +1682,10 @@ export async function trustGranter(
  * pinned, verified or first-seen, with the keys their pin followed a
  * succession from, as this device's guard allows (2.8): a settings pin that
  * disagrees with the guard vouches for nothing, and the keys the guard holds
- * stand in for it, never verified. A guard that cannot be read fails the set,
- * so every item reads Couldn't check rather than as anyone's. Cached with the
+ * stand in for it, never verified. A pin the guard holds nothing for is
+ * written to it first (rememberSynced). A guard that cannot be read or
+ * written fails the set, so every item reads Couldn't check rather than as
+ * anyone's. Cached with the
  * settings query and the guard's writes, so a listing does not refetch them.
  */
 const signersCache = new WeakMap<object, { writes: number; signers: Promise<DriveSigners> }>();
@@ -1649,6 +1700,8 @@ export async function trustedSigners(userId: string) {
         } catch (error) {
             throw new GuardUnreadableError(error);
         }
+        // A pin judges what Drive lists only once this device's guard keeps it.
+        entries = await rememberSynced(userId, loaded.settings.contacts, entries);
         const effective: Record<string, Pin> = {};
         for (const [key, pin] of Object.entries(loaded.settings.contacts)) {
             const entry = entries.get(pin.userId.toLowerCase()) ?? null;

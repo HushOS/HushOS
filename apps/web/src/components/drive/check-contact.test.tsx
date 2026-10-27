@@ -11,7 +11,7 @@ import type { Lookup } from '@/lib/contacts';
  * one dialog on screen at a time.
  */
 const lookup = vi.fn<() => Promise<Lookup>>();
-const pinContact = vi.fn(async () => ({}));
+const pinContact = vi.fn(async (): Promise<{ resealShares?: boolean }> => ({}));
 const continueWith = vi.fn(async () => ({}));
 const removeContact = vi.fn(async () => ({}));
 const upgradeShares = vi.fn(async () => ({ resealed: 1, refused: 0 }));
@@ -116,6 +116,16 @@ describe('Check it’s Maya', () => {
 
     test('They match over keys that changed seals what was shared again, as Continue does', async () => {
         lookup.mockResolvedValue({ ...found, changed: true, stale: false, wasVerified: true });
+        pinContact.mockResolvedValueOnce({ resealShares: true });
+        open();
+        fireEvent.click(await screen.findByRole('button', { name: 'They match' }));
+        await vi.waitFor(() => expect(upgradeShares).toHaveBeenCalledTimes(1));
+    });
+
+    test('They match after a signed succession it followed just now seals what was shared again', async () => {
+        // Followed, not changed: the pin moved on and what was shared waits to be sealed to it.
+        lookup.mockResolvedValue({ ...found, followed: true });
+        pinContact.mockResolvedValueOnce({ resealShares: true });
         open();
         fireEvent.click(await screen.findByRole('button', { name: 'They match' }));
         await vi.waitFor(() => expect(upgradeShares).toHaveBeenCalledTimes(1));

@@ -16,8 +16,16 @@ import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
  * key, which exists only while the account is unlocked: a locked browser holds
  * ciphertext, and rows are found by an id that does not say whom they are
  * about. A read that cannot open (locked, another key, a damaged row) fails;
- * it is never "nothing recorded". A guard written before it was sealed is
- * sealed on the first unlock and its plaintext deleted (migrate).
+ * it is never "nothing recorded". Since an id is worked out under the
+ * settings key, a person's row looked up under another key would simply be
+ * missing, so each account keeps one sealed key-check row beside its rows:
+ * a lookup reads "none" only once that row proves the rows here are sealed
+ * under the key open now. Rows sealed under another settings key (the server
+ * served a new one with a later settings document) fail every read and every
+ * write, so that person, and everyone else on this account, pauses with
+ * "Couldn't check" rather than starting over as first use; signing out
+ * (which deletes the guard) is the way out. A guard written before it was
+ * sealed is sealed on the first unlock and its plaintext deleted (migrate).
  *
  * Every act that changes whom this device trusts (adding, Continue, a check)
  * commits in four steps (lib/contacts.ts commitTrust): a pending record names
@@ -134,14 +142,19 @@ export type GuardSealer = {
     ids(userId: string, contactIds: string[]): Promise<string[]>;
     seal(
         userId: string,
-        rows: { contactId: string; kind: 'entry' | 'pending'; value: unknown }[],
+        rows: { contactId: string; kind: RowKind; value: unknown }[],
     ): Promise<{ id: string; envelope: string }[]>;
     open(
         userId: string,
-        kind: 'entry' | 'pending',
+        kind: RowKind,
         rows: { id: string; envelope: string }[],
     ): Promise<({ contactId: string; value: unknown } | null)[]>;
 };
+
+type RowKind = 'entry' | 'pending' | 'check';
+/* The key-check row's contact id: no account id looks like it, and its kind keeps it apart anyway. */
+const KEY_CHECK = 'key-check';
+const KEY_CHECK_VALUE = { check: 1 };
 
 /* Before the guard was sealed: its rows in the clear, sealed and deleted on the first unlock. */
 type PlainRow<T> = { key: string; userId: string; contactId: string; value: T };
@@ -152,9 +165,14 @@ interface Schema extends DBSchema {
     pending: { key: string; value: PlainRow<PendingAct> };
     'sealed-entries': { key: string; value: SealedRow };
     'sealed-pending': { key: string; value: SealedRow };
+    /* One per account, keyed by the account id: which settings key its rows are sealed under. */
+    'sealed-check': { key: string; value: SealedRow };
 }
-/* Version 2 added the sealed stores; version 1's plaintext ones stay until every account moved. */
-const DATABASE_VERSION = 2;
+/*
+ * Version 2 added the sealed stores; version 1's plaintext ones stay until
+ * every account moved. Version 3 added the key-check rows.
+ */
+const DATABASE_VERSION = 3;
 
 const rowKey = (userId: string, id: string) => `${userId}:${id}`;
 
@@ -170,6 +188,7 @@ export function createIndexedDbContactGuard(
                     db.createObjectStore('sealed-entries', { keyPath: 'key' });
                     db.createObjectStore('sealed-pending', { keyPath: 'key' });
                 }
+                if (oldVersion < 3) db.createObjectStore('sealed-check', { keyPath: 'key' });
             },
             blocking(_current, _next, event) {
                 (event.target as IDBDatabase).close();
@@ -218,11 +237,16 @@ export function createIndexedDbContactGuard(
                         value: checkPending(row.value),
                     })),
                 ];
+                // Every sealed row of the account under the key open now, or none of them.
+                await keyHolds(userId);
                 const sealed = await sealer.seal(userId, values);
+                const check = await sealCheck(userId);
                 const tx = db.transaction(
-                    ['entries', 'pending', 'sealed-entries', 'sealed-pending'],
+                    ['entries', 'pending', 'sealed-entries', 'sealed-pending', 'sealed-check'],
                     'readwrite',
                 );
+                if (!(await tx.objectStore('sealed-check').get(userId)))
+                    await tx.objectStore('sealed-check').put(check);
                 for (const [index, row] of values.entries()) {
                     const { id, envelope } = sealed[index]!;
                     const store = tx.objectStore(
@@ -251,19 +275,64 @@ export function createIndexedDbContactGuard(
         return done;
     }
 
+    /* The key-check row for an account, sealed under the key open now. */
+    async function sealCheck(userId: string): Promise<SealedRow> {
+        await sealer.ready(userId);
+        const [{ id, envelope }] = (await sealer.seal(userId, [
+            { contactId: KEY_CHECK, kind: 'check', value: KEY_CHECK_VALUE },
+        ])) as [{ id: string; envelope: string }];
+        return { key: userId, userId, id, envelope };
+    }
     /*
-     * The row id of a person, the settings key opened first. Null only when
-     * this account keeps no row here at all, which is an honest "none" that
-     * needs no key to say; with any row kept, a locked worker fails the read.
+     * Whether this account's rows are sealed under the settings key open now:
+     * 'empty' when it keeps nothing here, 'held' when its key-check row opens
+     * under that key. Throws for a key-check row of another key (or one that
+     * does not open), so a row looked up by an id worked out under the wrong
+     * key is never read as missing. Rows from before key-check rows existed
+     * are proven by opening every one of them, and the row is then written.
      */
-    async function idOf(userId: string, contactId: string) {
-        await migrate(userId);
+    const proven = new Map<string, string>();
+    async function keyHolds(userId: string): Promise<'empty' | 'held'> {
         const db = await open();
+        const check = await db.get('sealed-check', userId);
         const kept =
             (await db.count('sealed-entries', account(userId))) +
             (await db.count('sealed-pending', account(userId)));
-        if (!kept) return null;
+        if (!check && !kept) return 'empty';
         await sealer.ready(userId);
+        const [expected] = await sealer.ids(userId, [KEY_CHECK]);
+        if (check) {
+            if (check.id !== expected)
+                throw new Error('These contact records were saved under another settings key.');
+            if (proven.get(userId) === check.envelope) return 'held';
+            const [opened] = await sealer.open(userId, 'check', [check]);
+            if (!opened || opened.contactId !== KEY_CHECK)
+                throw new Error('A contact guard record could not be opened.');
+            proven.set(userId, check.envelope);
+            return 'held';
+        }
+        const [entries, pending] = await Promise.all([
+            db.getAll('sealed-entries', account(userId)),
+            db.getAll('sealed-pending', account(userId)),
+        ]);
+        for (const entry of await openRows(userId, 'entry', entries)) entryOf(entry);
+        await openRows(userId, 'pending', pending);
+        const row = await sealCheck(userId);
+        const tx = db.transaction('sealed-check', 'readwrite');
+        if (!(await tx.store.get(userId))) await tx.store.put(row);
+        await tx.done;
+        return 'held';
+    }
+
+    /*
+     * The row id of a person, the settings key opened first. Null only when
+     * this account keeps no row here at all, which is an honest "none" that
+     * needs no key to say; with any row kept, a locked worker, or rows sealed
+     * under another settings key, fail the read.
+     */
+    async function idOf(userId: string, contactId: string) {
+        await migrate(userId);
+        if ((await keyHolds(userId)) === 'empty') return null;
         const [id] = await sealer.ids(userId, [contactId]);
         if (!id) throw new Error('A contact guard id could not be worked out.');
         return id;
@@ -308,6 +377,7 @@ export function createIndexedDbContactGuard(
         },
         async entries(userId) {
             await migrate(userId);
+            if ((await keyHolds(userId)) === 'empty') return new Map();
             const rows = await (await open()).getAll('sealed-entries', account(userId));
             const out = new Map<string, GuardEntry>();
             for (const opened of await openRows(userId, 'entry', rows))
@@ -326,31 +396,35 @@ export function createIndexedDbContactGuard(
         },
         async putPending(userId, contactId, act) {
             await migrate(userId);
-            await sealer.ready(userId);
+            // Never a row under one key beside rows under another; the first one brings its check.
+            const held = await keyHolds(userId);
             const [{ id, envelope }] = (await sealer.seal(userId, [
                 { contactId, kind: 'pending', value: checkPending(act) },
             ])) as [{ id: string; envelope: string }];
-            await (
-                await open()
-            ).put('sealed-pending', {
-                key: rowKey(userId, id),
-                userId,
-                id,
-                envelope,
-            });
+            const check = held === 'empty' ? await sealCheck(userId) : null;
+            const tx = (await open()).transaction(['sealed-pending', 'sealed-check'], 'readwrite');
+            if (check && !(await tx.objectStore('sealed-check').get(userId)))
+                await tx.objectStore('sealed-check').put(check);
+            await tx
+                .objectStore('sealed-pending')
+                .put({ key: rowKey(userId, id), userId, id, envelope });
+            await tx.done;
         },
         async commit(userId, contactId, entry, revision) {
             await migrate(userId);
-            await sealer.ready(userId);
+            const held = await keyHolds(userId);
             // Sealed first: nothing may await the worker inside the transaction below.
             const [{ id, envelope }] = (await sealer.seal(userId, [
                 { contactId, kind: 'entry', value: checkGuardEntry(entry) },
             ])) as [{ id: string; envelope: string }];
+            const check = held === 'empty' ? await sealCheck(userId) : null;
             const key = rowKey(userId, id);
             const tx = (await open()).transaction(
-                ['sealed-entries', 'sealed-pending'],
+                ['sealed-entries', 'sealed-pending', 'sealed-check'],
                 'readwrite',
             );
+            if (check && !(await tx.objectStore('sealed-check').get(userId)))
+                await tx.objectStore('sealed-check').put(check);
             const stored = await tx.objectStore('sealed-entries').get(key);
             const at = stored?.revision ?? 0;
             if (at !== revision) {

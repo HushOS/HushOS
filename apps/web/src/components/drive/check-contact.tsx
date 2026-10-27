@@ -66,13 +66,14 @@ export function CheckContactStep({
         setSaving(true);
         setError('');
         try {
-            await pinContact(queryClient, userId, lookup);
+            const pin = await pinContact(queryClient, userId, lookup);
             // What they wrote now reads as verified, and what waited on them runs.
             afterTrustChanged(queryClient);
             void queryClient.invalidateQueries({ queryKey: driveKeys.shared });
-            // Over keys that changed, a check is a Continue too: what was shared with them is
-            // sealed again, to these keys only, as Continue does (account-changed.tsx).
-            if (lookup.changed) void driveClient.upgradeShares().catch(() => {});
+            // What was shared with them waits to be sealed to the keys the pin holds now: over
+            // keys that changed (a check is a Continue too, as in account-changed.tsx), and after
+            // a signed succession the lookup followed just now. Sealed again to these keys only.
+            if (pin.resealShares) void driveClient.upgradeShares().catch(() => {});
             cue('success');
             toast.add({ type: 'success', title: `${name} verified` });
             onResolved?.();
