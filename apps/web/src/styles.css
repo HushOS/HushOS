@@ -309,6 +309,9 @@
     }
     * {
         @apply border-border outline-ring;
+        /* Thin scrollbars everywhere (dialogs, menus, lists), with a quiet thumb and no track. */
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in oklab, var(--muted-foreground) 40%, transparent) transparent;
     }
     html {
         text-rendering: optimizeLegibility;
