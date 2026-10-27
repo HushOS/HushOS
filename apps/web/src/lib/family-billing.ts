@@ -7,7 +7,6 @@ import type {
 import {
     DEFAULT_CURRENCY,
     FAMILY_MAX_MEMBERS,
-    MAX_MEMBERS_PER_RAISE,
     quoteTierChange,
     countedPool,
     firstPlanTooSmall,
@@ -214,13 +213,13 @@ export function placesFloor(summary: FamilyBillingFull) {
 }
 
 /*
- * How many places one "Add places" may add: at least one, at most the
- * server's step, never past the family maximum. Null when none can be added.
+ * How many places one "Add places" may add: at least one, and up to the
+ * family maximum in one go. Null when none can be added.
  */
 export function addRange(summary: FamilyBillingFull) {
     const live = summary.subscription;
     if (!live) return null;
-    const max = Math.min(MAX_MEMBERS_PER_RAISE, maxMembersOf(summary) - live.units);
+    const max = maxMembersOf(summary) - live.units;
     return max >= 1 ? { min: 1, max } : null;
 }
 

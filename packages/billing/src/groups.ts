@@ -29,7 +29,6 @@ import {
 } from './provider';
 import {
     GROUP_CUSTOMER_PREFIX,
-    MAX_MEMBERS_PER_RAISE,
     STALE_RAISE_DAYS,
     UNPAID_GROUP_SEATS,
     firstPlanTooSmall,
@@ -2137,8 +2136,8 @@ export type SeatResult =
     | { status: 'no-plan' }
     /* Someone other than the payer would have to pay for it. */
     | { status: 'payer' }
-    /* Past the plan's maximum, or more than one raise may add. */
-    | { status: 'cap'; max: number; step: number }
+    /* Past the plan's maximum. */
+    | { status: 'cap'; max: number }
     /* The plan is set to end; Polar refuses quantity changes until it is resumed. */
     | { status: 'canceling' }
     /* 402 PaymentFailed: the bank declined; nothing changed and nothing waits in the portal. */
@@ -2190,11 +2189,9 @@ async function changePlaces(
     const plan = await planOf(subscription.product_id);
     if (!plan) return { status: 'no-plan' };
     const current = subscription.units ?? plan.includedMembers;
-    const cap = { status: 'cap' as const, max: plan.maxMembers, step: MAX_MEMBERS_PER_RAISE };
-    if (target > plan.maxMembers) return cap;
+    if (target > plan.maxMembers) return { status: 'cap', max: plan.maxMembers };
     if (subscription.cancel_at_period_end) return { status: 'canceling' };
     if (target <= current) return placesHeld(groupId, live, subscription, target);
-    if (target - current > MAX_MEMBERS_PER_RAISE) return cap;
     // One plan change at a time: a raise and an upgrade never run together for a family. The
     // raise works from a read taken under the claim, never from the one above.
     return withPlanChange(
@@ -2216,10 +2213,9 @@ async function changePlaces(
             if (!heldPlan) return { status: 'no-plan' };
             const now = held.units ?? heldPlan.includedMembers;
             if (held.cancel_at_period_end) return { status: 'canceling' };
-            if (target > heldPlan.maxMembers) return cap;
+            if (target > heldPlan.maxMembers) return { status: 'cap', max: heldPlan.maxMembers };
             // A raise that landed meanwhile may already hold the place.
             if (target <= now) return placesHeld(groupId, live, held, target);
-            if (target - now > MAX_MEMBERS_PER_RAISE) return cap;
             return raisePlaces(
                 groupId,
                 live,
@@ -2756,10 +2752,7 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
         case 'changed':
             return new BillingError(CHARGED_BUT_CHANGED, 409);
         case 'cap':
-            return new BillingError(
-                `A family can have at most ${result.max} members, and one change can add at most ${result.step} places.`,
-                400,
-            );
+            return new BillingError(`A family can have at most ${result.max} members.`, 400);
         case 'canceling':
             return new BillingError(
                 'This family plan is set to end. Resume it in the billing portal first.',

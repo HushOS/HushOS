@@ -1268,8 +1268,9 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
                     )}
                 </dl>
                 <p className="text-[13px] text-muted-foreground">
-                    {TAX_ON_CHARGES} You can add up to {places(range.max)} now; a family has at most{' '}
-                    {currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members.
+                    {TAX_ON_CHARGES} A family has at most{' '}
+                    {currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members, so you can add
+                    up to {places(range.max)}.
                 </p>
                 {confirmUrl && (
                     <Alert variant="warning">

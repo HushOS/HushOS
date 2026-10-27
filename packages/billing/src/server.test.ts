@@ -3010,21 +3010,14 @@ describe('family checkout and webhooks', () => {
 });
 
 describe('family places', () => {
-    test('a raise is capped by HushOS, since Polar caps nothing', async () => {
+    test('a raise is capped by HushOS at the family maximum, since Polar caps nothing', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({ units: 18 });
         await expect(billing.setGroupUnits(payer, groupId, 21)).rejects.toMatchObject({
             status: 400,
-        });
-        const small = await familyOnPlan({ units: 6 });
-        // Six more at once is past the step; five is not.
-        await expect(billing.setGroupUnits(small.payer, small.groupId, 12)).rejects.toMatchObject({
-            status: 400,
+            message: 'A family can have at most 20 members.',
         });
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(18);
-        await billing.setGroupUnits(small.payer, small.groupId, 11);
-        expect(small.subscription.units).toBe(11);
-        expect(await seatLimit(small.groupId)).toBe(11);
         // An admission at the family maximum asks Polar for nothing either.
         await billing.setGroupUnits(payer, groupId, 20);
         for (let used = await groupsRepository.seatsUsed(groupId); used < 20; used++)
@@ -3039,6 +3032,48 @@ describe('family places', () => {
             max: 20,
         });
         expect(raises()).toEqual([]);
+    });
+
+    test('one raise fills a family from its four included places to twenty, charged once', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
+        expect(subscription.units).toBe(4);
+        await billing.setGroupUnits(payer, groupId, 20);
+        // One immediate charge at Polar for all sixteen places, not four raises of a few each.
+        expect(raises()).toEqual([
+            `subscriptions.update:${subscription.id}:{"units":20,"proration_behavior":"invoice"}`,
+        ]);
+        expect(subscription.units).toBe(20);
+        expect(await seatLimit(groupId)).toBe(20);
+        expect((await priced(billing.getGroupBilling(payer, groupId))).subscription).toMatchObject({
+            units: 20,
+            paidUnits: 20,
+        });
+    });
+
+    test('past the maximum is refused from a raise still waiting for the bank, and nothing more is charged', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PRO_FAMILY });
+        // Twelve more, which the bank wants confirmed: Polar holds sixteen, four paid for.
+        polar.raiseRefusal = { error: 'PaymentActionRequired', detail: 'Confirm the payment.' };
+        polar.raiseLeavesOrder = true;
+        expect(await billing.setGroupUnits(payer, groupId, 16)).toMatchObject({
+            confirmPayment: true,
+        });
+        expect(subscription.units).toBe(16);
+        await billing.reconcileGroup(groupId);
+        expect((await priced(billing.getGroupBilling(payer, groupId))).subscription).toMatchObject({
+            units: 16,
+            paidUnits: 4,
+        });
+        polar.raiseRefusal = null;
+        polar.raiseLeavesOrder = false;
+        // Five more from the sixteen held is past twenty, however few of them are paid for.
+        await expect(billing.setGroupUnits(payer, groupId, 21)).rejects.toMatchObject({
+            status: 400,
+            message: 'A family can have at most 20 members.',
+        });
+        expect(raises()).toHaveLength(1);
+        expect(subscription.units).toBe(16);
+        expect(await seatLimit(groupId)).toBe(4);
     });
 
     test('an explicit raise replaces a scheduled cut: no places paid for and blocked', async () => {
