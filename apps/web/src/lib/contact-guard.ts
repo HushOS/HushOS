@@ -37,8 +37,13 @@ import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
  * finish silently. Reads that fail are never first use: they are errors.
  */
 
-/* A trust-changing act on its way: the key commitment it moves to, from `revision`. */
-export type PendingAct = { target: string; revision: number; at: string };
+/*
+ * A trust-changing act on its way: the key commitment it moves to, from
+ * `revision`, and `base`, the stored settings sequence its save was sent over
+ * (the server's compare-and-set lands it only while that is still stored).
+ * Records from before `base` was kept have none, and are settled as before.
+ */
+export type PendingAct = { target: string; revision: number; at: string; base?: number };
 
 export interface ContactGuardStore {
     /* This device's entry for one person: null when it has none; throws when it could not be read. */
@@ -125,10 +130,16 @@ function checkPending(value: unknown): PendingAct {
         typeof act.target !== 'string' ||
         !Number.isSafeInteger(act.revision) ||
         act.revision < 0 ||
-        typeof act.at !== 'string'
+        typeof act.at !== 'string' ||
+        !(act.base === undefined || (Number.isSafeInteger(act.base) && act.base >= 0))
     )
         throw new Error('A pending contact act is corrupt.');
-    return { target: act.target, revision: act.revision, at: act.at };
+    return {
+        target: act.target,
+        revision: act.revision,
+        at: act.at,
+        ...(act.base === undefined ? {} : { base: act.base }),
+    };
 }
 
 export const CONTACT_GUARD_DATABASE = 'hushos-contact-guard';

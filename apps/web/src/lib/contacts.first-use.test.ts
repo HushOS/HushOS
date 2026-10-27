@@ -121,6 +121,12 @@ async function world() {
         envelope: me.stored.envelope as SettingsEnvelope | null,
         saves: 0,
         loseNextAnswer: false,
+        /*
+         * The next save times out on the client before the server has run it; `land` runs it
+         * later, with the server's compare-and-set, as a transaction that commits late would.
+         */
+        holdNextSave: false,
+        land: null as null | (() => boolean),
         /* Another device's save, landing between this one's read and its save. */
         beforeNextSave: null as null | (() => Promise<void>),
         served: new Map<string, ContactIdentity>(),
@@ -136,6 +142,22 @@ async function world() {
             const between = server.beforeNextSave;
             server.beforeNextSave = null;
             await between?.();
+            if (server.holdNextSave) {
+                server.holdNextSave = false;
+                server.land = () => {
+                    if (input.expectedVersion !== server.version) return false;
+                    server.saves++;
+                    server.version++;
+                    server.envelope = {
+                        version: 2,
+                        settingsVersion: server.version,
+                        nonce: input.nonce,
+                        ciphertext: input.ciphertext,
+                    };
+                    return true;
+                };
+                throw new Error('The request timed out.');
+            }
             if (input.expectedVersion !== server.version)
                 throw new Error('Your settings changed on another device.');
             server.saves++;
@@ -591,6 +613,45 @@ describe('the guard (2.8)', () => {
         });
         expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(after.signingPublicKey);
         expect(await w.real.pending(ME, MAYA)).toBeNull();
+    });
+
+    test('a save that times out keeps its pending act until the settings move past its base, so a late commit still finishes', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const after = await startOver(w);
+        // Tab A continues; its save times out on the client before the server has run it.
+        w.server.holdNextSave = true;
+        await expect(continueWith(query, ME, change)).rejects.toThrow('timed out');
+        expect(await w.real.pending(ME, MAYA)).not.toBeNull();
+        // Tab B takes the lock and reads the settings, still at the sequence A's save was sent over.
+        expect((await trustedSigners(ME))[MAYA]).toMatchObject({
+            current: w.maya.signingPublicKey,
+        });
+        await contacts.contactStandings(ME);
+        // A's save could still land, so its pending act is kept.
+        expect(await w.real.pending(ME, MAYA)).not.toBeNull();
+        // It does: the server's transaction commits late.
+        expect(w.server.land!()).toBe(true);
+        // The next reader finishes the Continue: no second notice, and sharing goes on.
+        expect((await contacts.contactStandings(ME)).get(MAYA)).toEqual({
+            verified: false,
+            changed: false,
+        });
+        expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(after.signingPublicKey);
+        expect(await w.real.pending(ME, MAYA)).toBeNull();
+        expect(await trustGrantee(ME, MAYA, after)).toMatchObject({
+            encryptionPublicKey: after.encryptionPublicKey,
+        });
+
+        // One whose save can no longer land is dropped: another save took its base first.
+        const third = await startOver(w);
+        w.server.holdNextSave = true;
+        await expect(continueWith(query, ME, change)).rejects.toThrow('timed out');
+        await w.replace({ ...(await w.stored()) });
+        await contacts.contactStandings(ME);
+        expect(await w.real.pending(ME, MAYA)).toBeNull();
+        expect(w.server.land!()).toBe(false);
+        await expect(trustGrantee(ME, MAYA, third)).rejects.toBeInstanceOf(AccountChangedError);
     });
 
     test('a failed guard write or a crash before it shares nothing; a restart finishes only with the pending record', async () => {

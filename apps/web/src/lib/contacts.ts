@@ -435,6 +435,8 @@ export async function saveSettings(
     change: (
         settings: LoadedSettings['settings'],
     ) => LoadedSettings['settings'] | Promise<LoadedSettings['settings']>,
+    /* Runs before each attempt is sent, with the stored sequence it must land over. */
+    beforeSend?: (expectedVersion: number) => Promise<void>,
 ) {
     for (let attempt = 0; attempt < 2; attempt++) {
         const current = await readSettings(userId, true);
@@ -445,6 +447,7 @@ export async function saveSettings(
             settingsVersion: current.version + 1,
             settings: next,
         });
+        await beforeSend?.(current.version);
         try {
             const saved = await authClient.saveSettings({
                 expectedVersion: current.version,
@@ -677,22 +680,27 @@ async function commitGuard(
 }
 
 /*
- * The guard entry for a person, with an act left pending settled first (2.8):
+ * The guard entry for a person, with an act left pending settled first (2.8),
+ * given the settings pin and the stored sequence (`at`) read under the lock:
  * one whose target the settings pin reached, over the entry's current
- * revision, is finished silently; any other is dropped, and that act was
- * never done. Under the account's lock.
+ * revision, is finished silently. One whose save could still land is kept,
+ * and the entry is judged as it is: the settings are still at the sequence
+ * its save was sent over (`base`), which the server's compare-and-set needs
+ * to land it, so a save whose answer this device stopped waiting for may yet
+ * arrive. Any other is dropped: the settings moved past its base without its
+ * target, or the entry moved since, and that act was never done. Under the
+ * account's lock.
  */
-async function guardFor(userId: string, contactId: string, pin: Pin | null) {
+async function guardFor(userId: string, contactId: string, pin: Pin | null, at: number) {
     const [entry, pending] = await readGuard(userId, contactId);
     if (!pending) return entry;
     const revision = entry?.revision ?? 0;
-    if (
-        pin !== null &&
-        pending.revision === revision &&
-        (await keyCommitment(pin)) === pending.target
-    ) {
-        const next = await nextGuardEntry(entry, pin).catch(() => null);
-        if (next) return commitGuard(userId, contactId, next, revision);
+    if (pending.revision === revision) {
+        if (pin !== null && (await keyCommitment(pin)) === pending.target) {
+            const next = await nextGuardEntry(entry, pin).catch(() => null);
+            if (next) return commitGuard(userId, contactId, next, revision);
+        }
+        if (pending.base !== undefined && at <= pending.base) return entry;
     }
     try {
         await contactGuard().store.dropPending(userId, contactId);
@@ -765,7 +773,7 @@ async function rememberKeys(
  */
 async function guardedView(userId: string) {
     return withGuardLock(userId, async () => {
-        const { settings } = await loadSettings(userId);
+        const { settings, version: at } = await loadSettings(userId);
         const { store } = contactGuard();
         const read = async () => {
             try {
@@ -786,7 +794,7 @@ async function guardedView(userId: string) {
         if (due.size) {
             for (const contactId of due) {
                 const pin = pinOf(settings.contacts, contactId)?.pin ?? null;
-                const entry = await guardFor(userId, contactId, pin);
+                const entry = await guardFor(userId, contactId, pin, at);
                 if (entry !== null || pin === null) continue;
                 const trust = await pinTrust(pin);
                 if (trust === 'verified' || trust === 'seen')
@@ -824,16 +832,22 @@ async function commitTrust(
     const revision = entry?.revision ?? 0;
     // The pending record is sealed under the settings key: the account's first act makes one.
     await settingsKeyMade(userId);
-    try {
-        await store.putPending(userId, contactId, {
-            target: keys,
-            revision,
-            at: new Date().toISOString(),
-        });
-    } catch (error) {
-        throw new GuardUnsavedError(error);
-    }
-    const saved = await saveSettings(queryClient ?? boundQueryClient, userId, change);
+    // Written again before every attempt, naming the stored sequence that attempt lands over
+    // (`base`, what the server's compare-and-set compares): until the settings move past it,
+    // the save may still land, even after this tab gave up waiting for its answer.
+    const pending = async (base: number) => {
+        try {
+            await store.putPending(userId, contactId, {
+                target: keys,
+                revision,
+                at: new Date().toISOString(),
+                base,
+            });
+        } catch (error) {
+            throw new GuardUnsavedError(error);
+        }
+    };
+    const saved = await saveSettings(queryClient ?? boundQueryClient, userId, change, pending);
     const pin = pinOf(saved.contacts, contactId)?.pin ?? null;
     if (!pin || (await keyCommitment(pin)) !== keys) throw new TrustMovedError();
     return {
@@ -945,7 +959,7 @@ async function stand(
     const loaded = await loadSettings(userId);
     const found = pinOf(loaded.settings.contacts, contactId);
     let pin = found?.pin ?? null;
-    let entry = await guardFor(userId, contactId, pin);
+    let entry = await guardFor(userId, contactId, pin, loaded.version);
     let trust = pin ? await pinTrust(pin) : null;
     const changed = async (): Promise<Standing> => ({
         kind: 'changed',
@@ -1375,7 +1389,7 @@ export async function continueWith(
         const loaded = await loadSettings(userId);
         const found = pinOf(loaded.settings.contacts, contact.userId);
         const before = found?.pin ?? null;
-        const entry = await guardFor(userId, contact.userId, before);
+        const entry = await guardFor(userId, contact.userId, before, loaded.version);
         // What this device trusted: the settings pin where it agrees, else the guard's keys.
         const base = before && (await agreement(entry, before)) !== 'changed' ? before : entry;
         const keys = await pinOfServed(
@@ -1418,7 +1432,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
         const loaded = await loadSettings(userId);
         const found = pinOf(loaded.settings.contacts, contact.userId);
         const before = found?.pin ?? null;
-        const entry = await guardFor(userId, contact.userId, before);
+        const entry = await guardFor(userId, contact.userId, before, loaded.version);
         const base = before && (await agreement(entry, before)) !== 'changed' ? before : entry;
         const moved =
             base !== null &&
