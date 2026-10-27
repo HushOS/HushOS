@@ -1,0 +1,28 @@
+apps/web/src/lib/family-trash.ts
+  s_566b8e0c4467a4::t_2f59485243cf23 1-2,7-10,15-19,32-33,36-37,40-43,49,51,57-76,78-81,86-90,99-101,103-118,123-125
+  s_566b8e0c4467a4::t_e2feadcb111326 126,128,132
+DESIGN.md
+  s_566b8e0c4467a4::t_ec84cb25030e38 516
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_b9f27a4dccd655 31,158-160,162-173,175,194-202,237,410-412,417
+apps/web/src/lib/family-trash.test.ts
+  s_566b8e0c4467a4::t_ee6d7774b7349e 2,6,10-15,24,32,34-51,66-86,89,98,102-103
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_b053e222a5a624 2990,3001
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d19b26a508bd97e41d791a7c9ee235bd44171d99",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
