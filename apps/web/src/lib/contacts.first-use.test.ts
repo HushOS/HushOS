@@ -654,6 +654,35 @@ describe('the guard (2.8)', () => {
         await expect(trustGrantee(ME, MAYA, third)).rejects.toBeInstanceOf(AccountChangedError);
     });
 
+    test('on a device with no guard entry yet, remembering the pin keeps a timed-out act, so its late commit still finishes', async () => {
+        // Through the verdict readers (guardedView), and through an open (stand).
+        for (const first of ['verdict', 'open'] as const) {
+            const w = await world();
+            await addContact(query, ME, MAYA_EMAIL);
+            // A new device: the settings hold Maya at K0, the guard holds nothing.
+            await deleteContactGuard(w.guardName);
+            const after = await startOver(w);
+            w.server.holdNextSave = true;
+            await expect(continueWith(query, ME, change)).rejects.toThrow('timed out');
+            // The settings are still at the act's base: K0 is remembered, and the act is kept.
+            if (first === 'verdict') await contacts.contactStandings(ME);
+            else
+                expect((await trustGranter(granter(w.maya))).signingPublicKey).toBe(
+                    w.maya.signingPublicKey,
+                );
+            expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(w.maya.signingPublicKey);
+            expect(await w.real.pending(ME, MAYA)).not.toBeNull();
+            // The late commit lands, and the next reader finishes the Continue.
+            expect(w.server.land!()).toBe(true);
+            expect((await contacts.contactStandings(ME)).get(MAYA)).toEqual({
+                verified: false,
+                changed: false,
+            });
+            expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(after.signingPublicKey);
+            expect(await w.real.pending(ME, MAYA)).toBeNull();
+        }
+    });
+
     test('a failed guard write or a crash before it shares nothing; a restart finishes only with the pending record', async () => {
         const w = await world();
         await addContact(query, ME, MAYA_EMAIL);

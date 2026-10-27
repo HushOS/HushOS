@@ -41,6 +41,7 @@ import {
     GuardUnsavedError,
     withGuardLock,
     type ContactGuardStore,
+    type PendingAct,
     type GuardSealer,
 } from '@/lib/contact-guard';
 import { onStaleIdentity } from '@/lib/drive-api';
@@ -668,9 +669,10 @@ async function commitGuard(
     contactId: string,
     entry: GuardEntry,
     revision: number,
+    keep?: PendingAct | null,
 ): Promise<GuardEntry> {
     try {
-        await contactGuard().store.commit(userId, contactId, entry, revision);
+        await contactGuard().store.commit(userId, contactId, entry, revision, keep ?? undefined);
     } catch (error) {
         if (error instanceof GuardRacedError) throw error;
         throw new GuardUnsavedError(error);
@@ -689,25 +691,34 @@ async function commitGuard(
  * to land it, so a save whose answer this device stopped waiting for may yet
  * arrive. Any other is dropped: the settings moved past its base without its
  * target, or the entry moved since, and that act was never done. Under the
- * account's lock.
+ * account's lock. `kept` is an act kept that way: whatever this device then
+ * remembers for the person in the same turn under the lock (a first entry
+ * for a pin that came with the settings, a followed succession) keeps it,
+ * moved to the entry's new revision, so the late save still finishes it.
  */
-async function guardFor(userId: string, contactId: string, pin: Pin | null, at: number) {
+async function guardFor(
+    userId: string,
+    contactId: string,
+    pin: Pin | null,
+    at: number,
+): Promise<{ entry: GuardEntry | null; kept: PendingAct | null }> {
     const [entry, pending] = await readGuard(userId, contactId);
-    if (!pending) return entry;
+    if (!pending) return { entry, kept: null };
     const revision = entry?.revision ?? 0;
     if (pending.revision === revision) {
         if (pin !== null && (await keyCommitment(pin)) === pending.target) {
             const next = await nextGuardEntry(entry, pin).catch(() => null);
-            if (next) return commitGuard(userId, contactId, next, revision);
+            if (next)
+                return { entry: await commitGuard(userId, contactId, next, revision), kept: null };
         }
-        if (pending.base !== undefined && at <= pending.base) return entry;
+        if (pending.base !== undefined && at <= pending.base) return { entry, kept: pending };
     }
     try {
         await contactGuard().store.dropPending(userId, contactId);
     } catch (error) {
         throw new GuardUnsavedError(error);
     }
-    return entry;
+    return { entry, kept: null };
 }
 
 /*
@@ -751,9 +762,16 @@ async function rememberKeys(
     contactId: string,
     entry: GuardEntry | null,
     pin: Pin,
+    keep?: PendingAct | null,
 ): Promise<GuardEntry> {
     void contactGuard().persist();
-    return commitGuard(userId, contactId, await nextGuardEntry(entry, pin), entry?.revision ?? 0);
+    return commitGuard(
+        userId,
+        contactId,
+        await nextGuardEntry(entry, pin),
+        entry?.revision ?? 0,
+        keep,
+    );
 }
 
 /*
@@ -794,11 +812,11 @@ async function guardedView(userId: string) {
         if (due.size) {
             for (const contactId of due) {
                 const pin = pinOf(settings.contacts, contactId)?.pin ?? null;
-                const entry = await guardFor(userId, contactId, pin, at);
+                const { entry, kept } = await guardFor(userId, contactId, pin, at);
                 if (entry !== null || pin === null) continue;
                 const trust = await pinTrust(pin);
                 if (trust === 'verified' || trust === 'seen')
-                    await rememberKeys(userId, contactId, null, pin);
+                    await rememberKeys(userId, contactId, null, pin, kept);
             }
             [entries] = await read();
         }
@@ -959,7 +977,7 @@ async function stand(
     const loaded = await loadSettings(userId);
     const found = pinOf(loaded.settings.contacts, contactId);
     let pin = found?.pin ?? null;
-    let entry = await guardFor(userId, contactId, pin, loaded.version);
+    let { entry, kept } = await guardFor(userId, contactId, pin, loaded.version);
     let trust = pin ? await pinTrust(pin) : null;
     const changed = async (): Promise<Standing> => ({
         kind: 'changed',
@@ -1008,12 +1026,12 @@ async function stand(
         const keys = await servedCommitment(served);
         if (keys === null || keys !== (await keyCommitment(pin))) return changed();
         if (!(await chainHolds(contactId, entry, served))) return changed();
-        if (act) entry = await rememberKeys(userId, contactId, entry, pin);
+        if (act) entry = await rememberKeys(userId, contactId, entry, pin, kept);
     }
     const comparison = await comparePin(pin, served);
     if (comparison === 'same') {
         if (act && (entry === null || (trust === 'verified' && !entry.verified)))
-            entry = await rememberKeys(userId, contactId, entry, pin);
+            entry = await rememberKeys(userId, contactId, entry, pin, kept);
         return { kind: 'ok', pin, entry, followed: false };
     }
     if (comparison !== 'succession') return changed();
@@ -1389,7 +1407,7 @@ export async function continueWith(
         const loaded = await loadSettings(userId);
         const found = pinOf(loaded.settings.contacts, contact.userId);
         const before = found?.pin ?? null;
-        const entry = await guardFor(userId, contact.userId, before, loaded.version);
+        const { entry } = await guardFor(userId, contact.userId, before, loaded.version);
         // What this device trusted: the settings pin where it agrees, else the guard's keys.
         const base = before && (await agreement(entry, before)) !== 'changed' ? before : entry;
         const keys = await pinOfServed(
@@ -1432,7 +1450,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
         const loaded = await loadSettings(userId);
         const found = pinOf(loaded.settings.contacts, contact.userId);
         const before = found?.pin ?? null;
-        const entry = await guardFor(userId, contact.userId, before, loaded.version);
+        const { entry } = await guardFor(userId, contact.userId, before, loaded.version);
         const base = before && (await agreement(entry, before)) !== 'changed' ? before : entry;
         const moved =
             base !== null &&

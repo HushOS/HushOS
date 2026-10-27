@@ -58,9 +58,17 @@ export interface ContactGuardStore {
      * Writes `entry` and deletes the pending record, in one transaction, only
      * over `revision` (0 for none stored): a write that read an earlier
      * revision than is stored throws GuardRacedError and changes nothing, so a
-     * delayed write never puts an older entry back.
+     * delayed write never puts an older entry back. `keep`, a pending act
+     * whose save may still land: kept instead, moved to the entry's new
+     * revision, in the same transaction.
      */
-    commit(userId: string, contactId: string, entry: GuardEntry, revision: number): Promise<void>;
+    commit(
+        userId: string,
+        contactId: string,
+        entry: GuardEntry,
+        revision: number,
+        keep?: PendingAct,
+    ): Promise<void>;
     dropPending(userId: string, contactId: string): Promise<void>;
 }
 
@@ -432,13 +440,22 @@ export function createIndexedDbContactGuard(
                 .put({ key: rowKey(userId, id), userId, id, envelope });
             await tx.done;
         },
-        async commit(userId, contactId, entry, revision) {
+        async commit(userId, contactId, entry, revision, keep) {
             await migrate(userId);
             const held = await keyHolds(userId);
             // Sealed first: nothing may await the worker inside the transaction below.
-            const [{ id, envelope }] = (await sealer.seal(userId, [
+            const [{ id, envelope }, kept] = (await sealer.seal(userId, [
                 { contactId, kind: 'entry', value: checkGuardEntry(entry) },
-            ])) as [{ id: string; envelope: string }];
+                ...(keep
+                    ? [
+                          {
+                              contactId,
+                              kind: 'pending' as const,
+                              value: checkPending({ ...keep, revision: entry.revision }),
+                          },
+                      ]
+                    : []),
+            ])) as [{ id: string; envelope: string }, { id: string; envelope: string }?];
             const check = held === 'empty' ? await sealCheck(userId) : null;
             const key = rowKey(userId, id);
             const tx = (await open()).transaction(
@@ -457,7 +474,11 @@ export function createIndexedDbContactGuard(
             await tx
                 .objectStore('sealed-entries')
                 .put({ key, userId, id, revision: entry.revision, envelope });
-            await tx.objectStore('sealed-pending').delete(key);
+            if (kept)
+                await tx
+                    .objectStore('sealed-pending')
+                    .put({ key, userId, id, envelope: kept.envelope });
+            else await tx.objectStore('sealed-pending').delete(key);
             await tx.done;
         },
         async dropPending(userId, contactId) {
