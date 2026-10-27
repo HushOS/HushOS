@@ -2485,16 +2485,17 @@ describe('affiliates', () => {
         const spy = landsBetween(async () => {
             release = await fillPool(1);
         });
+        const change = growth.updateAffiliate(affiliate.id, {
+            code: 'creator30',
+            userEmail: 'owner@hushos.test',
+        });
         try {
-            const change = growth.updateAffiliate(affiliate.id, {
-                code: 'creator30',
-                userEmail: 'owner@hushos.test',
-            });
-            change.catch(() => {});
             expect(await within(change)).toBe('done');
         } finally {
             release();
             spy.mockRestore();
+            // A stalled change resumes once the pool is free: settled here, not in the next test.
+            await change.catch(() => {});
         }
         expect((await growth.listAffiliates())[0]).toMatchObject({
             code: 'CREATOR30',
@@ -2508,13 +2509,14 @@ describe('affiliates', () => {
         const spy = landsBetween(async () => {
             release = await fillPool(1);
         });
+        const removal = growth.deleteAffiliate(affiliate.id);
         try {
-            const removal = growth.deleteAffiliate(affiliate.id);
-            removal.catch(() => {});
             expect(await within(removal)).toBe('done');
         } finally {
             release();
             spy.mockRestore();
+            // A stalled removal resumes once the pool is free: settled here, not in the next test.
+            await removal.catch(() => {});
         }
         expect(await growth.listAffiliates()).toEqual([]);
     }, 60_000);
