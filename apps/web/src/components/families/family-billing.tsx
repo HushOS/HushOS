@@ -361,14 +361,13 @@ function GlanceSection({
     return (
         <SettingsGroup title="Plan">
             <div data-family-plan="glance" className="flex flex-col">
-                <Setting label="Plan">
-                    <span className="font-semibold">
-                        {planTierName({ name: summary.planName })}
-                        {summary.storage && summary.storage.quotaBytes !== '0'
-                            ? ` · ${formatQuota(summary.storage.quotaBytes)}`
-                            : ''}
-                    </span>
-                </Setting>
+                {/* The group is already called Plan: its first row says only which one. */}
+                <p className="border-b border-rule py-4 text-[15px] font-semibold last:border-0">
+                    {planTierName({ name: summary.planName })}
+                    {summary.storage && summary.storage.quotaBytes !== '0'
+                        ? ` · ${formatQuota(summary.storage.quotaBytes)}`
+                        : ''}
+                </p>
                 {seats && (
                     <Setting label="Places" data={{ 'data-glance-places': true }}>
                         <Figure>
