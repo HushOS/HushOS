@@ -142,6 +142,8 @@ test('someone Sam removed is not added back when they share again, until he open
     await expect(waiting.first()).toContainText(
         'You removed Maya from your contacts. Open this to add them again.',
     );
+    // Not opened yet, so its size is unknown: the cell is empty, never the padded stored size.
+    await expect(waiting.first().locator('[data-size]')).toHaveText('');
     await openWaiting(sam, 'You removed Maya');
     // Added back on purpose: the rest of what she shared opens too.
     await expect(sam.locator('[data-shared="module.ts"]')).toBeVisible({ timeout: 60_000 });

@@ -40,6 +40,17 @@ const granteeKeys = vi.fn();
 const continueWith = vi.fn(async () => sam);
 const addContact = vi.fn();
 const currentNode = vi.fn(async () => fresh);
+const links = vi.fn(async (): Promise<unknown[]> => []);
+const revokeLink = vi.fn(async () => {});
+const rotateAfterRevoke = vi.fn();
+const LINK = {
+    id: 'link-1',
+    nodeId: 'file-1',
+    createdAt: '2026-10-27T00:00:00.000Z',
+    expiresAt: null,
+    hasPassword: false,
+    useCount: 0,
+};
 
 vi.mock('@/components/drive/drive-shell', () => ({ useDrive: () => ({ userId: 'me' }) }));
 vi.mock('@/lib/contacts', () => {
@@ -87,7 +98,8 @@ vi.mock('@/lib/contacts', () => {
 vi.mock('@/lib/drive', () => ({
     driveClient: {
         nodeShares: async () => [],
-        nodeLinks: async () => [],
+        nodeLinks: () => links(),
+        revokeLink: (...args: unknown[]) => revokeLink(...(args as [])),
         share: (...args: unknown[]) => share(...(args as [])),
         upgradeShares: async () => ({ resealed: 0, refused: 0 }),
     },
@@ -99,7 +111,7 @@ vi.mock('@/lib/drive', () => ({
 }));
 vi.mock('@/lib/rotation', () => ({
     currentNode: (...args: unknown[]) => currentNode(...(args as [])),
-    rotateAfterRevoke: vi.fn(),
+    rotateAfterRevoke: (...args: unknown[]) => rotateAfterRevoke(...(args as [])),
 }));
 vi.mock('@/lib/session', () => ({
     sessionQueryOptions: queryOptions({
@@ -137,6 +149,46 @@ describe('the share sheet', () => {
         continueWith.mockClear();
         addContact.mockReset();
         currentNode.mockClear();
+        links.mockReset().mockResolvedValue([]);
+        revokeLink.mockClear();
+        rotateAfterRevoke.mockClear();
+    });
+
+    test('a link’s password and end date, and turning it off, each take the sheet’s place', async () => {
+        links.mockResolvedValue([LINK]);
+        const user = userEvent.setup();
+        open();
+        await user.click(await screen.findByRole('button', { name: 'More for this link' }));
+        await user.click(await screen.findByRole('menuitem', { name: 'Password and end date' }));
+        // One dialog: the sheet's content gives way, and closing comes back to it.
+        expect(await screen.findByText('Password and end date')).toBeVisible();
+        expect(screen.queryByText('Who can open this?')).toBeNull();
+        expect(dialogs()).toHaveLength(1);
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(await screen.findByText('Who can open this?')).toBeVisible();
+
+        // Turn off link from the options: asked in the same place; Cancel goes back to them.
+        await user.click(await screen.findByRole('button', { name: 'More for this link' }));
+        await user.click(await screen.findByRole('menuitem', { name: 'Password and end date' }));
+        await user.click(await screen.findByRole('button', { name: 'Turn off link' }));
+        expect(await screen.findByText('Turn off this link?')).toBeVisible();
+        expect(dialogs()).toHaveLength(1);
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(await screen.findByText('Password and end date')).toBeVisible();
+        expect(revokeLink).not.toHaveBeenCalled();
+
+        // From the sheet's menu: asked in place, then turned off and re-keyed, back on the sheet.
+        await user.keyboard('{Escape}');
+        expect(await screen.findByText('Who can open this?')).toBeVisible();
+        await user.click(await screen.findByRole('button', { name: 'More for this link' }));
+        await user.click(await screen.findByRole('menuitem', { name: 'Turn off link' }));
+        expect(await screen.findByText('Turn off this link?')).toBeVisible();
+        expect(dialogs()).toHaveLength(1);
+        await user.click(screen.getByRole('button', { name: 'Turn off link' }));
+        await vi.waitFor(() => expect(revokeLink).toHaveBeenCalledWith(item, LINK.id));
+        await vi.waitFor(() => expect(rotateAfterRevoke).toHaveBeenCalledTimes(1));
+        expect(await screen.findByText('Who can open this?')).toBeVisible();
+        expect(dialogs()).toHaveLength(1);
     });
 
     test('a share that met a changed account goes ahead after Continue, as asked', async () => {

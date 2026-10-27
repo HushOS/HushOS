@@ -14,22 +14,14 @@ import {
     UserPlusIcon,
     XIcon,
 } from 'lucide-react';
+import { cn } from 'cn';
 import { useId, useRef, useState } from 'react';
 import { ContactFlow, type FlowStart } from '@/components/drive/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
-import { describeLink, LinkOptionsDialog } from '@/components/drive/link-row';
+import { describeLink, LinkOptionsForm } from '@/components/drive/link-row';
 import { PersonAvatar } from '@/components/person-avatar';
 import { QrCode, shareQrImage } from '@/components/qr-code';
 import { safeFileName, saveBlob } from '@/lib/save-file';
-import {
-    AlertDialog,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import {
@@ -138,9 +130,16 @@ type Interrupted =
     | { kind: 'role'; share: ShareView; role: ShareRole };
 /*
  * What fills the sheet in place of its own content, one at a time: the
- * contact flow (Review, Check it's Maya) or "Stop sharing with Maya?".
+ * contact flow (Review, Check it's Maya), "Stop sharing with Maya?", a link's
+ * password and end date, or "Turn off this link?". Closing any of them comes
+ * back to the sheet; Cancel on "Turn off this link?" comes back to where it
+ * was asked from.
  */
-type Over = { kind: 'flow'; start: FlowStart } | { kind: 'stop'; share: ShareView };
+type Over =
+    | { kind: 'flow'; start: FlowStart }
+    | { kind: 'stop'; share: ShareView }
+    | { kind: 'link-options'; link: LinkView }
+    | { kind: 'link-off'; link: LinkView; from: 'sheet' | 'options' };
 
 function ShareForm({
     node,
@@ -343,6 +342,80 @@ function ShareForm({
         }
     }
 
+    /* The links' own list, and the By me page's, after a link changed. */
+    const linksChanged = async () => {
+        await queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'links', node.id] });
+        await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
+    };
+    async function turnOff(link: LinkView) {
+        setPending(link.id);
+        try {
+            await driveClient.revokeLink(node, link.id);
+            await linksChanged();
+            cue('droplet');
+            toast.add({
+                type: 'success',
+                title: 'Link turned off',
+                description: `Anyone who has it can’t open “${node.name}” any more.`,
+            });
+            void rotateAfterRevoke(queryClient, node);
+        } catch (cause) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t turn the link off',
+                description: driveError(cause),
+            });
+        } finally {
+            setPending(null);
+        }
+    }
+
+    if (over?.kind === 'link-options') {
+        const link = over.link;
+        return (
+            <LinkOptionsForm
+                node={node}
+                link={link}
+                onDone={() => setOver(null)}
+                onChanged={linksChanged}
+                onTurnOff={() => setOver({ kind: 'link-off', link, from: 'options' })}
+            />
+        );
+    }
+    if (over?.kind === 'link-off') {
+        const { link, from } = over;
+        return (
+            <>
+                <DialogHeader>
+                    <DialogTitle>Turn off this link?</DialogTitle>
+                    <DialogDescription>
+                        Anyone who has it can’t open “{node.name}” any more. Other links keep
+                        working.
+                    </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                    <Button
+                        variant="outline"
+                        onClick={() =>
+                            setOver(from === 'options' ? { kind: 'link-options', link } : null)
+                        }
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        onClick={() => {
+                            setOver(null);
+                            void turnOff(link);
+                        }}
+                    >
+                        Turn off link
+                    </Button>
+                </DialogFooter>
+            </>
+        );
+    }
     if (over?.kind === 'flow')
         return (
             <ContactFlow
@@ -505,7 +578,12 @@ function ShareForm({
                 ))}
             </div>
 
-            <LinksSection node={node} />
+            <LinksSection
+                node={node}
+                turningOff={pending}
+                onOptions={(link) => setOver({ kind: 'link-options', link })}
+                onTurnOff={(link) => setOver({ kind: 'link-off', link, from: 'sheet' })}
+            />
 
             <DialogFooter>
                 <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -630,10 +708,12 @@ function RoleSelect({
     value,
     onChange,
     label,
+    className,
 }: {
     value: ShareRole;
     onChange: (role: ShareRole) => void;
     label: string;
+    className?: string;
 }) {
     return (
         <Select
@@ -641,7 +721,10 @@ function RoleSelect({
             onValueChange={(next) => next && onChange(next as ShareRole)}
             items={ROLES}
         >
-            <SelectTrigger className="h-9 w-[128px] pointer-coarse:h-11" aria-label={label}>
+            <SelectTrigger
+                className={cn('h-9 w-[128px] pointer-coarse:h-11', className)}
+                aria-label={label}
+            >
                 <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -692,13 +775,15 @@ function PeopleField({
     const matches = contacts.filter((contact) =>
         `${contact.name} ${contact.email}`.toLowerCase().includes(typed.toLowerCase()),
     );
-    // The list of matches opens under the field and the picker both, so a long address fits.
+    // On a phone the picker has a line of its own under the field, so the field's placeholder
+    // fits; the list of matches then opens under the field. Wider, the picker sits beside the
+    // field and the list opens under both, so a long address fits.
     return (
-        <div className="relative flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:relative sm:flex-row sm:items-center">
             <CommandPrimitive
                 label="Add people"
                 shouldFilter={false}
-                className="min-w-0 flex-1"
+                className="relative min-w-0 flex-1 sm:static"
                 onKeyDown={(event) => {
                     if (event.key === 'Escape' && open) {
                         // Closes the list, not the dialog.
@@ -813,7 +898,12 @@ function PeopleField({
                     </CommandList>
                 )}
             </CommandPrimitive>
-            <RoleSelect value={role} onChange={onRole} label="What they can do" />
+            <RoleSelect
+                value={role}
+                onChange={onRole}
+                label="What they can do"
+                className="max-sm:w-full"
+            />
         </div>
     );
 }
@@ -824,7 +914,19 @@ function PeopleField({
  * others. Each is a row: copy it, show it as a QR code, change its password and
  * end date, or turn it off.
  */
-function LinksSection({ node }: { node: DriveNode }) {
+function LinksSection({
+    node,
+    turningOff,
+    onOptions,
+    onTurnOff,
+}: {
+    node: DriveNode;
+    /* The id of the link being turned off, while it is. */
+    turningOff: string | null;
+    /* Password and end date, and "Turn off this link?": each in the sheet's own place. */
+    onOptions: (link: LinkView) => void;
+    onTurnOff: (link: LinkView) => void;
+}) {
     const queryClient = useQueryClient();
     const linksKey = [...driveKeys.all, 'links', node.id];
     const links = useQuery({
@@ -904,7 +1006,9 @@ function LinksSection({ node }: { node: DriveNode }) {
                             link={link}
                             url={made[link.id] ?? null}
                             several={list.length > 1}
-                            onChanged={refresh}
+                            turningOff={turningOff === link.id}
+                            onOptions={() => onOptions(link)}
+                            onTurnOff={() => onTurnOff(link)}
                         />
                     ))}
                 </ul>
@@ -919,7 +1023,9 @@ function LinkCard({
     link,
     url,
     several,
-    onChanged,
+    turningOff,
+    onOptions,
+    onTurnOff,
 }: {
     node: DriveNode;
     link: LinkView;
@@ -927,16 +1033,16 @@ function LinkCard({
     url: string | null;
     /* More than one link: each says when it was made, so they can be told apart. */
     several: boolean;
-    onChanged: () => Promise<unknown>;
+    turningOff: boolean;
+    onOptions: () => void;
+    onTurnOff: () => void;
 }) {
-    const queryClient = useQueryClient();
-    const [busy, setBusy] = useState(false);
+    const [working, setWorking] = useState(false);
+    const busy = working || turningOff;
     const [copied, setCopied] = useState(false);
     const [qr, setQr] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const qrNote = useId();
-    const [options, setOptions] = useState(false);
-    const [confirmOff, setConfirmOff] = useState(false);
 
     async function address() {
         if (url) return url;
@@ -948,7 +1054,7 @@ function LinkCard({
         return value;
     }
     async function copy() {
-        setBusy(true);
+        setWorking(true);
         try {
             await copySecret(await address());
             setCopied(true);
@@ -969,7 +1075,7 @@ function LinkCard({
                 description: driveError(cause),
             });
         } finally {
-            setBusy(false);
+            setWorking(false);
         }
     }
     async function toggleQr() {
@@ -977,7 +1083,7 @@ function LinkCard({
             setQr(null);
             return;
         }
-        setBusy(true);
+        setWorking(true);
         try {
             setQr(await address());
         } catch (cause) {
@@ -988,7 +1094,7 @@ function LinkCard({
                 description: driveError(cause),
             });
         } finally {
-            setBusy(false);
+            setWorking(false);
         }
     }
     /*
@@ -1016,30 +1122,6 @@ function LinkCard({
         saveBlob(image, `${safeFileName(node.name)} QR code.png`);
         cue('success', { volume: 0.4 });
     }
-    async function turnOff() {
-        setBusy(true);
-        try {
-            await driveClient.revokeLink(node, link.id);
-            await onChanged();
-            cue('droplet');
-            toast.add({
-                type: 'success',
-                title: 'Link turned off',
-                description: `Anyone who has it can’t open “${node.name}” any more.`,
-            });
-            void rotateAfterRevoke(queryClient, node);
-        } catch (cause) {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title: 'Couldn’t turn the link off',
-                description: driveError(cause),
-            });
-        } finally {
-            setBusy(false);
-        }
-    }
-
     return (
         <li data-link={link.id} className="flex flex-col gap-3 px-3 py-2.5">
             <div className="flex items-center gap-3">
@@ -1081,7 +1163,7 @@ function LinkCard({
                         <EllipsisIcon />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-auto min-w-52">
-                        <DropdownMenuItem onClick={() => setOptions(true)}>
+                        <DropdownMenuItem onClick={onOptions}>
                             <KeyRoundIcon aria-hidden="true" />
                             Password and end date
                         </DropdownMenuItem>
@@ -1090,7 +1172,7 @@ function LinkCard({
                             {qr ? 'Hide QR code' : 'Show as QR code'}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onClick={() => setConfirmOff(true)}>
+                        <DropdownMenuItem variant="destructive" onClick={onTurnOff}>
                             <Link2OffIcon aria-hidden="true" />
                             Turn off link
                         </DropdownMenuItem>
@@ -1117,40 +1199,6 @@ function LinkCard({
                     </Button>
                 </div>
             )}
-            <LinkOptionsDialog
-                node={node}
-                link={link}
-                open={options}
-                onOpenChange={setOptions}
-                onChanged={onChanged}
-                onTurnOff={() => {
-                    setOptions(false);
-                    setConfirmOff(true);
-                }}
-            />
-            <AlertDialog open={confirmOff} onOpenChange={setConfirmOff}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Turn off this link?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            Anyone who has it can’t open “{node.name}” any more. Other links keep
-                            working.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <Button
-                            variant="destructive"
-                            onClick={() => {
-                                setConfirmOff(false);
-                                void turnOff();
-                            }}
-                        >
-                            Turn off link
-                        </Button>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
         </li>
     );
 }

@@ -290,7 +290,7 @@ test('a stopped link stops, and the Shared page lists what is left', async ({ br
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(2);
     await linkAction(dialog(owner).locator('[data-link]').first(), 'Turn off link');
-    await owner.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+    await dialog(owner).getByRole('button', { name: 'Turn off link' }).click();
     await expect(owner.getByText('Link turned off')).toBeVisible();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(1);
     await owner.keyboard.press('Escape');
@@ -319,7 +319,7 @@ test('a link made right after stopping one opens, and a stopped link leaves no p
     // node as it was opened; the next link must seal under the new key.
     const rotated = await rotationsDone(owner);
     await linkAction(dialog(owner).locator('[data-link]').first(), 'Turn off link');
-    await owner.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+    await dialog(owner).getByRole('button', { name: 'Turn off link' }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(0);
     await waitForRotation(owner, rotated, 60_000);
     const url = await newLink(owner);
@@ -336,7 +336,7 @@ test('a link made right after stopping one opens, and a stopped link leaves no p
 
     // Turning the link off takes its address and QR code with it.
     await linkAction(dialog(owner).locator('[data-link]').first(), 'Turn off link');
-    await owner.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+    await dialog(owner).getByRole('button', { name: 'Turn off link' }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(0);
     await expect(copy).toHaveCount(0);
     await expect(dialog(owner).getByRole('button', { name: 'New link' })).toBeVisible();

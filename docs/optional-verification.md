@@ -349,15 +349,17 @@ No words, no second step.
 
 ### 6.3 Share sheet
 
-- People field: a name from Contacts, or a full email, with the role select ("Can view", "Can edit", Can view first) right beside it, so what they can do is chosen before anything is shared. An email not in Contacts shows one suggestion row, "Share with maya@example.com"; choosing it adds them (6.2's rules) and shares with the role beside the field, in one step. Toast "Shared with Maya".
+- People field: a name from Contacts, or a full email, with the role select ("Can view", "Can edit", Can view first) right beside it, so what they can do is chosen before anything is shared. On a phone (under 640px) the role select has a line of its own under the field, so "Add a name or email" is never cut off. An email not in Contacts shows one suggestion row, "Share with maya@example.com"; choosing it adds them (6.2's rules) and shares with the role beside the field, in one step. Toast "Shared with Maya".
 - Person rows: avatar, name, email, role select, as now. No verification text.
 - A person whose account changed (2.4): their row's second line reads "Maya's account changed" with **Review** (link style), which opens 6.7. Their role select and any new share wait until then.
 - Row menu: **Check it's Maya** sits beside Stop sharing (above it; Stop sharing stays last).
+- A link's Password and end date and "Turn off this link?" take the sheet's place, as every follow-on step does, and closing them comes back to the sheet (Cancel on "Turn off this link?" goes back to where it was asked from). One dialog on screen at a time.
 - iOS and Android: the same; the email suggestion is the list's first row while typing.
 
 ### 6.4 Opening something shared
 
 - From someone this account has never had as a contact: it opens as Shared with me lists it, and adds them (first-seen); nothing more is said (decided 2026-10-27).
+- A row that waits shows Size empty until it opens: the stored size is padded (to 256 bytes at the least), so it would say 272 B of a 27-byte file.
 - From someone this account removed: Shared with me lists it with who shared it and when (the name waits), and "You removed Maya from your contacts. Open this to add them again." with **Open**, which adds them back, forgets the removal, and opens it and whatever else they shared. From someone whose pin is gone with no removal recorded while this device's guard holds them: "Open this to add Maya to your contacts." with **Open**.
 - From someone whose signed succession this device has not followed: "Maya updated their account. Open this to carry on." with **Open**, which follows it.
 - Info and the viewer's details: "Shared by Maya", and below it "Not verified · Check it's Maya".

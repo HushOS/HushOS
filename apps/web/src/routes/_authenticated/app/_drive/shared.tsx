@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { contentSize, type DriveNode, type ShareMount } from '@hushos/drive/client';
+import type { DriveNode, ShareMount } from '@hushos/drive/client';
 import type { LinkView, ShareView } from '@hushos/drive/api';
 import {
     ContactIcon,
@@ -279,16 +279,11 @@ function WithMeRow({
     const [opening, setOpening] = useState(false);
     const from = firstName(share.granter.name);
     const role = share.role === 'editor' ? 'can edit' : 'can view';
-    // Who shared it, when and how big, all known without opening it: only the name waits. A
-    // file not opened yet has its exact size sealed inside it; its stored size (padded by at
-    // most a few percent, or to 256 bytes) is what the server holds, and stands in for it.
+    // Who shared it and when are known without opening it. Its size is not: the exact size is
+    // sealed inside it, and the stored size is padded (to 256 bytes at the least), so a file not
+    // opened yet leaves the cell empty rather than show a size it isn't. A folder has none.
     const size =
-        share.node.kind === 'folder'
-            ? null
-            : share.error
-              ? (contentSize(share.node) ??
-                Number(share.node.currentVersion?.ciphertextSize ?? NaN))
-              : nodeSize(share.node);
+        share.node.kind === 'folder' ? null : share.error ? undefined : nodeSize(share.node);
     const facts = (
         <>
             <span className="flex min-w-0 items-center gap-2 text-[13px] max-md:hidden">
@@ -300,8 +295,11 @@ function WithMeRow({
             <span className="text-[13px] text-muted-foreground tabular-nums max-sm:hidden">
                 {formatWhen(share.createdAt)}
             </span>
-            <span className="text-right text-[13px] text-muted-foreground tabular-nums max-lg:hidden">
-                {size === null ? '–' : formatBytes(size)}
+            <span
+                data-size
+                className="text-right text-[13px] text-muted-foreground tabular-nums max-lg:hidden"
+            >
+                {size === null ? '–' : size === undefined ? '' : formatBytes(size)}
             </span>
         </>
     );
