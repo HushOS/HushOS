@@ -1,0 +1,91 @@
+apps/web/src/lib/rollback-marks.test.ts
+  s_566b8e0c4467a4::t_9ff11b1ef376f1 1-7,10,12-13,21-25,30-105,107,109,125-247
+  s_566b8e0c4467a4::t_d335d26121cde4 248-258,261-267,271,279,284-289
+apps/web/src/lib/link-sent.ts
+  s_566b8e0c4467a4::t_9774871c4607b9 1-73
+  s_566b8e0c4467a4::t_046893f44c87bb 74
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_58e26eb4e0324c 1-218
+  s_566b8e0c4467a4::t_d535a45eafb5a7 219
+apps/web/src/lib/device-data.test.ts
+  s_566b8e0c4467a4::t_8109ed6ac305b6 1-244
+  s_566b8e0c4467a4::t_9a0b3a15f8a51b 245-247
+packages/crypto/src/rollback-marks.test.ts
+  s_566b8e0c4467a4::t_967901bd9f7d75 1-159
+  s_566b8e0c4467a4::t_c9bdb16ecf86f3 160-161
+apps/web/src/lib/rollback-marks.ts
+  s_566b8e0c4467a4::t_36334fb22aafd1 1-2,4-5,15-36,38-57,60-110,112,114-210,212,214-264,267,278-279,282,304
+  s_566b8e0c4467a4::t_8882320d72f1f0 303,307-308,311
+packages/crypto/src/rollback-marks.ts
+  s_566b8e0c4467a4::t_a9e475dd0c5343 1-182
+apps/web/src/components/account-dialogs.tsx
+  s_566b8e0c4467a4::t_369b74e5d2d400 21,340-343
+apps/web/src/components/email-step.tsx
+  s_566b8e0c4467a4::t_9896c519eff195 29,35-36,241
+apps/web/src/components/verified-email-step.tsx
+  s_566b8e0c4467a4::t_eade7cc4fa9345 8,44-45
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_85cdc324e3da78 159,163-171,273-276
+apps/web/src/lib/auth-client.ts
+  s_566b8e0c4467a4::t_4712b3438492b0 8,30-32
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_bb323907fd643b 28,113-115,137-142,267,272,283,299,395-396,432-433
+apps/web/src/lib/groups/store.ts
+  s_566b8e0c4467a4::t_7d8b57f1f74aee 2
+apps/web/src/lib/own-identity.test.ts
+  s_566b8e0c4467a4::t_bf0e71b4e4714f 54-55
+apps/web/src/lib/own-identity.ts
+  s_566b8e0c4467a4::t_0ef7c13b457376 52-53,61,69,87,89,98,101,105
+apps/web/src/lib/sign-out.test.ts
+  s_566b8e0c4467a4::t_588025dabac062 14-15,50,65,79,87,105-130
+apps/web/src/lib/sign-out.ts
+  s_566b8e0c4467a4::t_8d781a195aa55b 4,33-35,38-44
+apps/web/src/lib/stash.test.ts
+  s_566b8e0c4467a4::t_3e0c52b56acc94 235-247
+apps/web/src/lib/stash.ts
+  s_566b8e0c4467a4::t_98b2f16fef9a4e 88-98,147,195,199-200
+docs/drive-design.md
+  s_566b8e0c4467a4::t_43734f1b5534d7 26,160
+docs/groups-invariants.md
+  s_566b8e0c4467a4::t_41befde5deb11b 99
+docs/integrity-design.md
+  s_566b8e0c4467a4::t_6e1d6155072a93 222-223
+docs/opaque-auth-design.md
+  s_566b8e0c4467a4::t_cb3b9e7f2684ad 161
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_86c4ae261dbfe8 134
+e2e/devices.spec.ts
+  s_566b8e0c4467a4::t_f9135c7b5545e3 134-135
+packages/auth/src/client.test.ts
+  s_566b8e0c4467a4::t_f9e5218874743f 240,245-246,249-252
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_4fcf43b440a52c 824,839-841
+packages/auth/src/device-storage.test.ts
+  s_566b8e0c4467a4::t_f3d220f64a7083 311-371
+packages/auth/src/device-storage.ts
+  s_566b8e0c4467a4::t_21dde7ab34f5c6 124-161,166,220,242,312
+packages/auth/src/store.test.ts
+  s_566b8e0c4467a4::t_b629beeef7fe9e 2,57-74
+packages/auth/src/store.ts
+  s_566b8e0c4467a4::t_0599ace90e61ac 35-43,76-79
+packages/crypto/package.json
+  s_566b8e0c4467a4::t_3eb161b4b367db 31
+packages/crypto/src/session.ts
+  s_566b8e0c4467a4::t_0dacd87704e1f1 124-130,245-254,794-796,1899-1922
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5dd52da6a738405ca8d62b6275ce75cc2d8c0c02",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
