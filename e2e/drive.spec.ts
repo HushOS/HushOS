@@ -539,7 +539,9 @@ test('the transfers panel closes from its header once everything has finished, a
     await expect(row(page, 'still-going.bin')).toHaveCount(0);
 });
 
-test('on a phone a Markdown document stays inside the screen: wide tables and code scroll in their own box', async () => {
+test('on a phone a Markdown document stays inside the screen: wide tables and code scroll in their own box', async ({
+    browserName,
+}) => {
     // Shaped like a real working note: a heading that wraps, a table of long cells, a fenced
     // command on one long line (highlighted, so it keeps its line), nested lists, a bare URL.
     const dir = mkdtempSync(join(tmpdir(), 'hushos-phone-md-'));
@@ -570,11 +572,15 @@ test('on a phone a Markdown document stays inside the screen: wide tables and co
             '',
         ].join('\n'),
     );
+    // A neighbour, so Right has a next file to step to when the table doesn't keep the key.
+    const neighbour = join(dir, 'automation-notes.txt');
+    writeFileSync(neighbour, 'the next file\n');
     const desk = page.viewportSize()!;
     await page.setViewportSize({ width: 390, height: 844 });
     try {
-        await page.locator('input[type=file]').first().setInputFiles([path]);
+        await page.locator('input[type=file]').first().setInputFiles([path, neighbour]);
         await expect(row(page, 'automation-ideas.md')).toBeVisible({ timeout: 60_000 });
+        await expect(row(page, 'automation-notes.txt')).toBeVisible({ timeout: 60_000 });
         await openPreview(page, 'automation-ideas.md');
         const body = dialog(page).locator('[data-viewer-body]');
         const rendered = body.locator('.rt-markdown');
@@ -594,6 +600,29 @@ test('on a phone a Markdown document stays inside the screen: wide tables and co
             expect(await wide.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
         }
         await expect(rendered.getByRole('table')).toBeVisible();
+        // From the keyboard, a focused box scrolls with the arrows; they don't step to the next file.
+        await expect(dialog(page).getByRole('button', { name: 'Next file' })).toBeEnabled();
+        for (const wide of [rendered.locator('.rt-table'), rendered.locator('pre.shiki')]) {
+            await wide.focus();
+            // The event is kept to read once dispatch is over: nothing on the way may cancel it.
+            await wide.evaluate((el) =>
+                el.addEventListener('keydown', (event) => Object.assign(el, { pressed: event }), {
+                    once: true,
+                }),
+            );
+            await page.keyboard.press('ArrowRight');
+            await expect(dialog(page).getByRole('heading', { level: 2 })).toHaveText(
+                'automation-ideas.md',
+                { timeout: 3_000 },
+            );
+            const cancelled = await wide.evaluate(
+                (el) => (el as HTMLElement & { pressed?: KeyboardEvent }).pressed?.defaultPrevented,
+            );
+            expect(cancelled, 'the arrow key was taken from the box').toBe(false);
+            // Playwright's WebKit doesn't scroll a focused box from a pressed arrow at all.
+            if (browserName === 'chromium')
+                await expect.poll(() => wide.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+        }
         // The source wraps on a phone: nothing sideways there either.
         await dialog(page).getByRole('button', { name: 'Source', exact: true }).click();
         await expect(body.locator('.rt-code')).toBeVisible();
