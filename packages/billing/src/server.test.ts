@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { EndPersonalPlanJob } from './endings';
 import { PolarClientError } from '@polar-sh/sdk';
@@ -980,7 +980,12 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
 const planEndingMail: { to: string; endsOn: string }[] = [];
 /* How many plan-ending mails fail (the provider down, no email settings) before one is sent. */
 const mailer = { failures: 0 };
+/* Verification links sign-up sends, as the email would carry them. */
+const verificationMail: { to: string; url: string }[] = [];
 vi.mock('@hushos/emails/server', () => ({
+    sendVerificationEmail: async (to: string, url: string) => {
+        verificationMail.push({ to, url });
+    },
     sendFamilyPlanEnding: async (to: string, input: { endsOn: string }) => {
         if (mailer.failures > 0) {
             mailer.failures -= 1;
@@ -2192,6 +2197,117 @@ describe('a family tier chosen at sign-up', () => {
         await intend(userId, MAX);
         await billing.forgetIntendedFamily(userOfId(userId));
         expect((await billing.getSummary(userOfId(userId))).intendedPlan).toBe(MAX);
+    });
+});
+
+/*
+ * Signing up for a family tier, driven through the real path as far as the fake Polar: the
+ * registration email asked for with the tier, a code and the currency Pricing showed, the
+ * link opened, the account registered (the repository's step; OPAQUE has no part in it),
+ * the summary read as the first visit reads it, the tier forgotten (twice: a second landing
+ * finds nothing), then the family's checkout in the currency signup carried.
+ */
+describe('signing up for a family tier, through to its checkout', () => {
+    const sha = (value: string) => createHash('sha256').update(value).digest();
+    const bytes = (length: number) => randomBytes(length);
+    const registration = () => ({
+        initialQuotaBytes: 1_073_741_824n,
+        name: 'Sam Ortega',
+        registrationRecord: 'record',
+        profileVersion: 1,
+        serverSetupId: 'primary',
+        envelope: {
+            envelopeVersion: 1,
+            wrappingSalt: bytes(32),
+            wrappingNonce: bytes(24),
+            encryptedKey: bytes(48),
+        },
+        recovery: {
+            wrappingSalt: bytes(32),
+            wrappingNonce: bytes(24),
+            encryptedKey: bytes(48),
+            backupNonce: bytes(24),
+            encryptedRecoveryKey: bytes(48),
+            publicKey: bytes(32),
+        },
+        identity: {
+            wrappingSalt: bytes(32),
+            encryptionPublicKey: bytes(32),
+            encryptionPrivateKeyNonce: bytes(24),
+            encryptedEncryptionPrivateKey: bytes(48),
+            signingPublicKey: bytes(32),
+            signingSeedNonce: bytes(24),
+            encryptedSigningSeed: bytes(48),
+        },
+        workspace: {
+            id: randomUUID(),
+            grant: {
+                keyVersion: 1,
+                wrappingSalt: bytes(32),
+                wrappingNonce: bytes(24),
+                encryptedKey: bytes(48),
+            },
+        },
+    });
+
+    /* Signs up as a person would, from the email with `intent`; the account as billing sees it. */
+    async function signUp(intent: Record<string, string>) {
+        const auth = await import('@hushos/auth/server');
+        const email = `family-${randomUUID()}@hushos.test`;
+        await auth.requestRegistrationEmail(email, 'register', '203.0.113.7', intent);
+        const link = new URL(verificationMail.filter((mail) => mail.to === email).at(-1)!.url);
+        const { enrollmentToken } = await auth.verifyEmail(link.hash.slice('#verify='.length));
+        const result = await authRepository.registerAccount({
+            enrollmentTokenHash: sha(enrollmentToken),
+            ...registration(),
+        });
+        if (result.status !== 'created') throw new Error(result.status);
+        return { id: result.user.id, name: 'Sam Ortega', email };
+    }
+
+    test('the tier, the code and the currency reach the family’s checkout', async () => {
+        const user = await signUp({
+            plan: PRO_FAMILY,
+            referral: 'FRIEND25',
+            source: 'referral',
+            currency: 'inr',
+        });
+        const summary = await billing.getSummary(user);
+        expect(summary).toMatchObject({
+            intendedPlan: null,
+            intendedFamily: { plan: PRO_FAMILY, currency: 'inr' },
+        });
+        await billing.forgetIntendedFamily(user);
+        await billing.forgetIntendedFamily(user);
+        expect((await billing.getSummary(user)).intendedFamily).toBeNull();
+        // Kept for the checkout that comes next.
+        expect(await growthRepository.pendingReferralCode(user.id)).toBe('FRIEND25');
+        const { groupId } = await createTestFamily({ organizerId: user.id, pooled: true });
+        await billing.startGroupCheckout(user, groupId, {
+            productId: summary.intendedFamily!.plan,
+            currency: summary.intendedFamily!.currency!,
+        });
+        expect(polar.checkouts.at(-1)).toMatchObject({
+            products: [PRO_FAMILY],
+            currency: 'inr',
+            units: 4,
+            min_units: 4,
+            max_units: 20,
+            metadata: { hushos_group_id: groupId },
+        });
+    });
+
+    test('a currency that isn’t three lowercase letters, or comes without a plan, is dropped', async () => {
+        const shouted = await signUp({ plan: PRO_FAMILY, source: 'pricing', currency: 'INR' });
+        expect((await billing.getSummary(shouted)).intendedFamily).toEqual({
+            plan: PRO_FAMILY,
+            currency: null,
+        });
+        const alone = await signUp({ referral: 'FRIEND25', source: 'referral', currency: 'inr' });
+        expect(
+            (await rawSql(`select currency from account_intents where user_id = '${alone.id}'`))
+                .rows[0],
+        ).toEqual({ currency: null });
     });
 });
 
