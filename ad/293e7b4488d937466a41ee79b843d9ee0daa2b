@@ -1,0 +1,57 @@
+apps/web/src/components/ui/autocomplete.tsx
+  s_566b8e0c4467a4::t_f084b5e749a1f6 1-99
+apps/web/src/lib/affiliate-form.test.ts
+  s_566b8e0c4467a4::t_a49cf07bcbceb1 1-113
+apps/web/src/lib/affiliate-form.ts
+  s_566b8e0c4467a4::t_7848db20d7d589 1-131
+apps/web/src/lib/affiliate-routes.test.ts
+  s_566b8e0c4467a4::t_0f6bfc46e2e4c7 1-33
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_5d4f2f9dc2c0bd 247-251,1146-1161,1184,1209-1214
+apps/web/src/lib/growth-api.ts
+  s_566b8e0c4467a4::t_bf7b64a5d4b82b 14-20
+apps/web/src/lib/use-debounced-value.ts
+  s_566b8e0c4467a4::t_0049553be6d3ff 1-11
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_566b8e0c4467a4::t_53653aa5249b71 20-26,44,46-54,58,366-370,372-373,375-390,393-395,397,401,417,424,450-455,472,487,492-494,500-503,508-513,515-523,528-718,725-730,733-740,742,744-748,762,771-772,774,777,787-788,790,793,797-798,800-801,803,806,810-814,816,819,846-851,856-879,881,883-885
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_566b8e0c4467a4::t_6198e8b7661e04 1,3,211,213,217,219-244,250-291
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_2df3841e9c870e 513
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_d3d51d1117206f 221-222,239-240,312-317
+packages/billing/src/growth.ts
+  s_566b8e0c4467a4::t_8c652f148bfe5d 87,98-100,117,219-220,234,242-254,292-295,311,318-343,347-357,367-453,455-456,458,467-483
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_8ea02e6d8c081a 180-183,567-569,587-589,1029,1117-1118,2208-2703
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_3a1232baaf604f 557-583
+packages/db/drizzle/20261027013917_affiliate_pending_email/migration.sql
+  s_566b8e0c4467a4::t_2ebc48d5658e97 1
+packages/db/drizzle/20261027013917_affiliate_pending_email/snapshot.json
+  s_566b8e0c4467a4::t_69675d3dc31b59 1-13720
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_be3b6c24c49dec 1,295,299-337,358,360,378-379,389-400,417-418,420-425,429-434,436-437,441-482,505-506,523-524,528,535,544-570,574-577,586,588-609,656-657
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_13fe06d12922e6 14
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_a59939e14a4051 45-47
+packages/db/test/helpers.ts
+  s_566b8e0c4467a4::t_e478ecad52edb5 11,71-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad293e7b4488d937466a41ee79b843d9ee0daa2b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
