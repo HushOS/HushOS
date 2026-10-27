@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { errorCopy, wrongWordsCopy } from './copy';
+import { errorCopy, refusalCopy, wrongWordsCopy } from './copy';
 
 describe('the hidden words typed wrong', () => {
     test('are said calmly, naming neither word and never a different member list', () => {
@@ -10,6 +10,14 @@ describe('the hidden words typed wrong', () => {
         // A number would tell a guesser which word to keep and which to change.
         expect(line).not.toMatch(/\d/);
         expect(line).not.toMatch(/member list|Don’t use/);
+    });
+});
+
+describe('a place an admission could not have', () => {
+    test('while the bank holds an upgrade, says the plan change comes first, not another place', () => {
+        const line = refusalCopy('seats', { reason: 'upgrade-waiting' }, { family: 'Lindqvist' });
+        expect(line).toBe('Confirm the plan change with your bank first, then let them in.');
+        expect(line).not.toMatch(/another place/);
     });
 });
 

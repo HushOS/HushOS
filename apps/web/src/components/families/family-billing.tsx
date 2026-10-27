@@ -1311,12 +1311,17 @@ function AddPlacesDialog({
         setCount(1);
     }
 
-    if (!live || !range) return null;
-    const value = Math.min(count, range.max);
-    const now = quoteAdd(summary, value, sent?.at);
+    if (!live) return null;
+    // A refusal stays on screen even when the family it read again has no room left.
+    if (!range && !error) return null;
+    const value = range ? Math.min(count, range.max) : 0;
+    const now = range ? quoteAdd(summary, value, sent?.at) : null;
     // A raise drops any scheduled cut, so the renewal is for every place the family then has.
-    const then = renewalAmount(summary, live.units + value);
+    const then = range ? renewalAmount(summary, live.units + value) : null;
     const interval = intervalOf(live.recurringInterval);
+    // Polar kept the raise (a 200 with its order waiting) or, on a 402, changed nothing: only the
+    // first is known to open the places once the bank confirms.
+    const kept = (sent?.answered.subscription?.units ?? 0) >= (sent?.target ?? Infinity);
 
     async function add() {
         const done = `Added ${places(value)} to ${family}`;
@@ -1376,14 +1381,16 @@ function AddPlacesDialog({
                             : 'You pay now for the rest of this period.'}
                     </DialogDescription>
                 </DialogHeader>
-                <Stepper
-                    label="Places to add"
-                    value={value}
-                    min={range.min}
-                    max={range.max}
-                    onChange={setCount}
-                    disabled={busy || confirmUrl !== null}
-                />
+                {range && (
+                    <Stepper
+                        label="Places to add"
+                        value={value}
+                        min={range.min}
+                        max={range.max}
+                        onChange={setCount}
+                        disabled={busy || confirmUrl !== null}
+                    />
+                )}
                 <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
                     {now && (
                         <Fact label="Charged now">{formatMoney(now.amount, now.currency)}</Fact>
@@ -1399,13 +1406,15 @@ function AddPlacesDialog({
                     {TAX_ON_CHARGES}
                     {/* Once the bank holds the raise, the step says only what it holds. */}
                     {!confirmUrl &&
+                        range &&
                         ` You can add up to ${places(range.max)} now; a family has at most ${currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members.`}
                 </p>
                 {confirmUrl && (
                     <Alert variant="warning">
                         <AlertDescription>
-                            Your bank wants you to confirm this payment. The places open once you
-                            do.
+                            {kept
+                                ? 'Your bank wants you to confirm this payment. The places open once you do.'
+                                : 'Your bank wants you to confirm this payment. If the places don’t open after you confirm, add them again.'}
                         </AlertDescription>
                     </Alert>
                 )}
@@ -1424,8 +1433,8 @@ function AddPlacesDialog({
                             <ArrowUpRightIcon />
                         </Button>
                     ) : (
-                        <Button disabled={busy} onClick={() => void add()}>
-                            {busy ? 'Adding…' : `Add ${places(value)}`}
+                        <Button disabled={busy || !range} onClick={() => void add()}>
+                            {busy ? 'Adding…' : range ? `Add ${places(value)}` : 'Add places'}
                         </Button>
                     )}
                 </DialogFooter>
@@ -1850,14 +1859,20 @@ export function SeatHelp({
                     : `${payer} pays for the family and can add a place under Billing.`}
             </p>
         ) : null;
-    else if (reason === 'confirm' && url)
+    else if ((reason === 'confirm' || reason === 'upgrade-waiting') && url)
         body = (
             <Button variant="outline" onClick={() => window.location.assign(url)}>
                 Confirm with your bank
                 <ArrowUpRightIcon />
             </Button>
         );
-    else if ((reason === 'declined' || reason === 'canceling' || reason === 'confirm') && payerYou)
+    else if (
+        (reason === 'declined' ||
+            reason === 'canceling' ||
+            reason === 'confirm' ||
+            reason === 'upgrade-waiting') &&
+        payerYou
+    )
         body = (
             <Button variant="outline" disabled={busy} onClick={() => void portal()}>
                 {busy ? 'Opening…' : 'Manage payment and invoices'}

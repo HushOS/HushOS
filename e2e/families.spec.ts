@@ -1908,6 +1908,11 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
         await pressAndRead(add.getByRole('button', { name: 'Add 1 place' }));
         await expect(add).toContainText(bankStep);
+        // Nobody has seen Polar apply a raise it refused this way once confirmed: no promise.
+        await expect(add).toContainText(
+            'Your bank wants you to confirm this payment. If the places don’t open after you confirm, add them again.',
+        );
+        await expect(add).not.toContainText('The places open once you do.');
         const unrelated = oneMore(live());
         answer = unrelated;
         await refocus();
@@ -2004,6 +2009,35 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(maya.page.locator('[data-plan-notice="ending"]')).toBeVisible();
         await expect(add.getByRole('alert')).toContainText(refusal);
         await add.getByRole('button', { name: 'Cancel' }).click();
+        await expect(add).toHaveCount(0);
+        await maya.page.unroute(units);
+
+        // Refused because another tab already took the family to twenty: read again, it has no
+        // room left, and the refusal still shows, with nothing more to add.
+        const moved =
+            'Your family’s places changed a moment ago. Check the new total and try again.';
+        const before = live({ units: 18, paidUnits: 18 });
+        before.seats = { used: 1, limit: 18 };
+        const full = live({ units: 20, paidUnits: 20 });
+        full.seats = { used: 1, limit: 20 };
+        await maya.page.route(units, (route: Route) => {
+            answer = full;
+            return route.fulfill({ status: 409, json: { message: moved } });
+        });
+        await show(before);
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'More' }).click();
+        await add.getByRole('button', { name: 'Add 2 places' }).click();
+        await readAgain(full);
+        await expect(add.getByRole('alert')).toContainText(moved);
+        await expect(add.getByRole('button', { name: /^Add/ })).toBeDisabled();
+        await add.getByRole('button', { name: 'Cancel' }).click();
+        await expect(add).toHaveCount(0);
+        await expect(billing.getByRole('button', { name: 'Add places' })).toHaveCount(0);
+        // Room again later: the dialog closed, and does not come back by itself.
+        answer = before;
+        await refocus();
+        await expect(billing.getByRole('button', { name: 'Add places' })).toBeVisible();
         await expect(add).toHaveCount(0);
         await maya.page.unroute(units);
     });

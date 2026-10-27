@@ -1984,12 +1984,15 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
             'Your bank wants you to confirm the charge for another place. Confirm it in the billing portal, then let them in again.',
         payment: 'The payment for another place did not go through. Nobody was let in.',
         busy: 'Another change to this plan is in progress. Try again in a moment.',
+        'upgrade-waiting': 'Confirm the plan change with your bank first, then let them in.',
         changed:
             'The charge went through but the plan changed at the same time. Refresh to see your places.',
     };
     return new GroupError('seats', messages[result.status], 402, {
         reason: result.status,
-        ...(result.status === 'confirm' ? { url: result.url } : {}),
+        ...(result.status === 'confirm' || result.status === 'upgrade-waiting'
+            ? { url: result.url }
+            : {}),
         ...(result.status === 'cap' ? { limit: result.max } : {}),
     });
 }

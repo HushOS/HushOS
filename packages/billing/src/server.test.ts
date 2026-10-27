@@ -3151,6 +3151,30 @@ describe('family places', () => {
         expect(raises()).toHaveLength(1);
     });
 
+    test('a raise from a total another tab has since passed is refused, never scheduled as a cut', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        // Tab A quoted six to eight; tab B raised to ten, and the mirror has caught up.
+        subscription.units = 10;
+        await billing.reconcileGroup(groupId);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.units).toBe(10);
+        polar.calls = [];
+        await expect(billing.setGroupUnits(payer, groupId, 8, 6)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'Your family’s places changed a moment ago. Check the new total and try again.',
+        });
+        // Nothing asked of Polar, no cut waiting for the renewal.
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+        expect(subscription.pending_update ?? null).toBeNull();
+        expect(
+            (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
+        ).toBeNull();
+        expect(await seatLimit(groupId)).toBe(10);
+        // A real cut sends no total, or one above what it asks for, and is still scheduled.
+        await billing.setGroupUnits(payer, groupId, 8, 10);
+        expect(subscription).toMatchObject({ units: 10, pending_update: { units: 8 } });
+    });
+
     test('an admission gets a place only from the payer, and only on a 200', async () => {
         const { payer, groupId, subscription, others } = await familyOnPlan({
             units: 6,
@@ -6328,9 +6352,10 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
-        // An admission sends the admitter to the portal to confirm the upgrade first.
-        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
-            status: 'confirm',
+        // An admission is told the upgrade comes first, with the portal to confirm it in.
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({
+            status: 'upgrade-waiting',
+            url: `https://polar.test/portal/${polar.customers.get(`group:${groupId}`)?.id}/${payer.id}`,
         });
         // The payer's own raise is refused outright: nothing went to Polar, so there is
         // nothing of it to confirm, and the portal would only show the upgrade's charge.
@@ -6479,7 +6504,8 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
-        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        // The upgrade the bank holds comes first: said as that, not as a place to confirm.
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('upgrade-waiting');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
     });
@@ -6722,7 +6748,8 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
-        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        // The upgrade the bank holds comes first: said as that, not as a place to confirm.
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('upgrade-waiting');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
         expect((await live(groupId))?.paidProductId).toBe(PLUS);
@@ -6948,7 +6975,8 @@ describe('family tiers', () => {
             });
         };
         polar.calls = [];
-        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('confirm');
+        // The upgrade the bank holds comes first: said as that, not as a place to confirm.
+        expect((await billing.ensureGroupSeat(groupId, payer.id)).status).toBe('upgrade-waiting');
         expect(raises()).toEqual([]);
         expect(subscription.units).toBe(4);
     });
