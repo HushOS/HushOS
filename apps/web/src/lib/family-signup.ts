@@ -128,6 +128,9 @@ export type FirstLandingDeps = {
     hint: () => Promise<LocaleHint | null>;
     families: () => Promise<readonly Membership[]>;
     forget: () => Promise<unknown>;
+    /* Whether the person is still where they were when the landing began. */
+    stillHere: () => boolean;
+    log: (message: string, error: unknown) => void;
 };
 
 export type FirstLanding =
@@ -139,7 +142,8 @@ export type FirstLanding =
  * The first landing once an account is set up and unlocked (the app layout runs it on every
  * visit): a personal plan chosen at signup goes on to its checkout; a family tier goes where
  * familyLanding says, once, the server forgetting it so the next visit goes where the person
- * chooses. Without a summary nothing happens, and the next visit tries again.
+ * chooses. Without a summary nothing happens, and the next visit tries again. A place the
+ * person went to while it read wins: it never moves them from there.
  */
 export async function firstLanding(deps: FirstLandingDeps): Promise<FirstLanding> {
     const summary = await deps.summary().catch(() => null);
@@ -163,8 +167,16 @@ export async function firstLanding(deps: FirstLandingDeps): Promise<FirstLanding
                 catalogue,
                 hint,
             });
-            await deps.forget().catch(() => {});
-            return { kind: 'go', to };
+            // The person went somewhere meanwhile: that wins. The tier is kept, so they get
+            // Create a family on a later visit, when they aren't on their way elsewhere.
+            if (!deps.stillHere()) return { kind: 'stay' };
+            // A forget that fails only means the next visit lands here again.
+            await deps
+                .forget()
+                .catch((error: unknown) =>
+                    deps.log('The family plan chosen at signup could not be forgotten.', error),
+                );
+            return deps.stillHere() ? { kind: 'go', to } : { kind: 'stay' };
         } catch {
             return { kind: 'stay' };
         }

@@ -118,6 +118,8 @@ function AppLayout() {
     useEffect(() => {
         let active = true;
         const current = latestUser.current;
+        // Where the person was as this began: a landing never moves them from a place they went to.
+        const from = router.state.location.href;
         // A session from before devices, or one whose registration failed, describes its device
         // now (docs/devices-design.md); never in the way of the page.
         void authClient.ensureDevice(current).catch(() => {});
@@ -143,6 +145,8 @@ function AppLayout() {
                             (summary) => summary && { ...summary, intendedFamily: null },
                         );
                     },
+                    stillHere: () => active && router.state.location.href === from,
+                    log: (message, error) => console.error(message, error),
                 });
                 if (!active) return;
                 if (landing.kind === 'go') {

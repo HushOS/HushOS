@@ -169,6 +169,7 @@ describe('firstLanding', () => {
     /* The readings an account just signed up for Family Pro would get, each one replaceable. */
     function deps(overrides: Partial<Deps> = {}) {
         const forgotten: unknown[] = [];
+        const logged: unknown[] = [];
         const all: Deps = {
             summary: async () => ({ intendedPlan: null, intendedFamily: everywhere.id }),
             capabilities: async () => ({ groups: true }),
@@ -178,9 +179,11 @@ describe('firstLanding', () => {
             forget: async () => {
                 forgotten.push(true);
             },
+            stillHere: () => true,
+            log: (message, error) => logged.push([message, error]),
             ...overrides,
         };
-        return { all, forgotten };
+        return { all, forgotten, logged };
     }
 
     test('a family tier opens Create a family with it, and is forgotten once', async () => {
@@ -233,6 +236,36 @@ describe('firstLanding', () => {
             kind: 'go',
             to: { to: '/app/family', search: { create: everywhere.id, currency: 'usd' } },
         });
+        expect(forgotten).toHaveLength(1);
+    });
+
+    test('a forget the server refused is logged, and the landing still goes', async () => {
+        const refused = new Error('503');
+        const { all, logged } = deps({
+            forget: async () => {
+                throw refused;
+            },
+        });
+        expect(await firstLanding(all)).toMatchObject({ kind: 'go' });
+        expect(logged).toEqual([[expect.stringContaining('forgotten'), refused]]);
+    });
+
+    test('a place the person went to meanwhile wins: no move, and the tier is kept', async () => {
+        const { all, forgotten } = deps({ stillHere: () => false });
+        expect(await firstLanding(all)).toEqual({ kind: 'stay' });
+        expect(forgotten).toHaveLength(0);
+    });
+
+    test('a move made while the tier was being forgotten wins too', async () => {
+        let here = true;
+        const { all, forgotten } = deps({
+            stillHere: () => here,
+            forget: async () => {
+                forgotten.push(true);
+                here = false;
+            },
+        });
+        expect(await firstLanding(all)).toEqual({ kind: 'stay' });
         expect(forgotten).toHaveLength(1);
     });
 
