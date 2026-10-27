@@ -1,7 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
 import { SQL } from 'bun';
-import { e2eDatabase, grip, newContext, registerAccount, sampleFiles } from './helpers';
+import {
+    e2eDatabase,
+    grip,
+    newContext,
+    openWaiting,
+    registerAccount,
+    sampleFiles,
+} from './helpers';
 
 /*
  * Sharing on first use (docs/optional-verification.md, PR 3), as two people:
@@ -86,8 +93,9 @@ test('Maya shares with Sam by typing his address, and he opens it, with no words
     );
     await expect(maya.locator(`[data-contact="${samEmail}"]`)).toContainText('Not verified');
 
-    // Sam has never added Maya: her share opens anyway, and she becomes a contact of his.
+    // Sam has never added Maya: her share waits for him to open it, then she is a contact of his.
     await sam.goto('/app/shared');
+    await openWaiting(sam, 'Open this to add Maya to your contacts.');
     const shared = sam.locator('[data-shared="notes.md"]');
     await expect(shared).toBeVisible({ timeout: 60_000 });
     await shared.getByRole('button', { name: 'notes.md', exact: true }).click();

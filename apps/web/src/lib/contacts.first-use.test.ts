@@ -4,13 +4,17 @@ import type { ContactIdentity } from '@hushos/auth/api';
 import type { SettingsEnvelope } from '@hushos/crypto';
 import { keyCommitment, pinTrust } from '@hushos/crypto/pins';
 import { pinOfServed } from '@hushos/drive/trust';
+import { QueryClient } from '@tanstack/react-query';
+import { openDB } from 'idb';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
     createIndexedDbContactGuard,
+    deleteContactGuard,
     GUARD_RACED,
     GUARD_UNREADABLE,
     GUARD_UNSAVED,
     type ContactGuardStore,
+    type GuardSealer,
 } from './contact-guard';
 import { account } from './groups/worker-testkit';
 
@@ -64,15 +68,29 @@ const contacts = await import('./contacts');
 const {
     AccountChangedError,
     addContact,
+    bindContactsToQueries,
     continueWith,
+    GranterWaitingError,
     lookupContact,
     pinContact,
+    removeContact,
     resealPending,
     setContactGuard,
     trustedSigners,
     trustGrantee,
     trustGranter,
 } = contacts;
+
+/* The guard sealed by this account's own worker, as the app seals it (lib/contacts.ts guardSealer). */
+type Device = Awaited<ReturnType<Awaited<ReturnType<typeof account>>['device']>>;
+const sealerOf = (device: Device): GuardSealer => ({
+    ready: async () => {},
+    ids: async (userId, contactIds) =>
+        (await device.call('contactGuardIds', { userId, contactIds })).ids,
+    seal: async (userId, rows) => (await device.call('contactGuardSeal', { userId, rows })).rows,
+    open: async (userId, kind, rows) =>
+        (await device.call('contactGuardOpen', { userId, kind, rows })).rows,
+});
 
 /* Someone's account as the server serves it: a fresh account under one id is "starting over". */
 async function person(userId: string, email: string, name: string) {
@@ -102,6 +120,8 @@ async function world() {
         envelope: me.stored.envelope as SettingsEnvelope | null,
         saves: 0,
         loseNextAnswer: false,
+        /* Another device's save, landing between this one's read and its save. */
+        beforeNextSave: null as null | (() => Promise<void>),
         served: new Map<string, ContactIdentity>(),
     };
     auth.rpc.mockImplementation((operation, input) => device.call(operation, input));
@@ -112,6 +132,9 @@ async function world() {
     }));
     auth.saveSettings.mockImplementation(
         async (input: { expectedVersion: number; nonce: string; ciphertext: string }) => {
+            const between = server.beforeNextSave;
+            server.beforeNextSave = null;
+            await between?.();
             if (input.expectedVersion !== server.version)
                 throw new Error('Your settings changed on another device.');
             server.saves++;
@@ -137,7 +160,8 @@ async function world() {
     // Nobody here replaced their keys with a signed chain: every change below has none.
     auth.contactSuccession.mockResolvedValue({ links: [] });
 
-    const real = createIndexedDbContactGuard(`hushos-contact-guard-test-${Math.random()}`);
+    const guardName = `hushos-contact-guard-test-${Math.random()}`;
+    const real = createIndexedDbContactGuard(sealerOf(device), guardName);
     const fail = { read: false, pending: null as Error | null, commit: null as Error | null };
     const store: ContactGuardStore = {
         ...real,
@@ -167,7 +191,7 @@ async function world() {
         server.version++;
         server.envelope = envelope;
     };
-    return { device, server, maya, store, real, fail, persist, stored, replace };
+    return { device, server, maya, store, real, fail, persist, stored, replace, guardName };
 }
 
 /* Maya starts her account over: new keys under her id, and no chain from the old ones. */
@@ -286,7 +310,7 @@ describe('a change with no signed chain', () => {
 describe('opening something shared', () => {
     test('from someone new pins the keys it came with, and a share under other keys then pauses', async () => {
         const w = await world();
-        const keys = await trustGranter(granter(w.maya));
+        const keys = await trustGranter(granter(w.maya), { explicit: true });
         expect(keys.signingPublicKey).toBe(w.maya.signingPublicKey);
         const pin = (await w.stored()).contacts[MAYA]!;
         expect(pin.firstSeen).toBe('shared-with-me');
@@ -412,7 +436,9 @@ describe('the guard (2.8)', () => {
         // Someone new sharing something: nothing is pinned while the guard can't be read.
         const saves = w.server.saves;
         const sam = await person('a1a1a1a1-0000-4000-8000-000000000003', 'sam@example.com', 'Sam');
-        await expect(trustGranter(granter(sam))).rejects.toThrow(GUARD_UNREADABLE);
+        await expect(trustGranter(granter(sam), { explicit: true })).rejects.toThrow(
+            GUARD_UNREADABLE,
+        );
         expect(w.server.saves).toBe(saves);
         w.fail.read = false;
         expect(await trustGrantee(ME, MAYA, w.maya)).toMatchObject({
@@ -424,7 +450,10 @@ describe('the guard (2.8)', () => {
         const w = await world();
         await addContact(query, ME, MAYA_EMAIL);
         const name = `hushos-contact-guard-tabs-${Math.random()}`;
-        const [one, two] = [createIndexedDbContactGuard(name), createIndexedDbContactGuard(name)];
+        const [one, two] = [
+            createIndexedDbContactGuard(sealerOf(w.device), name),
+            createIndexedDbContactGuard(sealerOf(w.device), name),
+        ];
         const first = (await w.real.entry(ME, MAYA))!;
         await one.commit(ME, MAYA, first, 0);
         const read = (await two.entry(ME, MAYA))!;
@@ -446,5 +475,249 @@ describe('the guard (2.8)', () => {
         expect(await keyCommitment(guard)).toBe(
             await keyCommitment((await w.stored()).contacts[MAYA]!),
         );
+    });
+});
+
+describe('another device saving between the read and the save', () => {
+    test('a verified pin of the same keys another device saved is kept, verified', async () => {
+        const w = await world();
+        const verified = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: new Date().toISOString(),
+            ...(await pinOfServed(
+                {
+                    ...w.maya,
+                    mlDsaPublicKey: w.maya.mlDsaPublicKey!,
+                    kemPublicKey: w.maya.kemPublicKey!,
+                },
+                'verified',
+            )),
+        };
+        // Another device checks Maya's words and saves while this one adds her.
+        w.server.beforeNextSave = async () =>
+            w.replace({ ...(await w.stored()), contacts: { [MAYA]: verified } });
+        expect((await addContact(query, ME, MAYA_EMAIL)).outcome).toBe('added');
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('verified');
+        expect((await w.real.entry(ME, MAYA))!.verified).toBe(true);
+    });
+
+    test('a pin of other keys another device saved stops the add: it is the changed-account notice', async () => {
+        const w = await world();
+        const other = await person(MAYA, MAYA_EMAIL, 'Maya Lindqvist');
+        const theirs = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: new Date().toISOString(),
+            ...(await pinOfServed(
+                {
+                    ...other,
+                    mlDsaPublicKey: other.mlDsaPublicKey!,
+                    kemPublicKey: other.kemPublicKey!,
+                },
+                'seen',
+            )),
+        };
+        w.server.beforeNextSave = async () =>
+            w.replace({ ...(await w.stored()), contacts: { [MAYA]: theirs } });
+        expect((await addContact(query, ME, MAYA_EMAIL)).outcome).toBe('changed');
+        // What the other device saved stays, and nothing is shared to the keys served here.
+        expect((await w.stored()).contacts[MAYA]!.signingPublicKey).toBe(other.signingPublicKey);
+        await expect(trustGrantee(ME, MAYA, w.maya)).rejects.toBeInstanceOf(AccountChangedError);
+
+        // Opening something from her meets the same: the notice, never a pin over theirs.
+        const again = await world();
+        again.server.beforeNextSave = async () =>
+            again.replace({ ...(await again.stored()), contacts: { [MAYA]: theirs } });
+        await expect(trustGranter(granter(again.maya), { explicit: true })).rejects.toBeInstanceOf(
+            AccountChangedError,
+        );
+        expect((await again.stored()).contacts[MAYA]!.signingPublicKey).toBe(
+            other.signingPublicKey,
+        );
+    });
+});
+
+describe('listing what was shared, and opening it', () => {
+    test('a share from someone new waits for the person to open it, and listing pins nobody', async () => {
+        const w = await world();
+        await expect(trustGranter(granter(w.maya))).rejects.toBeInstanceOf(GranterWaitingError);
+        expect(w.server.saves).toBe(0);
+        expect(await w.real.entry(ME, MAYA)).toBeNull();
+        // Opening it is the person's act: she is pinned, first-seen, and it opens.
+        expect((await trustGranter(granter(w.maya), { explicit: true })).signingPublicKey).toBe(
+            w.maya.signingPublicKey,
+        );
+        expect((await w.stored()).contacts[MAYA]!.firstSeen).toBe('shared-with-me');
+    });
+
+    test('a removed contact stays removed when their shares are listed, and keeps their verified state', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await pinContact(query, ME, await lookupContact(query, ME, MAYA_EMAIL));
+        await removeContact(query, ME, MAYA);
+        const saves = w.server.saves;
+        // What she shared still opens, under the keys this device acted on, and nobody is added.
+        expect((await trustGranter(granter(w.maya))).signingPublicKey).toBe(
+            w.maya.signingPublicKey,
+        );
+        expect(w.server.saves).toBe(saves);
+        expect((await w.stored()).contacts[MAYA]).toBeUndefined();
+        expect((await w.real.entry(ME, MAYA))!.verified).toBe(true);
+    });
+});
+
+describe('a signed succession', () => {
+    test('is followed only when the person opens something, never while listing', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        // Maya replaces her keys with a chain signed by the ones pinned here.
+        const next = { ...(await startOver(w)), keyVersion: 2 };
+        const link = {
+            oldEncryptionPublicKey: w.maya.encryptionPublicKey,
+            oldSigningPublicKey: w.maya.signingPublicKey,
+            oldMlDsaPublicKey: w.maya.mlDsaPublicKey!,
+        };
+        auth.contactSuccession.mockResolvedValue({ links: [link] });
+        auth.rpc.mockImplementation(async (operation, input) =>
+            operation === 'identityVerifyChain' ? { valid: true } : w.device.call(operation, input),
+        );
+        const saves = w.server.saves;
+        await expect(trustGranter(granter(next))).rejects.toBeInstanceOf(GranterWaitingError);
+        expect(w.server.saves).toBe(saves);
+        expect((await w.stored()).contacts[MAYA]!.signingPublicKey).toBe(w.maya.signingPublicKey);
+        // Opening it is the person's act: the pin follows, and it opens under the new keys.
+        expect((await trustGranter(granter(next), { explicit: true })).signingPublicKey).toBe(
+            next.signingPublicKey,
+        );
+        expect((await w.stored()).contacts[MAYA]!.signingPublicKey).toBe(next.signingPublicKey);
+    });
+});
+
+describe('another tab of this browser', () => {
+    test('a Continue made in another tab rebuilds who wrote what here', async () => {
+        const w = await world();
+        const client = new QueryClient();
+        bindContactsToQueries(client);
+        try {
+            await addContact(query, ME, MAYA_EMAIL);
+            expect((await trustedSigners(ME))[MAYA]).toMatchObject({
+                current: w.maya.signingPublicKey,
+            });
+            // The other tab: Maya started over, it continued, saving the settings and the guard.
+            const after = await startOver(w);
+            const moved = {
+                ...(await w.stored()).contacts[MAYA]!,
+                ...(await pinOfServed(
+                    {
+                        ...after,
+                        mlDsaPublicKey: after.mlDsaPublicKey!,
+                        kemPublicKey: after.kemPublicKey!,
+                    },
+                    'seen',
+                )),
+            };
+            await w.replace({ ...(await w.stored()), contacts: { [MAYA]: moved } });
+            const held = (await w.real.entry(ME, MAYA))!;
+            const other = createIndexedDbContactGuard(sealerOf(w.device), w.guardName);
+            await other.commit(
+                ME,
+                MAYA,
+                {
+                    ...held,
+                    revision: held.revision + 1,
+                    encryptionPublicKey: moved.encryptionPublicKey,
+                    signingPublicKey: moved.signingPublicKey,
+                    mlDsaPublicKeyHash: moved.mlDsaPublicKeyHash!,
+                    kemPublicKeyHash: moved.kemPublicKeyHash!,
+                },
+                held.revision,
+            );
+            const channel = new BroadcastChannel('hushos-contact-guard');
+            channel.postMessage({ userId: ME, contactId: MAYA });
+            channel.close();
+            await vi.waitFor(async () =>
+                expect((await trustedSigners(ME))[MAYA]).toMatchObject({
+                    current: after.signingPublicKey,
+                }),
+            );
+        } finally {
+            bindContactsToQueries(undefined as never);
+        }
+    });
+});
+
+describe('the guard at rest', () => {
+    /* The guard's database as it sits on disk, read with no key. */
+    const disk = async (name: string) => {
+        const db = await openDB(name);
+        try {
+            return await Promise.all(
+                [...db.objectStoreNames].map(async (store) => ({
+                    store,
+                    rows: await db.getAll(store),
+                })),
+            );
+        } finally {
+            db.close();
+        }
+    };
+
+    test('is sealed: a locked worker reads nothing, and that is never "nothing recorded"', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const written = JSON.stringify(await disk(w.guardName));
+        expect(written).not.toContain(w.maya.signingPublicKey);
+        expect(written).not.toContain(MAYA);
+        w.device.locked();
+        await expect(w.real.entry(ME, MAYA)).rejects.toThrow();
+        await expect(w.real.entries(ME)).rejects.toThrow();
+        await expect(w.real.pending(ME, MAYA)).rejects.toThrow();
+        await w.device.unlock();
+        expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(w.maya.signingPublicKey);
+    });
+
+    test('a guard kept in the clear is sealed on the first unlock and its plaintext deleted', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const entry = (await w.real.entry(ME, MAYA))!;
+        // What a version 1 guard left: the same entry, in the clear.
+        const name = `hushos-contact-guard-old-${Math.random()}`;
+        const old = await openDB(name, 1, {
+            upgrade(db) {
+                db.createObjectStore('entries', { keyPath: 'key' });
+                db.createObjectStore('pending', { keyPath: 'key' });
+            },
+        });
+        await old.put('entries', {
+            key: `${ME}:${MAYA}`,
+            userId: ME,
+            contactId: MAYA,
+            value: entry,
+        });
+        old.close();
+        const store = createIndexedDbContactGuard(sealerOf(w.device), name);
+        // Locked: nothing is read, nothing is moved, and the plaintext stays until it can be.
+        w.device.locked();
+        await expect(store.entry(ME, MAYA)).rejects.toThrow();
+        await w.device.unlock();
+        expect(await store.entry(ME, MAYA)).toEqual(entry);
+        const after = await disk(name);
+        expect(after.find((each) => each.store === 'entries')!.rows).toEqual([]);
+        expect(JSON.stringify(after)).not.toContain(entry.signingPublicKey);
+    });
+
+    test('sign-out deletes it; signing back in trusts the settings, as a new device does', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await deleteContactGuard(w.guardName);
+        expect((await disk(w.guardName)).every((each) => each.rows.length === 0)).toBe(true);
+        expect(await w.real.entry(ME, MAYA)).toBeNull();
+        // The pin the settings hold is taken as first use again, and shared with.
+        expect(await trustGrantee(ME, MAYA, w.maya)).toMatchObject({
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+        });
     });
 });

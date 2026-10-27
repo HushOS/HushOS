@@ -1,5 +1,5 @@
 import type { GuardEntry } from '@hushos/crypto/first-seen';
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 /*
  * The contact guard (docs/optional-verification.md 2.8): what this device
@@ -7,12 +7,17 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
  * the settings document. A newer copy of the settings that disagrees with it
  * (an older copy saved over at a higher sequence, or an empty one) is caught
  * here, since nothing in the settings can stand in for what this device saw.
- * Never written to the settings, never cleared by anything the server
- * answers, and kept through sign-out, as the rollback marks are: only the
- * browser clearing site data makes this a new device again.
+ * Never written to the settings and never cleared by anything the server
+ * answers. Sign-out deletes it (deleteContactGuard): a browser someone signed
+ * out of keeps nothing of whom they shared with, and after signing back in it
+ * trusts the server's copy of the contacts, as a new device does.
  *
- * Public keys and their digests only, in the clear: nothing here opens
- * anything, and a page that could rewrite it could rewrite the app too.
+ * Sealed at rest by the crypto worker under a key derived from the settings
+ * key, which exists only while the account is unlocked: a locked browser holds
+ * ciphertext, and rows are found by an id that does not say whom they are
+ * about. A read that cannot open (locked, another key, a damaged row) fails;
+ * it is never "nothing recorded". A guard written before it was sealed is
+ * sealed on the first unlock and its plaintext deleted (migrate).
  *
  * Every act that changes whom this device trusts (adding, Continue, a check)
  * commits in four steps (lib/contacts.ts commitTrust): a pending record names
@@ -71,8 +76,6 @@ export class GuardRacedError extends Error {
     }
 }
 
-const keyOf = (userId: string, contactId: string) => `${userId}:${contactId.toLowerCase()}`;
-
 /* An entry as stored, or refused: a corrupt entry reads as one that could not be read. */
 export function checkGuardEntry(value: unknown): GuardEntry {
     const entry = value as GuardEntry;
@@ -120,19 +123,53 @@ function checkPending(value: unknown): PendingAct {
 
 export const CONTACT_GUARD_DATABASE = 'hushos-contact-guard';
 
-type Row<T> = { key: string; userId: string; contactId: string; value: T };
-interface Schema extends DBSchema {
-    entries: { key: string; value: Row<GuardEntry> };
-    pending: { key: string; value: Row<PendingAct> };
-}
+/*
+ * What seals the guard: the crypto worker, under a key derived from the
+ * settings key (@hushos/crypto contact-guard.ts), which exists only while the
+ * account is unlocked. `ready` opens the settings key in the worker when it is
+ * not open yet; ids find a row without saying whom it is about.
+ */
+export type GuardSealer = {
+    ready(userId: string): Promise<void>;
+    ids(userId: string, contactIds: string[]): Promise<string[]>;
+    seal(
+        userId: string,
+        rows: { contactId: string; kind: 'entry' | 'pending'; value: unknown }[],
+    ): Promise<{ id: string; envelope: string }[]>;
+    open(
+        userId: string,
+        kind: 'entry' | 'pending',
+        rows: { id: string; envelope: string }[],
+    ): Promise<({ contactId: string; value: unknown } | null)[]>;
+};
 
-export function createIndexedDbContactGuard(name = CONTACT_GUARD_DATABASE): ContactGuardStore {
+/* Before the guard was sealed: its rows in the clear, sealed and deleted on the first unlock. */
+type PlainRow<T> = { key: string; userId: string; contactId: string; value: T };
+/* A sealed row: found by the account and the row's id; the revision beside it for the commit. */
+type SealedRow = { key: string; userId: string; id: string; revision?: number; envelope: string };
+interface Schema extends DBSchema {
+    entries: { key: string; value: PlainRow<GuardEntry> };
+    pending: { key: string; value: PlainRow<PendingAct> };
+    'sealed-entries': { key: string; value: SealedRow };
+    'sealed-pending': { key: string; value: SealedRow };
+}
+/* Version 2 added the sealed stores; version 1's plaintext ones stay until every account moved. */
+const DATABASE_VERSION = 2;
+
+const rowKey = (userId: string, id: string) => `${userId}:${id}`;
+
+export function createIndexedDbContactGuard(
+    sealer: GuardSealer,
+    name = CONTACT_GUARD_DATABASE,
+): ContactGuardStore & { migrate(userId: string): Promise<void> } {
     let database: Promise<IDBPDatabase<Schema>> | undefined;
     const open = () =>
-        (database ??= openDB<Schema>(name, 1, {
-            upgrade(db) {
-                db.createObjectStore('entries', { keyPath: 'key' });
-                db.createObjectStore('pending', { keyPath: 'key' });
+        (database ??= openDB<Schema>(name, DATABASE_VERSION, {
+            upgrade(db, oldVersion) {
+                if (oldVersion < 2) {
+                    db.createObjectStore('sealed-entries', { keyPath: 'key' });
+                    db.createObjectStore('sealed-pending', { keyPath: 'key' });
+                }
             },
             blocking(_current, _next, event) {
                 (event.target as IDBDatabase).close();
@@ -145,46 +182,211 @@ export function createIndexedDbContactGuard(name = CONTACT_GUARD_DATABASE): Cont
             database = undefined;
             throw error;
         }));
-    const account = (userId: string) => IDBKeyRange.bound(`${userId}:`, `${userId}:￿`);
+    const account = (userId: string) => IDBKeyRange.bound(`${userId}:`, `${userId}:\uffff`);
+
+    /*
+     * The plaintext rows a version 1 guard left for this account, sealed and
+     * then deleted, in one transaction with the sealed rows written: a crash
+     * leaves either the plaintext or the sealed rows, never neither. A sealed
+     * row already there (another tab moved first) at a revision as high is
+     * kept. Once per account per page; a failure (locked, a corrupt row) is
+     * tried again on the next read, and the read fails meanwhile.
+     */
+    const moved = new Map<string, Promise<void>>();
+    function migrate(userId: string) {
+        let done = moved.get(userId);
+        if (!done) {
+            done = (async () => {
+                const db = await open();
+                if (!db.objectStoreNames.contains('entries')) return;
+                const read = db.transaction(['entries', 'pending'], 'readonly');
+                const [entries, pending] = await Promise.all([
+                    read.objectStore('entries').getAll(account(userId)),
+                    read.objectStore('pending').getAll(account(userId)),
+                ]);
+                if (!entries.length && !pending.length) return;
+                await sealer.ready(userId);
+                const values = [
+                    ...entries.map((row) => ({
+                        contactId: row.contactId,
+                        kind: 'entry' as const,
+                        value: checkGuardEntry(row.value),
+                    })),
+                    ...pending.map((row) => ({
+                        contactId: row.contactId,
+                        kind: 'pending' as const,
+                        value: checkPending(row.value),
+                    })),
+                ];
+                const sealed = await sealer.seal(userId, values);
+                const tx = db.transaction(
+                    ['entries', 'pending', 'sealed-entries', 'sealed-pending'],
+                    'readwrite',
+                );
+                for (const [index, row] of values.entries()) {
+                    const { id, envelope } = sealed[index]!;
+                    const store = tx.objectStore(
+                        row.kind === 'entry' ? 'sealed-entries' : 'sealed-pending',
+                    );
+                    const existing = await store.get(rowKey(userId, id));
+                    const revision = row.kind === 'entry' ? (row.value as GuardEntry).revision : 0;
+                    if (!existing || (row.kind === 'entry' && (existing.revision ?? 0) < revision))
+                        await store.put({
+                            key: rowKey(userId, id),
+                            userId,
+                            id,
+                            ...(row.kind === 'entry' ? { revision } : {}),
+                            envelope,
+                        });
+                }
+                for (const row of entries) await tx.objectStore('entries').delete(row.key);
+                for (const row of pending) await tx.objectStore('pending').delete(row.key);
+                await tx.done;
+            })();
+            moved.set(userId, done);
+            done.catch(() => {
+                if (moved.get(userId) === done) moved.delete(userId);
+            });
+        }
+        return done;
+    }
+
+    /*
+     * The row id of a person, the settings key opened first. Null only when
+     * this account keeps no row here at all, which is an honest "none" that
+     * needs no key to say; with any row kept, a locked worker fails the read.
+     */
+    async function idOf(userId: string, contactId: string) {
+        await migrate(userId);
+        const db = await open();
+        const kept =
+            (await db.count('sealed-entries', account(userId))) +
+            (await db.count('sealed-pending', account(userId)));
+        if (!kept) return null;
+        await sealer.ready(userId);
+        const [id] = await sealer.ids(userId, [contactId]);
+        if (!id) throw new Error('A contact guard id could not be worked out.');
+        return id;
+    }
+    async function openRows(
+        userId: string,
+        kind: 'entry' | 'pending',
+        rows: SealedRow[],
+    ): Promise<{ contactId: string; value: unknown; row: SealedRow }[]> {
+        if (!rows.length) return [];
+        await sealer.ready(userId);
+        const opened = await sealer.open(
+            userId,
+            kind,
+            rows.map((row) => ({ id: row.id, envelope: row.envelope })),
+        );
+        return rows.map((row, index) => {
+            const value = opened[index];
+            // Sealed under another key, for another place, or altered: never read as none.
+            if (!value) throw new Error('A contact guard record could not be opened.');
+            return { ...value, row };
+        });
+    }
+    function entryOf(opened: { value: unknown; row: SealedRow }) {
+        const entry = checkGuardEntry(opened.value);
+        // The revision the commit compares, in the clear beside the envelope, must be the sealed one.
+        if (entry.revision !== opened.row.revision)
+            throw new Error('A contact guard entry is corrupt.');
+        return entry;
+    }
     return {
+        migrate,
         async entry(userId, contactId) {
-            const row = await (await open()).get('entries', keyOf(userId, contactId));
-            return row ? checkGuardEntry(row.value) : null;
+            const id = await idOf(userId, contactId);
+            if (id === null) return null;
+            const row = await (await open()).get('sealed-entries', rowKey(userId, id));
+            if (!row) return null;
+            const [opened] = await openRows(userId, 'entry', [row]);
+            if (opened!.contactId !== contactId.toLowerCase())
+                throw new Error('A contact guard entry is corrupt.');
+            return entryOf(opened!);
         },
         async entries(userId) {
-            const rows = await (await open()).getAll('entries', account(userId));
-            return new Map(rows.map((row) => [row.contactId, checkGuardEntry(row.value)]));
+            await migrate(userId);
+            const rows = await (await open()).getAll('sealed-entries', account(userId));
+            const out = new Map<string, GuardEntry>();
+            for (const opened of await openRows(userId, 'entry', rows))
+                out.set(opened.contactId, entryOf(opened));
+            return out;
         },
         async pending(userId, contactId) {
-            const row = await (await open()).get('pending', keyOf(userId, contactId));
-            return row ? checkPending(row.value) : null;
+            const id = await idOf(userId, contactId);
+            if (id === null) return null;
+            const row = await (await open()).get('sealed-pending', rowKey(userId, id));
+            if (!row) return null;
+            const [opened] = await openRows(userId, 'pending', [row]);
+            if (opened!.contactId !== contactId.toLowerCase())
+                throw new Error('A pending contact act is corrupt.');
+            return checkPending(opened!.value);
         },
         async putPending(userId, contactId, act) {
-            const key = keyOf(userId, contactId);
+            await migrate(userId);
+            await sealer.ready(userId);
+            const [{ id, envelope }] = (await sealer.seal(userId, [
+                { contactId, kind: 'pending', value: checkPending(act) },
+            ])) as [{ id: string; envelope: string }];
             await (
                 await open()
-            ).put('pending', { key, userId, contactId: contactId.toLowerCase(), value: act });
+            ).put('sealed-pending', {
+                key: rowKey(userId, id),
+                userId,
+                id,
+                envelope,
+            });
         },
         async commit(userId, contactId, entry, revision) {
-            const key = keyOf(userId, contactId);
-            const tx = (await open()).transaction(['entries', 'pending'], 'readwrite');
-            const stored = await tx.objectStore('entries').get(key);
-            const at = stored ? checkGuardEntry(stored.value).revision : 0;
+            await migrate(userId);
+            await sealer.ready(userId);
+            // Sealed first: nothing may await the worker inside the transaction below.
+            const [{ id, envelope }] = (await sealer.seal(userId, [
+                { contactId, kind: 'entry', value: checkGuardEntry(entry) },
+            ])) as [{ id: string; envelope: string }];
+            const key = rowKey(userId, id);
+            const tx = (await open()).transaction(
+                ['sealed-entries', 'sealed-pending'],
+                'readwrite',
+            );
+            const stored = await tx.objectStore('sealed-entries').get(key);
+            const at = stored?.revision ?? 0;
             if (at !== revision) {
                 tx.abort();
                 await tx.done.catch(() => {});
                 throw new GuardRacedError();
             }
             await tx
-                .objectStore('entries')
-                .put({ key, userId, contactId: contactId.toLowerCase(), value: entry });
-            await tx.objectStore('pending').delete(key);
+                .objectStore('sealed-entries')
+                .put({ key, userId, id, revision: entry.revision, envelope });
+            await tx.objectStore('sealed-pending').delete(key);
             await tx.done;
         },
         async dropPending(userId, contactId) {
-            await (await open()).delete('pending', keyOf(userId, contactId));
+            const id = await idOf(userId, contactId);
+            if (id === null) return;
+            await (await open()).delete('sealed-pending', rowKey(userId, id));
         },
     };
+}
+
+/*
+ * Sign-out (lib/sign-out.ts): every account's guard on this browser goes, the
+ * plaintext rows of a version 1 guard included. After signing back in this
+ * device trusts the server's copy of the contacts, as a new device does
+ * (docs/optional-verification.md 2.8). An open connection in another tab lets
+ * go when asked (the store's `blocking`), so the deletion is not held up.
+ */
+export function deleteContactGuard(name = CONTACT_GUARD_DATABASE) {
+    if (typeof indexedDB === 'undefined') return Promise.resolve();
+    return deleteDB(name, {
+        blocked() {
+            // Every connection this app opens closes on `blocking`; one that does not is a
+            // tab of an older release, and the deletion lands once it closes.
+        },
+    });
 }
 
 /*

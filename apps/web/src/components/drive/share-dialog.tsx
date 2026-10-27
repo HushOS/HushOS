@@ -14,9 +14,8 @@ import {
     UserPlusIcon,
     XIcon,
 } from 'lucide-react';
-import { useId, useState } from 'react';
-import { AccountChangedDialog } from '@/components/drive/account-changed';
-import { CheckContactDialog, type Checking } from '@/components/drive/check-contact';
+import { useId, useRef, useState } from 'react';
+import { ContactFlow, type FlowStart } from '@/components/drive/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { describeLink, LinkOptionsDialog } from '@/components/drive/link-row';
 import { PersonAvatar } from '@/components/person-avatar';
@@ -68,7 +67,7 @@ import {
     type AccountChange,
     type Pin,
 } from '@/lib/contacts';
-import { familyWord, vouchLine } from '@/lib/family-pin';
+import { familyWord, pinOf, vouchLine } from '@/lib/family-pin';
 import { afterTrustChanged } from '@/lib/integrity';
 import {
     displayName,
@@ -78,7 +77,7 @@ import {
     formatDay,
     formatWhen,
 } from '@/lib/drive';
-import { currentNode, rotateAfterRevoke } from '@/lib/rotation';
+import { currentNode, oweRotation, rotateAfterRevoke } from '@/lib/rotation';
 import { sessionQueryOptions } from '@/lib/session';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
@@ -107,21 +106,52 @@ export function ShareDialog({
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }) {
+    // While a step of its own fills the sheet (a notice, a check, a stop), closing comes back here.
+    const [over, setOver] = useState<Over | null>(null);
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
+        <Dialog
+            open={open}
+            onOpenChange={(next) => {
+                if (!next && over) setOver(null);
+                else onOpenChange(next);
+            }}
+        >
             <DialogContent className="max-h-[92svh] overflow-y-auto sm:max-w-[560px]">
-                {node && <ShareForm key={node.id} node={node} onOpenChange={onOpenChange} />}
+                {node && (
+                    <ShareForm
+                        key={node.id}
+                        node={node}
+                        onOpenChange={onOpenChange}
+                        over={over}
+                        setOver={setOver}
+                    />
+                )}
             </DialogContent>
         </Dialog>
     );
 }
 
+/* What a share sheet was doing when someone's changed account stopped it: run again after Review. */
+type Interrupted =
+    | { kind: 'share'; pin: Pin; role: ShareRole }
+    | { kind: 'new'; email: string; role: ShareRole }
+    | { kind: 'role'; share: ShareView; role: ShareRole };
+/*
+ * What fills the sheet in place of its own content, one at a time: the
+ * contact flow (Review, Check it's Maya) or "Stop sharing with Maya?".
+ */
+type Over = { kind: 'flow'; start: FlowStart } | { kind: 'stop'; share: ShareView };
+
 function ShareForm({
     node,
     onOpenChange,
+    over,
+    setOver: show,
 }: {
     node: DriveNode;
     onOpenChange: (open: boolean) => void;
+    over: Over | null;
+    setOver: (over: Over | null) => void;
 }) {
     const { userId } = useDrive();
     const queryClient = useQueryClient();
@@ -135,13 +165,19 @@ function ShareForm({
     });
     useAccountChanges();
     const [chosen, setChosen] = useState<Pin | null>(null);
-    const [checking, setChecking] = useState<Checking | null>(null);
-    const [reviewing, setReviewing] = useState<AccountChange | null>(null);
     const [role, setRole] = useState<ShareRole>('viewer');
     /* 'share' while sealing, else the id of the share whose role is changing. */
     const [pending, setPending] = useState<string | null>(null);
     const [error, setError] = useState('');
-    const [stopping, setStopping] = useState<ShareView | null>(null);
+    /* The act a changed account stopped, and whether Review settled it so it may run again. */
+    const interrupted = useRef<Interrupted | null>(null);
+    const resolved = useRef(false);
+    /* Something in this sheet's place; only a Review started by an act carries that act. */
+    function setOver(next: Over | null, act: Interrupted | null = null) {
+        interrupted.current = act;
+        resolved.current = false;
+        show(next);
+    }
 
     const contacts = Object.values(settings.data?.settings.contacts ?? {}).sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -150,70 +186,103 @@ function ShareForm({
     const choices = contacts.filter((contact) => !already.has(contact.userId));
     const refresh = () => queryClient.invalidateQueries({ queryKey: sharesKey });
 
-    async function share() {
-        if (!chosen) return;
+    /*
+     * An account that changed is the notice, in this sheet's place, not an error: nothing was
+     * shared. The act waits, and runs again once Continue or a check settles it.
+     */
+    function reviewChange(
+        cause: unknown,
+        pin: Pick<Pin, 'userId' | 'name' | 'email'>,
+        act: Interrupted,
+    ) {
+        if (!(cause instanceof AccountChangedError)) return false;
+        setOver(
+            {
+                kind: 'flow',
+                start: {
+                    kind: 'changed',
+                    change: accountChangeOf(userId, pin.userId) ?? {
+                        contactId: pin.userId,
+                        name: pin.name,
+                        email: pin.email,
+                    },
+                },
+            },
+            act,
+        );
+        return true;
+    }
+    /* The flow ended: back to the sheet, and the act it interrupted again if trust was settled. */
+    function flowDone() {
+        const act = resolved.current ? interrupted.current : null;
+        setOver(null);
+        // A Continue or a check changes where each row stands.
+        void queryClient.invalidateQueries({ queryKey: ['contacts', 'sharee'] });
+        if (!act) return;
+        if (act.kind === 'share') void share(act.pin, act.role);
+        else if (act.kind === 'new') void shareWithNew(act.email, act.role);
+        else void changeRole(act.share, act.role);
+    }
+
+    async function share(pin: Pin, as: ShareRole) {
         setPending('share');
         setError('');
         try {
+            // A fresh node and fresh keys, also when this runs again after Review.
             const current = await currentNode(queryClient, node);
-            await driveClient.share(current, await granteeKeys(userId, chosen), role);
+            await driveClient.share(current, await granteeKeys(userId, pin), as);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             cue('success');
             toast.add({
                 type: 'success',
-                title: `“${node.name}” shared with ${chosen.name}`,
+                title: `“${node.name}” shared with ${pin.name}`,
                 description:
-                    role === 'editor'
-                        ? `${firstName(chosen.name)} can open, add and change what’s inside.`
-                        : `${firstName(chosen.name)} can open and download it.`,
+                    as === 'editor'
+                        ? `${firstName(pin.name)} can open, add and change what’s inside.`
+                        : `${firstName(pin.name)} can open and download it.`,
             });
             setChosen(null);
             setRole('viewer');
         } catch (cause) {
-            if (reviewChange(cause, chosen)) return;
+            if (reviewChange(cause, pin, { kind: 'share', pin, role: as })) return;
             cue('error');
             setError(driveError(cause));
         } finally {
             setPending(null);
         }
     }
-    /* An account that changed is the notice, not an error: nothing was shared. */
-    function reviewChange(cause: unknown, pin: Pick<Pin, 'userId' | 'name' | 'email'>) {
-        if (!(cause instanceof AccountChangedError)) return false;
-        setReviewing(
-            accountChangeOf(userId, pin.userId) ?? {
-                contactId: pin.userId,
-                name: pin.name,
-                email: pin.email,
-            },
-        );
-        return true;
-    }
     /* Someone new by their email (6.3): added as 6.2 adds them, and shared with, in one step. */
-    async function shareWithNew(email: string) {
+    async function shareWithNew(email: string, as: ShareRole) {
         setPending('share');
         setError('');
+        const act: Interrupted = { kind: 'new', email, role: as };
         try {
             const added = await addContact(queryClient, userId, email);
             if (added.outcome === 'changed') {
-                setReviewing(added.change);
+                reviewChange(
+                    new AccountChangedError(added.change.contactId, added.change.name),
+                    { userId: added.change.contactId, ...added.change },
+                    act,
+                );
                 return;
             }
             const pin = added.pin;
             const current = await currentNode(queryClient, node);
-            await driveClient.share(current, await granteeKeys(userId, pin), 'viewer');
+            await driveClient.share(current, await granteeKeys(userId, pin), as);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             // What they wrote now reads as theirs.
             if (added.outcome === 'added') afterTrustChanged(queryClient);
             cue('success');
             toast.add({ type: 'success', title: `Shared with ${firstName(pin.name)}` });
+            setRole('viewer');
         } catch (cause) {
-            if (cause instanceof AccountChangedError) {
-                setReviewing({ contactId: cause.contactId, name: cause.person, email });
+            if (
+                cause instanceof AccountChangedError &&
+                reviewChange(cause, { userId: cause.contactId, name: cause.person, email }, act)
+            )
                 return;
-            }
             cue('error');
             setError(driveError(cause));
         } finally {
@@ -222,7 +291,11 @@ function ShareForm({
     }
     /* A new role is the same share sealed again with it; the server replaces the old one. */
     async function changeRole(target: ShareView, next: ShareRole) {
-        const pin = settings.data?.settings.contacts[target.grantee.id];
+        // The settings as they are now: this may run again after Review moved the pin.
+        const loaded = await queryClient.fetchQuery(settingsQueryOptions(userId)).catch(() => null);
+        const pin = loaded
+            ? (pinOf(loaded.settings.contacts, target.grantee.id)?.pin ?? null)
+            : null;
         if (!pin || next === target.role) return;
         setPending(target.id);
         try {
@@ -235,7 +308,7 @@ function ShareForm({
                 title: `${firstName(target.grantee.name)} ${next === 'editor' ? 'can edit' : 'can view'} “${node.name}” now`,
             });
         } catch (cause) {
-            if (reviewChange(cause, pin)) return;
+            if (reviewChange(cause, pin, { kind: 'role', share: target, role: next })) return;
             cue('error');
             toast.add({
                 type: 'error',
@@ -249,6 +322,8 @@ function ShareForm({
     async function stop(target: ShareView) {
         setPending(target.id);
         try {
+            // Owed before it is stopped, so a closed tab still re-keys it (lib/rotation.ts).
+            await oweRotation(node.id);
             await driveClient.revokeShare(node, target.id);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
@@ -269,6 +344,47 @@ function ShareForm({
             setPending(null);
         }
     }
+
+    if (over?.kind === 'flow')
+        return (
+            <ContactFlow
+                userId={userId}
+                start={over.start}
+                onDone={flowDone}
+                onResolved={() => {
+                    resolved.current = true;
+                }}
+            />
+        );
+    if (over?.kind === 'stop')
+        return (
+            <>
+                <DialogHeader>
+                    <DialogTitle>
+                        Stop sharing with {firstName(over.share.grantee.name)}?
+                    </DialogTitle>
+                    <DialogDescription>
+                        They can’t open “{node.name}” in HushOS any more. Copies they already
+                        downloaded stay with them. You can share it again later.
+                    </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => setOver(null)}>
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        onClick={() => {
+                            const target = over.share;
+                            setOver(null);
+                            void stop(target);
+                        }}
+                    >
+                        Stop sharing
+                    </Button>
+                </DialogFooter>
+            </>
+        );
 
     return (
         <>
@@ -315,7 +431,10 @@ function ShareForm({
                         </p>
                     )}
                     <div className="flex justify-end">
-                        <Button disabled={pending !== null} onClick={() => void share()}>
+                        <Button
+                            disabled={pending !== null}
+                            onClick={() => void share(chosen, role)}
+                        >
                             {pending === 'share' ? 'Sharing…' : 'Share'}
                         </Button>
                     </div>
@@ -327,8 +446,10 @@ function ShareForm({
                         busy={pending === 'share'}
                         contacts={choices}
                         anyContacts={contacts.length > 0}
+                        role={role}
+                        onRole={setRole}
                         onPick={setChosen}
-                        onAdd={(email) => void shareWithNew(email)}
+                        onAdd={(email) => void shareWithNew(email, role)}
                     />
                     {error && (
                         <p role="alert" className="text-[13px] text-destructive">
@@ -367,10 +488,21 @@ function ShareForm({
                         disabled={pending !== null}
                         onRole={(next) => void changeRole(entry, next)}
                         onCheck={() =>
-                            setChecking({ email: entry.grantee.email, name: entry.grantee.name })
+                            setOver({
+                                kind: 'flow',
+                                start: {
+                                    kind: 'check',
+                                    person: {
+                                        email: entry.grantee.email,
+                                        name: entry.grantee.name,
+                                    },
+                                },
+                            })
                         }
-                        onStop={() => setStopping(entry)}
-                        onReview={setReviewing}
+                        onStop={() => setOver({ kind: 'stop', share: entry })}
+                        onReview={(change) =>
+                            setOver({ kind: 'flow', start: { kind: 'changed', change } })
+                        }
                     />
                 ))}
             </div>
@@ -382,51 +514,6 @@ function ShareForm({
                     Done
                 </Button>
             </DialogFooter>
-
-            <CheckContactDialog
-                userId={userId}
-                person={checking}
-                onOpenChange={(value) => !value && setChecking(null)}
-            />
-            <AccountChangedDialog
-                userId={userId}
-                change={reviewing}
-                onOpenChange={(value) => {
-                    if (value) return;
-                    setReviewing(null);
-                    // A Continue or a check changes where each row stands.
-                    void queryClient.invalidateQueries({ queryKey: ['contacts', 'sharee'] });
-                }}
-            />
-            <AlertDialog
-                open={stopping !== null}
-                onOpenChange={(value) => !value && setStopping(null)}
-            >
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>
-                            Stop sharing with {stopping ? firstName(stopping.grantee.name) : ''}?
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                            They can’t open “{node.name}” in HushOS any more. Copies they already
-                            downloaded stay with them. You can share it again later.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <Button
-                            variant="destructive"
-                            onClick={() => {
-                                const target = stopping;
-                                setStopping(null);
-                                if (target) void stop(target);
-                            }}
-                        >
-                            Stop sharing
-                        </Button>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
         </>
     );
 }
@@ -579,6 +666,8 @@ function PeopleField({
     busy,
     contacts,
     anyContacts,
+    role,
+    onRole,
     onPick,
     onAdd,
 }: {
@@ -586,6 +675,9 @@ function PeopleField({
     busy: boolean;
     contacts: Pin[];
     anyContacts: boolean;
+    /* What whoever is chosen here can do, picked beside the field before anything is shared. */
+    role: ShareRole;
+    onRole: (role: ShareRole) => void;
     onPick: (contact: Pin) => void;
     onAdd: (email: string) => void;
 }) {
@@ -602,123 +694,129 @@ function PeopleField({
     const matches = contacts.filter((contact) =>
         `${contact.name} ${contact.email}`.toLowerCase().includes(typed.toLowerCase()),
     );
+    // The list of matches opens under the field and the picker both, so a long address fits.
     return (
-        <CommandPrimitive
-            label="Add people"
-            shouldFilter={false}
-            className="relative"
-            onKeyDown={(event) => {
-                if (event.key === 'Escape' && open) {
-                    // Closes the list, not the dialog.
-                    event.stopPropagation();
-                    setOpen(false);
-                }
-            }}
-        >
-            <div className="flex h-11 items-center gap-2.5 rounded-md border border-input bg-card px-3 focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-ring">
-                <UserPlusIcon
-                    className="size-4 shrink-0 text-muted-foreground"
-                    aria-hidden="true"
-                />
-                <CommandPrimitive.Input
-                    id={id}
-                    value={query}
-                    onValueChange={(value) => {
-                        setQuery(value);
-                        setOpen(true);
-                    }}
-                    // Opens when asked for: a click, typing, or the down arrow, never on the
-                    // focus the dialog gives it when it opens.
-                    onPointerDown={() => setOpen(true)}
-                    onKeyDown={(event) => {
-                        if (event.key === 'ArrowDown' && !open) setOpen(true);
-                    }}
-                    onBlur={() => setOpen(false)}
-                    disabled={busy}
-                    placeholder="Add a name or email"
-                    aria-label="Add people"
-                    className="h-full min-w-0 flex-1 bg-transparent text-base outline-none sm:text-[15px] placeholder:text-muted-foreground"
-                />
-            </div>
-            {open && (
-                <CommandList
-                    // Pressing an item must not blur the field first, or the list would close under it.
-                    onMouseDown={(event) => event.preventDefault()}
-                    className="absolute inset-x-0 top-full z-20 mt-1.5 max-h-72 rounded-xl border border-border bg-popover p-1.5 shadow-overlay"
-                >
-                    {loading && (
-                        <p className="px-2 py-3 text-sm text-muted-foreground">
-                            Opening your contacts…
-                        </p>
-                    )}
-                    {!loading && matches.length > 0 && (
-                        <CommandGroup heading={typed ? undefined : 'Your contacts'}>
-                            {matches.map((contact) => (
-                                <CommandItem
-                                    key={contact.userId}
-                                    value={contact.userId}
-                                    onSelect={() => {
-                                        onPick(contact);
-                                        setQuery('');
-                                        setOpen(false);
-                                    }}
-                                    className="gap-3 py-2"
-                                >
-                                    <PersonAvatar
-                                        name={contact.name}
-                                        seed={contact.userId}
-                                        size={32}
-                                    />
-                                    <span className="flex min-w-0 flex-col">
-                                        <span className="truncate text-sm font-medium">
-                                            {contact.name}
-                                        </span>
-                                        <span className="truncate text-[13px] text-muted-foreground">
-                                            {contact.email}
-                                        </span>
-                                        {vouchLine(contact) && (
-                                            <span
-                                                data-vouched
-                                                className="truncate text-[13px] text-muted-foreground"
-                                            >
-                                                {vouchLine(contact)}
+        <div className="relative flex items-center gap-2">
+            <CommandPrimitive
+                label="Add people"
+                shouldFilter={false}
+                className="min-w-0 flex-1"
+                onKeyDown={(event) => {
+                    if (event.key === 'Escape' && open) {
+                        // Closes the list, not the dialog.
+                        event.stopPropagation();
+                        setOpen(false);
+                    }
+                }}
+            >
+                <div className="flex h-11 items-center gap-2.5 rounded-md border border-input bg-card px-3 focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-ring">
+                    <UserPlusIcon
+                        className="size-4 shrink-0 text-muted-foreground"
+                        aria-hidden="true"
+                    />
+                    <CommandPrimitive.Input
+                        id={id}
+                        value={query}
+                        onValueChange={(value) => {
+                            setQuery(value);
+                            setOpen(true);
+                        }}
+                        // Opens when asked for: a click, typing, or the down arrow, never on the
+                        // focus the dialog gives it when it opens.
+                        onPointerDown={() => setOpen(true)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'ArrowDown' && !open) setOpen(true);
+                        }}
+                        onBlur={() => setOpen(false)}
+                        disabled={busy}
+                        placeholder="Add a name or email"
+                        aria-label="Add people"
+                        className="h-full min-w-0 flex-1 bg-transparent text-base outline-none sm:text-[15px] placeholder:text-muted-foreground"
+                    />
+                </div>
+                {open && (
+                    <CommandList
+                        // Pressing an item must not blur the field first, or the list would close under it.
+                        onMouseDown={(event) => event.preventDefault()}
+                        className="absolute inset-x-0 top-full z-20 mt-1.5 max-h-72 rounded-xl border border-border bg-popover p-1.5 shadow-overlay"
+                    >
+                        {loading && (
+                            <p className="px-2 py-3 text-sm text-muted-foreground">
+                                Opening your contacts…
+                            </p>
+                        )}
+                        {!loading && matches.length > 0 && (
+                            <CommandGroup heading={typed ? undefined : 'Your contacts'}>
+                                {matches.map((contact) => (
+                                    <CommandItem
+                                        key={contact.userId}
+                                        value={contact.userId}
+                                        onSelect={() => {
+                                            onPick(contact);
+                                            setQuery('');
+                                            setOpen(false);
+                                        }}
+                                        className="gap-3 py-2"
+                                    >
+                                        <PersonAvatar
+                                            name={contact.name}
+                                            seed={contact.userId}
+                                            size={32}
+                                        />
+                                        <span className="flex min-w-0 flex-col">
+                                            <span className="truncate text-sm font-medium">
+                                                {contact.name}
                                             </span>
-                                        )}
-                                    </span>
-                                </CommandItem>
-                            ))}
-                        </CommandGroup>
-                    )}
-                    {!loading && isEmail && !known && (
-                        <CommandItem
-                            value={`add:${typed}`}
-                            onSelect={() => {
-                                onAdd(typed);
-                                setQuery('');
-                                setOpen(false);
-                            }}
-                            className="gap-3 py-2"
-                        >
-                            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground">
-                                <UserPlusIcon className="size-4" aria-hidden="true" />
-                            </span>
-                            <span className="truncate text-sm font-medium">Share with {typed}</span>
-                        </CommandItem>
-                    )}
-                    {!loading && matches.length === 0 && !(isEmail && !known) && (
-                        <p className="px-2 py-3 text-sm text-muted-foreground">
-                            {!anyContacts && !typed
-                                ? 'Type their email to share with someone new.'
-                                : known
-                                  ? 'They already have this.'
-                                  : typed
-                                    ? 'No one by that name yet. Type their full email to add them.'
-                                    : 'Everyone in your contacts already has this.'}
-                        </p>
-                    )}
-                </CommandList>
-            )}
-        </CommandPrimitive>
+                                            <span className="truncate text-[13px] text-muted-foreground">
+                                                {contact.email}
+                                            </span>
+                                            {vouchLine(contact) && (
+                                                <span
+                                                    data-vouched
+                                                    className="truncate text-[13px] text-muted-foreground"
+                                                >
+                                                    {vouchLine(contact)}
+                                                </span>
+                                            )}
+                                        </span>
+                                    </CommandItem>
+                                ))}
+                            </CommandGroup>
+                        )}
+                        {!loading && isEmail && !known && (
+                            <CommandItem
+                                value={`add:${typed}`}
+                                onSelect={() => {
+                                    onAdd(typed);
+                                    setQuery('');
+                                    setOpen(false);
+                                }}
+                                className="gap-3 py-2"
+                            >
+                                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground">
+                                    <UserPlusIcon className="size-4" aria-hidden="true" />
+                                </span>
+                                <span className="truncate text-sm font-medium">
+                                    Share with {typed}
+                                </span>
+                            </CommandItem>
+                        )}
+                        {!loading && matches.length === 0 && !(isEmail && !known) && (
+                            <p className="px-2 py-3 text-sm text-muted-foreground">
+                                {!anyContacts && !typed
+                                    ? 'Type their email to share with someone new.'
+                                    : known
+                                      ? 'They already have this.'
+                                      : typed
+                                        ? 'No one by that name yet. Type their full email to add them.'
+                                        : 'Everyone in your contacts already has this.'}
+                            </p>
+                        )}
+                    </CommandList>
+                )}
+            </CommandPrimitive>
+            <RoleSelect value={role} onChange={onRole} label="What they can do" />
+        </div>
     );
 }
 
@@ -923,6 +1021,7 @@ function LinkCard({
     async function turnOff() {
         setBusy(true);
         try {
+            await oweRotation(node.id);
             await driveClient.revokeLink(node, link.id);
             await onChanged();
             cue('droplet');

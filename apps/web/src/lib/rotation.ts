@@ -2,16 +2,27 @@ import type { DriveNode } from '@hushos/drive/client';
 import type { QueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
-import { sharingLedger } from '@/lib/contacts';
+import { stopWork } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, folderQueryOptions } from '@/lib/drive';
-import { stopSharingWith } from '@/lib/stop-sharing';
+import {
+    owe,
+    rekeyAll,
+    resumeStopping,
+    stopSharingWith,
+    type StopSharingParts,
+} from '@/lib/stop-sharing';
 
 /*
  * Revocation stops the server; rotation shuts the door. After a share or link
  * is stopped, the owner's device re-keys the node and everything beneath it,
- * re-sealing what remains shared. It runs in the background of the tab and,
- * if the tab closes first, resumes the next time this account opens Drive.
+ * re-sealing what remains shared. Every re-key owed is recorded in the
+ * settings before the share or link is stopped (lib/contacts.ts stopWork), one
+ * item after another, and crossed off only once it finished, so the whole
+ * queue, not just the rotation the server is running, survives a closed tab:
+ * it runs in the background and resumes the next time this account opens
+ * Drive, on any of its devices.
  */
+const owed = stopWork(() => authClient.store.getState().unlockedUserId);
 
 let running: Promise<unknown> | null = null;
 let finished = 0;
@@ -37,7 +48,6 @@ async function quietly(
 ): Promise<void> {
     try {
         await work();
-        countFinishedRotation();
     } catch (error) {
         const last = attempt >= RETRY_DELAYS_MS.length;
         if (attempt === 0 || last)
@@ -83,12 +93,56 @@ function retryLater(
     );
 }
 
-/* Rotate after a revocation; a rotation already running in this tab finishes first. */
-export function rotateAfterRevoke(queryClient: QueryClient, node: DriveNode) {
+/*
+ * Every re-key owed, oldest first, each crossed off once it finished (or its
+ * item is gone for good): a rotation the server already runs for this account
+ * first, since it allows one at a time. Queued behind whatever this tab runs.
+ */
+function rekeyOwed(queryClient: QueryClient, name: string | null = null) {
     const previous = running ?? Promise.resolve();
-    // Starting again learns of the rotation the server already holds for the node.
-    running = previous.then(() => quietly(queryClient, node.name, () => driveClient.rotate(node)));
-    return running;
+    const next: Promise<unknown> = previous.then(() =>
+        quietly(queryClient, name, async () => {
+            if (driveClient.pendingRotation()) {
+                await driveClient.resumeRotation();
+                countFinishedRotation();
+            }
+            return rekeyAll(
+                owed,
+                (nodeId) => driveClient.rotateById(nodeId),
+                countFinishedRotation,
+            );
+        }),
+    );
+    running = next;
+    void next.finally(() => {
+        if (running === next) running = null;
+    });
+    return next;
+}
+
+/*
+ * Rotate after a revocation: recorded first (`owe`, before the share or link
+ * is stopped), then run behind anything this tab is rotating already.
+ */
+export async function oweRotation(nodeId: string) {
+    await owed.save((record) => owe(record, [nodeId]));
+}
+export function rotateAfterRevoke(queryClient: QueryClient, node: DriveNode) {
+    return rekeyOwed(queryClient, node.name);
+}
+
+function stopParts(queryClient: QueryClient): StopSharingParts {
+    return {
+        work: owed,
+        listed: () => driveClient.sharedByMeIds(),
+        sharesOf: async (nodeId) =>
+            (await driveClient.sharesOfNode(nodeId)).map((share) => ({
+                id: share.id,
+                granteeId: share.grantee.id,
+            })),
+        revoke: (_nodeId, shareId) => driveClient.endShare(shareId),
+        rekey: () => rekeyOwed(queryClient),
+    };
 }
 
 /*
@@ -96,14 +150,12 @@ export function rotateAfterRevoke(queryClient: QueryClient, node: DriveNode) {
  * here, then each item re-keyed in the background, as one stopped share is.
  */
 export async function stopSharingWithPerson(queryClient: QueryClient, contactId: string) {
-    const { stopped } = await stopSharingWith(contactId, {
-        ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
-        shares: () => driveClient.mySharing(),
-        revoke: (node, shareId) => driveClient.revokeShare(node, shareId),
-        rotate: (node) => rotateAfterRevoke(queryClient, node),
-    });
-    await queryClient.invalidateQueries({ queryKey: driveKeys.all });
-    return stopped;
+    try {
+        const { stopped } = await stopSharingWith(contactId, stopParts(queryClient));
+        return stopped;
+    } finally {
+        await queryClient.invalidateQueries({ queryKey: driveKeys.all });
+    }
 }
 
 /* Settles when any rotation this tab started has finished; at once when none has. */
@@ -125,10 +177,21 @@ export async function currentNode(queryClient: QueryClient, node: DriveNode): Pr
     return listing.children.find((child) => child.id === node.id) ?? node;
 }
 
-/* On opening Drive: a rotation left unfinished, by this tab or another device. */
+/*
+ * On opening Drive: a rotation left unfinished, by this tab or another
+ * device, and whatever a Stop sharing or a stopped share left owed.
+ */
 export function resumePendingRotation(queryClient: QueryClient) {
-    if (!driveClient.pendingRotation() || running) return;
-    running = quietly(queryClient, null, () => driveClient.resumeRotation()).finally(() => {
-        running = null;
+    if (running) return;
+    void (async () => {
+        const record = await owed.read();
+        if (!driveClient.pendingRotation() && !record.rekey?.length && !record.stopping) return;
+        await resumeStopping(stopParts(queryClient));
+    })().catch((error: unknown) => {
+        toast.add({
+            type: 'error',
+            title: 'Stopping access didn’t finish',
+            description: `${driveError(error)} HushOS finishes it the next time you open your files.`,
+        });
     });
 }

@@ -5,26 +5,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ShieldAlertIcon, ShieldQuestionIcon } from 'lucide-react';
 import { useState } from 'react';
-import { AccountChangedDialog } from '@/components/drive/account-changed';
-import { AddSomeone, firstName } from '@/components/drive/add-someone';
-import { CheckContactDialog, requestCheck, type Checking } from '@/components/drive/check-contact';
+import { firstName } from '@/components/drive/add-someone';
+import { useContactFlow } from '@/components/drive/contact-flow';
 import { useFamilyArea } from '@/components/drive/family-area';
 import { TrustAsFamily } from '@/components/drive/trust-as-family';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from '@/components/ui/toast';
 import { useAuthView } from '@/lib/auth-view';
-import { settingsQueryOptions, type AccountChange } from '@/lib/contacts';
+import { settingsQueryOptions } from '@/lib/contacts';
 import { familyWord, pinName, pinOf, pinsById } from '@/lib/family-pin';
 import {
-    afterTrustChanged,
     checkSignerAgain,
     issueLines,
     markLabel,
@@ -140,7 +131,7 @@ export function useSeenBy(
 }
 export function SeenBy({ seen }: { seen: { name: string; email: string | null } }) {
     const userId = useAuthView((state) => state.unlockedUserId);
-    const [checking, setChecking] = useState<Checking | null>(null);
+    const openFlow = useContactFlow();
     const email = seen.email;
     return (
         <span data-integrity-seen className="flex flex-col">
@@ -156,7 +147,9 @@ export function SeenBy({ seen }: { seen: { name: string; email: string | null } 
                             <Button
                                 variant="link"
                                 className="text-[13px] font-semibold"
-                                onClick={() => setChecking({ email, name: seen.name })}
+                                onClick={() =>
+                                    openFlow({ kind: 'check', person: { email, name: seen.name } })
+                                }
                             >
                                 Check it’s {firstName(seen.name)}
                             </Button>
@@ -164,13 +157,6 @@ export function SeenBy({ seen }: { seen: { name: string; email: string | null } 
                     </>
                 )}
             </span>
-            {userId && (
-                <CheckContactDialog
-                    userId={userId}
-                    person={checking}
-                    onOpenChange={(open) => !open && setChecking(null)}
-                />
-            )}
         </span>
     );
 }
@@ -213,10 +199,8 @@ export function UnverifiedMark({
         enabled: issues.length > 0 && userId !== null,
     });
     const [open, setOpen] = useState(false);
-    // Who wrote it, for someone nobody can name yet: their email, then Check it's them.
-    const [finding, setFinding] = useState<Signer | null>(null);
-    const [checking, setChecking] = useState<Checking | null>(null);
-    const [reviewing, setReviewing] = useState<AccountChange | null>(null);
+    // Who wrote it, Check it's them, an account changed: one flow, where this mark sits.
+    const openFlow = useContactFlow();
     const [busy, setBusy] = useState(false);
     if (!issues.length) return null;
     const lines = issueLines(issues, names);
@@ -239,7 +223,11 @@ export function UnverifiedMark({
                 toast.add({ type: 'success', title: `${first} updated their account` });
             else if (outcome === 'changed') {
                 const pin = pinOf(settings.data?.settings.contacts ?? {}, signer.id)?.pin;
-                if (pin) setReviewing({ contactId: pin.userId, name: pin.name, email: pin.email });
+                if (pin)
+                    openFlow({
+                        kind: 'changed',
+                        change: { contactId: pin.userId, name: pin.name, email: pin.email },
+                    });
             } else if (outcome === 'recheck')
                 toast.add({
                     type: 'error',
@@ -315,8 +303,11 @@ export function UnverifiedMark({
                                 setOpen(false);
                                 if (action.kind === 'check') {
                                     if (contact)
-                                        setChecking({ email: contact.email, name: contact.name });
-                                    else setFinding(action.signer);
+                                        openFlow({
+                                            kind: 'check',
+                                            person: { email: contact.email, name: contact.name },
+                                        });
+                                    else openFlow({ kind: 'find', writer: action.signer.id });
                                 } else if (action.kind === 'again')
                                     void again(action.signer, action.name);
                                 else void retryChecks(queryClient, userId);
@@ -343,59 +334,6 @@ export function UnverifiedMark({
                     )}
                 </PopoverContent>
             </Popover>
-            {userId && (
-                <>
-                    <Dialog
-                        open={finding !== null}
-                        onOpenChange={(next) => !next && setFinding(null)}
-                    >
-                        <DialogContent
-                            className="sm:max-w-[480px]"
-                            onClick={(event) => event.stopPropagation()}
-                        >
-                            <DialogHeader>
-                                <DialogTitle>Check who wrote this</DialogTitle>
-                                <DialogDescription>
-                                    Enter the email they use for HushOS. Once they’re in your
-                                    contacts, what they add and change shows as theirs.
-                                </DialogDescription>
-                            </DialogHeader>
-                            {finding && (
-                                <AddSomeone
-                                    userId={userId}
-                                    writer={finding.id}
-                                    onCancel={() => setFinding(null)}
-                                    onAdded={(pin) => {
-                                        setFinding(null);
-                                        toast.add({
-                                            type: 'success',
-                                            title: `${firstName(pin.name)} added`,
-                                        });
-                                        // Then, if they like, the words: the advanced door. Hosted by
-                                        // the shell, since this mark clears now that they're added.
-                                        requestCheck({ email: pin.email, name: pin.name });
-                                    }}
-                                    onChanged={(change) => {
-                                        setFinding(null);
-                                        setReviewing(change);
-                                    }}
-                                />
-                            )}
-                        </DialogContent>
-                    </Dialog>
-                    <CheckContactDialog
-                        userId={userId}
-                        person={checking}
-                        onOpenChange={(next) => !next && setChecking(null)}
-                        onChecked={() => afterTrustChanged(queryClient)}
-                    />
-                    <AccountChangedDialog
-                        userId={userId}
-                        change={reviewing}
-                        onOpenChange={(next) => !next && setReviewing(null)}
-                    />
-                </>
-            )}
         </>
     );
 }

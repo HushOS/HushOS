@@ -10,6 +10,7 @@ import {
     sampleFiles,
     saveKit,
     shareWith,
+    openWaiting,
 } from './helpers';
 
 /*
@@ -302,7 +303,9 @@ test('after Sam replaces his sharing keys, Maya follows when she opens what he s
 
     // Opening what he shared is Maya's own act: her device asks for his chain then, checks it
     // from the keys it holds, follows it, and his share, sealed again under his new keys, opens.
+    // Listing alone follows nothing: the row waits for her.
     await maya.goto('/app/shared');
+    await openWaiting(maya, 'Sam updated their account. Open this to carry on.');
     await expect(
         maya.locator('[data-shared="From Sam"]').getByRole('link', { name: 'From Sam' }),
     ).toBeVisible({ timeout: 60_000 });

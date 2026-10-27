@@ -37,8 +37,10 @@ import {
     GuardUnsavedError,
     withGuardLock,
     type ContactGuardStore,
+    type GuardSealer,
 } from '@/lib/contact-guard';
 import { onStaleIdentity } from '@/lib/drive-api';
+import type { StopRecord, StopWork } from '@/lib/stop-sharing';
 import { pinOf } from '@/lib/family-pin';
 import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
@@ -96,6 +98,7 @@ authClient.store.subscribe((state, previous) => {
         opened = undefined;
         settingsKeyOpened = undefined;
         consentBackfilled = undefined;
+        if (state.unlockedUserId) sealOlderGuard(state.unlockedUserId);
     }
 });
 
@@ -424,11 +427,13 @@ export async function compareAndSetSettings(
 export async function saveSettings(
     queryClient: QueryClient | undefined,
     userId: string,
-    change: (settings: LoadedSettings['settings']) => LoadedSettings['settings'],
+    change: (
+        settings: LoadedSettings['settings'],
+    ) => LoadedSettings['settings'] | Promise<LoadedSettings['settings']>,
 ) {
     for (let attempt = 0; attempt < 2; attempt++) {
         const current = await readSettings(userId, true);
-        const next = change(structuredClone(current.settings));
+        const next = await change(structuredClone(current.settings));
         const { envelope } = await authClient.rpc('settingsSeal', {
             userId,
             settingsVersion: current.version + 1,
@@ -476,20 +481,96 @@ type Served = ServedIdentity;
 
 /*
  * The guard's store, and how the browser is asked to keep it. Tests hand in
- * their own (setContactGuard); the app opens IndexedDB on first use.
+ * their own (setContactGuard); the app opens IndexedDB on first use, sealed by
+ * this account's worker under a key from the settings key (lib/contact-guard.ts).
  */
 type Guard = { store: ContactGuardStore; persist: () => Promise<boolean> };
 let guard: Guard | undefined;
+export const guardSealer: GuardSealer = {
+    ready: (userId) => settingsKeyFor(userId),
+    ids: async (userId, contactIds) =>
+        (await authClient.rpc('contactGuardIds', { userId, contactIds })).ids,
+    seal: async (userId, rows) => (await authClient.rpc('contactGuardSeal', { userId, rows })).rows,
+    open: async (userId, kind, rows) =>
+        (await authClient.rpc('contactGuardOpen', { userId, kind, rows })).rows,
+};
+let appStore: ReturnType<typeof createIndexedDbContactGuard> | undefined;
 function contactGuard(): Guard {
-    guard ??= { store: createIndexedDbContactGuard(), persist: askPersistentStorage };
+    guard ??= {
+        store: (appStore = createIndexedDbContactGuard(guardSealer)),
+        persist: askPersistentStorage,
+    };
     return guard;
 }
 export function setContactGuard(next: Guard | undefined) {
     guard = next;
-    guardWrites++;
+    guardMoved(null);
 }
-/* Every guard write in this tab: verdicts built over older entries are built again. */
+
+/*
+ * The settings key in the worker, for the guard sealed under it: the one
+ * opened since this unlock, else the one the server keeps. Never created
+ * here: a guard with rows always has a key behind it, and an act that writes
+ * the first row saves the settings (which creates one) before it.
+ */
+async function settingsKeyFor(userId: string) {
+    requireUnlocked(userId);
+    if (settingsKeyOpened?.userId === userId) return settingsKeyOpened.promise;
+    const { settingsKey } = await authClient.settings();
+    await settingsKeyReady(userId, settingsKey, false);
+    if (settingsKeyOpened?.userId !== userId) throw new Error('Open your settings first.');
+}
+/* The same, made and stored when the account has none yet: before an act's first guard write. */
+async function settingsKeyMade(userId: string) {
+    requireUnlocked(userId);
+    if (settingsKeyOpened?.userId === userId) return settingsKeyOpened.promise;
+    const { settingsKey } = await authClient.settings();
+    await settingsKeyReady(userId, settingsKey, true);
+}
+
+/*
+ * Every guard write, in this tab or another of this browser: verdicts and
+ * standings built over older entries are built again. Another tab's write
+ * (a Continue, a check, an add) arrives on a BroadcastChannel, with its
+ * settings save: both are read again here, and a change this tab noted for
+ * that person is cleared, so the next act finds where it stands afresh.
+ */
 let guardWrites = 0;
+const GUARD_CHANNEL = 'hushos-contact-guard';
+const guardChannel =
+    typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(GUARD_CHANNEL);
+guardChannel?.addEventListener('message', (event: MessageEvent) => {
+    const data = event.data as { userId?: unknown; contactId?: unknown } | null;
+    guardWrites++;
+    if (typeof data?.userId !== 'string') return;
+    if (typeof data.contactId === 'string') clearChange(data.userId, data.contactId);
+    void boundQueryClient?.invalidateQueries({ queryKey: contactKeys.settings(data.userId) });
+    void boundQueryClient?.invalidateQueries({ queryKey: ['contacts', 'standing'] });
+    void boundQueryClient?.invalidateQueries({ queryKey: ['contacts', 'sharee'] });
+    // What Drive drew was judged over the guard as it was (lib/integrity.ts afterTrustChanged).
+    void boundQueryClient?.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === 'drive' && query.queryKey[1] !== 'open',
+    });
+});
+function guardMoved(moved: { userId: string; contactId: string } | null) {
+    guardWrites++;
+    if (moved) guardChannel?.postMessage(moved);
+}
+/* The guard's revision as this tab knows it, for queries built over it. */
+export function guardRevision() {
+    return guardWrites;
+}
+
+/* On unlock: a guard written before it was sealed is sealed now and its plaintext deleted. */
+function sealOlderGuard(userId: string) {
+    if (guard && !appStore) return;
+    contactGuard();
+    void appStore
+        ?.migrate(userId)
+        .catch((error: unknown) =>
+            console.error('The contacts this device remembers could not be sealed yet.', error),
+        );
+}
 
 /*
  * Someone whose keys changed with no chain from the keys this device holds:
@@ -573,7 +654,7 @@ async function commitGuard(
         if (error instanceof GuardRacedError) throw error;
         throw new GuardUnsavedError(error);
     }
-    guardWrites++;
+    guardMoved({ userId, contactId });
     return entry;
 }
 
@@ -664,13 +745,17 @@ async function commitTrust(
     contactId: string,
     entry: GuardEntry | null,
     target: Pin,
-    change: (settings: LoadedSettings['settings']) => LoadedSettings['settings'],
+    change: (
+        settings: LoadedSettings['settings'],
+    ) => LoadedSettings['settings'] | Promise<LoadedSettings['settings']>,
 ): Promise<{ pin: Pin; entry: GuardEntry }> {
     const { store, persist } = contactGuard();
     void persist();
     const keys = await keyCommitment(target);
     if (keys === null) throw new Error('These keys can’t be remembered.');
     const revision = entry?.revision ?? 0;
+    // The pending record is sealed under the settings key: the account's first act makes one.
+    await settingsKeyMade(userId);
     try {
         await store.putPending(userId, contactId, {
             target: keys,
@@ -682,8 +767,7 @@ async function commitTrust(
     }
     const saved = await saveSettings(queryClient ?? boundQueryClient, userId, change);
     const pin = pinOf(saved.contacts, contactId)?.pin ?? null;
-    if (!pin || (await keyCommitment(pin)) !== keys)
-        throw new Error('Your contacts changed on another device. Try again.');
+    if (!pin || (await keyCommitment(pin)) !== keys) throw new TrustMovedError();
     return {
         pin,
         entry: await commitGuard(userId, contactId, await nextGuardEntry(entry, pin), revision),
@@ -832,11 +916,12 @@ async function stand(
                 const current = settings.contacts[key];
                 // Only over the pin it was worked out from: another device may have moved first.
                 if (
-                    current &&
-                    current.encryptionPublicKey === before.encryptionPublicKey &&
-                    current.signingPublicKey === before.signingPublicKey
+                    !current ||
+                    current.encryptionPublicKey !== before.encryptionPublicKey ||
+                    current.signingPublicKey !== before.signingPublicKey
                 )
-                    settings.contacts[key] = { ...current, ...upgraded };
+                    throw new TrustMovedError();
+                settings.contacts[key] = { ...current, ...upgraded };
                 return settings;
             },
         ));
@@ -885,11 +970,12 @@ async function stand(
             const current = settings.contacts[key];
             // Only from the keys the chain was checked from: another device may have moved first.
             if (
-                current &&
-                current.encryptionPublicKey === from.encryptionPublicKey &&
-                current.signingPublicKey === from.signingPublicKey
+                !current ||
+                current.encryptionPublicKey !== from.encryptionPublicKey ||
+                current.signingPublicKey !== from.signingPublicKey
             )
-                settings.contacts[key] = { ...current, ...next };
+                throw new TrustMovedError();
+            settings.contacts[key] = { ...current, ...next };
             return settings;
         },
     ));
@@ -1041,44 +1127,67 @@ export async function addContact(
     if (writer !== undefined && contact.userId.toLowerCase() !== writer.toLowerCase())
         throw new Error('This isn’t the account that wrote it. Check the address, then try again.');
     if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
-    return withGuardLock(userId, async () => {
-        const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
-        if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
-        if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(contact.name));
-        if (standing.kind !== 'new')
-            return {
-                outcome: 'changed',
-                change: noteChange(userId, {
-                    contactId: contact.userId,
-                    name: standing.pin?.name ?? contact.name,
-                    email: contact.email,
-                }),
-            };
-        const fresh: Pin = {
-            userId: contact.userId,
-            email: contact.email,
-            name: contact.name,
-            ...(await pinOfServed(
-                {
-                    ...contact,
-                    mlDsaPublicKey: contact.mlDsaPublicKey!,
-                    kemPublicKey: contact.kemPublicKey!,
-                },
-                'seen',
-            )),
-            pinnedAt: new Date().toISOString(),
-            firstSeen: 'added',
+    return withGuardLock(userId, () =>
+        decidedAgain(() => addDecided(queryClient, userId, contact)),
+    );
+}
+
+/*
+ * An act decided over what the settings held, run again once when another
+ * device moved the person's pin before it saved (TrustMovedError): the second
+ * decision meets what that device saved, as a change when the keys differ.
+ */
+async function decidedAgain<T>(act: () => Promise<T>): Promise<T> {
+    try {
+        return await act();
+    } catch (error) {
+        if (!(error instanceof TrustMovedError)) throw error;
+        return act();
+    }
+}
+
+async function addDecided(
+    queryClient: QueryClient,
+    userId: string,
+    contact: ContactIdentity,
+): Promise<Added> {
+    const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
+    if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
+    if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(contact.name));
+    if (standing.kind !== 'new')
+        return {
+            outcome: 'changed',
+            change: noteChange(userId, {
+                contactId: contact.userId,
+                name: standing.pin?.name ?? contact.name,
+                email: contact.email,
+            }),
         };
-        const { pin } = await commitTrust(
-            queryClient,
-            userId,
-            contact.userId,
-            standing.entry,
-            fresh,
-            (settings) => withPinOnce(settings, fresh),
-        );
-        return { outcome: 'added', pin };
-    });
+    const fresh: Pin = {
+        userId: contact.userId,
+        email: contact.email,
+        name: contact.name,
+        ...(await pinOfServed(
+            {
+                ...contact,
+                mlDsaPublicKey: contact.mlDsaPublicKey!,
+                kemPublicKey: contact.kemPublicKey!,
+            },
+            'seen',
+        )),
+        pinnedAt: new Date().toISOString(),
+        firstSeen: 'added',
+    };
+    // Over nobody: a pin another device saved meanwhile is kept, or stops the add.
+    const { pin } = await commitTrust(
+        queryClient,
+        userId,
+        contact.userId,
+        standing.entry,
+        fresh,
+        (settings) => withPinIf(settings, fresh, null),
+    );
+    return { outcome: 'added', pin };
 }
 
 /* `pin` for its person, under the served id: a pin stored under the id in other letters goes. */
@@ -1088,6 +1197,57 @@ function withPinOnce(settings: LoadedSettings['settings'], pin: Pin) {
         if (key !== pin.userId && key.toLowerCase() === pin.userId.toLowerCase())
             delete next.contacts[key];
     return next;
+}
+
+/*
+ * Another device moved this person's pin between the read an act was decided
+ * over and its save: nothing was written, and the act is decided again from
+ * what the settings hold now (for someone new, that is the changed-account
+ * notice when the keys differ).
+ */
+export class TrustMovedError extends Error {
+    override name = 'TrustMovedError';
+    constructor() {
+        super('Your contacts changed on another device. Try again.');
+    }
+}
+
+/* Whether two pins hold the same keys: by key commitment, or for pins without one, by every key field. */
+async function sameKeys(a: Pin | null, b: Pin | null) {
+    if (a === null || b === null) return a === b;
+    const [left, right] = await Promise.all([keyCommitment(a), keyCommitment(b)]);
+    if (left !== null || right !== null) return left === right;
+    return (
+        a.encryptionPublicKey === b.encryptionPublicKey &&
+        a.signingPublicKey === b.signingPublicKey &&
+        (a.mlDsaPublicKeyHash ?? null) === (b.mlDsaPublicKeyHash ?? null) &&
+        (a.kemPublicKeyHash ?? null) === (b.kemPublicKeyHash ?? null)
+    );
+}
+
+/*
+ * The save of an act that writes `target`, checked again on every attempt of
+ * the compare-and-set (another device may have saved since the act was
+ * decided): a pin of the target's own keys already there is kept exactly as
+ * it is, its verified state included, unless `verify` asks for a verified one
+ * over first-seen keys; the target is written only over the pin the act was
+ * decided from (`expected`, null for nobody); anything else stops the act.
+ */
+async function withPinIf(
+    settings: LoadedSettings['settings'],
+    target: Pin,
+    expected: Pin | null,
+    { verify = false }: { verify?: boolean } = {},
+) {
+    const current = pinOf(settings.contacts, target.userId)?.pin ?? null;
+    if (
+        current !== null &&
+        (await sameKeys(current, target)) &&
+        (!verify || (await pinTrust(current)) === 'verified')
+    )
+        return settings;
+    if (await sameKeys(current, expected)) return withPinOnce(settings, target);
+    throw new TrustMovedError();
 }
 
 /*
@@ -1157,7 +1317,7 @@ export async function continueWith(
         const target = acceptedPin(before, base, contact, keys);
         return (
             await commitTrust(queryClient, userId, contact.userId, entry, target, (settings) =>
-                withPinOnce(settings, target),
+                withPinIf(settings, target, before),
             )
         ).pin;
     });
@@ -1211,7 +1371,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
         }
         return (
             await commitTrust(queryClient, userId, contact.userId, entry, target, (settings) =>
-                withPinOnce(settings, target),
+                withPinIf(settings, target, before, { verify: true }),
             )
         ).pin;
     });
@@ -1340,86 +1500,140 @@ export function bindContactsToQueries(client: QueryClient) {
 export class UnverifiedGranterError extends Error {
     override name = 'UnverifiedGranterError';
 }
+/*
+ * A share that opens only when the person opens it (6.4, 2.3): from someone
+ * this device has not pinned, or whose signed succession it has not followed.
+ * Listing what was shared never pins anyone or follows anything.
+ */
+export class GranterWaitingError extends Error {
+    override name = 'GranterWaitingError';
+}
+
+/* The keys a guard entry holds, as a pin no settings carry: what this device already acted on. */
+function pinOfEntry(person: { userId: string; email: string; name: string }, entry: GuardEntry) {
+    return {
+        userId: person.userId,
+        email: person.email,
+        name: person.name,
+        pinnedAt: new Date(0).toISOString(),
+        keyVersion: entry.keyVersion,
+        encryptionPublicKey: entry.encryptionPublicKey,
+        signingPublicKey: entry.signingPublicKey,
+        mlDsaPublicKeyHash: entry.mlDsaPublicKeyHash,
+        kemPublicKeyHash: entry.kemPublicKeyHash,
+        fingerprint: '',
+        previousSigningKeys: entry.previousSigningKeys,
+    } satisfies Pin;
+}
 
 /*
- * Which keys to open a share with (6.4). From someone this device has never
- * met, the keys the share came with are pinned first-seen and it opens; that
+ * Which keys to open a share with (6.4). From someone pinned, the pinned
+ * keys, only when the server serves those same keys or a signed succession
+ * from them leads to them, and the pin agrees with this device's guard.
+ * Anything else waits for the person: "Maya's account changed", Review.
+ *
+ * Only an explicit open (the person opening this one share, `explicit`) may
+ * pin anyone or follow a succession: from someone this device has never met,
+ * the keys the share came with are then pinned first-seen and it opens; that
  * is first use, and the server could make a share look as if anyone sent it
- * (docs/optional-verification.md 4.1). From someone pinned, the pinned keys,
- * only when the server serves those same keys or a signed succession from
- * them leads to them, and the pin agrees with this device's guard. Anything
- * else waits for the person: "Maya's account changed", Review.
+ * (docs/optional-verification.md 4.1). Listing what was shared with this
+ * person (background discovery) opens only what the keys this device already
+ * holds open, a removed contact's guard keys included, and pins nothing, so a
+ * removed contact stays removed and a succession waits for the person.
  */
 export async function trustGranter(
     granter: { id: string; name: string; email: string } & Served,
+    { explicit = false }: { explicit?: boolean } = {},
 ): Promise<TrustedGranter> {
     const userId = authClient.store.getState().unlockedUserId;
     if (!userId) throw new Error('Unlock your account first.');
-    return withGuardLock(userId, async () => {
-        let standing = await stand(userId, granter.id, granter, { act: true, follow: true });
-        if (standing.kind === 'new') {
-            if (!(await keysHold(granter.id, granter)))
-                throw new UnverifiedGranterError(
-                    `${firstNameOf(granter.name)} needs to sign in to HushOS once more before this opens.`,
-                );
-            const fresh: Pin = {
-                userId: granter.id,
-                email: granter.email,
-                name: granter.name,
-                ...(await pinOfServed(
-                    {
-                        ...granter,
-                        mlDsaPublicKey: granter.mlDsaPublicKey!,
-                        kemPublicKey: granter.kemPublicKey!,
-                    },
-                    'seen',
-                )),
-                pinnedAt: new Date().toISOString(),
-                firstSeen: 'shared-with-me',
-            };
-            try {
-                const { pin, entry } = await commitTrust(
-                    boundQueryClient,
-                    userId,
-                    granter.id,
-                    standing.entry,
-                    fresh,
-                    (settings) => settingsWithPin(settings, fresh),
-                );
-                standing = { kind: 'ok', pin, entry, followed: false };
-            } catch (error) {
-                if (error instanceof Error && error.message === CONTACTS_FULL)
-                    throw new UnverifiedGranterError(CONTACTS_FULL);
-                throw error;
-            }
-        }
-        if (standing.kind === 'not-upgraded')
-            throw new UnverifiedGranterError(
-                `${firstNameOf(standing.pin.name)} needs to sign in to HushOS once more before this opens.`,
-            );
-        if (standing.kind !== 'ok') {
-            const name = standing.pin?.name ?? granter.name;
-            noteChange(userId, {
-                contactId: granter.id,
-                name,
-                email: standing.pin?.email ?? granter.email,
+    const first = firstNameOf(granter.name);
+    return withGuardLock(userId, () =>
+        decidedAgain(async () => {
+            let standing = await stand(userId, granter.id, granter, {
+                act: explicit,
+                follow: explicit,
             });
-            throw new AccountChangedError(granter.id, name);
-        }
-        // Both halves of the share's signature: the pinned Ed25519 key, and the served ML-DSA key
-        // whose digest the pin holds.
-        const pin = standing.pin;
-        const keys = await granterKeysOf(pin, granter);
-        if (!keys) {
-            noteChange(userId, { contactId: granter.id, name: pin.name, email: pin.email });
-            throw new AccountChangedError(granter.id, pin.name);
-        }
-        return {
-            ...keys,
-            // Keys the pin followed a succession from open nothing: a share sealed under one waits.
-            ...(pin.previousSigningKeys?.length ? { replaced: { name: pin.name } } : {}),
-        };
-    });
+            if (standing.kind === 'new' && !explicit) {
+                // Removed from the settings, but the keys this device acted on: opens, pins nothing.
+                if (standing.entry)
+                    standing = {
+                        kind: 'ok',
+                        pin: pinOfEntry({ ...granter, userId: granter.id }, standing.entry),
+                        entry: standing.entry,
+                        followed: false,
+                    };
+                else throw new GranterWaitingError(`Open this to add ${first} to your contacts.`);
+            }
+            if (standing.kind === 'succession')
+                throw new GranterWaitingError(
+                    `${first} updated their account. Open this to carry on.`,
+                );
+            if (standing.kind === 'new') {
+                if (!(await keysHold(granter.id, granter)))
+                    throw new UnverifiedGranterError(
+                        `${first} needs to sign in to HushOS once more before this opens.`,
+                    );
+                const fresh: Pin = {
+                    userId: granter.id,
+                    email: granter.email,
+                    name: granter.name,
+                    ...(await pinOfServed(
+                        {
+                            ...granter,
+                            mlDsaPublicKey: granter.mlDsaPublicKey!,
+                            kemPublicKey: granter.kemPublicKey!,
+                        },
+                        'seen',
+                    )),
+                    pinnedAt: new Date().toISOString(),
+                    firstSeen: 'shared-with-me',
+                };
+                try {
+                    // Over nobody: a pin another device saved meanwhile is kept, or decided again.
+                    const { pin, entry } = await commitTrust(
+                        boundQueryClient,
+                        userId,
+                        granter.id,
+                        standing.entry,
+                        fresh,
+                        (settings) => withPinIf(settings, fresh, null),
+                    );
+                    standing = { kind: 'ok', pin, entry, followed: false };
+                } catch (error) {
+                    if (error instanceof Error && error.message === CONTACTS_FULL)
+                        throw new UnverifiedGranterError(CONTACTS_FULL);
+                    throw error;
+                }
+            }
+            if (standing.kind === 'not-upgraded')
+                throw new UnverifiedGranterError(
+                    `${firstNameOf(standing.pin.name)} needs to sign in to HushOS once more before this opens.`,
+                );
+            if (standing.kind !== 'ok') {
+                const name = standing.pin?.name ?? granter.name;
+                noteChange(userId, {
+                    contactId: granter.id,
+                    name,
+                    email: standing.pin?.email ?? granter.email,
+                });
+                throw new AccountChangedError(granter.id, name);
+            }
+            // Both halves of the share's signature: the pinned Ed25519 key, and the served ML-DSA
+            // key whose digest the pin holds.
+            const pin = standing.pin;
+            const keys = await granterKeysOf(pin, granter);
+            if (!keys) {
+                noteChange(userId, { contactId: granter.id, name: pin.name, email: pin.email });
+                throw new AccountChangedError(granter.id, pin.name);
+            }
+            return {
+                ...keys,
+                // Keys the pin followed a succession from open nothing: a share sealed under one waits.
+                ...(pin.previousSigningKeys?.length ? { replaced: { name: pin.name } } : {}),
+            };
+        }),
+    );
 }
 
 /*
@@ -1557,5 +1771,30 @@ export function sharingLedger(userId: () => string | null): SharingLedger {
             save((ledger) => {
                 delete ledger.links[linkId];
             }),
+    };
+}
+
+/*
+ * What Stop sharing and every re-key still owe, kept beside the ledger in the
+ * settings document (lib/stop-sharing.ts): it outlives a closed tab, a
+ * failure and a sign-out, and any of the person's devices carries it on.
+ * Every client keeps fields of the ledger it does not know when it saves.
+ */
+export function stopWork(userId: () => string | null): StopWork {
+    return {
+        async read() {
+            const id = userId();
+            if (!id) return { shares: {} };
+            const { settings } = await loadSettings(id);
+            return (settings.sharing ?? { shares: {}, links: {} }) as StopRecord;
+        },
+        async save(change) {
+            const id = userId();
+            if (!id) throw new Error('Unlock your account first.');
+            await saveSettings(boundQueryClient, id, (settings) => {
+                change(ledgerOf(settings) as StopRecord);
+                return settings;
+            });
+        },
     };
 }

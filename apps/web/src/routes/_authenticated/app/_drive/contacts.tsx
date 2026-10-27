@@ -10,9 +10,7 @@ import {
     UserXIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { AccountChangedDialog } from '@/components/drive/account-changed';
-import { AddSomeone } from '@/components/drive/add-someone';
-import { CheckContactDialog, type Checking } from '@/components/drive/check-contact';
+import { ContactFlowDialog, type FlowStart } from '@/components/drive/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
 import { OwnWordsDialog } from '@/components/own-words-dialog';
@@ -29,7 +27,6 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -81,9 +78,8 @@ function People() {
         enabled: settings.isSuccess,
     });
     useAccountChanges();
-    const [adding, setAdding] = useState(false);
-    const [checking, setChecking] = useState<Checking | null>(null);
-    const [reviewing, setReviewing] = useState<AccountChange | null>(null);
+    // Add someone, Review, Check it's Maya: one dialog, each step replacing the last.
+    const [flow, setFlow] = useState<FlowStart | null>(null);
     const [removing, setRemoving] = useState<ContactPin | null>(null);
     const [busy, setBusy] = useState(false);
     const [showingWords, setShowingWords] = useState(false);
@@ -139,7 +135,7 @@ function People() {
                 <Button variant="outline" onClick={() => setShowingWords(true)}>
                     Your twelve words
                 </Button>
-                <Button onClick={() => setAdding(true)}>
+                <Button onClick={() => setFlow({ kind: 'add' })}>
                     <UserPlusIcon />
                     Add someone
                 </Button>
@@ -237,7 +233,7 @@ function People() {
                                             <Button
                                                 variant="link"
                                                 className="text-[13px] font-semibold"
-                                                onClick={() => setReviewing(change)}
+                                                onClick={() => setFlow({ kind: 'changed', change })}
                                             >
                                                 Review
                                             </Button>
@@ -272,9 +268,12 @@ function People() {
                                         <DropdownMenuGroup>
                                             <DropdownMenuItem
                                                 onClick={() =>
-                                                    setChecking({
-                                                        email: contact.email,
-                                                        name: contact.name,
+                                                    setFlow({
+                                                        kind: 'check',
+                                                        person: {
+                                                            email: contact.email,
+                                                            name: contact.name,
+                                                        },
                                                     })
                                                 }
                                             >
@@ -305,44 +304,14 @@ function People() {
 
             <OwnWordsDialog userId={userId} open={showingWords} onOpenChange={setShowingWords} />
 
-            <Dialog open={adding} onOpenChange={setAdding}>
-                <DialogContent className="sm:max-w-[480px]">
-                    <DialogHeader>
-                        <DialogTitle>Add someone</DialogTitle>
-                    </DialogHeader>
-                    {adding && (
-                        <AddSomeone
-                            userId={userId}
-                            onCancel={() => setAdding(false)}
-                            onAdded={(pin) => {
-                                setAdding(false);
-                                toast.add({
-                                    type: 'success',
-                                    title: `${firstName(pin.name)} added`,
-                                });
-                            }}
-                            onChanged={(change) => {
-                                setAdding(false);
-                                setReviewing(change);
-                            }}
-                        />
-                    )}
-                </DialogContent>
-            </Dialog>
-
             {/*
              * Checking someone looks up the keys the server serves for them now, and only here (or
              * on a mark's Check again, or when sharing) does a pin follow a signed succession.
              */}
-            <CheckContactDialog
+            <ContactFlowDialog
                 userId={userId}
-                person={checking}
-                onOpenChange={(open) => !open && setChecking(null)}
-            />
-            <AccountChangedDialog
-                userId={userId}
-                change={reviewing}
-                onOpenChange={(open) => !open && setReviewing(null)}
+                start={flow}
+                onOpenChange={(open) => !open && setFlow(null)}
             />
 
             <AlertDialog

@@ -7,14 +7,20 @@ import type { Lookup } from '@/lib/contacts';
  * Check it's Maya (docs/optional-verification.md 6.6): They match saves the
  * check over the very lookup whose words were shown; They don't match saves
  * nothing at all, and offers Stop sharing with Maya, which asks once before
- * it ends anything.
+ * it ends anything. Each step replaces the one before in the same dialog:
+ * one dialog on screen at a time.
  */
 const lookup = vi.fn<() => Promise<Lookup>>();
 const pinContact = vi.fn(async () => ({}));
+const continueWith = vi.fn(async () => ({}));
 const stopSharing = vi.fn(async () => 2);
+const upgradeShares = vi.fn(async () => ({ resealed: 1, refused: 0 }));
 vi.mock('@/lib/contacts', () => ({
     lookupContact: () => lookup(),
     pinContact: (...args: unknown[]) => pinContact(...(args as [])),
+    continueWith: (...args: unknown[]) => continueWith(...(args as [])),
+    addContact: vi.fn(),
+    TrustMovedError: class extends Error {},
     notUpgradedWords: (name: string) => `${name} needs to sign in`,
 }));
 vi.mock('@/lib/rotation', () => ({
@@ -22,12 +28,13 @@ vi.mock('@/lib/rotation', () => ({
 }));
 vi.mock('@/lib/integrity', () => ({ afterTrustChanged: vi.fn() }));
 vi.mock('@/lib/drive', () => ({
+    driveClient: { upgradeShares: () => upgradeShares() },
     driveKeys: { shared: ['shared'] },
     driveError: (error: Error) => error.message,
     formatDay: () => '3 Nov',
 }));
 vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
-const { CheckContactDialog } = await import('./check-contact');
+const { ContactFlowDialog } = await import('./contact-flow');
 
 const MAYA = 'a0000000-0000-4000-8000-000000000002';
 const found: Lookup = {
@@ -55,23 +62,28 @@ const found: Lookup = {
     upgraded: true,
 };
 
-function open() {
+function open(
+    start: Parameters<typeof ContactFlowDialog>[0]['start'] = {
+        kind: 'check',
+        person: { email: 'maya@example.com', name: 'Maya Lindqvist' },
+    },
+) {
     render(
         <QueryClientProvider client={new QueryClient()}>
-            <CheckContactDialog
-                userId="me"
-                person={{ email: 'maya@example.com', name: 'Maya Lindqvist' }}
-                onOpenChange={vi.fn()}
-            />
+            <ContactFlowDialog userId="me" start={start} onOpenChange={vi.fn()} />
         </QueryClientProvider>,
     );
 }
+/* Every dialog on screen: there must only ever be one. */
+const dialogs = () => document.querySelectorAll('[role="dialog"], [role="alertdialog"]');
 
 describe('Check it’s Maya', () => {
     beforeEach(() => {
         lookup.mockReset().mockResolvedValue(found);
         pinContact.mockClear();
+        continueWith.mockClear();
         stopSharing.mockClear();
+        upgradeShares.mockClear();
     });
 
     test('They don’t match saves nothing, and Stop sharing asks before it ends anything', async () => {
@@ -82,6 +94,13 @@ describe('Check it’s Maya', () => {
         expect(pinContact).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Stop sharing with Maya' }));
         expect(stopSharing).not.toHaveBeenCalled();
+        // The question replaces the check: one dialog, and Cancel comes back to it.
+        expect(await screen.findByText('Stop sharing with Maya?')).toBeVisible();
+        expect(dialogs()).toHaveLength(1);
+        expect(screen.queryByText(/These don’t match/)).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.getByText(/These don’t match/)).toBeVisible();
+        fireEvent.click(screen.getByRole('button', { name: 'Stop sharing with Maya' }));
         fireEvent.click(await screen.findByRole('button', { name: 'Stop sharing' }));
         await vi.waitFor(() => expect(stopSharing).toHaveBeenCalledWith(expect.anything(), MAYA));
         expect(pinContact).not.toHaveBeenCalled();
@@ -92,5 +111,32 @@ describe('Check it’s Maya', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'They match' }));
         await vi.waitFor(() => expect(pinContact).toHaveBeenCalledTimes(1));
         expect(pinContact).toHaveBeenCalledWith(expect.anything(), 'me', found);
+    });
+
+    test('They match over keys that changed seals what was shared again, as Continue does', async () => {
+        lookup.mockResolvedValue({ ...found, changed: true, stale: false, wasVerified: true });
+        open();
+        fireEvent.click(await screen.findByRole('button', { name: 'They match' }));
+        await vi.waitFor(() => expect(upgradeShares).toHaveBeenCalledTimes(1));
+    });
+
+    test('over the same keys, nothing is sealed again', async () => {
+        open();
+        fireEvent.click(await screen.findByRole('button', { name: 'They match' }));
+        await vi.waitFor(() => expect(pinContact).toHaveBeenCalledTimes(1));
+        expect(upgradeShares).not.toHaveBeenCalled();
+    });
+
+    test('Check it’s Maya from the changed-account notice replaces it in the same dialog', async () => {
+        lookup.mockResolvedValue({ ...found, changed: true, stale: false, wasVerified: true });
+        open({
+            kind: 'changed',
+            change: { contactId: MAYA, name: 'Maya Lindqvist', email: 'maya@example.com' },
+        });
+        expect(await screen.findByText('Maya’s account changed')).toBeVisible();
+        fireEvent.click(await screen.findByRole('button', { name: 'Check it’s Maya' }));
+        expect(await screen.findByRole('button', { name: 'They match' })).toBeVisible();
+        expect(screen.queryByText('Maya’s account changed')).toBeNull();
+        expect(dialogs()).toHaveLength(1);
     });
 });

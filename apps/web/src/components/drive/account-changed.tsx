@@ -2,19 +2,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
 import { useState } from 'react';
 import { firstName } from '@/components/drive/add-someone';
-import { CheckContactDialog, type Checking } from '@/components/drive/check-contact';
 import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { continueWith, lookupContact, type AccountChange } from '@/lib/contacts';
+import { continueWith, lookupContact, TrustMovedError, type AccountChange } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys } from '@/lib/drive';
 import { afterTrustChanged } from '@/lib/integrity';
 import { cue } from '@/lib/sounds';
@@ -24,61 +16,27 @@ import { cue } from '@/lib/sounds';
  * notice for keys that changed with no signed chain from the ones this device
  * holds, wherever it is met (Contacts, the share sheet, something they
  * shared). Until Continue or a check, nothing new is shared with them,
- * nothing is sealed to them again and nothing new from them opens. Continue
+ * nothing is sealed to them again and nothing they shared opens, what they
+ * shared before included; links never pause. Continue
  * takes the keys HushOS serves now, and what waited runs: everything shared
  * with them is sealed again, to the new keys only. For someone this device had
- * checked, the check leads.
+ * checked, the check leads. A step of the contact flow (contact-flow.tsx):
+ * it fills the dialog it is met in, and Check it's Maya replaces it there.
  */
-export function AccountChangedDialog({
-    userId,
-    change,
-    onOpenChange,
-}: {
-    userId: string;
-    change: AccountChange | null;
-    onOpenChange: (open: boolean) => void;
-}) {
-    const [checking, setChecking] = useState<Checking | null>(null);
-    return (
-        <>
-            <Dialog open={change !== null} onOpenChange={onOpenChange}>
-                <DialogContent
-                    className="sm:max-w-[480px]"
-                    onClick={(event) => event.stopPropagation()}
-                >
-                    {change && (
-                        <Notice
-                            key={change.contactId}
-                            userId={userId}
-                            change={change}
-                            onDone={() => onOpenChange(false)}
-                            onCheck={() => {
-                                onOpenChange(false);
-                                setChecking({ email: change.email, name: change.name });
-                            }}
-                        />
-                    )}
-                </DialogContent>
-            </Dialog>
-            <CheckContactDialog
-                userId={userId}
-                person={checking}
-                onOpenChange={(open) => !open && setChecking(null)}
-            />
-        </>
-    );
-}
-
-function Notice({
+export function AccountChangedStep({
     userId,
     change,
     onDone,
     onCheck,
+    onResolved,
 }: {
     userId: string;
     change: AccountChange;
     onDone: () => void;
+    /* Check it's Maya, which replaces this notice in the same dialog. */
     onCheck: () => void;
+    /* Continue went through: what waited on them may run now (the share sheet's interrupted share). */
+    onResolved?: () => void;
 }) {
     const queryClient = useQueryClient();
     const name = firstName(change.name);
@@ -105,10 +63,13 @@ function Notice({
             void driveClient.upgradeShares().catch(() => {});
             cue('success');
             toast.add({ type: 'success', title: `You’re sharing with ${name} again` });
+            onResolved?.();
             onDone();
         } catch (cause) {
             cue('error');
             setError(driveError(cause));
+            // Another device moved them meanwhile: where they stand now is looked up again.
+            if (cause instanceof TrustMovedError) void found.refetch();
         } finally {
             setBusy(false);
         }

@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { DriveNode, ShareMount } from '@hushos/drive/client';
+import { contentSize, type DriveNode, type ShareMount } from '@hushos/drive/client';
 import type { LinkView, ShareView } from '@hushos/drive/api';
 import {
     ContactIcon,
@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useState, type ReactNode } from 'react';
-import { AccountChangedDialog } from '@/components/drive/account-changed';
+import { useContactFlow } from '@/components/drive/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
@@ -48,12 +48,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import {
-    accountChangeOf,
-    GUARD_UNREADABLE,
-    useAccountChanges,
-    type AccountChange,
-} from '@/lib/contacts';
+import { accountChangeOf, GUARD_UNREADABLE, useAccountChanges } from '@/lib/contacts';
 import {
     driveClient,
     driveError,
@@ -67,7 +62,8 @@ import {
     sharedQueryOptions,
 } from '@/lib/drive';
 import { downloadNodes } from '@/lib/downloads';
-import { rotateAfterRevoke } from '@/lib/rotation';
+import { afterTrustChanged } from '@/lib/integrity';
+import { oweRotation, rotateAfterRevoke } from '@/lib/rotation';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
@@ -279,34 +275,96 @@ function WithMeRow({
     const { userId } = useDrive();
     const queryClient = useQueryClient();
     useAccountChanges();
-    const [reviewing, setReviewing] = useState<AccountChange | null>(null);
+    const openFlow = useContactFlow();
+    const [opening, setOpening] = useState(false);
     const from = firstName(share.granter.name);
     const role = share.role === 'editor' ? 'can edit' : 'can view';
+    // Who shared it, when and how big, all known without opening it: only the name waits. A
+    // file not opened yet has its exact size sealed inside it; its stored size (padded by at
+    // most a few percent, or to 256 bytes) is what the server holds, and stands in for it.
+    const size =
+        share.node.kind === 'folder'
+            ? null
+            : share.error
+              ? (contentSize(share.node) ??
+                Number(share.node.currentVersion?.ciphertextSize ?? NaN))
+              : nodeSize(share.node);
+    const facts = (
+        <>
+            <span className="flex min-w-0 items-center gap-2 text-[13px] max-md:hidden">
+                <PersonAvatar name={share.granter.name} seed={share.granter.id} size={24} />
+                <span className="truncate" title={share.granter.email}>
+                    From {from} · {role}
+                </span>
+            </span>
+            <span className="text-[13px] text-muted-foreground tabular-nums max-sm:hidden">
+                {formatWhen(share.createdAt)}
+            </span>
+            <span className="text-right text-[13px] text-muted-foreground tabular-nums max-lg:hidden">
+                {size === null ? '–' : formatBytes(size)}
+            </span>
+        </>
+    );
+
+    /* The person opening this share: someone new is added, a succession followed, then it opens. */
+    async function openIt() {
+        setOpening(true);
+        try {
+            await driveClient.openShare(share.id);
+            // What they wrote now reads as theirs, and the rest of what they shared opens too.
+            afterTrustChanged(queryClient);
+            await queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+        } catch (cause) {
+            // A change found on the way is said on the row itself (the notice), not as an error.
+            await queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+            if (!accountChangeOf(userId, share.granter.id)) {
+                cue('error');
+                toast.add({
+                    type: 'error',
+                    title: 'Couldn’t open this',
+                    description: driveError(cause),
+                });
+            }
+        } finally {
+            setOpening(false);
+        }
+    }
+
     if (share.error) {
-        // Waiting on the person, said calmly (6.4): an account that changed, a check that
-        // couldn't run, or someone who can't be added yet. Anything else couldn't open.
+        // Waiting on the person, said calmly (6.4): an account that changed, one to open (which
+        // adds or follows them), a check that couldn't run, or someone who can't be added yet.
+        // Anything else couldn't open.
         const change = accountChangeOf(userId, share.granter.id);
         const unchecked = share.error === GUARD_UNREADABLE;
-        const calm = change !== null || unchecked || share.unverified;
+        const waiting = !change && share.waiting;
+        const calm = change !== null || unchecked || share.unverified || waiting;
         return (
             <li
                 data-shared={share.node.name}
-                data-waiting={change ? 'changed' : unchecked ? 'unchecked' : undefined}
-                className="flex h-16 items-center gap-4 border-b border-rule pr-5 pl-5 sm:pr-8 sm:pl-8"
+                data-waiting={
+                    change ? 'changed' : unchecked ? 'unchecked' : waiting ? 'open' : undefined
+                }
+                className={cn(WITH_ME, 'min-h-16 border-b border-rule py-2')}
             >
-                <span
-                    className={cn(
-                        'flex size-10 shrink-0 items-center justify-center rounded-full',
-                        calm
-                            ? 'bg-muted text-muted-foreground'
-                            : 'bg-destructive-soft text-destructive',
-                    )}
-                >
-                    <TriangleAlertIcon className="size-[18px]" aria-hidden="true" />
-                </span>
+                {waiting ? (
+                    <span className="flex size-10 items-center justify-center">
+                        <FileMark node={share.node} size="list" />
+                    </span>
+                ) : (
+                    <span
+                        className={cn(
+                            'flex size-10 shrink-0 items-center justify-center rounded-full',
+                            calm
+                                ? 'bg-muted text-muted-foreground'
+                                : 'bg-destructive-soft text-destructive',
+                        )}
+                    >
+                        <TriangleAlertIcon className="size-[18px]" aria-hidden="true" />
+                    </span>
+                )}
                 <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[15px] font-medium">
-                        Shared by {share.granter.name}
+                        {share.node.kind === 'folder' ? 'Shared folder' : 'Shared file'}
                     </span>
                     {change ? (
                         <span className="text-[13px] text-muted-foreground">
@@ -314,9 +372,21 @@ function WithMeRow({
                             <Button
                                 variant="link"
                                 className="text-[13px] font-semibold"
-                                onClick={() => setReviewing(change)}
+                                onClick={() => openFlow({ kind: 'changed', change })}
                             >
                                 Review
+                            </Button>
+                        </span>
+                    ) : waiting ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            {share.error}{' '}
+                            <Button
+                                variant="link"
+                                className="text-[13px] font-semibold"
+                                disabled={opening}
+                                onClick={() => void openIt()}
+                            >
+                                Open
                             </Button>
                         </span>
                     ) : unchecked ? (
@@ -356,11 +426,8 @@ function WithMeRow({
                         </span>
                     )}
                 </span>
-                <AccountChangedDialog
-                    userId={userId}
-                    change={reviewing}
-                    onOpenChange={(open) => !open && setReviewing(null)}
-                />
+                {facts}
+                <span />
             </li>
         );
     }
@@ -381,18 +448,7 @@ function WithMeRow({
                     From {from} · {role}
                 </span>
             </span>
-            <span className="flex min-w-0 items-center gap-2 text-[13px] max-md:hidden">
-                <PersonAvatar name={share.granter.name} seed={share.granter.id} size={24} />
-                <span className="truncate" title={share.granter.email}>
-                    From {from} · {role}
-                </span>
-            </span>
-            <span className="text-[13px] text-muted-foreground tabular-nums max-sm:hidden">
-                {formatWhen(share.createdAt)}
-            </span>
-            <span className="text-right text-[13px] text-muted-foreground tabular-nums max-lg:hidden">
-                {share.node.kind === 'folder' ? '–' : formatBytes(nodeSize(share.node))}
-            </span>
+            {facts}
             <span className="flex justify-end">
                 <DropdownMenu>
                     <DropdownMenuTrigger
@@ -461,6 +517,8 @@ function ByMe() {
         const node = target.kind === 'share' ? target.share.node : target.link.node;
         setBusy(target.kind === 'share' ? target.share.id : target.link.id);
         try {
+            // Owed before it is stopped, so a closed tab still re-keys it (lib/rotation.ts).
+            await oweRotation(node.id);
             if (target.kind === 'share') await driveClient.revokeShare(node, target.share.id);
             else await driveClient.revokeLink(node, target.link.id);
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });

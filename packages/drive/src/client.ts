@@ -267,8 +267,11 @@ export type DriveClientOptions = {
      * (followed through a signed succession when the served keys moved on), and
      * only when the served keys match. Throws to refuse (no pin, an unchecked
      * one, or keys that changed). Without it, shares received cannot be opened.
+     * `explicit` is the person opening that one share (openShare): only then
+     * may it pin someone new or follow a succession; listing what was shared
+     * (mountShares) never does.
      */
-    trustGranter?: (granter: Granter) => Promise<TrustedGranter>;
+    trustGranter?: (granter: Granter, how: { explicit: boolean }) => Promise<TrustedGranter>;
     /*
      * Decides which keys a share is sealed to when the server, not the person,
      * names the grantee: on rotation and when re-sealing older shares. Returns
@@ -330,11 +333,16 @@ export type SharingLedger = {
     removeLink(linkId: string): Promise<void>;
 };
 
-/* `unverified`: the share stays shut until its granter is pinned after a words check. */
+/*
+ * `unverified`: the share stays shut until its granter can be pinned.
+ * `waiting`: it opens when the person opens it (openShare), which may pin its
+ * granter or follow their succession; listing never does.
+ */
 export type ShareMount = SharedWithMeView & {
     node: DriveNode;
     error: string | null;
     unverified: boolean;
+    waiting: boolean;
 };
 
 export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientOptions = {}) {
@@ -1414,6 +1422,35 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (all && !failed) await options.resealedAll?.();
         return { resealed, refused };
     }
+    /*
+     * By item id in this account's own workspace, for work recorded before it
+     * ran (Stop sharing with someone): an item in Trash is listed and revoked
+     * like any other, and one deleted for good has no shares left.
+     */
+    async function sharesOfNode(nodeId: string) {
+        if (!workspace) throw new Error('Open Drive first.');
+        try {
+            return (await api.nodeShares(workspace.workspaceId, nodeId)).shares;
+        } catch (error) {
+            if (error instanceof DriveApiError && error.status === 404) return [];
+            throw error;
+        }
+    }
+    /* Ends a share the caller already took out of the ledger; one already ended is not an error. */
+    async function endShare(shareId: string) {
+        if (!workspace) throw new Error('Open Drive first.');
+        try {
+            await api.revokeShare(workspace.workspaceId, shareId);
+        } catch (error) {
+            if (error instanceof DriveApiError && error.status === 404) return;
+            throw error;
+        }
+    }
+    /* Every share this account made, by item and grantee, unopened. */
+    async function sharedByMeIds() {
+        const mine = await api.sharedByMe();
+        return mine.shares.map((share) => ({ nodeId: share.node.id, granteeId: share.grantee.id }));
+    }
     async function revokeShare(node: DriveNode, shareId: string) {
         // Out of the ledger first, so the rotation that follows never seals to them again.
         const grantee = (await nodeShares(node)).find((share) => share.id === shareId)?.grantee.id;
@@ -1843,6 +1880,25 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         for (const change of page.changes) if (change.kind === 'node') remember([change.node]);
         return page;
     }
+    /*
+     * Re-keys an item of this account's own workspace by id, wherever it is
+     * (a folder in Trash included): the walk resolves where it sits, as a
+     * resumed rotation does. False when the item is gone for good.
+     */
+    async function rotateById(nodeId: string, onProgress?: (done: number) => void) {
+        if (!workspace) throw new Error('Open Drive first.');
+        let rotation;
+        try {
+            ({ rotation } = await api.startRotation(workspace.workspaceId, nodeId));
+        } catch (error) {
+            if (error instanceof DriveApiError && error.status === 404) return false;
+            throw error;
+        }
+        await walkRotation({ nodeId, targetEpoch: rotation.targetEpoch }, onProgress);
+        // The server's own record of it (from opening Drive) is this one, now finished.
+        if (workspace?.rotation?.nodeId === nodeId) workspace = { ...workspace, rotation: null };
+        return true;
+    }
     /* A rotation this account left unfinished, from any device; null when none. */
     function pendingRotation() {
         return workspace?.rotation ?? null;
@@ -1918,12 +1974,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         };
     }
 
-    /* Everything shared with this person, keys opened; a share whose granter is not trusted is reported, not opened. */
-    function mountShares(refresh = false) {
+    /*
+     * Everything shared with this person, keys opened; a share whose granter is
+     * not trusted is reported, not opened. `explicit`, the one share the person
+     * is opening now (openShare): its granter may be pinned or followed.
+     */
+    function mountShares(refresh = false, explicit?: string) {
         // Before Drive is open there is no identity to open a share with; a failure
         // this early must not be remembered as the answer.
         if (!currentUserId) return Promise.reject(new Error('Open Drive first.'));
-        if (refresh) mounts = undefined;
+        if (refresh || explicit !== undefined) mounts = undefined;
         mounts ??= (async () => {
             const { shares } = await api.sharedWithMe();
             const granteeUserId = currentUserId;
@@ -1932,13 +1992,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 remember([received.node]);
                 let error: string | null = null;
                 let unverified = false;
+                let waiting = false;
                 try {
                     if (!options.trustGranter || !granteeUserId)
                         throw new Error('Shares cannot be opened on this client.');
                     // The granter's current key only: a share signed before they replaced
                     // their keys waits for them to seal it again.
                     const { signingPublicKey, mlDsaPublicKey, replaced } =
-                        await options.trustGranter(received.granter);
+                        await options.trustGranter(received.granter, {
+                            explicit: received.id === explicit,
+                        });
                     try {
                         await rpc('driveOpenShare', {
                             workspaceId: received.workspaceId,
@@ -1965,6 +2028,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     error =
                         cause instanceof Error ? cause.message : 'This share could not be opened.';
                     unverified = cause instanceof Error && cause.name === 'UnverifiedGranterError';
+                    waiting = cause instanceof Error && cause.name === 'GranterWaitingError';
                 }
                 const node: DriveNode = error
                     ? {
@@ -1976,7 +2040,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                           integrity: null,
                       }
                     : (await decorate([received.node]))[0]!;
-                out.push({ ...received, node, error, unverified });
+                out.push({ ...received, node, error, unverified, waiting });
             }
             return out;
         })().catch((error: unknown) => {
@@ -1984,6 +2048,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             throw error;
         });
         return mounts;
+    }
+
+    /* The person opening one share: its granter may be pinned or followed, and it opens. */
+    async function openShare(shareId: string) {
+        const mounted = await mountShares(true, shareId);
+        const share = mounted.find((each) => each.id === shareId);
+        if (!share) throw new Error('This share no longer exists.');
+        if (share.error) throw new Error(share.error);
+        return share;
     }
 
     /*
@@ -2174,6 +2247,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         upgradeShares,
         revokeShare,
         mountShares,
+        openShare,
         mySharing,
         createLink,
         linkUrl,
@@ -2185,6 +2259,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         openReport,
         resealReport,
         rotate,
+        rotateById,
+        sharesOfNode,
+        endShare,
+        sharedByMeIds,
         resumeRotation,
         walkRotation,
         pendingRotation,

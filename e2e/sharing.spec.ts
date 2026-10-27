@@ -12,6 +12,7 @@ import {
     shareWith,
     waitForRotation,
     openFolder,
+    openWaiting,
 } from './helpers';
 
 /*
@@ -88,9 +89,16 @@ test('the owner adds the guest without words and shares a folder as editor', asy
         .toContain('E2E Tester shared something with you · HushOS');
 });
 
-test('the guest’s share opens at once, pinning the owner on first open, and they add a file', async () => {
+test('the guest opens the share, which pins the owner on that first open, and they add a file', async () => {
     await guest.goto('/app/shared');
-    // Never added: the share opens anyway, and the owner is added, first-seen, with nothing said.
+    // Never added: listing it adds nobody; it waits, saying who shared it, until the guest
+    // opens it. Then the owner is added, first-seen, with nothing more said.
+    const waiting = guest.locator('[data-waiting="open"]');
+    await expect(waiting).toContainText('Open this to add E2E to your contacts.', {
+        timeout: 60_000,
+    });
+    await expect(waiting).toContainText('From E2E · can edit');
+    await openWaiting(guest, 'Open this to add E2E');
     const item = guest.locator('[data-shared="Project"]');
     await expect(item).toBeVisible({ timeout: 60_000 });
     await expect(item).toContainText('From E2E · can edit');

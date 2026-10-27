@@ -542,3 +542,15 @@ function crc32(buffer: Buffer) {
 export async function mailSubjects(email: string) {
     return (await mailTo(email)).map((message) => message.subject.replace(/\s+/g, ' ').trim());
 }
+
+/*
+ * In Shared with me: opens a share that waits for the person (from someone not in their
+ * contacts, or whose signed succession this device has not followed), with its row's Open.
+ * Listing alone pins nobody and follows nothing (docs/optional-verification.md 2.3, 6.4).
+ */
+export async function openWaiting(page: Page, text: string | RegExp) {
+    const waiting = page.locator('[data-waiting="open"]').filter({ hasText: text }).first();
+    await expect(waiting).toBeVisible({ timeout: 60_000 });
+    await waiting.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(waiting).toHaveCount(0, { timeout: 60_000 });
+}

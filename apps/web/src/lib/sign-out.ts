@@ -12,7 +12,8 @@ import { loadPage } from '@/lib/load-page';
  * and chunk digests) emptied and their stashed bytes (sealed copies)
  * deleted; the mirrored tree (ciphertext, but its shape, sizes and times) is
  * dropped; families' sealed records and family folders' mirrors are deleted;
- * and a saved return to a link (its key in the fragment) goes. Drive
+ * the contact guard (sealed, lib/contact-guard.ts) is deleted; and a saved
+ * return to a link (its key in the fragment) goes. Drive
  * loads on demand, so a page that never opened it does not pull it in here.
  */
 export async function forgetDevice() {
@@ -41,6 +42,9 @@ export async function clearDevice() {
         // Families: the sealed chain records, outbox and joins, and every family folder's
         // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
         import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
+        // The contact guard: whom this account shared with and the keys it acted on. After
+        // signing back in, this device trusts the server's copy of the contacts, as a new one does.
+        import('@/lib/contact-guard').then(({ deleteContactGuard }) => deleteContactGuard()),
     ]);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;

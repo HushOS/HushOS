@@ -1,29 +1,20 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
 import { firstName } from '@/components/drive/add-someone';
 import { FingerprintWords } from '@/components/fingerprint-words';
 import { Spinner } from '@/components/motion';
-import {
-    AlertDialog,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { lookupContact, notUpgradedWords, pinContact, type Lookup } from '@/lib/contacts';
-import { driveError, driveKeys, formatDay } from '@/lib/drive';
+import {
+    lookupContact,
+    notUpgradedWords,
+    pinContact,
+    TrustMovedError,
+    type Lookup,
+} from '@/lib/contacts';
+import { driveClient, driveError, driveKeys, formatDay } from '@/lib/drive';
 import { vouchLine } from '@/lib/family-pin';
 import { afterTrustChanged } from '@/lib/integrity';
 import { stopSharingWithPerson } from '@/lib/rotation';
@@ -33,82 +24,26 @@ import { cue } from '@/lib/sounds';
 export type Checking = { email: string; name: string };
 
 /*
- * A check asked for by something that may not stay on screen: a mark clears
- * the moment its writer is added, and the check offered next must outlive it.
- * The drive shell hosts it (CheckContactHost).
- */
-let requested: Checking | null = null;
-const listeners = new Set<() => void>();
-export function requestCheck(person: Checking | null) {
-    requested = person;
-    for (const listener of listeners) listener();
-}
-export function CheckContactHost({ userId }: { userId: string }) {
-    const person = useSyncExternalStore(
-        (listener) => {
-            listeners.add(listener);
-            return () => listeners.delete(listener);
-        },
-        () => requested,
-        () => null,
-    );
-    return (
-        <CheckContactDialog
-            userId={userId}
-            person={person}
-            onOpenChange={(open) => !open && requestCheck(null)}
-        />
-    );
-}
-
-/*
  * Check it's Maya (docs/optional-verification.md 6.6), the advanced door: the
  * twelve words over the keys HushOS serves for them now, read against the
  * ones on their own device. They match makes the pin verified (over new keys,
- * it is also a Continue); They don't match saves nothing, and offers Stop
- * sharing with Maya, the remedy for shares sealed to keys that were not theirs.
+ * it is also a Continue, and what was shared with them is sealed again);
+ * They don't match saves nothing, and offers Stop sharing with Maya, the
+ * remedy for shares sealed to keys that were not theirs. A step of the
+ * contact flow (contact-flow.tsx): "Stop sharing with Maya?" replaces it in
+ * the same dialog, and Cancel there comes back to it.
  */
-export function CheckContactDialog({
-    userId,
-    person,
-    onOpenChange,
-    onChecked,
-}: {
-    userId: string;
-    person: Checking | null;
-    onOpenChange: (open: boolean) => void;
-    onChecked?: () => void;
-}) {
-    return (
-        <Dialog open={person !== null} onOpenChange={onOpenChange}>
-            <DialogContent
-                className="sm:max-w-[480px]"
-                onClick={(event) => event.stopPropagation()}
-            >
-                {person && (
-                    <CheckContact
-                        key={person.email}
-                        userId={userId}
-                        person={person}
-                        onDone={() => onOpenChange(false)}
-                        onChecked={onChecked}
-                    />
-                )}
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-function CheckContact({
+export function CheckContactStep({
     userId,
     person,
     onDone,
-    onChecked,
+    onResolved,
 }: {
     userId: string;
     person: Checking;
     onDone: () => void;
-    onChecked?: () => void;
+    /* They match went through: what waited on them may run now. */
+    onResolved?: () => void;
 }) {
     const queryClient = useQueryClient();
     const found = useQuery({
@@ -118,10 +53,11 @@ function CheckContact({
         gcTime: 0,
         retry: false,
     });
-    const [mismatch, setMismatch] = useState(false);
+    /* The words, the words not matching, then (replacing it) Stop sharing with Maya? */
+    const [stage, setStage] = useState<'words' | 'mismatch' | 'stop'>('words');
+    const mismatch = stage !== 'words';
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
-    const [stopping, setStopping] = useState(false);
     const name = firstName(found.data?.contact.name ?? person.name);
 
     async function theyMatch(lookup: Lookup) {
@@ -132,13 +68,18 @@ function CheckContact({
             // What they wrote now reads as verified, and what waited on them runs.
             afterTrustChanged(queryClient);
             void queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+            // Over keys that changed, a check is a Continue too: what was shared with them is
+            // sealed again, to these keys only, as Continue does (account-changed.tsx).
+            if (lookup.changed) void driveClient.upgradeShares().catch(() => {});
             cue('success');
             toast.add({ type: 'success', title: `${name} verified` });
-            onChecked?.();
+            onResolved?.();
             onDone();
         } catch (cause) {
             cue('error');
             setError(cause instanceof Error ? cause.message : 'That wasn’t saved. Try again.');
+            // Another device moved them meanwhile: the words are worked out again.
+            if (cause instanceof TrustMovedError) void found.refetch();
         } finally {
             setSaving(false);
         }
@@ -156,7 +97,8 @@ function CheckContact({
             toast.add({
                 type: 'error',
                 title: 'Couldn’t stop sharing',
-                description: driveError(cause),
+                // What was owed is kept: Drive finishes it when it next opens (lib/rotation.ts).
+                description: `${driveError(cause)} HushOS finishes it the next time you open your files.`,
             });
         } finally {
             setSaving(false);
@@ -166,6 +108,33 @@ function CheckContact({
     const lookup = found.data;
     const replacedAt = lookup?.pinned?.keysReplacedAt ?? null;
     const vouched = lookup?.pinned ? vouchLine(lookup.pinned) : null;
+
+    if (stage === 'stop')
+        return (
+            <>
+                <DialogHeader>
+                    <DialogTitle>Stop sharing with {name}?</DialogTitle>
+                    <DialogDescription>
+                        {name} can’t open anything you’ve shared with them any more, including what
+                        you add to those folders later. You can share again once your words match.
+                    </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => setStage('mismatch')}>
+                        Cancel
+                    </Button>
+                    <Button
+                        variant="destructive"
+                        disabled={saving}
+                        onClick={() => {
+                            if (lookup) void stopSharing(lookup.contact.userId);
+                        }}
+                    >
+                        Stop sharing
+                    </Button>
+                </DialogFooter>
+            </>
+        );
 
     return (
         <>
@@ -249,7 +218,7 @@ function CheckContact({
                             <Button
                                 variant="outline"
                                 disabled={saving}
-                                onClick={() => setStopping(true)}
+                                onClick={() => setStage('stop')}
                             >
                                 Stop sharing with {name}
                             </Button>
@@ -263,7 +232,7 @@ function CheckContact({
                             disabled={saving}
                             onClick={() => {
                                 cue('error');
-                                setMismatch(true);
+                                setStage('mismatch');
                             }}
                         >
                             They don’t match
@@ -274,30 +243,6 @@ function CheckContact({
                     </>
                 )}
             </div>
-            <AlertDialog open={stopping} onOpenChange={setStopping}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Stop sharing with {name}?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            {name} can’t open anything you’ve shared with them any more, including
-                            what you add to those folders later. You can share again once your words
-                            match.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <Button
-                            variant="destructive"
-                            onClick={() => {
-                                setStopping(false);
-                                if (lookup) void stopSharing(lookup.contact.userId);
-                            }}
-                        >
-                            Stop sharing
-                        </Button>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
         </>
     );
 }
