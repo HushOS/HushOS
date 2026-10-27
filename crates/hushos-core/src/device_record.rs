@@ -625,8 +625,16 @@ pub(crate) enum JoinWith<'a> {
 pub(crate) enum GuardAfter {
     /* The held one moved on: to store. */
     Store(GroupPin),
-    /* It covers the pin already (the pin is behind it, or adds nothing): nothing to write. */
+    /*
+     * It covers the pin: the same roster and group key at the same versions (so the same digests),
+     * with areas and a check time at least as far. Nothing to write; a wipe may drop the pin's chain.
+     */
     Covered,
+    /*
+     * It is past the pin (a later roster or group key): never lowered, but no coverage, since it
+     * holds digests only at its own versions and cannot show the pin is on its history.
+     */
+    Ahead,
     /* They disagree (other first keys, another roster or group key at one version): never coverage. */
     Conflict,
 }
@@ -634,9 +642,10 @@ pub(crate) enum GuardAfter {
 /// The family guard after an acceptance (docs/optional-verification.md 2.8):
 /// the held guard merged with the accepted `pin` and the folders opened on
 /// this device ([`merge_pin`]), only when that records anything new
-/// ([`pin_ahead`]); covered when it is behind or adds nothing, so a guard
-/// never goes down; a conflict when the two disagree, which a wipe never takes
-/// for coverage. The twin of the web's `guardAfter`.
+/// ([`pin_ahead`]); covered only when it is the pin at the pin's own
+/// versions and adds nothing; ahead when it is past the pin, so a guard never
+/// goes down, and a wipe never takes that for coverage; a conflict when the
+/// two disagree. The twin of the web's `guardAfter`.
 pub(crate) fn guard_after(
     group_id: &str,
     guard: Option<&GroupPin>,
@@ -648,7 +657,8 @@ pub(crate) fn guard_after(
             GuardAfter::Store(merged)
         }
         PinMerge::Conflict => GuardAfter::Conflict,
-        _ => GuardAfter::Covered,
+        PinMerge::Behind => GuardAfter::Ahead,
+        PinMerge::Merged { .. } => GuardAfter::Covered,
     })
 }
 
@@ -852,7 +862,7 @@ impl AreaLedger {
                 // The guard was a mark, so a chain that disagrees with it was the fork above.
                 let guard = match guard_after(group_id, reader.guard, &pin, self.opened_areas(group_id))? {
                     GuardAfter::Store(next) => Some(next),
-                    GuardAfter::Covered | GuardAfter::Conflict => None,
+                    GuardAfter::Covered | GuardAfter::Ahead | GuardAfter::Conflict => None,
                 };
                 Ok(ServedAcceptance::Accepted { chain, record, pin, guard })
             }
@@ -1152,8 +1162,9 @@ pub enum PinMerge {
     /// Accept again with it as a mark.
     Behind,
     /// The two name other first keys, or other rosters or group keys at one
-    /// version: never saved over; acceptance with the settings pin as a mark
-    /// says what it is.
+    /// version, or cross (one ahead on its roster version and behind on its
+    /// group key version, which no one history holds): never saved over;
+    /// acceptance with the settings pin as a mark says what it is.
     Conflict,
 }
 
@@ -1202,7 +1213,15 @@ pub fn merge_pin(
         {
             return Ok(PinMerge::Conflict);
         }
-        if current.roster_version > next.roster_version || current.key_version > next.key_version {
+        let roster_ahead = current.roster_version > next.roster_version;
+        let key_ahead = current.key_version > next.key_version;
+        // Roster and key versions only ever advance together along a chain: crossed is two histories.
+        if (roster_ahead && current.key_version < next.key_version)
+            || (key_ahead && current.roster_version < next.roster_version)
+        {
+            return Ok(PinMerge::Conflict);
+        }
+        if roster_ahead || key_ahead {
             return Ok(PinMerge::Behind);
         }
     }
@@ -2232,7 +2251,7 @@ mod tests {
         let after = |guard: Option<GroupPin>, next: GroupPin, opened: Vec<Arc<OpenedArea>>| {
             guard_after(GROUP, guard.as_ref(), &next, opened).unwrap()
         };
-        use GuardAfter::{Conflict, Covered, Store};
+        use GuardAfter::{Ahead, Conflict, Covered, Store};
         // None held: the accepted pin, with what this device opened.
         assert_eq!(after(None, pin(3, 1, AT, &[]), vec![here("a", 1)]), Store(pin(3, 1, AT, &[("a", 1)])));
         // A later roster and key: the guard moves there, keeping its own floors.
@@ -2247,8 +2266,13 @@ mod tests {
         );
         // Nothing new: nothing to write.
         assert_eq!(after(Some(pin(5, 2, AT, &[("a", 2)])), pin(5, 2, AT, &[]), vec![]), Covered);
-        // An older pin never lowers it: the guard covers it.
-        assert_eq!(after(Some(pin(5, 2, AT, &[])), pin(3, 1, AT, &[]), vec![]), Covered);
+        // An older pin never lowers it, and is not covered either: the guard holds no digest at
+        // the pin's versions, so it cannot show the pin is on its history.
+        assert_eq!(after(Some(pin(5, 2, AT, &[])), pin(3, 1, AT, &[]), vec![]), Ahead);
+        assert_eq!(after(Some(pin(5, 2, AT, &[])), pin(5, 1, AT, &[]), vec![]), Ahead);
+        // Crossed versions (a later roster under an earlier key): two histories.
+        assert_eq!(after(Some(pin(3, 1, AT, &[])), pin(2, 2, AT, &[]), vec![]), Conflict);
+        assert_eq!(after(Some(pin(2, 2, AT, &[])), pin(3, 1, AT, &[]), vec![]), Conflict);
         // One that disagrees never replaces it, and is no coverage either (a wipe drops nothing
         // over it): another roster or group key at one version, or other first keys.
         let other = GroupPin { roster_digest: "elsewhere".into(), ..pin(5, 2, AT, &[]) };
@@ -2265,7 +2289,10 @@ mod tests {
         const LATE: &str = "2026-06-01T00:00:00.000Z";
         let current = pin(5, 2, EARLY, &[("a", 3)]);
         assert_eq!(merge(Some(current.clone()), pin(4, 2, LATE, &[]), vec![]), PinMerge::Behind);
-        assert_eq!(merge(Some(current.clone()), pin(6, 1, LATE, &[]), vec![]), PinMerge::Behind);
+        assert_eq!(merge(Some(current.clone()), pin(5, 1, LATE, &[]), vec![]), PinMerge::Behind);
+        // A later roster under an earlier group key, or the reverse: no one history holds both.
+        assert_eq!(merge(Some(current.clone()), pin(6, 1, LATE, &[]), vec![]), PinMerge::Conflict);
+        assert_eq!(merge(Some(current.clone()), pin(4, 3, LATE, &[]), vec![]), PinMerge::Conflict);
         let mut first = pin(6, 2, LATE, &[]);
         first.first_ed25519_public_key = "other".into();
         assert_eq!(merge(Some(current.clone()), first, vec![]), PinMerge::Conflict);

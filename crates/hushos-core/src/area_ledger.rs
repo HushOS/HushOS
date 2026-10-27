@@ -123,6 +123,13 @@ pub const FAMILY_FORGOTTEN: &str =
 /// floor stays a mark. The web's `GUARD_CONFLICT`.
 pub const GUARD_CONFLICT: &str =
     "This family looks different from what this device already checked, so nothing of it was removed.";
+/// A wipe ([`AreaLedger::forget_group`]) whose held guard is past the
+/// session's floor (a later roster or group key): it holds digests only at its
+/// own versions, so it cannot show the floor is on its history. Nothing is
+/// dropped; the app accepts up to the guard first (which checks the history
+/// between them, and reports a fork), then wipes. The web's `GUARD_AHEAD`.
+pub const GUARD_AHEAD: &str =
+    "This device already checked a later member list for this family. Sync it first, then remove it.";
 
 /// Settings served as none after settings that opened, within one unlock.
 pub(crate) const OLDER_SETTINGS: &str =
@@ -1447,10 +1454,13 @@ impl AreaLedger {
     /// moved on to that floor with the folders opened here (`guard_after`'s
     /// rule). The app stores it, merged into what it holds and never lower,
     /// and asks again. Only a held guard that covers the floor, or no floor,
-    /// forgets. A held guard that is no pin is refused. A held guard that
-    /// disagrees with the floor (another roster or group key at one version,
-    /// other first keys) covers nothing: refused ([`GUARD_CONFLICT`]), nothing
-    /// dropped, so the floor stays a mark until the session ends. An unreadable
+    /// forgets: only one equal to the floor at the floor's own roster and key
+    /// versions. A held guard that is no pin is refused. One that disagrees
+    /// with the floor (another roster or group key at one version, crossed
+    /// versions, other first keys) is refused ([`GUARD_CONFLICT`]); one past
+    /// it, which cannot show the floor is on its history, is refused
+    /// ([`GUARD_AHEAD`]) until acceptance brings the floor up to it. Either
+    /// way nothing is dropped. An unreadable
     /// one does not hold the wipe up with no floor; with one, nothing is
     /// dropped and the floor's guard comes back with `unreadable`, to store
     /// once the entry reads again or the person resets it.
@@ -1484,6 +1494,8 @@ impl AreaLedger {
                 // A held guard that disagrees with the floor covers nothing: two histories this
                 // device accepted. Wiping would erase the floor, the only evidence of one of them.
                 crate::device_record::GuardAfter::Conflict => return Err(refused(GUARD_CONFLICT)),
+                // Past the floor: no proof the floor is on the guard's history.
+                crate::device_record::GuardAfter::Ahead => return Err(refused(GUARD_AHEAD)),
             };
             if unreadable {
                 return Ok(GroupForget {

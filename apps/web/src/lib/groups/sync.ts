@@ -437,7 +437,11 @@ export async function afterAccept(
  * stored one, never lower, under the account's lock) between the two calls;
  * until then it is handed straight back, as no store could hold it. A held
  * guard that disagrees with what the worker accepted is refused
- * (GUARD_CONFLICT, thrown): nothing of the family is deleted.
+ * (GUARD_CONFLICT, thrown), and so is one past it (GUARD_AHEAD: the guard
+ * cannot show the worker's floor is on its history, so the family is synced up
+ * to it first): nothing of the family is deleted. The guard handed straight
+ * back is the floor's own, so this never meets GUARD_AHEAD until PR 4 keeps
+ * one; that store must accept up to a guard ahead before wiping, or fail closed.
  */
 export async function forgetInWorker(ctx: GroupContext, groupId: string): Promise<boolean> {
     const checkedAt = new Date().toISOString();

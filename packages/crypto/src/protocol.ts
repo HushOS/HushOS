@@ -138,3 +138,14 @@ export const FAMILY_FORGOTTEN =
  */
 export const GUARD_CONFLICT =
     'This family looks different from what this device already checked, so nothing of it was removed.';
+/*
+ * A wipe (groupForget) whose held guard is past the session's floor (a later
+ * roster or group key, as another tab or an earlier session accepted): the
+ * guard holds digests only at its own versions, so it cannot show the floor is
+ * on its history, and dropping the floor could erase a fork's only evidence.
+ * Nothing is dropped; the caller brings the floor up to the guard through
+ * acceptance (which checks the history between them, and reports a fork),
+ * then wipes again. The core's GUARD_AHEAD says the same.
+ */
+export const GUARD_AHEAD =
+    'This device already checked a later member list for this family. Sync it first, then remove it.';

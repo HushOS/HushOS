@@ -1,6 +1,12 @@
 import { encryptKey, decryptKey } from './aead';
 import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
-import { FAMILY_FORGOTTEN, GUARD_CONFLICT, NOT_THIS_ACCOUNT, OPEN_SETTINGS } from './protocol';
+import {
+    FAMILY_FORGOTTEN,
+    GUARD_AHEAD,
+    GUARD_CONFLICT,
+    NOT_THIS_ACCOUNT,
+    OPEN_SETTINGS,
+} from './protocol';
 import { areaKeyCommitment } from './area-keys';
 import { encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
@@ -884,10 +890,12 @@ export type GroupResults = {
      * the family. `unreadable`: the held guard could not be read and there is
      * a floor, so `guard` is the floor's alone, to store once the entry reads
      * again or the person resets it (2.8); with no floor an unreadable guard
-     * does not hold the wipe up. A held guard that disagrees with the floor
-     * (guardAfter's 'conflict': two histories this device accepted) covers
-     * nothing: the call throws GUARD_CONFLICT and drops nothing, so the floor
-     * stays a mark until the session ends.
+     * does not hold the wipe up. Only a held guard equal to the floor at the
+     * floor's own roster and key versions covers it. One that disagrees with
+     * it (guardAfter's 'conflict': two histories this device accepted, or
+     * crossed versions) throws GUARD_CONFLICT; one past it ('ahead', which
+     * cannot show the floor is on its history) throws GUARD_AHEAD, for the
+     * caller to accept up to the guard first. Either way nothing is dropped.
      */
     groupForget: { forgotten: boolean; guard: GroupPin | null; unreadable: boolean };
     groupStoreSeal: { envelope: string };
@@ -2667,9 +2675,9 @@ export function createGroupSession(host: GroupHost) {
                 version: area.version,
             })),
         );
-        // The guard was a mark, so a chain that disagrees with it was the fork above; nothing is
-        // ever written over it.
-        const guard = next === 'conflict' ? null : next;
+        // The guard was a mark, so a chain that disagrees with it was the fork above, and one
+        // short of it refused; nothing is ever written over it or below it.
+        const guard = next === 'conflict' || next === 'ahead' ? null : next;
         const unlocked = host.unlocked();
         try {
             return {
@@ -4062,6 +4070,10 @@ export function createGroupSession(host: GroupHost) {
                     // this device accepted. Wiping would erase the floor, the only evidence of
                     // one of them, so nothing is dropped and the wipe is refused.
                     if (guard === 'conflict') throw new CryptoError(GUARD_CONFLICT);
+                    // Past the floor: no proof the floor is on the guard's history (another
+                    // history's later roster would look the same), so nothing is dropped until
+                    // acceptance brings the floor up to it.
+                    if (guard === 'ahead') throw new CryptoError(GUARD_AHEAD);
                     if (held === 'unreadable')
                         return { forgotten: false, guard: guard ?? pin, unreadable: true };
                     if (guard) return { forgotten: false, guard, unreadable: false };

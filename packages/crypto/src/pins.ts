@@ -265,8 +265,10 @@ export type OpenedArea = { groupId: string; workspaceId: string; version: number
  * - null when `current` is ahead of it (a later roster or group key), so it
  *   must not be written;
  * - 'conflict' when the two name other first keys, or other rosters or group
- *   keys at one version: never saved over, and acceptance (run again with the
- *   settings pin as a mark) says what it is.
+ *   keys at one version, or cross (one ahead on its roster version and behind
+ *   on its group key version, which no one history holds: roster and key
+ *   versions only ever advance together along a chain): never saved over, and
+ *   acceptance (run again with the settings pin as a mark) says what it is.
  * An opened area of another family than `groupId` is refused. Pure: the Rust
  * core's `merge_pin` is its twin.
  */
@@ -291,8 +293,14 @@ export function mergePin(
                 current.groupKeyDigest !== next.groupKeyDigest)
         )
             return 'conflict';
-        if (current.rosterVersion > next.rosterVersion || current.keyVersion > next.keyVersion)
-            return null;
+        const rosterAhead = current.rosterVersion > next.rosterVersion;
+        const keyAhead = current.keyVersion > next.keyVersion;
+        if (
+            (rosterAhead && current.keyVersion < next.keyVersion) ||
+            (keyAhead && current.rosterVersion < next.rosterVersion)
+        )
+            return 'conflict';
+        if (rosterAhead || keyAhead) return null;
     }
     const areas: Record<string, number> = { ...current?.areas };
     for (const [workspaceId, version] of Object.entries(next.areas))
@@ -309,23 +317,30 @@ export function mergePin(
 }
 
 /*
- * The family guard after an acceptance (docs/optional-verification.md 2.8):
- * the held guard merged with the accepted `pin` and the folders opened on
- * this device (mergePin), only when that records anything new (pinAhead);
- * null when it is behind or adds nothing (the guard covers the pin), so a
- * guard never goes down; 'conflict' when the two disagree (other first keys,
- * or another roster or group key at one version), which is never coverage:
- * nothing is written, and a wipe drops nothing over it. The Rust core's
- * `guard_after` is its twin.
+ * The family guard after an acceptance, or over a wipe's floor
+ * (docs/optional-verification.md 2.8), from the held guard and `pin` with the
+ * folders opened on this device (mergePin):
+ * - the merged pin, to store, when that records anything new (pinAhead);
+ * - null when the guard covers `pin`: the same roster and group key at the
+ *   same versions (so the same digests), with areas and a check time at least
+ *   as far, so nothing is written and a wipe may drop what `pin` is;
+ * - 'ahead' when the guard is past `pin` (a later roster or group key): never
+ *   lowered, but no coverage either, since the guard holds digests only at its
+ *   own versions and cannot say that `pin` is on its history; a wipe catches
+ *   up through acceptance first;
+ * - 'conflict' when the two disagree (mergePin's): nothing is written, and a
+ *   wipe drops nothing over it.
+ * The Rust core's `guard_after` is its twin.
  */
 export function guardAfter(
     groupId: string,
     guard: GroupPin | null,
     pin: GroupPin,
     opened: readonly OpenedArea[] = [],
-): GroupPin | null | 'conflict' {
+): GroupPin | null | 'ahead' | 'conflict' {
     const merged = mergePin(groupId, guard, pin, opened);
-    if (merged === null || merged === 'conflict') return merged;
+    if (merged === 'conflict') return merged;
+    if (merged === null) return 'ahead';
     return pinAhead(guard, merged) ? merged : null;
 }
 

@@ -2497,6 +2497,237 @@
                     }
                 }
             ]
+        },
+        {
+            "name": "a-guard-crossed-with-the-floor-is-two-histories-and-holds-the-wipe",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "main",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 3
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "succ",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 3,
+                        "guard": {
+                            "rosterVersion": 3,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 1
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This family looks different from what this device already checked, so nothing of it was removed."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "succOther",
+                        "through": 3
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "fork",
+                        "of": "group-key",
+                        "version": 2
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a-guard-ahead-of-the-floor-holds-the-wipe-even-from-another-history",
+            "settings": "none",
+            "steps": [
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 5
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 0,
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 5,
+                        "guard": {
+                            "rosterVersion": 5,
+                            "keyVersion": 2,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "first-use",
+                    "served": {
+                        "history": "removal",
+                        "through": 4
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "first-use",
+                        "rosterVersion": 4
+                    }
+                },
+                {
+                    "op": "accept",
+                    "matched": 3,
+                    "served": {
+                        "history": "removal",
+                        "through": 4
+                    },
+                    "guard": "none",
+                    "stored": false,
+                    "expect": {
+                        "status": "accepted",
+                        "rosterVersion": 4,
+                        "guard": {
+                            "rosterVersion": 4,
+                            "keyVersion": 1,
+                            "areas": {}
+                        }
+                    }
+                },
+                {
+                    "op": "guard",
+                    "expect": {
+                        "status": "held",
+                        "rosterVersion": 5,
+                        "keyVersion": 2
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This device already checked a later member list for this family. Sync it first, then remove it."
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "refused",
+                        "message": "This device already checked a later member list for this family. Sync it first, then remove it."
+                    }
+                },
+                {
+                    "op": "sync",
+                    "served": {
+                        "history": "removalFork",
+                        "through": 5
+                    },
+                    "guard": "none",
+                    "expect": {
+                        "status": "fork",
+                        "of": "roster",
+                        "version": 4
+                    }
+                },
+                {
+                    "op": "relaunch",
+                    "expect": {
+                        "status": "relaunched"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": {
+                        "status": "forgotten",
+                        "guard": null
+                    }
+                }
+            ]
         }
     ]
 }
