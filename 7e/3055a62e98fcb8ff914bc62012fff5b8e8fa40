@@ -1,0 +1,110 @@
+apps/web/src/components/drive/access.tsx
+  h_f7ba60a6997566 107
+apps/web/src/components/drive/file-list.tsx
+  h_f7ba60a6997566 322,331,425,584,797
+apps/web/src/components/drive/folder-view.tsx
+  h_f7ba60a6997566 994,1347
+apps/web/src/components/drive/home-view.tsx
+  h_f7ba60a6997566 825,849
+apps/web/src/components/drive/json-view.tsx
+  h_f7ba60a6997566 194,579
+apps/web/src/components/drive/link-row.tsx
+  h_f7ba60a6997566 205
+apps/web/src/components/drive/office-viewer.tsx
+  h_f7ba60a6997566 174,212,240,321,349,363
+apps/web/src/components/drive/preview.tsx
+  h_f7ba60a6997566 210,691,815
+apps/web/src/components/drive/share-dialog.tsx
+  h_f7ba60a6997566 486,507
+apps/web/src/components/drive/storage-full-dialog.tsx
+  h_f7ba60a6997566 289
+apps/web/src/components/drive/tag-colour.tsx
+  h_f7ba60a6997566 45,256,280,322,349
+apps/web/src/components/drive/tag-stamp.tsx
+  h_f7ba60a6997566 46,100
+apps/web/src/components/drive/unverified-mark.tsx
+  h_f7ba60a6997566 214-215
+apps/web/src/components/drive/viewer-parts.tsx
+  h_f7ba60a6997566 175,211
+apps/web/src/components/families/let-in-dialog.tsx
+  h_f7ba60a6997566 662
+apps/web/src/components/operator.tsx
+  h_f7ba60a6997566 119
+apps/web/src/components/recovery-phrase.tsx
+  h_f7ba60a6997566 458
+apps/web/src/components/security-page.tsx
+  h_f7ba60a6997566 101,114,279
+apps/web/src/components/settings.tsx
+  h_f7ba60a6997566 103
+apps/web/src/components/site.tsx
+  h_f7ba60a6997566 245
+apps/web/src/components/theme-toggle.tsx
+  h_f7ba60a6997566 50
+apps/web/src/components/ui/accordion.tsx
+  h_f7ba60a6997566 31
+apps/web/src/components/ui/alert-dialog.tsx
+  h_f7ba60a6997566 39
+apps/web/src/components/ui/breadcrumb.tsx
+  h_f7ba60a6997566 43
+apps/web/src/components/ui/button.tsx
+  h_f7ba60a6997566 6,11,13,19
+apps/web/src/components/ui/checkbox.tsx
+  h_f7ba60a6997566 10
+apps/web/src/components/ui/command.tsx
+  h_f7ba60a6997566 100
+apps/web/src/components/ui/context-menu.tsx
+  h_f7ba60a6997566 36,45
+apps/web/src/components/ui/dialog.tsx
+  h_f7ba60a6997566 49
+apps/web/src/components/ui/dropdown-menu.tsx
+  h_f7ba60a6997566 30,39
+apps/web/src/components/ui/input.tsx
+  h_f7ba60a6997566 11
+apps/web/src/components/ui/popover.tsx
+  h_f7ba60a6997566 37
+apps/web/src/components/ui/radio-group.tsx
+  h_f7ba60a6997566 22,43
+apps/web/src/components/ui/scroll-area.tsx
+  h_f7ba60a6997566 13
+apps/web/src/components/ui/select.tsx
+  h_f7ba60a6997566 34,71,77
+apps/web/src/components/ui/sidebar.tsx
+  h_f7ba60a6997566 285
+apps/web/src/components/ui/switch.tsx
+  h_f7ba60a6997566 16
+apps/web/src/components/ui/textarea.tsx
+  h_f7ba60a6997566 9
+apps/web/src/components/ui/toast.tsx
+  h_f7ba60a6997566 30,43,104,131
+apps/web/src/components/user-menu.tsx
+  h_f7ba60a6997566 93
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  h_f7ba60a6997566 306,364,414,490
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  h_f7ba60a6997566 113
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  h_f7ba60a6997566 93
+apps/web/src/routes/_authenticated/app/account.tsx
+  h_f7ba60a6997566 122
+apps/web/src/routes/_authenticated/app/admin/accounts/$accountId.tsx
+  h_f7ba60a6997566 306
+apps/web/src/routes/_authenticated/app/route.tsx
+  h_f7ba60a6997566 216
+apps/web/src/routes/recover/complete.tsx
+  h_f7ba60a6997566 143
+apps/web/src/routes/s/$token.tsx
+  h_f7ba60a6997566 563,618
+apps/web/src/styles.css
+  h_f7ba60a6997566 332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7e3055a62e98fcb8ff914bc62012fff5b8e8fa40",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
