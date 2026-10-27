@@ -521,6 +521,61 @@ describe('the guard (2.8)', () => {
         expect(await w.real.entry(ME, MAYA)).toBeNull();
     });
 
+    test('a verdict settles an act left pending over an entry the guard already holds', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const before = (await w.real.entry(ME, MAYA))!;
+        expect(before.revision).toBe(1);
+        // A Continue to K1, interrupted after the settings saved and before the guard moved.
+        const after = await startOver(w);
+        const moved = {
+            ...(await w.stored()).contacts[MAYA]!,
+            ...(await pinOfServed(
+                {
+                    ...after,
+                    mlDsaPublicKey: after.mlDsaPublicKey!,
+                    kemPublicKey: after.kemPublicKey!,
+                },
+                'seen',
+            )),
+        };
+        await w.real.putPending(ME, MAYA, {
+            target: (await keyCommitment(moved))!,
+            revision: before.revision,
+            at: new Date().toISOString(),
+        });
+        await w.replace({ ...(await w.stored()), contacts: { [MAYA]: moved } });
+        // Who wrote what, and Contacts, finish it with no act of the person's: K1, no change.
+        expect((await trustedSigners(ME))[MAYA]).toMatchObject({ current: after.signingPublicKey });
+        expect((await contacts.contactStandings(ME)).get(MAYA)).toEqual({
+            verified: false,
+            changed: false,
+        });
+        expect(await w.real.entry(ME, MAYA)).toMatchObject({
+            revision: 2,
+            signingPublicKey: after.signingPublicKey,
+        });
+        expect(await w.real.pending(ME, MAYA)).toBeNull();
+
+        // One whose target the settings never reached is dropped, and the entry stays.
+        const third = await startOver(w);
+        await w.real.putPending(ME, MAYA, {
+            target: (await keyCommitment({
+                ...moved,
+                encryptionPublicKey: third.encryptionPublicKey,
+            }))!,
+            revision: 2,
+            at: new Date().toISOString(),
+        });
+        await w.replace({ ...(await w.stored()) });
+        await contacts.contactStandings(ME);
+        expect(await w.real.pending(ME, MAYA)).toBeNull();
+        expect(await w.real.entry(ME, MAYA)).toMatchObject({
+            revision: 2,
+            signingPublicKey: after.signingPublicKey,
+        });
+    });
+
     test('a lost settings answer shares nothing on the act, and the next act finishes it silently', async () => {
         const w = await world();
         await addContact(query, ME, MAYA_EMAIL);

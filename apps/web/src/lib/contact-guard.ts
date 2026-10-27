@@ -46,6 +46,8 @@ export interface ContactGuardStore {
     /* Every entry of the account, by lowercased contact id; throws when any could not be read. */
     entries(userId: string): Promise<Map<string, GuardEntry>>;
     pending(userId: string, contactId: string): Promise<PendingAct | null>;
+    /* Every pending act of the account, by lowercased contact id; throws when any could not be read. */
+    pendingAll(userId: string): Promise<Map<string, PendingAct>>;
     putPending(userId: string, contactId: string, act: PendingAct): Promise<void>;
     /*
      * Writes `entry` and deletes the pending record, in one transaction, only
@@ -393,6 +395,15 @@ export function createIndexedDbContactGuard(
             if (opened!.contactId !== contactId.toLowerCase())
                 throw new Error('A pending contact act is corrupt.');
             return checkPending(opened!.value);
+        },
+        async pendingAll(userId) {
+            await migrate(userId);
+            if ((await keyHolds(userId)) === 'empty') return new Map();
+            const rows = await (await open()).getAll('sealed-pending', account(userId));
+            const out = new Map<string, PendingAct>();
+            for (const opened of await openRows(userId, 'pending', rows))
+                out.set(opened.contactId, checkPending(opened.value));
+            return out;
         },
         async putPending(userId, contactId, act) {
             await migrate(userId);

@@ -753,7 +753,10 @@ async function rememberKeys(
  * under the account's lock, for the readers that judge from them (who wrote
  * what, and Verified on Contacts). Nothing is judged from a pin read before
  * the lock: a contact removed or moved on another device meanwhile is judged
- * as the settings are now. And a pin that came with
+ * as the settings are now. Under the lock, every act left pending (by an
+ * interrupted Continue, add or check, in any tab) is settled as `stand`
+ * settles it (guardFor, 2.8): finished when the settings pin is exactly its
+ * target over the entry's revision, else dropped. And a pin that came with
  * the settings with nothing for it in the guard yet (a new device, a browser
  * signed back into) is written to the guard before it is used, so a later
  * change made on another device is met here as a change, never as first
@@ -766,13 +769,14 @@ async function guardedView(userId: string) {
         const { store } = contactGuard();
         const read = async () => {
             try {
-                return await store.entries(userId);
+                return await Promise.all([store.entries(userId), store.pendingAll(userId)]);
             } catch (error) {
                 throw new GuardUnreadableError(error);
             }
         };
-        let entries = await read();
-        const due = new Set<string>();
+        const [held, pending] = await read();
+        let entries = held;
+        const due = new Set(pending.keys());
         for (const pin of Object.values(settings.contacts)) {
             const id = pin.userId.toLowerCase();
             if (entries.has(id)) continue;
@@ -788,7 +792,7 @@ async function guardedView(userId: string) {
                 if (trust === 'verified' || trust === 'seen')
                     await rememberKeys(userId, contactId, null, pin);
             }
-            entries = await read();
+            [entries] = await read();
         }
         return { contacts: settings.contacts, entries };
     });
