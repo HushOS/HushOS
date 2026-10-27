@@ -212,18 +212,21 @@ function TokenTable({ looks }: { looks: Record<string, Look> }) {
     );
 }
 
-/* One layer on the warm ground, as it really draws, with what it's for and where. */
+/*
+ * One layer on the warm ground, as it really draws, with what it's for and where. The name
+ * sits 16px inside the visible edge on every side, hairline or not, so the redlines agree.
+ */
 function Specimen({ layer, look }: { layer: Layer; look: Look }) {
     return (
         <article className="flex flex-col gap-3">
             <div className="rounded-2xl border border-(--pg-ground-edge) bg-(--pg-ground) p-6">
                 <div
-                    data-measure=""
-                    className={cn(
-                        'px-4 py-3.5 text-sm font-semibold',
-                        layer.id !== 'toast' && 'h-20',
-                    )}
-                    style={lookStyle(look, layer)}
+                    data-measure="inset"
+                    className="text-sm font-semibold"
+                    style={{
+                        ...lookStyle(look, layer),
+                        padding: look.hairline === 'none' ? 16 : 15,
+                    }}
                 >
                     {layer.name}
                 </div>

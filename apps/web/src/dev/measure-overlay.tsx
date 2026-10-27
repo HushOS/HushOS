@@ -3,12 +3,14 @@ import { useLayoutEffect, useState } from 'react';
 /*
  * Redlines over one demo, as design breakdowns draw them. Edges are dashed cyan lines: the
  * heading's text edge, and every component's box, text and icon edges, so two edges a few
- * px apart show as two lines. Distances are solid magenta lines with end ticks and a px
+ * px apart show as two lines. A component's edges run just past its own box, so a grid of
+ * samples isn't cut through by every other sample's lines; the heading's runs the whole demo. Distances are solid magenta lines with end ticks and a px
  * pill: padding, the gap between an icon and its words, and how far a box sits off the
  * heading's edge. Icons are measured by their drawn strokes, not their 24-unit box, which
  * is what optical alignment is about.
  *
- * Measured: the elements marked `data-measure` inside the demo's `[data-measure-area]`,
+ * Measured: the elements marked `data-measure` (`data-measure="inset"` for one framed on
+ * purpose, whose offset from the heading isn't a misalignment) inside the demo's `[data-measure-area]`,
  * else its outermost `data-slot` components (every ui/ component sets one), else its
  * children. A `data-measure-scale` on the area divides the px it reports, for a demo drawn
  * larger than life. A breakdown sets `data-measure-mode`: `align` draws only the text and
@@ -18,7 +20,7 @@ import { useLayoutEffect, useState } from 'react';
  */
 
 type Box = { left: number; top: number; right: number; bottom: number };
-type Target = { box: Box; text: Box | null; icons: Box[] };
+type Target = { box: Box; text: Box | null; icons: Box[]; inset: boolean };
 type Drawing = {
     width: number;
     height: number;
@@ -107,7 +109,12 @@ function measure(root: HTMLElement): Drawing | null {
         const icons = Array.from(element.querySelectorAll('svg'))
             .map((icon) => iconBox(icon, origin))
             .filter((icon): icon is Box => icon !== null && overlaps(icon, box));
-        targets.push({ box, text: textBox(element, origin), icons });
+        targets.push({
+            box,
+            text: textBox(element, origin),
+            icons,
+            inset: element.getAttribute('data-measure') === 'inset',
+        });
     }
     return {
         width: origin.width,
@@ -190,18 +197,14 @@ function Span({
 }
 
 function Guides({ drawing }: { drawing: Drawing }) {
-    const edges = new Set<number>();
-    const add = (x: number) => edges.add(Math.round(x * 2) / 2);
+    // Each component's edges, a little past its own top and bottom.
+    const edges = new Map<string, { x: number; top: number; bottom: number }>();
     for (const { box, text, icons } of drawing.targets) {
-        add(box.left);
-        add(box.right);
-        if (text) {
-            add(text.left);
-            add(text.right);
-        }
-        for (const icon of icons) {
-            add(icon.left);
-            add(icon.right);
+        const xs = [box.left, box.right, ...(text ? [text.left, text.right] : [])];
+        for (const icon of icons) xs.push(icon.left, icon.right);
+        for (const raw of xs) {
+            const x = Math.round(raw * 2) / 2;
+            edges.set(`${x}:${box.top}`, { x, top: box.top - 12, bottom: box.bottom + 12 });
         }
     }
     return (
@@ -210,8 +213,8 @@ function Guides({ drawing }: { drawing: Drawing }) {
                 <line x1={drawing.heading} x2={drawing.heading} y1={0} y2={drawing.height} />
             )}
             <g opacity={0.55}>
-                {Array.from(edges, (x) => (
-                    <line key={x} x1={x} x2={x} y1={0} y2={drawing.height} />
+                {Array.from(edges, ([key, { x, top, bottom }]) => (
+                    <line key={key} x1={x} x2={x} y1={top} y2={bottom} />
                 ))}
             </g>
         </g>
@@ -319,6 +322,7 @@ function Distances({ target, drawing }: { target: Target; drawing: Drawing }) {
                 })}
             {/* Words off the heading's edge by a little: align the text, not the box. */}
             {heading !== null &&
+                !target.inset &&
                 text &&
                 Math.abs(text.left - box.left) > 0.5 &&
                 Math.abs(text.left - heading) > 0.5 &&
@@ -335,6 +339,7 @@ function Distances({ target, drawing }: { target: Target; drawing: Drawing }) {
                 )}
             {/* A box off the heading's edge by a little: the misalignment worth seeing. */}
             {heading !== null &&
+                !target.inset &&
                 Math.abs(box.left - heading) > 0.5 &&
                 Math.abs(box.left - heading) <= 32 && (
                     <Span
