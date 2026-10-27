@@ -2519,27 +2519,27 @@ describe('affiliates', () => {
         expect(await growth.listAffiliates()).toEqual([]);
     }, 60_000);
 
-    test('an earning recorded while a removal waits on Polar is never deleted with it', async () => {
+    test('an order paid while a removal waits on Polar is never deleted with it: it is logged to pay by hand', async () => {
         const affiliate = await creator();
         const fan = await createTestAccount();
         const observer = lockObserver();
-        let earning: Promise<unknown> = Promise.resolve();
-        // The removal has found nothing owed; an order.paid lands while Polar deletes the discount.
+        const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+        let delivered: Promise<unknown> = Promise.resolve();
+        // The removal has found nothing owed; Polar delivers an order.paid while it deletes the discount.
         polar.beforeDiscountDelete = async () => {
-            earning = growthRepository
-                .recordEarning({
-                    affiliateId: affiliate.id,
-                    orderId: 'order_late',
-                    userId: fan.userId,
+            const paid = await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_late',
+                    discount_id: 'disc_creator25',
+                    net_amount: 1000,
                     currency: 'usd',
-                    netAmount: 1000,
-                    commissionBps: 2000,
-                })
-                .then(
-                    () => 'recorded',
-                    (error: unknown) => error,
-                );
-            // The earning must wait for the removal: seen blocked on the affiliate's row.
+                    billing_reason: 'subscription_create',
+                    customer: { id: 'cus_fan', external_id: fan.userId },
+                },
+            });
+            delivered = billing.handleWebhook(paid).catch((error: unknown) => error);
+            // Its earning must wait for the removal: seen blocked on the affiliate's row.
             const until = Date.now() + DEADLINE;
             while (!(await observer.waitingOn('affiliate_earnings'))) {
                 if (Date.now() > until)
@@ -2549,18 +2549,30 @@ describe('affiliates', () => {
         };
         try {
             await growth.deleteAffiliate(affiliate.id);
+            const response = await delivered;
+            // Nothing is recorded for an affiliate that is gone, and nothing loops: the
+            // delivery is taken, and what would have been owed is left for the operator.
+            expect(response).toBeInstanceOf(Response);
+            expect((response as Response).status).toBe(200);
+            expect(warn).toHaveBeenCalledWith({
+                message:
+                    'Commission not recorded: its affiliate was removed while the order was paid. Pay it by hand if it is owed',
+                billing: {
+                    order: 'order_late',
+                    discount: 'disc_creator25',
+                    affiliate: affiliate.id,
+                    code: 'CREATOR25',
+                    amount: 200,
+                    currency: 'usd',
+                },
+            });
         } finally {
+            warn.mockRestore();
             await observer.end();
         }
-        // Gone with the affiliate, it fails where it is seen: the webhook answers 503 and is retried.
-        const outcome = await earning;
-        expect(outcome).toBeInstanceOf(Error);
-        let cause: unknown = outcome;
-        for (let depth = 0; depth < 5 && cause instanceof Error; depth++) {
-            if ((cause as { code?: string }).code) break;
-            cause = cause.cause;
-        }
-        expect((cause as { code?: string }).code).toBe('23503');
+        const [earnings] = (await rawSql(`select count(*)::int as n from affiliate_earnings`))
+            .rows as { n: number }[];
+        expect(earnings!.n).toBe(0);
     }, 60_000);
 
     test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {

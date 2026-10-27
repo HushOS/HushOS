@@ -545,6 +545,11 @@ export async function listAffiliates() {
  * Commission on one paid order. The order id is unique, so a replayed
  * webhook or a second attribution path records nothing the second time.
  */
+/* The commission on an order's net amount, in its smallest unit: rounded down. */
+export function commissionFor(netAmount: number, commissionBps: number) {
+    return Math.floor((netAmount * commissionBps) / 10_000);
+}
+
 export async function recordEarning(input: {
     affiliateId: string;
     orderId: string;
@@ -554,7 +559,7 @@ export async function recordEarning(input: {
     commissionBps: number;
 }) {
     if (input.netAmount <= 0) return null;
-    const commission = Math.floor((input.netAmount * input.commissionBps) / 10_000);
+    const commission = commissionFor(input.netAmount, input.commissionBps);
     const [row] = await db
         .insert(affiliateEarnings)
         .values({
