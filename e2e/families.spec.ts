@@ -1047,7 +1047,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         ).toHaveText('Trips');
         await expect(fileRow(ana.page, 'trip.txt')).toBeVisible();
         await expect(ana.page.locator('[data-family-checking]')).toHaveText(
-            `Checking ${family}’s member list`,
+            `Checking the member list of ${family}`,
         );
         await ana.page.screenshot({ path: test.info().outputPath('checking-member-list.png') });
 
@@ -1479,7 +1479,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             timeout: 60_000,
         });
         await expect(choose).toContainText(
-            `${family} needs a plan before you can invite anyone or make family folders.`,
+            `Choose a plan before you invite anyone to ${family} or make family folders.`,
         );
         // The three tiers, smallest first, the toggle above them.
         const cards = choose.locator('[data-plan]');
@@ -1537,7 +1537,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 
         // Cancelling is asked here, with a reason for Polar, not sent to the portal.
         await billing.getByRole('button', { name: 'Cancel plan' }).click();
-        const cancel = maya.page.getByRole('dialog', { name: `Cancel ${family}’s plan?` });
+        const cancel = maya.page.getByRole('dialog', { name: `Cancel the plan for ${family}?` });
         await expect(cancel).toContainText('Why are you cancelling?');
         await cancel.getByRole('button', { name: 'Keep the plan' }).click();
         await expect(cancel).toHaveCount(0);
@@ -1594,7 +1594,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
     test('a plan set to end, one that ended, and a member’s view each say only what is true', async () => {
         await show(live({ cancelAtPeriodEnd: true }));
         const ending = maya.page.locator('[data-plan-notice="ending"]');
-        await expect(ending).toContainText(`${family}’s plan ends on`, { timeout: 60_000 });
+        await expect(ending).toContainText('The family’s plan ends on', { timeout: 60_000 });
         await expect(ending).toContainText(
             'After that, nobody can upload to the family folders, and everyone’s own files count against their own storage again. Nothing is deleted.',
         );
@@ -1614,7 +1614,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             },
         });
         const lapsed = maya.page.locator('[data-plan-notice="lapsed"]');
-        await expect(lapsed).toContainText(`${family}’s plan ended on`, { timeout: 60_000 });
+        await expect(lapsed).toContainText('The family’s plan ended on', { timeout: 60_000 });
         await expect(lapsed).toContainText('Nothing has been deleted.');
         await expect(maya.page.getByRole('heading', { name: 'Choose a plan' })).toBeVisible();
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
@@ -2050,7 +2050,7 @@ test.describe.serial('moving between My files and a family folder', () => {
         await ada.page.reload();
         const before = { api: (await storage()).usedBytes, shown: await meter.innerText() };
         const { dialog, notice } = await moveToFamilyFolder('budget.txt');
-        await expect(notice).toContainText(`It uses no more of ${family}’s storage.`);
+        await expect(notice).toContainText('It uses no more of the family’s storage.');
         await dialog.getByRole('button', { name: 'Move here' }).click();
         await expect(dialog).toHaveCount(0, { timeout: 60_000 });
         // Done when it leaves My files, as the person sees it, and nothing more is on its way.
@@ -2266,13 +2266,13 @@ test.describe.serial('one view for a family member, with one pool', () => {
         // Plans: her storage comes from the family's plan, and no personal plan is offered.
         await rosa.page.goto('/app/billing');
         await expect(rosa.page.locator('[data-pooled-plan]')).toContainText(
-            `Your storage comes from ${family}’s plan.`,
+            `Your storage comes from the plan for ${family}.`,
             { timeout: 60_000 },
         );
         await expect(rosa.page.locator('[data-plan="Free"]')).toHaveCount(0);
         await expect(rosa.page.locator('[data-family-plans]')).toHaveCount(0);
         await expect(rosa.page.locator('[data-pool-line]')).toContainText(
-            `${family}’s storage, for everyone’s own files and the family folders.`,
+            'The family’s storage, for everyone’s own files and the family folders.',
         );
     });
 
@@ -2293,7 +2293,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
         await theo.page.goto(await invitationPath(theo.email));
         await expect(theo.page.locator('[data-join-storage]')).toHaveText(
             new RegExp(
-                `^Once you’re let in, your files use ${family}’s storage\\. They take \\S+ \\S+ now\\.$`,
+                `^Once you’re let in, your files use the family’s storage\\. They take \\S+ \\S+ now\\.$`,
             ),
             { timeout: 60_000 },
         );

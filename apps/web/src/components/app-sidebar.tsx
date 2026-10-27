@@ -181,7 +181,7 @@ function PoolMeter({
                 <span className="eyebrow truncate text-muted-foreground">{family}</span>
                 <Progress
                     value={Math.round(used * 100)}
-                    aria-label={`${family}’s storage used`}
+                    aria-label={`Storage used, ${family}`}
                     className={cn(
                         'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
                         nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',

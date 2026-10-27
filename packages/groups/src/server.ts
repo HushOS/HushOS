@@ -1927,7 +1927,7 @@ export async function acceptInvitation(userId: string, token: string, address: s
     if (opened && !(await familyHasPlan(opened.group.id)))
         throw new GroupError(
             'no-plan',
-            `${opened.group.name} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`,
+            `Nobody new can join ${opened.group.name} right now. Ask whoever invited you; this invitation works again once there’s a plan.`,
             402,
             { invitee: true },
         );

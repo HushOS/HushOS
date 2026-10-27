@@ -127,8 +127,8 @@ export function lapsedEndsWords(
         ? 'Nothing of them is refunded: no part of them is in use.'
         : 'Nothing of it is refunded: no part of it is in use.';
     return goer.you
-        ? `${family}’s ${names}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
-        : `${goer.name} pays for ${family}’s ${names}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
+        ? `The ${names} for ${family}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
+        : `${goer.name} pays for the ${names} for ${family}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
 }
 
 /* "Family Pro (monthly)" → "Family Pro"; a neutral "Family plan" → "Family", as "…’s Family plan". */

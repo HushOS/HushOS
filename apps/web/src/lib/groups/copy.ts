@@ -95,7 +95,7 @@ export function refusalCopy(
         case 'invalid':
             return 'Couldn’t save that change. Reload and try again.';
         case 'succession-due':
-            return `${family} needs a manager to finish an earlier change first. Reload and try again.`;
+            return `A manager of ${family} needs to finish an earlier change first. Reload and try again.`;
         case 'left-due':
             return leftDueCopy(data, ctx);
         case 'members-changed':
@@ -108,11 +108,11 @@ export function refusalCopy(
                 case 'no-plan':
                     return `Choose a plan for ${ctx.family ?? 'this family'} before letting anyone in.`;
                 case 'payer':
-                    return `${family} is full. Ask the person who pays for it to add a place.`;
+                    return `Every place in the plan for ${family} is taken. Ask the person who pays for it to add a place.`;
                 case 'cap':
-                    return `${family} has as many members as its plan allows.`;
+                    return `The plan for ${family} allows no more members.`;
                 case 'canceling':
-                    return `${family}’s plan is set to end, so nobody new can join. Resume it under Billing first.`;
+                    return `The plan for ${family} is set to end, so nobody new can join. Resume it under Billing first.`;
                 case 'declined':
                     return 'Your bank declined the charge for another place. Nothing was charged and nobody was let in.';
                 case 'confirm':
@@ -127,13 +127,13 @@ export function refusalCopy(
             const used = numberField(data, 'used');
             const limit = numberField(data, 'limit');
             return used !== null && limit !== null
-                ? `${family} is full (${used} of ${limit}).`
-                : `${family} is full.`;
+                ? `Every place in ${family} is taken (${used} of ${limit}).`
+                : `Every place in ${family} is taken.`;
         }
         case 'no-plan':
             // The invitee of a family whose plan lapsed, or a manager inviting or making a folder.
             return data && typeof data === 'object' && (data as { invitee?: unknown }).invitee
-                ? `${ctx.family ?? 'This family'} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`
+                ? `Nobody new can join ${ctx.family ?? 'this family'} right now. Ask whoever invited you; this invitation works again once there’s a plan.`
                 : `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
         case 'in-family': {
             // Let them in: the newcomer's other family is never named to this one.
@@ -153,8 +153,8 @@ export function refusalCopy(
         // on this page (through the billing portal). Removing them names them; leaving doesn't.
         case 'payer':
             return ctx.person
-                ? `${ctx.person} pays for ${ctx.family ?? 'this family'}’s plan. They can cancel it under Billing on this page; then you can remove them.`
-                : `You pay for ${ctx.family ?? 'this family'}’s plan. Cancel it under Billing on this page first; the family keeps it until the end of the period.`;
+                ? `${ctx.person} pays for the family’s plan. They can cancel it under Billing on this page; then you can remove them.`
+                : `You pay for the family’s plan. Cancel it under Billing on this page first; the family keeps it until the end of the period.`;
         case 'last-holder':
             return MANAGER_FIRST;
         case 'unsupported':
@@ -305,13 +305,13 @@ export function noticeCopy(
 }
 
 /* A notice's title, where it has one. */
-export function noticeTitle(notice: GroupNotice, family = 'The family') {
+export function noticeTitle(notice: GroupNotice, family = 'the family') {
     if (notice.kind !== 'foreign-listing') return null;
     // My files isn't a folder, and one family may name both: the titles differ.
-    if (notice.owner === null) return `${family}’s member list names your own files`;
+    if (notice.owner === null) return `The member list of ${family} names your own files`;
     return notice.count === 1
-        ? `${family}’s member list names a folder that isn’t its own`
-        : `${family}’s member list names folders that aren’t its own`;
+        ? `The member list of ${family} names a folder that isn’t its own`
+        : `The member list of ${family} names folders that aren’t its own`;
 }
 
 /*

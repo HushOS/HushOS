@@ -78,7 +78,9 @@ describe('checking it’s them', () => {
         expect(await screen.findByRole('button', { name: 'They match' })).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Already in your contacts' })).toBeNull();
         expect(document.querySelector('[data-fingerprint-words]')).not.toBeNull();
-        expect(screen.getByText(/Lindqvist family vouches for these keys/)).toBeInTheDocument();
+        expect(
+            screen.getByText(/The member list of Lindqvist family vouches for these keys/),
+        ).toBeInTheDocument();
     });
 
     test('someone whose words this person compared is already added', async () => {

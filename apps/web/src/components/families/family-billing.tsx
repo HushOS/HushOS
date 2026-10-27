@@ -321,8 +321,8 @@ function GlanceTop({
                     </AlertTitle>
                     <AlertDescription>
                         {paused
-                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
-                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                            ? 'The plan is paused, so the family’s storage is empty until it resumes.'
+                            : 'The plan gives no storage until it’s paid or replaced.'}{' '}
                         Nothing can be added to the family folders, nobody new can join, and your
                         own files count against your own storage again. Nothing is deleted.{' '}
                         {who ? `${who} can sort it out.` : 'The organizer can sort it out.'}
@@ -334,11 +334,11 @@ function GlanceTop({
     return (
         <div>
             <Alert data-plan-notice="none">
-                <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
+                <AlertTitle>No family plan right now</AlertTitle>
                 <AlertDescription>
                     {empty
-                        ? 'Nobody new can join, and nothing can be added to the family folders, until it has one.'
-                        : 'Nobody new can join until it has one.'}{' '}
+                        ? `Nobody new can join ${family}, and nothing can be added to the family folders, until there’s a plan.`
+                        : `Nobody new can join ${family} until there’s a plan.`}{' '}
                     {who ? `${who} can choose one.` : 'The organizer can choose one.'}
                 </AlertDescription>
             </Alert>
@@ -465,7 +465,7 @@ function PlanTop(props: Inner) {
                 <div data-plan-notice="overdue">
                     <Alert variant="destructive">
                         <AlertTitle>
-                            The last payment for {family}’s plan didn’t go through
+                            The last payment for the family’s plan didn’t go through
                         </AlertTitle>
                         <AlertDescription>
                             {payerYou
@@ -479,9 +479,7 @@ function PlanTop(props: Inner) {
             return (
                 <div data-plan-notice="ending">
                     <Alert>
-                        <AlertTitle>
-                            {family}’s plan ends on {ends}
-                        </AlertTitle>
+                        <AlertTitle>The family’s plan ends on {ends}</AlertTitle>
                         <AlertDescription>
                             After that, nobody can upload to the family folders, and everyone’s own
                             files count against their own storage again. Nothing is deleted.{' '}
@@ -550,8 +548,8 @@ function PlanTop(props: Inner) {
                     </AlertTitle>
                     <AlertDescription>
                         {paused
-                            ? `${family}’s plan is paused, so the family’s storage is empty until it resumes.`
-                            : `${family}’s plan gives no storage until it’s paid or replaced.`}{' '}
+                            ? 'The plan is paused, so the family’s storage is empty until it resumes.'
+                            : 'The plan gives no storage until it’s paid or replaced.'}{' '}
                         Nothing can be added to the family folders, nobody new can join, and
                         everyone’s own files count against their own storage again. Nothing is
                         deleted. {next}
@@ -573,9 +571,7 @@ function PlanTop(props: Inner) {
         return (
             <div className="flex flex-col gap-6">
                 <Alert data-plan-notice="lapsed">
-                    <AlertTitle>
-                        {family}’s plan ended on {formatDay(state.endedAt)}
-                    </AlertTitle>
+                    <AlertTitle>The family’s plan ended on {formatDay(state.endedAt)}</AlertTitle>
                     <AlertDescription>
                         {emptyPool
                             ? 'Nobody can upload to the family folders, and nobody new can join, until it’s renewed. Until then, everyone’s own files count against their own storage.'
@@ -597,11 +593,11 @@ function PlanTop(props: Inner) {
     return (
         <div>
             <Alert data-plan-notice="none">
-                <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
+                <AlertTitle>No family plan right now</AlertTitle>
                 <AlertDescription>
                     {emptyPool
-                        ? 'Nobody new can join, and nothing can be added to the family folders, until it has one.'
-                        : 'Nobody new can join until it has one.'}{' '}
+                        ? `Nobody new can join ${family}, and nothing can be added to the family folders, until there’s a plan.`
+                        : `Nobody new can join ${family} until there’s a plan.`}{' '}
                     {roles.includes('billing')
                         ? 'No family plans are on sale right now.'
                         : ask
@@ -746,13 +742,13 @@ function ChoosePlan({
                 </h2>
                 {!renewing && (
                     <p className="max-w-[43em] text-sm text-muted-foreground">
-                        {family} needs a plan before you can invite anyone or make family folders.
+                        Choose a plan before you invite anyone to {family} or make family folders.
                         {alone && ' Until then, only you are in it.'}
                     </p>
                 )}
                 {ownPlan && (
                     <p className="max-w-[43em] text-sm" data-personal-plan-ends>
-                        {ownPlan} From then on your files use {family}’s storage.
+                        {ownPlan} From then on your files use the family’s storage.
                     </p>
                 )}
             </div>
@@ -906,7 +902,7 @@ function PlanSection(props: Inner) {
             const result = await groupBillingApi.setUnits(groupId, live.units);
             settle(result.billing);
             cue('success');
-            toast.add({ type: 'success', title: `${family} keeps ${places(live.units)}` });
+            toast.add({ type: 'success', title: `The family’s plan keeps ${places(live.units)}` });
         } catch (cause) {
             cue('error');
             setError(authError(cause));
@@ -924,7 +920,7 @@ function PlanSection(props: Inner) {
             cue('success');
             toast.add({
                 type: 'success',
-                title: `${family} keeps ${tierName({ name: live.productName })}`,
+                title: `The family’s plan stays on ${tierName({ name: live.productName })}`,
             });
         } catch (cause) {
             cue('error');
@@ -943,8 +939,7 @@ function PlanSection(props: Inner) {
             cue('success');
             toast.add({
                 type: 'success',
-                title: `${family} keeps ${tierName({ name: live.productName })}`,
-                description: `It renews on ${ends}.`,
+                title: `The family’s plan renews on ${ends}`,
             });
         } catch (cause) {
             cue('error');
@@ -1171,7 +1166,7 @@ function PlanSection(props: Inner) {
                     onDone={(next) => {
                         settle(next);
                         setCancelling(false);
-                        toast.add({ type: 'success', title: `${family}’s plan ends on ${ends}` });
+                        toast.add({ type: 'success', title: `The family’s plan ends on ${ends}` });
                     }}
                 />
             )}
@@ -1234,7 +1229,7 @@ function CancelFamilyPlanDialog({
         <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
             <DialogContent className="sm:max-w-[480px]" data-cancel-family-plan>
                 <DialogHeader>
-                    <DialogTitle>Cancel {family}’s plan?</DialogTitle>
+                    <DialogTitle>Cancel the plan for {family}?</DialogTitle>
                     <DialogDescription>
                         The family keeps {planName} and {formatQuota(quotaBytes)} until {ends}.
                         After that, nothing new can be added to the family folders, and everyone’s
@@ -1495,7 +1490,7 @@ function AddPlacesDialog({ groupId, family, summary, open, onOpenChange, onDone 
  * one starts at the renewal, only once the family folders fit in it, and
  * refunds nothing. Places stay as they are.
  */
-function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
+function ChangePlanDialog({ groupId, summary, open, onOpenChange, onDone }: DialogProps) {
     const id = useId();
     const moves = tierMoves(summary);
     const live = summary.subscription;
@@ -1535,8 +1530,8 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
                 type: 'success',
                 title:
                     result.when === 'renewal'
-                        ? `${family} moves to ${tierName(chosen.plan)} on ${ends}`
-                        : `${family} is on ${tierName(chosen.plan)}`,
+                        ? `The family’s plan moves to ${tierName(chosen.plan)} on ${ends}`
+                        : `The family’s plan is ${tierName(chosen.plan)} now`,
             });
             onOpenChange(false);
         } catch (cause) {
@@ -1693,7 +1688,7 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
  * "Remove places at renewal": free, from the period's end, never below the
  * members or the included count. The places removed stop taking newcomers now.
  */
-function RemovePlacesDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
+function RemovePlacesDialog({ groupId, summary, open, onOpenChange, onDone }: DialogProps) {
     const range = removeRange(summary);
     const live = summary.subscription;
     const [target, setTarget] = useState<number | null>(null);
@@ -1715,7 +1710,10 @@ function RemovePlacesDialog({ groupId, family, summary, open, onOpenChange, onDo
             const result = await groupBillingApi.setUnits(groupId, value);
             onDone(result.billing);
             cue('success');
-            toast.add({ type: 'success', title: `${family} has ${places(value)} from ${ends}` });
+            toast.add({
+                type: 'success',
+                title: `The family’s plan has ${places(value)} from ${ends}`,
+            });
             onOpenChange(false);
         } catch (cause) {
             cue('error');
@@ -1741,8 +1739,8 @@ function RemovePlacesDialog({ groupId, family, summary, open, onOpenChange, onDo
                 <DialogHeader>
                     <DialogTitle>Remove places at renewal</DialogTitle>
                     <DialogDescription>
-                        From {ends}, {family} has fewer places. Nothing is refunded and nobody is
-                        removed. Nobody new can take the places you remove, starting now.
+                        From {ends}, the family’s plan has fewer places. Nothing is refunded and
+                        nobody is removed. Nobody new can take the places you remove, starting now.
                     </DialogDescription>
                 </DialogHeader>
                 <Stepper

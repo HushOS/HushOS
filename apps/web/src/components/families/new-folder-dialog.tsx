@@ -53,7 +53,7 @@ export function NewFamilyFolderDialog({
                     ? outcomeCopy(staged.outcome, { family })
                     : staged.status === 'not-synced'
                       ? staged.sync.status === 'fork'
-                          ? `${family}’s member list was shown differently to you.`
+                          ? `The member list of ${family} was shown differently to you.`
                           : `Couldn’t check ${family}. Try again.`
                       : 'Couldn’t make the folder. Try again.';
             if (failed) throw new Error(failed);

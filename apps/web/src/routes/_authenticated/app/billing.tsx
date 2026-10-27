@@ -469,7 +469,7 @@ function BillingPage() {
                                         : pooled.name}
                                 </span>
                                 <span className="text-sm text-muted-foreground">
-                                    Your storage comes from {pooled.name}’s plan.
+                                    Your storage comes from the plan for {pooled.name}.
                                 </span>
                             </div>
                             <div className="flex shrink-0 flex-wrap gap-2">

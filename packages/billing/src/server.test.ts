@@ -8436,7 +8436,7 @@ describe('a personal plan while pooled', () => {
             status: 409,
             code: 'in-family',
             message:
-                'Your storage comes from The Family’s plan. Leave the family to choose a plan of your own.',
+                'Your storage comes from the plan for The Family. Leave the family to choose a plan of your own.',
         };
         // Before the job ends it (a plan still live) and after.
         await expect(billing.startCheckout(user, MAX)).rejects.toMatchObject(refusal);

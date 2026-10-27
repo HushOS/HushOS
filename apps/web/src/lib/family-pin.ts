@@ -15,16 +15,18 @@ export function familyWord(pin: Pick<Pin, 'trustedVia' | 'trustedViaFamily'>) {
     return pin.trustedViaFamily || 'A family';
 }
 
-/* "Lindqvist family vouches for these keys", for a pin on a family's word; null otherwise. */
+/* "The member list of Lindqvist family vouches for these keys", for a pin on a family's word; null otherwise. */
 export function vouchLine(pin: Pick<Pin, 'trustedVia' | 'trustedViaFamily'>) {
     const family = familyWord(pin);
-    return family ? `${family} vouches for these keys` : null;
+    return family ? `The member list of ${family} vouches for these keys` : null;
 }
 
 /* A pin's name as a sentence may say it: a family's word always carries the address and the family. */
 export function pinName(pin: Pick<Pin, 'name' | 'email' | 'trustedVia' | 'trustedViaFamily'>) {
     const family = familyWord(pin);
-    return family ? `${pin.name} (${pin.email}), whom ${family} vouches for` : pin.name;
+    return family
+        ? `${pin.name} (${pin.email}), whom the member list of ${family} vouches for`
+        : pin.name;
 }
 
 /*

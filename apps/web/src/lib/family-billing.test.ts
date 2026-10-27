@@ -640,7 +640,7 @@ describe('lapsedPlanEndsLine', () => {
     test('says the plan ends at once only when the one who goes pays for it', () => {
         const mine = { ...summary({ live: false }), lapsedPlan: paused };
         expect(lapsedPlanEndsLine(mine, 'Lindqvist family', { userId: 'payer', you: true })).toBe(
-            'Lindqvist family’s Family Pro plan, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+            'The Family Pro plan for Lindqvist family, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
         );
         expect(
             lapsedPlanEndsLine(mine, 'Lindqvist family', {
@@ -649,7 +649,7 @@ describe('lapsedPlanEndsLine', () => {
                 name: 'Maya',
             }),
         ).toBe(
-            'Maya pays for Lindqvist family’s Family Pro plan, which is paused. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+            'Maya pays for the Family Pro plan for Lindqvist family, which is paused. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
         );
         // Someone who doesn't pay, or no lapsed plan: nothing said.
         expect(lapsedPlanEndsLine(mine, 'F', { userId: 'someone', you: true })).toBeNull();
@@ -662,7 +662,7 @@ describe('lapsedPlanEndsLine', () => {
         const theirs = { productName: 'Family Pro (monthly)', standing: 'paused' as const };
         const mine = { ...glance(false), lapsedPlan: { ...theirs, youPay: true } };
         expect(lapsedPlanEndsLine(mine, 'F', { userId: 'me', you: true })).toBe(
-            'F’s Family Pro plan, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+            'The Family Pro plan for F, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
         );
         // Not theirs to pay: nothing; and a glance never says that someone else pays.
         const other = { ...glance(false), lapsedPlan: { ...theirs, youPay: false } };
@@ -679,7 +679,7 @@ describe('lapsedPlanEndsLine', () => {
                 name: 'Maya',
             }),
         ).toBe(
-            'Maya pays for F’s Family Pro plan, whose payment didn’t go through. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+            'Maya pays for the Family Pro plan for F, whose payment didn’t go through. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
         );
         // Every plan named, and the neutral name of one HushOS can't read said as a plan once.
         expect(
@@ -692,7 +692,7 @@ describe('lapsedPlanEndsLine', () => {
                 { you: true },
             ),
         ).toBe(
-            'F’s Family Pro and Family plans, which you pay for and which give nothing now, end at once when you leave. Nothing of them is refunded: no part of them is in use.',
+            'The Family Pro and Family plans for F, which you pay for and which give nothing now, end at once when you leave. Nothing of them is refunded: no part of them is in use.',
         );
     });
 });

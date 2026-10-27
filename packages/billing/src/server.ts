@@ -164,7 +164,7 @@ async function refuseWhilePooled(user: BillingUser) {
     const family = await billingRepository.getPooledFamily(user.id);
     if (family)
         throw new BillingError(
-            `Your storage comes from ${family.name}’s plan. Leave the family to choose a plan of your own.`,
+            `Your storage comes from the plan for ${family.name}. Leave the family to choose a plan of your own.`,
             409,
             { code: 'in-family' },
         );

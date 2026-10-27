@@ -231,7 +231,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 }
                 if (staged.status === 'not-synced' && staged.sync.status === 'fork')
                     throw new Error(
-                        `${family}’s member list was shown differently to you. Don’t let anyone in until that’s sorted.`,
+                        `The member list of ${family} was shown differently to you. Don’t let anyone in until that’s sorted.`,
                     );
                 if (staged.status !== 'sent')
                     throw new Error(`Couldn’t check ${family}. Try again.`);
@@ -273,7 +273,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                         return;
                 }
             }
-            throw new Error(`${family} keeps changing. Try again in a moment.`);
+            throw new Error(`The member list of ${family} keeps changing. Try again in a moment.`);
         } catch (cause) {
             cue('error');
             if (cause instanceof GroupApiError && cause.code === 'seats')
@@ -489,11 +489,11 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                                             member list.
                                         </p>
                                         <p className="mt-2">
-                                            {first} is in {family}’s member list, but their device
-                                            won’t use the family until the codes match, so their
-                                            folders stay closed to them. Sort it out together. If
-                                            you can’t, close this and choose Remove from family in{' '}
-                                            {first}’s row under Members.
+                                            {first} is in the member list of {family}, but their
+                                            device won’t use the family until the codes match, so
+                                            their folders stay closed to them. Sort it out together.
+                                            If you can’t, close this and choose Remove from family
+                                            in {first}’s row under Members.
                                         </p>
                                         <Button
                                             variant="outline"

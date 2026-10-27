@@ -239,7 +239,7 @@ export function FamilyPage({
                     {ownWrong && (
                         <Alert variant="destructive">
                             <AlertTitle>
-                                Your entry in {family}’s member list isn’t your keys
+                                Your entry in the member list of {family} isn’t your keys
                             </AlertTitle>
                             <AlertDescription>
                                 Ask someone who manages the family to check your words again.
@@ -249,8 +249,8 @@ export function FamilyPage({
                     {!ownWrong && ownBehind && (
                         <Alert variant="info">
                             <AlertDescription>
-                                {family}’s member list still has your previous keys. A manager’s
-                                device updates it the next time they open the family.
+                                The member list of {family} still has your previous keys. A
+                                manager’s device updates it the next time they open the family.
                             </AlertDescription>
                         </Alert>
                     )}

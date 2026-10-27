@@ -481,7 +481,7 @@ function stageFailure(staged: StageOutcome, ctx: Parameters<typeof outcomeCopy>[
     if (staged.status === 'sent') return outcomeCopy(staged.outcome, ctx);
     if (staged.status === 'not-synced')
         return staged.sync.status === 'fork'
-            ? `${ctx?.family ?? 'The family'}’s member list was shown differently to you.`
+            ? `The member list of ${ctx?.family ?? 'the family'} was shown differently to you.`
             : `Couldn’t check ${ctx?.family ?? 'the family'}. Try again.`;
     if (staged.status === 'nothing') return null;
     return 'An earlier change to this person is still waiting to be sent. Try again from Let them in.';
@@ -513,7 +513,7 @@ function RoleConfirm({
         },
         organizer: {
             title: `Make ${who} the organizer?`,
-            body: `${who} takes over ${family}’s billing. You keep managing the family.`,
+            body: `${who} takes over the family’s billing. You keep managing the family.`,
             action: 'Make organizer',
         },
     }[change.kind];
