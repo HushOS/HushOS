@@ -856,6 +856,18 @@ function PlanSection(props: Inner) {
     const [busy, setBusy] = useState<'portal' | 'keep' | 'tier' | null>(null);
     const [error, setError] = useState('');
     usePageRestored(() => setBusy(null));
+    // A plan that stops being live takes its dialogs with it: none comes back by itself after.
+    const isLive = state.kind === 'live';
+    const [wasLive, setWasLive] = useState(isLive);
+    if (wasLive !== isLive) {
+        setWasLive(isLive);
+        if (!isLive) {
+            setAdding(false);
+            setRemoving(false);
+            setChanging(false);
+            setCancelling(false);
+        }
+    }
     if (state.kind !== 'live') return null;
     const live = state.subscription;
     const ends = formatDay(live.currentPeriodEnd);
@@ -1205,12 +1217,45 @@ type HeldDialogProps = DialogProps & {
  */
 type Sent<T> = HeldChange<T> & { at: Date; done: string; url: string | null };
 
+/* The server's answer as the held change's baseline: always the payer's full summary. */
+const answerOf = (billing: FamilyBilling, quoted: FamilyBillingFull) =>
+    billing.view === 'manage' ? billing : quoted;
+
+/*
+ * Reads the family's plan again: after a refusal (a total that moved shows its new count),
+ * and, while the bank holds a change, whenever the person comes back to the tab, however
+ * fresh the summary is, so a payer back from the bank within seconds sees it settle.
+ */
+function useReread(held: boolean, userId: string, groupId: string) {
+    const queryClient = useQueryClient();
+    const reread = () =>
+        void queryClient.invalidateQueries({
+            queryKey: familyBillingQueryOptions(userId, groupId).queryKey,
+        });
+    useEffect(() => {
+        if (!held) return;
+        const back = () => {
+            if (document.visibilityState === 'visible') reread();
+        };
+        document.addEventListener('visibilitychange', back);
+        window.addEventListener('focus', back);
+        return () => {
+            document.removeEventListener('visibilitychange', back);
+            window.removeEventListener('focus', back);
+        };
+        // reread is new each render; what it reads is the rest.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [held, userId, groupId]);
+    return reread;
+}
+
 /*
  * Paid or dropped elsewhere (the portal in another tab, a cut, the plan gone), a bank step
  * leaves, with the success line when paid; a form whose button was withdrawn leaves too.
  */
 function useSettled(
     open: boolean,
+    /* Pressed and waiting, or showing a refusal: nothing closes it under the person. */
     busy: boolean,
     offered: boolean,
     standing: Standing | null,
@@ -1251,8 +1296,9 @@ function AddPlacesDialog({
     const [sent, setSent] = useState<Sent<number> | null>(null);
     const confirmUrl = sent?.url ?? null;
     const standing = sent?.url ? raiseStanding(props.summary, sent) : null;
-    useSettled(open, busy, offered, standing, sent?.done, close);
-    const summary = sent?.summary ?? props.summary;
+    useSettled(open, busy || error !== '', offered, standing, sent?.done, close);
+    const reread = useReread(confirmUrl !== null, props.userId, groupId);
+    const summary = sent?.quoted ?? props.summary;
     const range = addRange(summary);
     const live = summary.subscription;
     const price = livePrice(summary);
@@ -1276,23 +1322,37 @@ function AddPlacesDialog({
         const done = `Added ${places(value)} to ${family}`;
         setBusy(true);
         setError('');
-        setSent({ summary, at: new Date(), target: live!.units + value, done, url: null });
+        const quoted = summary;
+        setSent({
+            quoted,
+            answered: quoted,
+            at: new Date(),
+            target: live!.units + value,
+            done,
+            url: null,
+        });
         try {
-            const result = await groupBillingApi.setUnits(groupId, live!.units + value);
+            // Counted from the places shown: another tab's raise meanwhile is refused, not re-aimed.
+            const result = await groupBillingApi.setUnits(
+                groupId,
+                live!.units + value,
+                live!.units,
+            );
             onDone(result.billing);
             const url = result.confirmPayment ? result.url : null;
             if (url) {
-                setSent((held) => held && { ...held, url });
+                const answered = answerOf(result.billing, quoted);
+                setSent((held) => held && { ...held, answered, url });
                 return;
             }
-            setSent(null);
             cue('success');
             toast.add({ type: 'success', title: done });
-            onOpenChange(false);
+            close();
         } catch (cause) {
             setSent(null);
             cue('error');
             setError(authError(cause));
+            reread();
         } finally {
             setBusy(false);
         }
@@ -1398,8 +1458,9 @@ function ChangePlanDialog({
     const [sent, setSent] = useState<Sent<string> | null>(null);
     const confirmUrl = sent?.url ?? null;
     const standing = sent?.url ? upgradeStanding(props.summary, sent) : null;
-    useSettled(open, busy, offered, standing, sent?.done, close);
-    const summary = sent?.summary ?? props.summary;
+    useSettled(open, busy || error !== '', offered, standing, sent?.done, close);
+    const reread = useReread(confirmUrl !== null, props.userId, groupId);
+    const summary = sent?.quoted ?? props.summary;
     const moves = tierMoves(summary, sent?.at);
     const live = summary.subscription;
     const current = currentPlan(summary);
@@ -1432,16 +1493,24 @@ function ChangePlanDialog({
         const done = `${family} is on ${tierName(chosen.plan)}`;
         setBusy(true);
         setError('');
-        setSent({ summary, at: new Date(), target: chosen.plan.id, done, url: null });
+        const quoted = summary;
+        setSent({
+            quoted,
+            answered: quoted,
+            at: new Date(),
+            target: chosen.plan.id,
+            done,
+            url: null,
+        });
         try {
             const result = await groupBillingApi.changePlan(groupId, chosen.plan.id);
             onDone(result.billing);
             const url = result.confirmPayment ? result.url : null;
             if (url) {
-                setSent((held) => held && { ...held, url });
+                const answered = answerOf(result.billing, quoted);
+                setSent((held) => held && { ...held, answered, url });
                 return;
             }
-            setSent(null);
             cue('success');
             toast.add({
                 type: 'success',
@@ -1450,11 +1519,12 @@ function ChangePlanDialog({
                         ? `${family} moves to ${tierName(chosen.plan)} on ${ends}`
                         : done,
             });
-            onOpenChange(false);
+            close();
         } catch (cause) {
             setSent(null);
             cue('error');
             setError(authError(cause));
+            reread();
         } finally {
             setBusy(false);
         }

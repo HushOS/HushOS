@@ -694,60 +694,114 @@ describe('lapsedPlanEndsLine', () => {
 });
 
 describe('a raise the bank holds, read against a fresh summary', () => {
-    // Six places, raised to eight; the bank holds the charge for the two.
+    // Six places, raised to eight.
     const quoted = summary({ units: 6 });
-    const held = { summary: quoted, target: 8 };
+    // Polar kept the raise and its order waits for the bank: eight places, six paid.
+    const kept = { quoted, answered: summary({ units: 8, paidUnits: 6 }), target: 8 };
+    // Polar answered 402 PaymentActionRequired: nothing changed, the bank wants a confirmation.
+    const refused = { quoted, answered: summary({ units: 6 }), target: 8 };
 
-    test('the summary it was quoted from is no news: still held, though it has fewer places', () => {
-        expect(raiseStanding(quoted, held)).toBe('held');
-        // The rule is that summary, not one like it: a fresh read saying six means cut back.
-        expect(raiseStanding({ ...quoted }, held)).toBe('gone');
+    test('before the cache takes the answer, the summary it was quoted from reads as the answer', () => {
+        expect(raiseStanding(quoted, kept)).toBe('held');
+        expect(raiseStanding(quoted, refused)).toBe('held');
     });
 
-    test('held while the bank holds the places', () => {
-        expect(raiseStanding(summary({ units: 8, paidUnits: 6 }), held)).toBe('held');
-        expect(raiseStanding(summary({ units: 8, paidUnits: 7 }), held)).toBe('held');
+    test('held while the bank holds the places, read again any number of times', () => {
+        expect(raiseStanding(summary({ units: 8, paidUnits: 6 }), kept)).toBe('held');
+        expect(raiseStanding(summary({ units: 8, paidUnits: 7 }), kept)).toBe('held');
+    });
+
+    test('answered with no change (a 402), unrelated reads keep it held until it is paid', () => {
+        expect(raiseStanding(summary({ units: 6 }), refused)).toBe('held');
+        expect(
+            raiseStanding(
+                {
+                    ...summary({ units: 6 }),
+                    storage: { usedBytes: '1', quotaBytes: plan.quotaBytes },
+                },
+                refused,
+            ),
+        ).toBe('held');
+        expect(raiseStanding(summary({ units: 6, ending: true }), refused)).toBe('held');
+        expect(raiseStanding(summary({ units: 8, paidUnits: 8 }), refused)).toBe('paid');
     });
 
     test('paid once the places are paid for, at the target or above it', () => {
-        expect(raiseStanding(summary({ units: 8, paidUnits: 8 }), held)).toBe('paid');
-        expect(raiseStanding(summary({ units: 10, paidUnits: 10 }), held)).toBe('paid');
+        expect(raiseStanding(summary({ units: 8, paidUnits: 8 }), kept)).toBe('paid');
+        expect(raiseStanding(summary({ units: 10, paidUnits: 10 }), kept)).toBe('paid');
     });
 
     test('still held while another charge waits on top of the paid places', () => {
-        expect(raiseStanding(summary({ units: 10, paidUnits: 8 }), held)).toBe('held');
+        expect(raiseStanding(summary({ units: 10, paidUnits: 8 }), kept)).toBe('held');
     });
 
-    test('gone when cut back below the target, or when the plan ended', () => {
-        expect(raiseStanding(summary({ units: 7, paidUnits: 6 }), held)).toBe('gone');
-        expect(raiseStanding(summary({ units: 6 }), held)).toBe('gone');
-        expect(raiseStanding(summary({ live: false }), held)).toBe('gone');
-    });
-});
-
-describe('an upgrade the bank holds, read against a fresh summary', () => {
-    // Pro to Max; the bank holds the charge for the difference.
-    const quoted = onTier('pro-month');
-    const held = { summary: quoted, target: 'max-month' };
-
-    test('the summary it was quoted from is no news: still held, though it names Pro', () => {
-        expect(upgradeStanding(quoted, held)).toBe('held');
-        expect(upgradeStanding({ ...quoted }, held)).toBe('gone');
-    });
-
-    test('held while the plan names Max but the charge for it still waits', () => {
-        expect(upgradeStanding(onTier('max-month', { paidProductId: 'pro-month' }), held)).toBe(
+    test('still held when a cut is scheduled: the places it holds are still owed', () => {
+        expect(raiseStanding(summary({ units: 8, paidUnits: 6, pendingUnits: 7 }), kept)).toBe(
             'held',
         );
     });
 
-    test('paid once Max is the plan and nothing waits', () => {
-        expect(upgradeStanding(onTier('max-month'), held)).toBe('paid');
+    test('gone once there are fewer places than the server answered with, or no plan', () => {
+        expect(raiseStanding(summary({ units: 7, paidUnits: 6 }), kept)).toBe('gone');
+        expect(raiseStanding(summary({ units: 6 }), kept)).toBe('gone');
+        expect(raiseStanding(summary({ units: 5 }), refused)).toBe('gone');
+        expect(raiseStanding(summary({ live: false }), kept)).toBe('gone');
+        expect(raiseStanding(summary({ live: false }), refused)).toBe('gone');
+    });
+});
+
+describe('an upgrade the bank holds, read against a fresh summary', () => {
+    // Pro to Max.
+    const quoted = onTier('pro-month');
+    // Polar kept the move: the plan names Max, the tier paid for is still Pro.
+    const kept = {
+        quoted,
+        answered: onTier('max-month', { paidProductId: 'pro-month' }),
+        target: 'max-month',
+    };
+    // Polar answered 402: the plan is still Pro, and the bank wants a confirmation.
+    const refused = { quoted, answered: onTier('pro-month'), target: 'max-month' };
+
+    test('before the cache takes the answer, the summary it was quoted from reads as the answer', () => {
+        expect(upgradeStanding(quoted, kept)).toBe('held');
+        expect(upgradeStanding(quoted, refused)).toBe('held');
     });
 
-    test('gone when the plan is another tier, or when it ended', () => {
-        expect(upgradeStanding(onTier('pro-month'), held)).toBe('gone');
-        expect(upgradeStanding(onTier('plus-month'), held)).toBe('gone');
-        expect(upgradeStanding(onTier('max-month', { live: false }), held)).toBe('gone');
+    test('held while the plan names Max but the charge for it still waits', () => {
+        expect(upgradeStanding(onTier('max-month', { paidProductId: 'pro-month' }), kept)).toBe(
+            'held',
+        );
+        expect(upgradeStanding(onTier('max-month', { paidProductId: 'pro-month' }), refused)).toBe(
+            'held',
+        );
+    });
+
+    test('answered with no change (a 402), unrelated reads keep it held until it is paid', () => {
+        expect(upgradeStanding(onTier('pro-month'), refused)).toBe('held');
+        expect(upgradeStanding(onTier('pro-month', { usedBytes: 5n }), refused)).toBe('held');
+        expect(upgradeStanding(onTier('max-month'), refused)).toBe('paid');
+    });
+
+    test('paid once Max is the plan and nothing waits', () => {
+        expect(upgradeStanding(onTier('max-month'), kept)).toBe('paid');
+    });
+
+    test('gone when the plan is a tier neither answered nor asked for, or when it ended', () => {
+        expect(upgradeStanding(onTier('pro-month'), kept)).toBe('gone');
+        expect(upgradeStanding(onTier('plus-month'), kept)).toBe('gone');
+        expect(upgradeStanding(onTier('plus-month'), refused)).toBe('gone');
+        expect(upgradeStanding(onTier('max-month', { live: false }), kept)).toBe('gone');
+        expect(upgradeStanding(onTier('pro-month', { live: false }), refused)).toBe('gone');
+    });
+});
+
+describe('places while an upgrade waits for the bank', () => {
+    test('Add places is not offered: nothing stacks on a charge the bank holds', () => {
+        const organizer = ['billing', 'members'];
+        expect(familyActions(onTier('max-month', { units: 6 }), organizer).addPlaces).toBe(true);
+        expect(
+            familyActions(onTier('max-month', { units: 6, paidProductId: 'pro-month' }), organizer)
+                .addPlaces,
+        ).toBe(false);
     });
 });
