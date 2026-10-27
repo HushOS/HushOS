@@ -1,0 +1,31 @@
+apps/web/src/components/drive/rich-text.css
+  s_566b8e0c4467a4::t_ef5bd69c676554 295-299,302,318
+  s_566b8e0c4467a4::t_d32a9ff3d5b110 312,316-317
+  s_566b8e0c4467a4::t_ddd620cce41193 258-259,261-269,273-276,279,284
+  s_566b8e0c4467a4::t_99268ee719941a 100-105,107,109
+  s_566b8e0c4467a4::t_a4803764bb9b48 247,249
+apps/web/src/components/drive/rich-text.tsx
+  s_566b8e0c4467a4::t_367c9a9571b84b 69-77,80,82-84
+  s_566b8e0c4467a4::t_3dbf10e4e00e49 78
+  s_566b8e0c4467a4::t_b46e1e6d243cef 79,81
+  s_566b8e0c4467a4::t_6ad0853bd9e747 12
+  s_566b8e0c4467a4::t_d54fca54c0c6da 143,148
+e2e/drive.spec.ts
+  s_566b8e0c4467a4::t_ecca4c7b38051d 541-605
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85c16833a65218a666e64f5a858c42ab4a3add6f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
