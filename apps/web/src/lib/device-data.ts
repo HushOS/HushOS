@@ -100,9 +100,17 @@ type Domain = 'local' | 'session' | 'databases' | 'files' | 'cookies';
  * storage access in any other file, on a name a file uses that it does not
  * declare here (literal, template or imported constant), and on a declared
  * name that is not in ACCOUNT_DATA, KEPT or SERVER_COOKIES for the same place.
+ * Each storage call's name must resolve, in its own file, to one declared for
+ * the place that call reaches, unless the file passes callers' names through.
  * A name ending in ':' is a prefix.
  */
-export const STORAGE_OWNERS: Record<string, Partial<Record<Domain, readonly string[]>>> = {
+export const STORAGE_OWNERS: Record<
+    string,
+    Partial<Record<Domain, readonly string[]>> & {
+        /* Places this file reaches with names its callers give it, each declared by them. */
+        passThrough?: readonly Domain[];
+    }
+> = {
     'apps/web/src/components/drive/folder-view.tsx': {
         local: ['hushos.drive.view', 'hushos.folder-sort'],
     },
@@ -112,6 +120,8 @@ export const STORAGE_OWNERS: Record<string, Partial<Record<Domain, readonly stri
     'apps/web/src/lib/sounds.ts': { local: ['hushos-sounds'] },
     'apps/web/src/lib/return-to.ts': { local: ['hushos.return'] },
     'apps/web/src/lib/rollback-marks.ts': {
+        // The storage it is given; the keys it finds there by listing them.
+        passThrough: ['local'],
         local: [
             'hushos.marks:',
             'hushos.settings-seen:',
@@ -120,6 +130,8 @@ export const STORAGE_OWNERS: Record<string, Partial<Record<Domain, readonly stri
         ],
     },
     'apps/web/src/lib/stash.ts': {
+        // Each stash inside upload-stash-sealed is named at random.
+        passThrough: ['files'],
         files: ['upload-stash-sealed', 'upload-stash-revision', 'upload-stash'],
         local: ['hushos-stash-written'],
     },
@@ -131,16 +143,22 @@ export const STORAGE_OWNERS: Record<string, Partial<Record<Domain, readonly stri
     'apps/web/src/lib/spaces.ts': { databases: [] },
     'apps/web/src/lib/drive.ts': { databases: [] },
     'apps/web/src/lib/transfers.ts': { databases: [] },
-    'packages/auth/src/store.ts': { local: ['hushos-device-unlock'] },
-    'packages/auth/src/client.ts': { local: [], session: ['hushos-device-removed'] },
+    // The store is zustand's persist, which names its key itself ('hushos-device-unlock').
+    'packages/auth/src/store.ts': { local: ['hushos-device-unlock'], passThrough: ['local'] },
+    'packages/auth/src/client.ts': {
+        local: [],
+        session: ['hushos-device-removed'],
+        passThrough: ['local'],
+    },
     'packages/auth/src/with-storage-events.ts': { local: [] },
     'packages/auth/src/device-storage.ts': {
         databases: ['hushos-device-keys', 'hushos-device-identity'],
+        passThrough: ['databases'],
     },
     'packages/auth/src/http.ts': { cookies: ['hushos-session', 'hushos-enrollment'] },
     'packages/drive/src/mirror.ts': { databases: ['hushos-drive-mirror'] },
     'packages/drive/src/journal.ts': { databases: ['hushos-drive'] },
-    'packages/drive/src/connection.ts': { databases: [] },
+    'packages/drive/src/connection.ts': { databases: [], passThrough: ['databases'] },
 };
 
 /*

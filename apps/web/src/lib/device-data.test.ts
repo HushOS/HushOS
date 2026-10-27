@@ -270,8 +270,53 @@ const NOT_STORAGE = new Set([
     'hushos-1-0',
 ]);
 const NAME = /(['"`])((?:hushos[-.:]|upload-stash|tsr-|sidebar_)[^'"`$\s]*)(\1|\$\{)/g;
-const CALL =
-    /(?:(?:local|session)Storage\.(?:get|set|remove)Item|indexedDB\.(?:open|deleteDatabase)|openDB(?:<[^>]*>)?|getDirectoryHandle|getFileHandle|removeEntry|[sg]etCookie)\(\s*(['"`])([^'"`$]*)/g;
+/*
+ * Each storage call by the place it reaches, and the expression its name is given as. A web
+ * storage reached through a variable (`storage.getItem`) counts for the web storage the file
+ * owns.
+ */
+const CALLS: [string, RegExp][] = [
+    ['local', /\blocalStorage\.(?:get|set|remove)Item\(\s*([^,)]+)/g],
+    ['session', /\bsessionStorage\.(?:get|set|remove)Item\(\s*([^,)]+)/g],
+    [
+        'databases',
+        /(?<!function\s)\b(?:indexedDB\.(?:open|deleteDatabase)|openDB|cachedConnection|openDeviceDatabase|deleteDeviceDatabase|deleteDatabase)(?:<[^>(]*>)?\(\s*([^,)]+)/g,
+    ],
+    ['files', /\b(?:getDirectoryHandle|getFileHandle|removeEntry)\(\s*([^,)]+)/g],
+    ['cookies', /\b[sg]etCookie\(\s*([^,)]+)/g],
+    ['cookies', /\bdocument\.cookie\s*=\s*(`\$\{\w+\})/g],
+];
+const WEB_STORAGE = /\b(?!(?:local|session)Storage\b)\w+\.(?:get|set|remove)Item\(\s*([^,)]+)/g;
+
+/*
+ * The name an argument stands for in `body`: a literal, a template's head, or a constant (or
+ * a parameter's default) it resolves to, in this file; `head` when more is added to it. Null
+ * when it does not resolve here: a parameter, an import, a computed value.
+ */
+function resolve(
+    expression: string,
+    body: string,
+    depth = 0,
+): { name: string; head: boolean } | null {
+    const text = expression.trim();
+    const literal = /^(['"`])([^'"`$]*)(\1|\$\{)/.exec(text);
+    if (literal)
+        return {
+            name: literal[2]!,
+            head: literal[3] === '${' || /[+]/.test(text.slice(literal[0].length)),
+        };
+    const leading = /^`\$\{(\w+)\}/.exec(text) ?? /^(\w+)(\s*\+|$)/.exec(text);
+    if (!leading || depth > 2) return null;
+    const name = leading[1]!;
+    // A constant (`const NAME = …`) or a parameter's default (`(NAME = …` or `, NAME: T = …`).
+    const assigned =
+        new RegExp(`\\b(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*([^;\\n]+)`).exec(body) ??
+        new RegExp(`[(,]\\s*${name}\\s*(?::\\s*[\\w.]+)?\\s*=\\s*([^,)\\n]+)`).exec(body);
+    if (!assigned) return null;
+    const found = resolve(assigned[1]!, body, depth + 1);
+    if (!found) return null;
+    return { name: found.name, head: found.head || text !== name };
+}
 
 function registered(domain: string): string[] {
     const local = [
@@ -299,22 +344,28 @@ const covers = (names: readonly string[], name: string, head = false) =>
 
 function audit(files: Source[], owners: Owners = STORAGE_OWNERS) {
     const problems: string[] = [];
-    const everyDeclared = Object.values(owners).flatMap((domains) =>
-        Object.values(domains).flatMap((names) => [...(names ?? [])]),
-    );
+    const namesOf = (domains: Owners[string]) =>
+        Object.entries(domains)
+            .filter(([domain]) => domain !== 'passThrough')
+            .flatMap(([, names]) => [...((names as readonly string[] | undefined) ?? [])]);
+    const everyDeclared = Object.values(owners).flatMap(namesOf);
     for (const [path, domains] of Object.entries(owners))
         for (const [domain, names] of Object.entries(domains))
-            for (const name of names ?? [])
-                if (!covers(registered(domain), name))
-                    problems.push(`${path}: ${name} is not registered under ${domain}`);
+            if (domain !== 'passThrough')
+                for (const name of names ?? [])
+                    if (!covers(registered(domain), name))
+                        problems.push(`${path}: ${name} is not registered under ${domain}`);
     for (const { path, text } of files) {
         if (path.endsWith('apps/web/src/lib/device-data.ts')) continue;
         const body = code(text);
         const own = owners[path];
         for (const [domain, pattern] of Object.entries(API))
-            if (pattern.test(body) && !own?.[domain as keyof Owners[string]])
+            if (
+                pattern.test(body) &&
+                !own?.[domain as Exclude<keyof Owners[string], 'passThrough'>]
+            )
                 problems.push(`${path}: reaches ${domain} storage without being its owner`);
-        const declared = own ? Object.values(own).flatMap((names) => [...(names ?? [])]) : [];
+        const declared = own ? namesOf(own) : [];
         for (const [, , name, end] of body.matchAll(NAME)) {
             const head = end === '${';
             if (NOT_STORAGE.has(name!)) continue;
@@ -322,12 +373,37 @@ function audit(files: Source[], owners: Owners = STORAGE_OWNERS) {
             if (!ok)
                 problems.push(`${path}: ${name}${head ? '…' : ''} is not a declared storage name`);
         }
-        if (own)
-            for (const [, , name] of body.matchAll(CALL))
-                if (name && !covers(declared, name, true) && !NOT_STORAGE.has(name))
+        if (!own) continue;
+        const passThrough: readonly string[] = own.passThrough ?? [];
+        const webPlaces = (['local', 'session'] as const).filter((place) => own[place]);
+        const calls: [string[], string][] = [
+            ...CALLS.flatMap(([place, pattern]) =>
+                [...body.matchAll(pattern)].map(
+                    (match) => [[place], match[1]!] as [string[], string],
+                ),
+            ),
+            ...[...body.matchAll(WEB_STORAGE)].map(
+                (match) => [webPlaces, match[1]!] as [string[], string],
+            ),
+        ];
+        for (const [places, argument] of calls) {
+            if (!places.length) continue;
+            const found = resolve(argument, body);
+            if (!found) {
+                if (!places.some((place) => passThrough.includes(place)))
                     problems.push(
-                        `${path}: ${name} is used as a storage name without being declared`,
+                        `${path}: ${argument.trim()} does not resolve to a storage name for ${places.join(' or ')}`,
                     );
+                continue;
+            }
+            const names = places.flatMap((place) => [
+                ...((own[place as keyof Owners[string]] as readonly string[] | undefined) ?? []),
+            ]);
+            if (!covers(names, found.name, found.head))
+                problems.push(
+                    `${path}: ${found.name} is used as a ${places.join(' or ')} name without being declared there`,
+                );
+        }
     }
     return problems;
 }
@@ -392,7 +468,25 @@ describe('the registry', () => {
             'a plain name passed straight to storage by an owner',
             'apps/web/src/routes/join/route.tsx',
             `export const keep = () => sessionStorage.setItem('draft', '1');`,
-            'draft is used as a storage name without being declared',
+            'draft is used as a session name without being declared there',
+        ],
+        [
+            'a plain name an owner keeps in a constant',
+            'apps/web/src/routes/join/route.tsx',
+            `const KEY = 'draft'; export const keep = (data: string) => sessionStorage.setItem(KEY, data);`,
+            'draft is used as a session name without being declared there',
+        ],
+        [
+            'a name registered for one place used in another',
+            'apps/web/src/lib/stash.ts',
+            `export const keep = (data: string) => localStorage.setItem('upload-stash', data);`,
+            'upload-stash is used as a local name without being declared there',
+        ],
+        [
+            'a name an owner computes',
+            'apps/web/src/lib/return-to.ts',
+            `export const keep = (key: string) => localStorage.setItem(key.trim(), '1');`,
+            'does not resolve to a storage name for local',
         ],
         [
             'an owner reaching a place it did not declare',
