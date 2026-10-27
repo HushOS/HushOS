@@ -172,7 +172,7 @@ export function LargeFileBar({
                 ref={status}
                 tabIndex={-1}
                 className={cn(
-                    'rounded-xs outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                    'rounded-xs outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                     !chosen && 'sr-only',
                 )}
             >
@@ -208,7 +208,7 @@ export function Notice({
         <div
             data-viewer-body
             tabIndex={-1}
-            className="flex min-h-0 flex-1 overflow-auto p-4 outline-none sm:p-6"
+            className="flex min-h-0 flex-1 overflow-auto p-4 outline-hidden sm:p-6"
         >
             <div className="m-auto flex w-full max-w-[420px] flex-col items-center gap-3 rounded-2xl bg-card p-8 text-center shadow-sm">
                 {icon}

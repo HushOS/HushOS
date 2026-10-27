@@ -97,7 +97,7 @@ export function Segmented<T extends string>({
                     disabled={disabled}
                     onClick={() => onChange(option.value)}
                     className={cn(
-                        'h-8 cursor-pointer rounded-sm px-3.5 text-sm font-semibold whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default',
+                        'h-8 cursor-pointer rounded-sm px-3.5 text-sm font-semibold whitespace-nowrap outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default',
                         value === option.value
                             ? 'bg-card text-foreground shadow-sm'
                             : 'text-muted-foreground hover:text-foreground',

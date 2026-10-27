@@ -991,7 +991,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 aria-pressed={view === value}
                                 title={label}
                                 onClick={() => setView(value)}
-                                className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+                                className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-hidden hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-pressed:bg-accent aria-pressed:text-accent-foreground"
                             >
                                 <Icon className="size-4" aria-hidden="true" />
                             </button>
@@ -1344,7 +1344,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     type="button"
                                                     aria-label={node.name}
                                                     aria-pressed={isSelected}
-                                                    className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-none"
+                                                    className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-hidden"
                                                     onClick={(event) => select(node.id, event)}
                                                     onDoubleClick={() => open(node)}
                                                 >

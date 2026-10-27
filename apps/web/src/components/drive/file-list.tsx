@@ -319,7 +319,7 @@ export function RowName({
             <button
                 type="button"
                 tabIndex={-1}
-                className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-4 outline-none md:pr-4 md:pl-8"
+                className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-4 outline-hidden md:pr-4 md:pl-8"
                 onClick={onSelect}
             >
                 {thumbnail}
@@ -328,7 +328,7 @@ export function RowName({
                 <span className="flex min-w-0 items-center gap-0.5">
                     <button
                         type="button"
-                        className="block min-w-0 cursor-default truncate text-left text-[14px] font-medium outline-none md:text-[15px]"
+                        className="block min-w-0 cursor-default truncate text-left text-[14px] font-medium outline-hidden md:text-[15px]"
                         onClick={onSelect}
                     >
                         {name}
@@ -422,7 +422,7 @@ export function CornerCheck({
                     onToggle();
                 }}
                 onDoubleClick={(event) => event.stopPropagation()}
-                className="absolute -inset-2 cursor-pointer appearance-none rounded-full outline-none"
+                className="absolute -inset-2 cursor-pointer appearance-none rounded-full outline-hidden"
             />
             {checked && (
                 <CheckIcon
@@ -581,7 +581,7 @@ export function SelectionAction({
                 aria-busy={pending || undefined}
                 data-pending={pending ? '' : undefined}
                 className={cn(
-                    'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
+                    'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-hidden hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
                     // Working is not unavailable: it stays at full strength, the spinner says why it waits.
                     disabled && !pending && 'opacity-40',
                     className,
@@ -794,7 +794,7 @@ export function HiddenSortToggle({
             type="button"
             onClick={onClick}
             aria-label={`By ${label}, ${order}. Reverse the order`}
-            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
+            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
         >
             By {label}
             <Arrow className="size-3.5" aria-hidden="true" />

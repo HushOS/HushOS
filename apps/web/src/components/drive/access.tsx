@@ -104,7 +104,7 @@ export function AccessMarker({
                 render={<button type="button" aria-label={sentence} />}
                 onClick={onOpen}
                 className={cn(
-                    'flex shrink-0 cursor-pointer items-center gap-2 rounded-full py-1 pr-2.5 pl-1 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring',
+                    'flex shrink-0 cursor-pointer items-center gap-2 rounded-full py-1 pr-2.5 pl-1 text-[13px] text-muted-foreground transition-colors outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                     className,
                 )}
             >

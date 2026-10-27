@@ -483,7 +483,7 @@ function PeopleField({
                 }
             }}
         >
-            <div className="flex h-11 items-center gap-2.5 rounded-md border border-input bg-card px-3 focus-within:outline-2 focus-within:-outline-offset-1 focus-within:outline-ring">
+            <div className="flex h-11 items-center gap-2.5 rounded-md border border-input bg-card px-3 focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-ring">
                 <UserPlusIcon
                     className="size-4 shrink-0 text-muted-foreground"
                     aria-hidden="true"
@@ -504,7 +504,7 @@ function PeopleField({
                     onBlur={() => setOpen(false)}
                     placeholder="Add a name or email"
                     aria-label="Add people"
-                    className="h-full min-w-0 flex-1 bg-transparent text-base outline-none sm:text-[15px] placeholder:text-muted-foreground"
+                    className="h-full min-w-0 flex-1 bg-transparent text-base outline-hidden sm:text-[15px] placeholder:text-muted-foreground"
                 />
             </div>
             {open && (

@@ -207,7 +207,7 @@ export function Preview({
                                                     )
                                                 }
                                                 className={cn(
-                                                    'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] sm:px-3 font-semibold outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                                    'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] sm:px-3 font-semibold outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                                     on
                                                         ? 'bg-card text-foreground shadow-sm'
                                                         : 'text-muted-foreground hover:text-foreground',
@@ -688,7 +688,7 @@ function ImageFrame({
         <div
             data-viewer-body
             tabIndex={-1}
-            className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 outline-none sm:p-6"
+            className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4 outline-hidden sm:p-6"
         >
             <img
                 src={url}
@@ -812,7 +812,7 @@ function TextFrame({
         <div
             data-viewer-body
             tabIndex={-1}
-            className="min-h-0 flex-1 overflow-auto px-3 py-4 outline-none sm:px-6 sm:py-8"
+            className="min-h-0 flex-1 overflow-auto px-3 py-4 outline-hidden sm:px-6 sm:py-8"
         >
             <div className="sheet mx-auto flex w-full max-w-4xl min-w-0 flex-col">
                 {stage !== 'fine' && (

@@ -40,7 +40,7 @@ function BreadcrumbLink({ className, render, ...props }: useRender.ComponentProp
         props: mergeProps<'a'>(
             {
                 className: cn(
-                    'truncate rounded-xs px-1 py-0.5 transition-colors duration-150 outline-none hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                    'truncate rounded-xs px-1 py-0.5 transition-colors duration-150 outline-hidden hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring',
                     className,
                 ),
             },

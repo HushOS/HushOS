@@ -3,20 +3,20 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from 'cn';
 
 const buttonVariants = cva(
-    "group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border font-sans text-sm font-semibold whitespace-nowrap transition-[color,background-color,border-color,transform] duration-150 ease-out-soft outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+    "group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border font-sans text-sm font-semibold whitespace-nowrap transition-[color,background-color,border-color,transform] duration-150 ease-out-soft outline-hidden select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
     {
         variants: {
             variant: {
                 default:
-                    'border-primary bg-primary text-primary-foreground hover:border-primary-hover hover:bg-primary-hover',
+                    'border-primary bg-primary text-primary-foreground hover:border-primary-hover hover:bg-primary-hover focus-visible:outline-primary-foreground',
                 secondary:
-                    'border-ink bg-ink text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--ink),var(--background)_12%)]',
+                    'border-ink bg-ink text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--ink),var(--background)_12%)] focus-visible:outline-secondary-foreground',
                 outline:
                     'border-input bg-card text-foreground hover:bg-muted aria-expanded:bg-muted',
                 ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted aria-expanded:bg-muted',
                 row: 'w-full justify-between border-transparent bg-transparent text-foreground hover:bg-muted aria-expanded:bg-muted [&>svg]:text-primary',
                 destructive:
-                    'border-destructive bg-destructive text-destructive-foreground hover:bg-[color-mix(in_oklch,var(--destructive),var(--ink)_10%)] focus-visible:outline-destructive',
+                    'border-destructive bg-destructive text-destructive-foreground hover:bg-[color-mix(in_oklch,var(--destructive),var(--ink)_10%)] focus-visible:outline-destructive-foreground',
                 'destructive-outline':
                     'border-destructive/35 bg-transparent text-destructive hover:bg-destructive-soft focus-visible:outline-destructive',
                 link: 'h-auto rounded-none border-transparent px-0 font-normal text-primary underline decoration-1 underline-offset-4 hover:text-primary-hover',

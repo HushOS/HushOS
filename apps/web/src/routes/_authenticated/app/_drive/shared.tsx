@@ -90,7 +90,7 @@ function Shared() {
     }, [queryClient, byMe]);
     const tab = (on: boolean) =>
         cn(
-            'flex h-8 items-center rounded-sm px-4 text-sm font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-ring',
+            'flex h-8 items-center rounded-sm px-4 text-sm font-semibold transition-colors outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
             on
                 ? 'bg-card text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',
