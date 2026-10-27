@@ -369,7 +369,7 @@ function AffiliateDialog({
     const [left, setLeft] = useState<ReadonlySet<DraftField>>(new Set());
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
-    // Pending covers Unlink and Cancel too, so Save waits for them; its label is its own.
+    // Pending covers Unlink and Remove email too, so Save waits for them; its label is its own.
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
     // Every opening starts from the creator as saved, or from empty. The page opens the
@@ -646,7 +646,7 @@ function AccountField({
 /*
  * Takes the creator's account away, at once and apart from Save: "Unlink" for
  * a linked account, after asking, since its email may not be at hand to link
- * it again; "Cancel" for an email still waiting for its account, which is shown.
+ * it again; "Remove email" for an email still waiting for its account, which is shown.
  */
 function AccountUnlink({
     affiliate,
@@ -669,7 +669,7 @@ function AccountUnlink({
             await onSaved();
             toast.add({
                 type: 'success',
-                title: linked ? 'Account unlinked' : 'No longer waiting for that email',
+                title: linked ? 'Account unlinked' : 'Email removed',
             });
         } catch (error) {
             toast.add({ type: 'error', title: 'That didn’t work', description: message(error) });
@@ -686,11 +686,11 @@ function AccountUnlink({
                 className="text-[13px] text-muted-foreground hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3"
                 disabled={busy}
                 aria-label={
-                    linked ? 'Unlink their account' : `Cancel linking ${affiliate.pendingEmail}`
+                    linked ? 'Unlink their account' : `Remove email ${affiliate.pendingEmail}`
                 }
                 onClick={() => (linked ? setAsking(true) : void unlink())}
             >
-                {linked ? 'Unlink' : 'Cancel'}
+                {linked ? 'Unlink' : 'Remove email'}
             </Button>
             <AlertDialog open={asking} onOpenChange={(next) => !busy && setAsking(next)}>
                 <AlertDialogContent>
