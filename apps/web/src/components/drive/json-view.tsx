@@ -25,6 +25,7 @@ import {
 import { inspect, inspectNow, preloadJsonWorker } from '@/lib/json-inspect';
 import { cue } from '@/lib/sounds';
 import '@/components/drive/rich-text.css';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 /*
  * A JSON file as a tree of its values, or as text laid out with two-space
@@ -182,7 +183,12 @@ function ValidJson({ text, name, layout }: { text: string; name: string; layout:
         <Panel>
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-rule px-2 py-2 sm:px-3">
                 {treeFits ? (
-                    <fieldset className="m-0 inline-flex min-w-0 shrink-0 rounded-md border-0 bg-muted p-0.5">
+                    <fieldset
+                        className={cn(
+                            'm-0 inline-flex min-w-0 shrink-0 rounded-md border-0 p-0.5',
+                            segmentTrack,
+                        )}
+                    >
                         <legend className="sr-only">Show as</legend>
                         {(['tree', 'text'] as const).map((value) => (
                             <button
@@ -193,7 +199,7 @@ function ValidJson({ text, name, layout }: { text: string; name: string; layout:
                                 className={cn(
                                     'h-8 cursor-pointer rounded-sm px-3 text-[13px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:h-10',
                                     showing === value
-                                        ? 'bg-card text-foreground shadow-sm'
+                                        ? segmentOn
                                         : 'text-muted-foreground hover:text-foreground',
                                 )}
                             >
