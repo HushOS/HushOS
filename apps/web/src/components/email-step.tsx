@@ -190,35 +190,37 @@ export function EmailStep({
                             onValueChange={(open) => setCodeOpen(open.includes('code'))}
                         >
                             <AccordionItem value="code">
-                                <AccordionTrigger className="justify-start gap-1.5 py-1 font-normal text-muted-foreground **:data-[slot=accordion-trigger-icon]:ml-0">
+                                <AccordionTrigger className="justify-start gap-1.5 py-1 font-normal text-foreground **:data-[slot=accordion-trigger-icon]:ml-0">
                                     Have a code?
                                 </AccordionTrigger>
                                 <AccordionContent keepMounted className="pt-2 pb-0">
-                                <form.Field name="code">
-                                    {(field) => (
-                                        <AuthInput
-                                            label="Code"
-                                            optional
-                                            hint="From a friend or an offer. A friend’s code gives you both more space."
-                                            id="code"
-                                            name={field.name}
-                                            type="text"
-                                            autoComplete="off"
-                                            autoCapitalize="none"
-                                            spellCheck={false}
-                                            placeholder="k7m2p4qz"
-                                            className="font-mono"
-                                            value={field.state.value}
-                                            onChange={(event) => field.handleChange(event.target.value)}
-                                            onBlur={field.handleBlur}
-                                            errors={field.state.meta.errors}
-                                            disabled={pending}
-                                            maxLength={64}
-                                            data-1p-ignore
-                                            data-lpignore="true"
-                                        />
-                                    )}
-                                </form.Field>
+                                    <form.Field name="code">
+                                        {(field) => (
+                                            <AuthInput
+                                                label="Code"
+                                                optional
+                                                hint="From a friend or an offer. A friend’s code gives you both more space."
+                                                id="code"
+                                                name={field.name}
+                                                type="text"
+                                                autoComplete="off"
+                                                autoCapitalize="none"
+                                                spellCheck={false}
+                                                placeholder="k7m2p4qz"
+                                                className="font-mono"
+                                                value={field.state.value}
+                                                onChange={(event) =>
+                                                    field.handleChange(event.target.value)
+                                                }
+                                                onBlur={field.handleBlur}
+                                                errors={field.state.meta.errors}
+                                                disabled={pending}
+                                                maxLength={64}
+                                                data-1p-ignore
+                                                data-lpignore="true"
+                                            />
+                                        )}
+                                    </form.Field>
                                 </AccordionContent>
                             </AccordionItem>
                         </Accordion>
